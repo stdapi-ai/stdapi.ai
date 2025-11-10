@@ -1,0 +1,153 @@
+[project]
+name = "stdapi"
+version = "1.0.0"
+description = "Standard API for AI on AWS"
+authors = [{ name = "J.Goutin", email = "contact@stdapi.ai" }]
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi",
+    "aioboto3>=15.1.0",
+    "aiobotocore>=2.24.0",
+    "pydantic>=2",
+    "pydantic-settings>=2",
+    "sse-starlette",
+    "langcodes",
+    "python-multipart",
+    "aiohttp",
+    "aiodns",
+    "python-magic",
+    "pybase64",
+    "pillow",
+    "tiktoken",
+]
+
+[project.optional-dependencies]
+opentelemetry = [
+    "opentelemetry-api",
+    "opentelemetry-sdk",
+    "opentelemetry-instrumentation-fastapi",
+    "opentelemetry-instrumentation-botocore",
+    "opentelemetry-instrumentation-aiohttp-client",
+    "opentelemetry-exporter-otlp",
+    "opentelemetry-propagator-aws-xray",
+    "opentelemetry-distro",
+    "opentelemetry-exporter-otlp-proto-http",
+]
+uvicorn = ["uvicorn[standard]"]
+granian = ["granian[uvloop]"]
+
+[dependency-groups]
+test = [
+    "stdapi[opentelemetry, uvicorn]",
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "pytest-xdist[psutil]",
+    "httpx",
+    "openai",
+]
+lint = [
+    "stdapi[opentelemetry, uvicorn]",
+    "mypy",
+    "ruff",
+    "types-aioboto3[bedrock, bedrock-runtime, polly, comprehend, s3, transcribe, translate]",
+    "types-PyYAML",
+]
+docs = [
+    "stdapi",
+    "mkdocs-material",
+    "mkdocs-redoc-tag",
+]
+dev = [
+    "stdapi[opentelemetry, uvicorn, granian]",
+    {include-group = "test"},
+    {include-group = "lint"},
+    {include-group = "docs"},
+]
+
+[tool.hatch.build.targets.sdist]
+include = ["stdapi"]
+
+[tool.hatch.build.targets.wheel]
+include = ["stdapi"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+fix = true
+output-format = "grouped"
+
+[tool.ruff.format]
+skip-magic-trailing-comma = true
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "E501", # format conflicts, line length
+    "PLR2004", # constants ints
+    "PLR0913", # Functions with many arguments
+    "PLW2901", # loop variable overide
+    "COM812", # format conflicts
+    "TD002", # to do comments
+    "TD003", # to do comments
+    "FIX002", # to do comments
+    "ERA001", # docstring false positive
+    "PYI036", # type false positive
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.isort]
+split-on-trailing-comma=false
+
+[tool.ruff.lint.flake8-annotations]
+suppress-dummy-args = true
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.BackgroundTasks"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*.py" = [
+    "S101", # assert
+    "ARG002", # parametrize comments
+    "FBT001" # bool fixture
+]
+
+[tool.mypy]
+files = ["stdapi", "tests"]
+check_untyped_defs = true
+disallow_any_generics = true
+disallow_incomplete_defs = true
+disallow_subclassing_any = true
+disallow_untyped_calls = true
+disallow_untyped_decorators = true
+disallow_untyped_defs = true
+implicit_reexport = false
+no_implicit_optional = true
+strict_equality = true
+warn_redundant_casts = true
+warn_return_any = true
+warn_unused_ignores = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+addopts = [
+    "--strict-markers",
+    "--cov",
+]
+markers = ["expensive"]
+
+[tool.coverage.run]
+branch = true
+source = ["stdapi"]
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if _TYPE_CHECKING:",
+]

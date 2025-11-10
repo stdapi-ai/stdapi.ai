@@ -1,0 +1,117 @@
+---
+site_name: stdapi.ai
+site_description: "stdapi.ai - AI API platform"
+site_url: https://stdapi.ai
+
+theme:
+  name: material
+  language: en
+  logo: styles/logo.svg
+  favicon: styles/logo.svg
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.instant
+    - navigation.instant.prefetch
+    - navigation.instant.progress
+    - navigation.top
+    - navigation.prune
+    - navigation.tracking
+    - navigation.path
+    - navigation.indexes
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - search.share
+    - header.autohide
+    - content.code.copy
+    - content.code.select
+    - content.code.annotate
+    - content.action.edit
+    - content.action.view
+    - content.tabs.link
+    - toc.follow
+  font:
+    text: Open Sans
+    code: JetBrains Mono
+  palette:
+    scheme: slate
+    primary: custom
+    accent: custom
+nav:
+  - Home: index.md
+  - Documentation:
+      - API:
+          - Overview: api_overview.md
+          - OpenAI Compatible:
+            - Chat Completions: api_openai_chat_completions.md
+            - Images Generations: api_openai_images_generations.md
+            - Audio Speech: api_openai_audio_speech.md
+            - Audio Transcriptions: api_openai_audio_transcriptions.md
+            - Audio Translations: api_openai_audio_translations.md
+            - Embeddings: api_openai_embeddings.md
+            - Models: api_openai_models.md
+      - Operations:
+          - Getting started: operations_getting_started.md
+          - Configuration: operations_configuration.md
+          - Licensing: operations_licensing.md
+          - Logging & Monitoring: operations_logging_monitoring.md
+      - Use cases:
+          - Overview: use_cases.md
+          - OpenWebUI integration: use_cases_openwebui.md
+          - N8N integration: use_cases_n8n.md
+          - IDE integration (Continue.dev & others): use_cases_continue.md
+          - LibreChat integration: use_cases_librechat.md
+          - LangChain / LlamaIndex integration: use_cases_langchain.md
+          - Note-taking apps (Obsidian & Notion): use_cases_note_taking.md
+          - Chat bots (Slack, Discord & Teams): use_cases_chatbots.md
+          - Autonomous agents (AutoGPT & more): use_cases_agents.md
+      - Roadmap & Changelog: roadmap.md
+  - API Reference: api_reference.md
+
+repo_url: https://github.com/stdapi-ai/stdapi.ai
+repo_name: stdapi-ai/stdapi.ai
+edit_uri: ''
+
+plugins:
+  - search
+  - redoc-tag
+
+hooks:
+  - docs_hooks/fastapi_openapi.py
+
+extra_css:
+  - styles/theme.css
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/stdapi-ai/stdapi.ai
+      name: GitHub repository
+    - icon: fontawesome/brands/aws
+      link: https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo
+      name: AWS Marketplace
+  homepage_buttons:
+    - label: Get started
+      link: getting_started.md
+    - label: API overview
+      link: api_overview.md
+    - label: View on GitHub
+      link: https://github.com/stdapi-ai/stdapi.ai
+    - label: AWS Marketplace
+      link: https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo

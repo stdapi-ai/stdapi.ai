@@ -1,0 +1,96 @@
+                          COMMERCIAL LICENSE
+
+                              stdapi.ai
+                         Commercial License Terms
+
+ Copyright (c) 2025 stdapi.ai
+ All rights reserved.
+
+===============================================================================
+
+                      COMMERCIAL LICENSE AVAILABILITY
+
+  This software is available under a Commercial License that provides you
+with the right to use, modify, and distribute stdapi.ai in proprietary,
+closed-source applications without the source code disclosure requirements
+of the GNU Affero General Public License v3.0 (AGPL-3.0).
+
+                    HOW TO OBTAIN A COMMERCIAL LICENSE
+
+  The Commercial License for stdapi.ai is EXCLUSIVELY AVAILABLE through
+the AWS Marketplace. No other method of commercial licensing is offered.
+
+  AWS Marketplace Product Page:
+  https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo
+
+  Upon purchasing through AWS Marketplace, you will receive access to
+container images that include this commercial license, granting you full
+commercial rights.
+
+===============================================================================
+
+                       COMMERCIAL LICENSE BENEFITS
+
+  Commercial License customers receive rights under the AWS Marketplace
+Standard Contract (SCMP), which provides:
+
+  - Full Commercial Rights: Use in closed-source applications, modify
+    freely, and distribute as part of your commercial products without
+    restriction
+
+  - No Source Disclosure Requirements: AGPL network use obligations do
+    not apply—keep your modifications and implementations private
+
+  - Internal Network Freedom: Deploy on internal networks without
+    triggering AGPL's source disclosure requirements for network
+    interaction
+
+  - Hardened Container Images: Access to optimized and security-hardened
+    container images built specifically for production workloads
+
+  - Regular Security Updates: Receive timely security patches and
+    vulnerability fixes to protect your deployments
+
+  - Enterprise-Ready Terms: Licensed under the trusted AWS Marketplace
+    Standard Contract, the same contract used across thousands of
+    enterprise software products
+
+  Full AWS Marketplace Standard Contract Terms:
+  https://aws.amazon.com/marketplace/management/terms
+
+===============================================================================
+
+                     WITHOUT A COMMERCIAL LICENSE
+
+  If you have not purchased a commercial license through AWS Marketplace,
+this software is licensed to you under the GNU Affero General Public
+License v3.0 or later (AGPL-3.0-or-later) as specified in the LICENSE-AGPL
+file included with this software.
+
+  The AGPL-3.0 license requires that you make your complete source code
+available to users who interact with the software over a network. This
+includes modifications and any larger work incorporating the software.
+
+  See the LICENSE-AGPL file for complete terms and conditions.
+
+===============================================================================
+
+                          LICENSING QUESTIONS
+
+  For questions about commercial licensing, volume pricing, or custom
+deployment scenarios, please contact:
+
+  Documentation: See https://stdapi.ai/operations_licensing/ for detailed
+  information about the dual-license model and choosing the right license for
+  your use case.
+
+===============================================================================
+
+                             IMPORTANT NOTICE
+
+  TO USE stdapi.ai COMMERCIALLY, YOU MUST PURCHASE A LICENSE THROUGH
+  AWS MARKETPLACE.
+
+  NO OTHER METHOD OF COMMERCIAL LICENSING IS AVAILABLE.
+
+===============================================================================
