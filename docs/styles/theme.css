@@ -1,0 +1,254 @@
+:root {
+  --primary: #232f3e;
+  --primary-light: #2c3f50;
+  --primary-dark: #1a2430;
+  --accent: #ff9900;
+  --accent-light: #ffac31;
+  --accent-dark: #ff6f00;
+}
+
+/* Light scheme */
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color: var(--primary);
+  --md-primary-fg-color--light: var(--primary-light);
+  --md-primary-fg-color--dark: var(--primary-dark);
+  --md-accent-fg-color: var(--accent);
+  --theme-contrasted: var(--primary-dark);
+}
+
+/* Dark scheme */
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: var(--primary);
+  --md-primary-fg-color--light: var(--primary-light);
+  --md-primary-fg-color--dark: var(--primary-dark);
+  --md-accent-fg-color: var(--accent);
+  --theme-contrasted: var(--accent-dark);
+}
+
+/* Favor accent-colored links */
+.md-typeset a {
+  color: var(--md-accent-fg-color);
+}
+
+/* Ensure primary buttons use the accent */
+.md-button--primary {
+  background-color: var(--md-accent-fg-color);
+  border-color: var(--md-accent-fg-color);
+}
+
+/* Hero banner */
+.hero--home {
+  position: relative;
+  padding: 4rem 1.25rem 3rem;
+  border-radius: 12px;
+  color: var(--primary-dark);
+  background: linear-gradient(45deg, var(--accent-dark), var(--accent), var(--accent-light) 100%);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.18);
+}
+
+@media (min-width: 768px) {
+  .hero--home { padding: 6rem 2rem 4rem; }
+}
+
+.hero--home h1 {
+  margin-top: 0;
+  margin-bottom: 0.5rem;
+  line-height: 1.1;
+  color: inherit;
+}
+
+.hero--home p {
+  margin: 0.25rem 0 1.25rem;
+  font-size: 1.05rem;
+  opacity: 0.95;
+}
+
+.hero--home .buttons, .buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+  margin-top: 0.75rem;
+}
+
+/* Elevate primary/secondary buttons slightly for a tactile feel */
+.md-button, .md-button--primary {
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+  transition: transform 120ms ease, box-shadow 120ms ease, background-color 120ms ease;
+}
+
+.md-button:hover, .md-button:focus-visible,
+.md-button--primary:hover, .md-button--primary:focus-visible {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(0,0,0,0.18);
+}
+
+/* Feature cards micro-interactions */
+.md-typeset .grid.cards > ul > li {
+  border: 1px solid color-mix(in srgb, var(--theme-contrasted) 20%, transparent);
+  border-radius: 12px;
+  transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+}
+
+.md-typeset .grid.cards > ul > li:hover,
+.md-typeset .grid.cards > ul > li:focus-within {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 24px rgba(0,0,0,0.20);
+  border-color: color-mix(in srgb, var(--theme-contrasted) 60%, transparent);
+}
+
+/* Code section */
+.section--soft {
+  margin: 2rem 0 0;
+  padding: 2rem 1rem 1.5rem;
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.18);
+  background: linear-gradient(
+    45deg,
+    color-mix(in srgb, var(--primary) 20%, transparent),
+    color-mix(in srgb, var(--primary-light) 20%, transparent)
+  );
+}
+.code-callout {
+  position: relative;
+  margin-top: 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--theme-contrasted) 20%, transparent);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.code-callout .code-callout__label {
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  background: color-mix(in srgb, var(--primary-light) 20%, transparent);
+  padding: 0.35rem 0.6rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--theme-contrasted) 20%, transparent);
+}
+.code-callout pre { margin: 0; }
+
+/* Closing CTA banner */
+.cta-banner {
+  margin: 2.25rem 0 0.5rem;
+  padding: 1.25rem;
+  border-radius: 12px;
+  background: linear-gradient(45deg, var(--accent-dark), var(--accent), var(--accent-light) 100%);
+  color: var(--primary-dark);
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.18);
+}
+.cta-banner strong { font-size: 1.05rem; }
+.cta-banner .buttons { margin: 0 0 0 auto; }
+
+@media (max-width: 720px) {
+  .cta-banner { flex-direction: column; align-items: flex-start; }
+  .cta-banner .buttons { margin: 0; }
+}
+
+/* Logo marquees */
+
+.logo-marquee {
+  --marquee-duration: 60s;
+  position: relative;
+  overflow: hidden;
+  padding: 0.5rem 0;
+  margin-bottom: 1rem;
+}
+
+.logo-marquee::before, .logo-marquee::after {
+  content: "";
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 40px;
+  pointer-events: none;
+  z-index: 2;
+}
+[data-md-color-scheme] .logo-marquee::before {
+  left: 0;
+  background: linear-gradient(90deg, var(--md-default-bg-color), transparent);
+}
+[data-md-color-scheme] .logo-marquee::after {
+  right: 0;
+  background: linear-gradient(270deg, var(--md-default-bg-color), transparent);
+}
+
+.logo-track {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  width: max-content;
+  animation: stdapi-marquee var(--marquee-duration) linear infinite;
+}
+
+@keyframes stdapi-marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+.logo-item {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.6rem;
+  border-radius: 10px;
+  background: var(--primary-light);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  color: inherit;
+  flex-shrink: 0;
+  transition: transform 160ms ease, box-shadow 160ms ease, filter 160ms ease, opacity 160ms ease, background 160ms ease;
+}
+.logo-item:hover, .logo-item:focus-visible {
+  transform: translateY(-1px) scale(1.02);
+  box-shadow: 0 8px 20px rgba(0,0,0,0.16);
+  background: var(--accent);
+}
+.logo-item img { height: 64px; width: auto; display: block; }
+.logo-item span {
+  font-size: 0.85rem;
+  font-weight: 500;
+  text-align: center;
+  white-space: nowrap;
+  color: #ffffff;
+}
+
+/* Logo and title */
+.md-header__button.md-logo img,
+.md-header__button.md-logo svg {
+  height: 5rem;
+  width: auto;
+}
+.md-header__topic {
+  font-size: 1.5rem;
+  font-weight: 600;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--accent);
+}
+
+/* Feature compatibility table */
+.feature-table table {
+  font-size: 0.9em;
+}
+
+.feature-table .success {
+  color: #4caf50;
+}
+
+.feature-table .unsupported {
+  color: #f44336;
+}
+
+.feature-table .partial {
+  color: #ff9800;
+}
+
+.feature-table .model-dep {
+  color: #91f321;
+}
+
+.feature-table .extra-feature {
+  color: #2196f3;
+}

@@ -1,0 +1,35 @@
+name: Lint
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_COLOR: "1"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          activate-environment: true
+
+      - name: Install dependencies
+        run: uv sync --frozen --group lint
+
+      - name: Python linting
+        run: ruff check .
+
+      - name: Python format checking
+        run: ruff format --check .
+
+      - name: Python type checking
+        run: mypy .
