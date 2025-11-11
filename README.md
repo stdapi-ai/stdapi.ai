@@ -65,6 +65,8 @@ Beyond Bedrock language models:
 
 ## 🛒 AWS Marketplace
 
+> **⚠️ Note:** The AWS Marketplace listing is currently in validation and may not be available yet.
+
 ### Enterprise Deployment Made Easy
 
 **stdapi.ai is available on AWS Marketplace** with commercial licensing and production-ready deployment options.

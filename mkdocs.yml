@@ -8,7 +8,9 @@ theme:
   language: en
   logo: styles/logo.svg
   favicon: styles/logo.svg
+  custom_dir: overrides
   features:
+    - announce.dismiss
     - navigation.tabs
     - navigation.sections
     - navigation.expand
