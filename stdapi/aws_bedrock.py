@@ -88,6 +88,9 @@ MIME_TYPES_TO_VIDEO_TYPE: "dict[str, VideoFormatType]" = {
     "3gpp": "three_gp",
 }
 
+#: Bedrock limit for sync body size (25MB), here with a little margin
+BEDROCK_BODY_SIZE_LIMIT = 24_990_000
+
 #: Bedrock supported image from data URL
 _IMAGE_DATA_EXT = compile_regex(
     r"^data:image/(png|jpeg|jpg|gif|webp);base64,(.+)$", IGNORECASE

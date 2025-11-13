@@ -120,3 +120,132 @@ class TestTwelveLabsMarengoEmbeddings:
             openai_client.embeddings.create(
                 model=model_id, input="Dims not supported.", dimensions=128
             )
+
+    @pytest.mark.expensive
+    @pytest.mark.parametrize("model_id", MARANGO_SAMPLE)
+    def test_force_s3_data_with_small_image(
+        self,
+        openai_client: OpenAI,
+        use_openai_api: bool,
+        sample_image_file_base64: str,
+        model_id: str,
+    ) -> None:
+        """Force S3 upload for small image using force_s3_data parameter.
+
+        This tests that small files (under 6MB) can be forced to use S3 and
+        async invocation via the force_s3_data extra parameter.
+        """
+        if use_openai_api:
+            pytest.skip(
+                "TwelveLabs models are not available on the official OpenAI API"
+            )
+
+        response = openai_client.embeddings.create(
+            model=model_id,
+            input=sample_image_file_base64,
+            extra_body={"force_s3_data": True},
+        )
+        assert response.object == "list"
+        assert len(response.data) == 1
+        item = response.data[0]
+        assert item.object == "embedding"
+        assert isinstance(item.embedding, list)
+        assert len(item.embedding) > 0
+
+    @pytest.mark.expensive
+    @pytest.mark.parametrize("model_id", MARANGO_SAMPLE)
+    def test_force_s3_data_with_video(
+        self,
+        openai_client: OpenAI,
+        use_openai_api: bool,
+        sample_video_file_base64: str,
+        model_id: str,
+    ) -> None:
+        """Force S3 upload for video using force_s3_data parameter."""
+        if use_openai_api:
+            pytest.skip(
+                "TwelveLabs models are not available on the official OpenAI API"
+            )
+        if not sample_video_file_base64:
+            pytest.skip(
+                "Missing video sample file. Skipping test. Add a MP4 file to 'tests/.cache/video.mp4'."
+            )
+
+        response = openai_client.embeddings.create(
+            model=model_id,
+            input=sample_video_file_base64,
+            extra_body={"force_s3_data": True},
+        )
+        assert response.object == "list"
+        assert len(response.data) >= 1
+        item = response.data[0]
+        assert item.object == "embedding"
+        assert isinstance(item.embedding, list)
+        assert len(item.embedding) > 0
+
+    @pytest.mark.expensive
+    @pytest.mark.parametrize("model_id", MARANGO_SAMPLE)
+    def test_force_s3_data_with_audio(
+        self,
+        openai_client: OpenAI,
+        use_openai_api: bool,
+        sample_audio_mp3_file_base64: str,
+        model_id: str,
+    ) -> None:
+        """Force S3 upload for audio using force_s3_data parameter."""
+        if use_openai_api:
+            pytest.skip(
+                "TwelveLabs models are not available on the official OpenAI API"
+            )
+
+        response = openai_client.embeddings.create(
+            model=model_id,
+            input=sample_audio_mp3_file_base64,
+            extra_body={"force_s3_data": True},
+        )
+        assert response.object == "list"
+        assert len(response.data) >= 1
+        item = response.data[0]
+        assert item.object == "embedding"
+        assert isinstance(item.embedding, list)
+        assert len(item.embedding) > 0
+
+    @pytest.mark.expensive
+    @pytest.mark.parametrize("model_id", MARANGO_SAMPLE)
+    def test_force_s3_data_with_mixed_batch(
+        self,
+        openai_client: OpenAI,
+        use_openai_api: bool,
+        sample_image_file_base64: str,
+        sample_video_file_base64: str,
+        model_id: str,
+    ) -> None:
+        """Force S3 upload for mixed batch with force_s3_data parameter.
+
+        This tests that the force_s3_data parameter works correctly with
+        mixed input types (text, image, video) in a single batch.
+        """
+        if use_openai_api:
+            pytest.skip(
+                "TwelveLabs models are not available on the official OpenAI API"
+            )
+        if not sample_video_file_base64:
+            pytest.skip(
+                "Missing video sample file. Skipping test. Add a MP4 file to 'tests/.cache/video.mp4'."
+            )
+
+        inputs = [
+            "Text description.",
+            sample_image_file_base64,
+            sample_video_file_base64,
+        ]
+        response = openai_client.embeddings.create(
+            model=model_id, input=inputs, extra_body={"force_s3_data": True}
+        )
+        assert response.object == "list"
+        # Video may return multiple segments
+        assert len(response.data) >= len(inputs)
+        for item in response.data:
+            assert item.object == "embedding"
+            assert isinstance(item.embedding, list)
+            assert len(item.embedding) > 0

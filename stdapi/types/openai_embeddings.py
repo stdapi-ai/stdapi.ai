@@ -2,7 +2,7 @@
 
 from typing import Literal, Self
 
-from pydantic import Field, model_validator
+from pydantic import AliasChoices, Field, model_validator
 
 from stdapi.types import BaseModelRequestWithExtra, BaseModelResponse
 
@@ -74,6 +74,7 @@ class EmbeddingCreateParams(BaseModelRequestWithExtra):
     )
     dimensions: int | None = Field(
         default=None,
+        validation_alias=AliasChoices("dimensions", "embeddingDimension"),
         description=(
             "The number of dimensions the resulting output embeddings should have.\n"
             "Supported by some models only."

@@ -86,7 +86,7 @@ Add provider-specific fields at the top level of your request body alongside sta
 **Amazon Titan Embed v2 - Normalization:**
 ```json
 {
-  "model": "amazon.titan-embed-text-v2:0",
+  "model": "amazon.nova-2-multimodal-embeddings-v1:0",
   "input": "Product description for similarity matching",
   "normalize": true
 }
@@ -127,7 +127,7 @@ curl -X POST "$BASE/v1/embeddings" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "amazon.titan-embed-text-v2:0",
+    "model": "amazon.nova-2-multimodal-embeddings-v1:0",
     "input": "Semantic search transforms how we find information"
   }'
 ```
@@ -139,7 +139,7 @@ curl -X POST "$BASE/v1/embeddings" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "amazon.titan-embed-text-v2:0",
+    "model": "amazon.nova-2-multimodal-embeddings-v1:0",
     "input": ["Product description", "User query", "Related content"],
     "encoding_format": "base64"
   }'
@@ -168,7 +168,7 @@ curl -X POST "$BASE/v1/embeddings" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d "{
-    \"model\": \"cohere.embed-v4\",
+    \"model\": \"amazon.nova-2-multimodal-embeddings-v1:0\",
     \"input\": \"data:image/jpeg;base64,$IMAGE_B64\"
   }"
 ```
@@ -186,10 +186,18 @@ curl -X POST "$BASE/v1/embeddings" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d "{
-    \"model\": \"twelvelabs.marengo-embed-2-7-v1:0\",
+    \"model\": \"amazon.nova-2-multimodal-embeddings-v1:0\",
     \"input\": \"data:video/mp4;base64,$VIDEO_B64\"
   }"
 ```
+
+!!! info "Automatic S3 Upload and Asynchronous Invocation"
+    When you provide Base64-encoded data that exceeds the model's size limit (or Bedrock's 25 MB quota), the server automatically uploads it to S3 and selects the appropriate invocation method (synchronous or asynchronous).
+
+    To allow this behavior, configure regional S3 buckets via `AWS_S3_REGIONAL_BUCKETS` in the same region as your Bedrock model. See [configuration guide](operations_configuration.md#aws-s3-regional-buckets).
+
+!!! warning "Large Base64 Files and Memory Configuration"
+    While passing large files as Base64 is supported, ensure your server has sufficient memory configured. Large Base64-encoded files (especially videos) can consume significant memory during processing. Consider using S3 URLs directly for very large files, or adjust your server's memory limits accordingly.
 
 **Option 2: S3 URL (for large files)**
 
@@ -199,19 +207,17 @@ curl -X POST "$BASE/v1/embeddings" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "twelvelabs.marengo-embed-2-7-v1:0",
+    "model": "amazon.nova-2-multimodal-embeddings-v1:0",
     "input": "s3://my-bucket/path/to/video.mp4"
   }'
 ```
 
-!!! warning "Regional S3 Buckets Required"
-    Video and audio embeddings with TwelveLabs models process content asynchronously and may require regional S3 buckets configured via [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets) for the region where the model is invoked. See the [configuration guide](operations_configuration.md#aws-s3-regional-buckets) for setup instructions.
-
 !!! warning "S3 URL Requirements"
-    When passing S3 URLs for large video files:
+    When using S3 URLs directly:
 
-    - The S3 bucket **must be in the same AWS region** as the Bedrock model you're invoking
-    - The STDAPI server **must have access** to the S3 bucket
+    - S3 bucket **must be in the same AWS region** as the Bedrock model
+    - The stdapi.ai server **must have read access** to the S3 object
+    - For TwelveLabs Marengo models: S3 bucket **must be in the same AWS account** as the STDAPI server
 
 ### Example: PDF Document Embedding
 

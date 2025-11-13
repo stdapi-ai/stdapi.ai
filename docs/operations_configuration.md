@@ -807,8 +807,19 @@ These permissions are mandatory for stdapi.ai to discover and invoke Bedrock mod
         "bedrock:ListInferenceProfiles"
       ],
       "Resource": "*"
+    },
+    {
+      "Sid": "STSGetCallerIdentity",
+      "Effect": "Allow",
+      "Action": [
+        "sts:GetCallerIdentity"
+      ],
+      "Resource": "*"
     }
     ```
+
+    !!! note "ECS Deployments"
+        When running on ECS, the `sts:GetCallerIdentity` permission is not required. ECS deployments automatically retrieve the account ID from ECS task metadata, eliminating the need for this STS API call.
 
 ### Bedrock Marketplace Auto-Subscribe (Optional) { #bedrock-marketplace-auto-subscribe-iam }
 
@@ -1077,6 +1088,14 @@ Required if you configure API authentication. See [Authentication](#authenticati
           "Resource": "*"
         },
         {
+          "Sid": "STSGetCallerIdentity",
+          "Effect": "Allow",
+          "Action": [
+            "sts:GetCallerIdentity"
+          ],
+          "Resource": "*"
+        },
+        {
           "Sid": "BedrockMarketplaceAutoSubscribe",
           "Effect": "Allow",
           "Action": [
@@ -1091,6 +1110,9 @@ Required if you configure API authentication. See [Authentication](#authenticati
 
     !!! note "Marketplace Auto-Subscribe (Default Enabled)"
         The marketplace permissions are included because `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE` defaults to `true`. If you set it to `false`, you can remove the `BedrockMarketplaceAutoSubscribe` statement.
+
+    !!! note "ECS Deployments"
+        When running on ECS, the `STSGetCallerIdentity` statement is not required. ECS deployments automatically retrieve the account ID from ECS task metadata.
 
 ??? example "Production Policy (Bedrock + S3 + Authentication)"
     ```json
@@ -1115,6 +1137,14 @@ Required if you configure API authentication. See [Authentication](#authenticati
             "bedrock:GetFoundationModelAvailability",
             "bedrock:ListProvisionedModelThroughputs",
             "bedrock:ListInferenceProfiles"
+          ],
+          "Resource": "*"
+        },
+        {
+          "Sid": "STSGetCallerIdentity",
+          "Effect": "Allow",
+          "Action": [
+            "sts:GetCallerIdentity"
           ],
           "Resource": "*"
         },
@@ -1152,6 +1182,9 @@ Required if you configure API authentication. See [Authentication](#authenticati
     !!! note "Marketplace Auto-Subscribe (Default Enabled)"
         The marketplace permissions are included because `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE` defaults to `true`. If you set it to `false`, you can remove the `BedrockMarketplaceAutoSubscribe` statement to follow the principle of least privilege.
 
+    !!! note "ECS Deployments"
+        When running on ECS, the `STSGetCallerIdentity` statement is not required. ECS deployments automatically retrieve the account ID from ECS task metadata.
+
 ### Permission Notes
 
 !!! tip "Least Privilege Principle"
@@ -1163,6 +1196,7 @@ Required if you configure API authentication. See [Authentication](#authenticati
 |---------|---------------------|---------------|
 | **Bedrock Models (Invoke)** | `bedrock:InvokeModel`<br>`bedrock:InvokeModelWithResponseStream` | Always required |
 | **Bedrock Models (Discovery)** | `bedrock:ListFoundationModels`<br>`bedrock:GetFoundationModelAvailability`<br>`bedrock:ListProvisionedModelThroughputs`<br>`bedrock:ListInferenceProfiles` | Always required |
+| **AWS Account Identity** | `sts:GetCallerIdentity` | Always required (except ECS, which uses task metadata) |
 | **Bedrock Marketplace Auto-Subscribe** | `aws-marketplace:Subscribe`<br>`aws-marketplace:ViewSubscriptions` | `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE=true` (default) |
 | **Bedrock Guardrails** | `bedrock:ApplyGuardrail` | `AWS_BEDROCK_GUARDRAIL_IDENTIFIER` |
 | **File Storage** | `s3:PutObject`<br>`s3:GetObject`<br>`s3:DeleteObject` | `AWS_S3_BUCKET` |

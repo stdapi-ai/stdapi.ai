@@ -4,8 +4,10 @@ from asyncio import Lock, Queue, create_task, gather, sleep
 from collections.abc import AsyncGenerator, Iterable, Mapping
 from contextlib import suppress
 from datetime import timedelta
+from functools import cached_property
 from importlib import import_module
 from pkgutil import iter_modules
+from secrets import token_hex
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, TypeVar
 
 from botocore.exceptions import ClientError
@@ -20,6 +22,7 @@ from stdapi.config import SETTINGS
 from stdapi.models.deprecation import DEPRECATED_MODELS
 from stdapi.monitoring import REQUEST_ID, REQUEST_LOG, log_error_details
 from stdapi.openai_exceptions import OpenaiUnsupportedModelError
+from stdapi.utils import b64decode_data_uri, get_base64_decoded_size, get_data_uri_type
 
 if TYPE_CHECKING:
     from types_aiobotocore_bedrock.client import BedrockClient
@@ -38,6 +41,7 @@ if TYPE_CHECKING:
         ToolConfigurationTypeDef,
     )
     from types_aiobotocore_s3.client import S3Client
+    from types_aiobotocore_s3.type_defs import BlobTypeDef, PutObjectRequestTypeDef
 
     from stdapi.aws_bedrock import ConverseRequestBaseTypeDef
 
@@ -139,6 +143,18 @@ class ModelBase[RequestT, ResponseT]:
         """
         self._model_id = model_id
 
+    @cached_property
+    def model(self) -> ModelDetails:
+        """Get the model details for this model.
+
+        Returns:
+            Model details including region, provider, and capabilities.
+
+        Raises:
+            KeyError: If the model is not found in the registry.
+        """
+        return _MODELS[self._model_id]
+
     async def invoke(
         self, body: RequestT, *, inference_profile: bool = True
     ) -> ResponseT:
@@ -198,6 +214,7 @@ class ModelBase[RequestT, ResponseT]:
         background_tasks: BackgroundTasks,
         *,
         inference_profile: bool = True,
+        output_file: str = "output.json",
     ) -> ResponseT:
         """Invoke the model through AWS Bedrock asynchronous API.
 
@@ -205,6 +222,8 @@ class ModelBase[RequestT, ResponseT]:
             body: The input data to invoke the operation.
             background_tasks: FastAPI background tasks for cleanup.
             inference_profile: If True, use the inference profile. Otherwise, use the model ID.
+            output_file: Output file name to retrieve from S3.
+                Defaults to "output.json".
 
         Returns:
             The result of the invoked operation.
@@ -214,6 +233,7 @@ class ModelBase[RequestT, ResponseT]:
             body,  # type: ignore[return-value,arg-type]
             background_tasks,
             inference_profile=inference_profile,
+            output_file=output_file,
         )
 
     async def batch_invoke_async(
@@ -925,6 +945,7 @@ async def invoke_json_async(
     background_tasks: BackgroundTasks,
     *,
     inference_profile: bool = True,
+    output_file: str = "output.json",
 ) -> Mapping[str, Any]:
     """Invoke a Bedrock model asynchronously from a JSON payload and return the JSON response.
 
@@ -937,9 +958,11 @@ async def invoke_json_async(
         body: JSON payload.
         background_tasks: FastAPI background tasks for cleanup.
         inference_profile: If True, use the inference profile. Otherwise, use the model ID.
+        output_file: Output JSON file name to retrieve from S3 (e.g., "output.json").
+            Defaults to "output.json".
 
     Returns:
-        JSON response.
+        JSON response from the output file.
 
     Raises:
         HTTPException: When invocation configuration is missing, invocation fails,
@@ -950,7 +973,6 @@ async def invoke_json_async(
     bedrock_client: BedrockRuntimeClient = get_client("bedrock-runtime", model.region)
     s3_tmp_objects: list[tuple[str, str]] = []
     request_id = REQUEST_ID.get()
-
     try:
         with handle_bedrock_client_error():
             invocation_arn = (
@@ -959,7 +981,7 @@ async def invoke_json_async(
                     modelInput=body,
                     outputDataConfig={
                         "s3OutputDataConfig": {
-                            "s3Uri": f"s3://{s3_bucket}/{request_id}"
+                            "s3Uri": f"s3://{s3_bucket}/{SETTINGS.aws_s3_tmp_prefix}{request_id}/"
                         }
                     },
                 )
@@ -968,12 +990,11 @@ async def invoke_json_async(
         s3_key = await _wait_for_async_invocation_completion(
             bedrock_client, invocation_arn
         )
-        s3_output = f"{s3_key}/output.json"
-        s3_tmp_objects.extend(
-            ((s3_bucket, s3_output), (s3_bucket, f"{s3_key}/manifest.json"))
-        )
+        s3_output_path = f"{s3_key}/{output_file}"
+        s3_tmp_objects.append((s3_bucket, s3_output_path))
+        s3_tmp_objects.append((s3_bucket, f"{s3_key}/manifest.json"))
         return from_json(  # type: ignore[no-any-return]
-            await (await s3_client.get_object(Bucket=s3_bucket, Key=s3_output))[
+            await (await s3_client.get_object(Bucket=s3_bucket, Key=s3_output_path))[
                 "Body"
             ].read()
         )
@@ -1025,3 +1046,88 @@ def get_model_s3_bucket(model: ModelDetails) -> "tuple[str, S3Client]":
             "Please contact the administrator to enable it.",
         ) from error
     return s3_bucket, get_client("s3", model.region)
+
+
+async def put_to_s3(
+    content: "BlobTypeDef | str", model: ModelDetails, content_type: str = ""
+) -> tuple[str, str]:
+    """Uploads content to an S3 bucket under a temporary key.
+
+    The key is derived from the request ID and model details.
+    This function handles both raw binary content and base64 encoded data URIs.
+
+    Args:
+        content: The content to upload. Can be a raw byte string or a base64 encoded
+            data URI.
+        model: Details of the model for which the content is being uploaded. Helps
+            determine the appropriate S3 storage location.
+        content_type: The MIME type of the content being uploaded. Used to set the
+            `ContentType` in the S3 object metadata. Defaults to an empty string,
+            indicating no specific content type.
+
+    Returns:
+        A tuple containing the S3 bucket name and the key of the uploaded object.
+    """
+    if isinstance(content, str):
+        content = (
+            await b64decode_data_uri(content)
+            if content.startswith("data:")
+            else content.encode()
+        )
+    ext = f".{content_type.split('/')[-1]}" if content_type else ""
+    s3_key = f"{SETTINGS.aws_s3_tmp_prefix}{REQUEST_ID.get()}/{token_hex(4)}{ext}"
+    s3_bucket, s3_client = get_model_s3_bucket(model)
+    kwargs: PutObjectRequestTypeDef = {
+        "Bucket": s3_bucket,
+        "Key": s3_key,
+        "Body": content,
+    }
+    if content_type:
+        kwargs["ContentType"] = content_type
+    await s3_client.put_object(**kwargs)
+    return s3_bucket, s3_key
+
+
+async def get_s3_content_type_and_size(
+    uri: str, model: ModelDetails
+) -> tuple[str, int]:
+    """Get information about the S3 file behind an S3 URI.
+
+    Args:
+        uri: plain text, base64 encoded as string or URI, or S3 URI
+        model: Model details containing region information.
+
+    Returns:
+        File size and content type.
+
+    Raises:
+        HTTPException: If the required S3 bucket for the region is not configured.
+    """
+    bucket, key = uri.removeprefix("s3://").split("/", 1)
+    result = await get_client("s3", region_name=model.region).head_object(
+        Bucket=bucket, Key=key
+    )
+    return result["ContentLength"], result["ContentType"]
+
+
+async def get_content_type_and_size(value: str, model: ModelDetails) -> tuple[str, int]:
+    """Determines the content type and size of the given data based on its format.
+
+    This function analyzes a given input value to determine its content type and size. The input
+    can be in the form of a data URI, an S3 resource path, or plain text. Based on the format,
+    the function identifies the content type and computes the size of the data.
+
+    Args:
+        value: The input data to be evaluated. It can be in a data URI format,
+            an S3 path, or a plain string.
+        model: The model object responsible for handling metadata
+            when processing S3 resources.
+
+    Returns:
+        A tuple containing the content type as a string and the size of the data as an integer.
+    """
+    if value.startswith("data:"):
+        return get_data_uri_type(value), get_base64_decoded_size(value)
+    if value.startswith("s3://"):
+        return await get_s3_content_type_and_size(value, model)
+    return "text/plain", len(value)

@@ -308,6 +308,40 @@ def sample_audio_file_base64(sample_audio_file: bytes) -> str:
 
 
 @pytest.fixture(scope="session")
+def sample_audio_mp3_file(openai_client: OpenAI, speech_standard_model: str) -> bytes:
+    """Create a sample audio file for testing using the speech endpoint.
+
+    This fixture generates a short MP3 audio snippet using the TTS endpoint once,
+    caches it under tests/.cache/audio.mp3, and returns its bytes for reuse by
+    tests (both local server and --use-openai-api modes).
+    """
+    audio_file = _CACHE_DIR / "audio.mp3"
+    if audio_file.exists():
+        with audio_file.open("rb") as file:
+            return file.read()
+    content = openai_client.audio.speech.create(
+        model=speech_standard_model,
+        voice="alloy",
+        input="This is a test.",
+        response_format="mp3",
+    ).content
+    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    with audio_file.open("wb") as file:
+        file.write(content)
+    return content
+
+
+@pytest.fixture(scope="session")
+def sample_audio_mp3_file_base64(sample_audio_mp3_file: bytes) -> str:
+    """Generates a MP3 data URL containing a base64-encoded audio.
+
+    Returns:
+        str: A string representing the data URL of a MP3 audio in base64 encoding.
+    """
+    return f"data:audio/mp3;base64,{b64encode(sample_audio_mp3_file).decode('utf-8')}"
+
+
+@pytest.fixture(scope="session")
 def sample_image_file(openai_client: OpenAI, image_generation_model: str) -> bytes:
     """Create a sample PNG image for testing using the Images API.
 
