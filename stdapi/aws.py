@@ -1,10 +1,12 @@
 """AWS client management and connection pooling."""
 
+import os
 from contextlib import AsyncExitStack
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from aioboto3 import Session
 from aiobotocore.config import AioConfig
+from aiohttp import ClientError, ClientSession, ClientTimeout
 
 from stdapi.config import SETTINGS
 from stdapi.server import USER_AGENT
@@ -12,11 +14,15 @@ from stdapi.server import USER_AGENT
 if TYPE_CHECKING:
     from types import TracebackType
 
+
 #: Current detected region
 REGION: str = Session().region_name or SETTINGS.aws_bedrock_regions[0]
 
 #: Session with the default region
 SESSION = Session(region_name=SETTINGS.aws_bedrock_regions[0])
+
+#: AWS account information (populated during startup)
+AWS_ACCOUNT_INFO: dict[str, str] = {}
 
 _CLIENTS: dict[str, dict[str, Any]] = {}
 
@@ -120,3 +126,35 @@ def get_client(service: str, region_name: str | None = None) -> Any:  # noqa:ANN
         if len(clients) == 1:
             return next(iter(clients.values()))
         raise
+
+
+async def initialize_aws_account_info() -> None:
+    """Initialize AWS account information at server startup.
+
+    Retrieves AWS account ID from ECS container metadata (if available)
+    or falls back to STS API. Also extracts ECS task ID if running in ECS.
+    Stores results in AWS_ACCOUNT_INFO dict.
+    """
+    try:
+        metadata_path = os.environ["ECS_CONTAINER_METADATA_URI_V4"]
+    except KeyError:
+        # Not running in ECS
+        pass
+    else:
+        try:
+            async with (
+                ClientSession(timeout=ClientTimeout(total=2, connect=1)) as session,
+                session.get(f"http://169.254.170.2{metadata_path}/task") as resp,
+            ):
+                resp.raise_for_status()
+                parts = (await resp.json())["TaskARN"].split(":")
+                AWS_ACCOUNT_INFO["account_id"] = parts[4]
+                AWS_ACCOUNT_INFO["task_id"] = parts[5].split("/")[-1]
+                return
+        except (OSError, ClientError):
+            pass
+
+    async with SESSION.client("sts", config=CONFIG, region_name=REGION) as sts_client:
+        AWS_ACCOUNT_INFO["account_id"] = (await sts_client.get_caller_identity())[
+            "Account"
+        ]

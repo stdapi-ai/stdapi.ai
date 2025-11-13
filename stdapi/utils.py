@@ -101,6 +101,33 @@ async def b64decode(
     return await to_thread(_b64decode, value, altchars=altchars, validate=validate)
 
 
+async def b64decode_data_uri(
+    value: str, *, altchars: str | Buffer | None = None, validate: bool = False
+) -> bytes:
+    """Decode a base64 encoded data URI into bytes.
+
+    Args:
+        value: The base64 encoded URI to decode.
+        altchars: Optional string or buffer containing two
+            characters to replace '+' and '/' in the standard base64 alphabet.
+        validate: When set to True, input will be validated to ensure it
+            conforms to base64 encoding rules. Defaults to False.
+
+    Returns:
+        bytes: The decoded data in bytes.
+    """
+    view = memoryview(value.encode())
+    try:
+        return await to_thread(
+            _b64decode,
+            view[view.tobytes().find(b",") + 1 :],
+            altchars=altchars,
+            validate=validate,
+        )
+    finally:
+        view.release()
+
+
 async def b64encode(value: Buffer, altchars: str | Buffer | None = None) -> str:
     """Encodes a given binary data into a base64 encoded string.
 
@@ -350,7 +377,7 @@ def hide_security_details(status: int, message: str) -> str:
     return message
 
 
-def guess_media_type(filepath: str) -> Literal["video", "audio", "image"]:
+def guess_media_type(filepath: str) -> tuple[Literal["video", "audio", "image"], str]:
     """Guess the media type from a file path based on its extension.
 
     Can be useful if the file cannot be accessed directly and only the file path is known.
@@ -360,7 +387,7 @@ def guess_media_type(filepath: str) -> Literal["video", "audio", "image"]:
         filepath: Path to the media file
 
     Returns:
-        str: "video", "audio", or "image"
+        str: "video", "audio", or "image", file extension.
 
     Raises:
         ValueError: If the file type cannot be determined
@@ -387,7 +414,7 @@ def guess_media_type(filepath: str) -> Literal["video", "audio", "image"]:
         "ts",
         "vob",
     }:
-        return "video"
+        return "video", extension
     if extension in {
         "mp3",
         "wav",
@@ -407,7 +434,7 @@ def guess_media_type(filepath: str) -> Literal["video", "audio", "image"]:
         "mid",
         "midi",
     }:
-        return "audio"
+        return "audio", extension
     if extension in {
         "jpg",
         "jpeg",
@@ -427,6 +454,28 @@ def guess_media_type(filepath: str) -> Literal["video", "audio", "image"]:
         "arw",
         "dng",
     }:
-        return "image"
+        return "image", extension
     msg = f"Unsupported media type for file: {filepath}"
     raise ValueError(msg)
+
+
+def get_base64_decoded_size(value: str) -> int:
+    """Compute the decoded size of base64 data without actually decoding it.
+
+    This function calculates the size of the decoded data by analyzing the base64
+    string length and padding, avoiding the memory overhead of actual decoding.
+
+    Args:
+        value: Base64-encoded string or URI.
+
+    Returns:
+        The size in bytes of the decoded data.
+    """
+    prefix_length = value.find(",") if value.startswith("data:") else 0
+    padding = 0
+    for i in range(len(value) - 1, -1, -1):
+        if value[i] == "=":
+            padding += 1
+        else:
+            break
+    return (len(value) * 3) // 4 - padding - prefix_length

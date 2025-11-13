@@ -50,7 +50,7 @@ lint = [
     "stdapi[opentelemetry, uvicorn]",
     "mypy",
     "ruff",
-    "types-aioboto3[bedrock, bedrock-runtime, polly, comprehend, s3, transcribe, translate]",
+    "types-aioboto3[bedrock, bedrock-runtime, polly, comprehend, s3, sts, transcribe, translate]",
     "types-PyYAML",
 ]
 docs = [

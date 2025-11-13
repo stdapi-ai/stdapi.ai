@@ -128,6 +128,20 @@ The following features may be implemented in future releases based on community 
 
 ## ✨ Release History
 
+### v1.1.0 – Embeddings Enhancement
+
+Expands multimodal embedding capabilities.
+
+### 🧠 Embeddings
+
+| Provider                                                                                      | Endpoint/Feature                          | AWS Backend                                                                                        |
+|-----------------------------------------------------------------------------------------------|-------------------------------------------|----------------------------------------------------------------------------------------------------|
+|                                                                                               | Intelligent S3 multimodal upload          | ![Amazon S3](styles/logo_amazon_s3.svg){: style="height:20px;width:20px"} Amazon S3                |
+|                                                                                               | Intelligent Sync/async Bedrock invocation | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock |
+| ![Amazon Nova](styles/logo_amazon_nova.svg){: style="height:20px;width:20px"} **Amazon Nova** | Multimodal embeddings models              |                                                                                                    |
+
+---
+
 ### v1.0.0 – Foundation Release
 
 The initial release establishes core OpenAI API compatibility with AWS Bedrock backing.

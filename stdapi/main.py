@@ -16,7 +16,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 
 from stdapi.auth import initialize_authentication
-from stdapi.aws import AWSConnectionManager
+from stdapi.aws import AWSConnectionManager, initialize_aws_account_info
 from stdapi.aws_bedrock import set_guardrail_configuration
 from stdapi.config import SETTINGS, LogLevel
 from stdapi.exceptions import ServerError
@@ -79,6 +79,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                     initialize_polly_models(),
                     initialize_transcribe_models(),
                     register(),
+                    initialize_aws_account_info(),
                 )
                 auth_enabled = results[0]
                 unavailable_models = results[1][1]
