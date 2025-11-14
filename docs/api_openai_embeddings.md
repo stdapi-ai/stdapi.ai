@@ -34,7 +34,7 @@ Transform text into semantic vectors. Power your search, recommendations, and si
 |------------------------------|:----------------------------------------:|-----------------------------------------------------------------|
 | **Input Types**              |                                          |                                                                 |
 | Text input (single string)   |   :material-check-circle:{ .success }    | Full support for text embeddings                                |
-| Multimodal input             | :material-plus-circle:{ .extra-feature } | Image, audio, video                                             |
+| Multimodal input             | :material-plus-circle:{ .extra-feature } | Image, audio, video, document (image + text)                    |
 | Multiple input (batch array) |   :material-check-circle:{ .success }    | Process multiple inputs efficiently                             |
 | Token array input            | :material-close-circle:{ .unsupported }  | Array of token integers not supported                           |
 | **Output Formats**           |                                          |                                                                 |
@@ -223,6 +223,8 @@ curl -X POST "$BASE/v1/embeddings" \
 
 For PDFs, convert each page to an image and send via inputs along with page metadata (e.g., file_name, entities) in adjacent text parts. **For RAG applications, smaller chunks often improve retrieval accuracy and reduce costs.**
 
+**![Cohere](styles/logo_cohere.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Cohere Embed v4** (supports multiple text+image pairs in one request):
+
 ```bash
 # Convert PDF pages to images (using ImageMagick or similar tool)
 convert -density 150 document.pdf page-%d.jpg
@@ -242,6 +244,28 @@ curl -X POST "$BASE/v1/embeddings" \
       \"data:image/jpeg;base64,$PAGE_1\",
       \"file_name: report.pdf, page: 2\",
       \"data:image/jpeg;base64,$PAGE_2\"
+    ]
+  }"
+```
+
+**![TwelveLabs](styles/logo_twelvelabs.svg){ style="height: 1.2em; vertical-align: text-bottom;" } TwelveLabs Marengo v3** (requires exactly one text + one image per request):
+
+!!! info "Text+Image Pairing for Marengo v3"
+    When using `twelvelabs.marengo-embed-3-0-v1:0`, if you provide exactly **2 inputs** where one is text and one is image, they are automatically combined into a single `text_image` embedding. This creates a unified multimodal representation of the text-image pair.
+
+```bash
+# Encode image to base64
+IMAGE_B64=$(base64 -w 0 page-0.jpg)
+
+# Generate text+image embedding (automatically uses text_image mode)
+curl -X POST "$BASE/v1/embeddings" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"model\": \"twelvelabs.marengo-embed-3-0-v1:0\",
+    \"input\": [
+      \"A diagram showing the quarterly sales report\",
+      \"data:image/jpeg;base64,$IMAGE_B64\"
     ]
   }"
 ```
