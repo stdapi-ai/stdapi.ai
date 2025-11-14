@@ -4,9 +4,10 @@ import pytest
 from openai import BadRequestError, OpenAI
 
 MARANGO_V2 = "twelvelabs.marengo-embed-2-7-v1:0"
+MARANGO_V3 = "twelvelabs.marengo-embed-3-0-v1:0"
 
-MARANGO_ALL = (MARANGO_V2,)
-MARANGO_SAMPLE = (MARANGO_V2,)
+MARANGO_ALL = (MARANGO_V2, MARANGO_V3)
+MARANGO_SAMPLE = (MARANGO_V3,)
 
 
 class TestTwelveLabsMarengoEmbeddings:
@@ -83,7 +84,7 @@ class TestTwelveLabsMarengoEmbeddings:
         assert isinstance(item.embedding, list)
         assert len(item.embedding) > 0
 
-    @pytest.mark.parametrize("model_id", MARANGO_SAMPLE)
+    @pytest.mark.parametrize("model_id", [MARANGO_V2])
     def test_text_extra_params_text_truncate(
         self, openai_client: OpenAI, use_openai_api: bool, model_id: str
     ) -> None:
@@ -122,7 +123,7 @@ class TestTwelveLabsMarengoEmbeddings:
             )
 
     @pytest.mark.expensive
-    @pytest.mark.parametrize("model_id", MARANGO_SAMPLE)
+    @pytest.mark.parametrize("model_id", MARANGO_ALL)
     def test_force_s3_data_with_small_image(
         self,
         openai_client: OpenAI,
@@ -153,7 +154,7 @@ class TestTwelveLabsMarengoEmbeddings:
         assert len(item.embedding) > 0
 
     @pytest.mark.expensive
-    @pytest.mark.parametrize("model_id", MARANGO_SAMPLE)
+    @pytest.mark.parametrize("model_id", MARANGO_ALL)
     def test_force_s3_data_with_video(
         self,
         openai_client: OpenAI,
@@ -184,7 +185,7 @@ class TestTwelveLabsMarengoEmbeddings:
         assert len(item.embedding) > 0
 
     @pytest.mark.expensive
-    @pytest.mark.parametrize("model_id", MARANGO_SAMPLE)
+    @pytest.mark.parametrize("model_id", MARANGO_ALL)
     def test_force_s3_data_with_audio(
         self,
         openai_client: OpenAI,
@@ -211,7 +212,7 @@ class TestTwelveLabsMarengoEmbeddings:
         assert len(item.embedding) > 0
 
     @pytest.mark.expensive
-    @pytest.mark.parametrize("model_id", MARANGO_SAMPLE)
+    @pytest.mark.parametrize("model_id", MARANGO_ALL)
     def test_force_s3_data_with_mixed_batch(
         self,
         openai_client: OpenAI,
@@ -245,6 +246,65 @@ class TestTwelveLabsMarengoEmbeddings:
         assert response.object == "list"
         # Video may return multiple segments
         assert len(response.data) >= len(inputs)
+        for item in response.data:
+            assert item.object == "embedding"
+            assert isinstance(item.embedding, list)
+            assert len(item.embedding) > 0
+
+    @pytest.mark.expensive
+    @pytest.mark.parametrize("model_id", [MARANGO_V3])
+    def test_text_image_pair_v3(
+        self,
+        openai_client: OpenAI,
+        use_openai_api: bool,
+        sample_image_file_base64: str,
+        model_id: str,
+    ) -> None:
+        """Text+image pair automatically uses text_image mode (v3 only).
+
+        When exactly 2 inputs are provided where one is text and one is image,
+        v3 models automatically combine them into a single text_image embedding.
+        """
+        if use_openai_api:
+            pytest.skip(
+                "TwelveLabs models are not available on the official OpenAI API"
+            )
+
+        # Test with text first, then image
+        inputs = ["A beautiful sunset over the ocean.", sample_image_file_base64]
+        response = openai_client.embeddings.create(model=model_id, input=inputs)
+
+        assert response.object == "list"
+        assert len(response.data) == 1  # Combined into single text_image embedding
+        item = response.data[0]
+        assert item.object == "embedding"
+        assert isinstance(item.embedding, list)
+        assert len(item.embedding) > 0
+
+    @pytest.mark.expensive
+    @pytest.mark.parametrize("model_id", [MARANGO_V2])
+    def test_text_image_pair_not_combined_v2(
+        self,
+        openai_client: OpenAI,
+        use_openai_api: bool,
+        sample_image_file_base64: str,
+        model_id: str,
+    ) -> None:
+        """Text+image pair NOT combined in v2 (no text_image support).
+
+        v2 models do not support text_image mode, so text and image
+        are embedded independently, returning 2 separate embeddings.
+        """
+        if use_openai_api:
+            pytest.skip(
+                "TwelveLabs models are not available on the official OpenAI API"
+            )
+
+        inputs = ["A beautiful sunset over the ocean.", sample_image_file_base64]
+        response = openai_client.embeddings.create(model=model_id, input=inputs)
+
+        assert response.object == "list"
+        assert len(response.data) == 2  # NOT combined in v2, returns 2 embeddings
         for item in response.data:
             assert item.object == "embedding"
             assert isinstance(item.embedding, list)
