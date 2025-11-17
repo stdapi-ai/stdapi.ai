@@ -65,7 +65,7 @@ This OpenAI-compatible endpoint provides access to AWS Bedrock foundation models
 | `response_format`                        | :material-close-circle:{ .unsupported }  | Response format specification                                   |
 | `verbosity`                              | :material-close-circle:{ .unsupported }  | Model verbosity                                                 |
 | `web_search_options`                     | :material-close-circle:{ .unsupported }  | Web search tool                                                 |
-| prompt cache                             | :material-close-circle:{ .unsupported }  | Prompt cache for similar request                                |
+| `prompt_cache_key`                       |       :material-cog:{ .model-dep }       | Cache prompts to reduce costs and latency                       |
 | Extra model-specific params              | :material-plus-circle:{ .extra-feature } | Extra model-specific parameters not supported by the OpenAI API |
 | **Streaming & Output**                   |                                          |                                                                 |
 | Text                                     |   :material-check-circle:{ .success }    | Text messages                                                   |
@@ -99,6 +99,89 @@ This OpenAI-compatible endpoint provides access to AWS Bedrock foundation models
 </div>
 
 ## Advanced Features
+
+### Prompt Caching
+
+Reduce costs and improve response times by caching frequently-used prompt components across multiple requests. This feature is particularly effective for applications with consistent system prompts, tool definitions, or conversation contexts.
+
+**Supported Models:**
+
+- **Anthropic Claude**: Full support for system, messages, and tools caching
+- **Amazon Nova**: Support for system and messages caching
+
+**Documentation:** [AWS Bedrock Prompt Caching - Supported Models](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html#prompt-caching-models)
+
+**Important:** Cache creation incurs a higher cost than regular token processing. Only use prompt caching when you expect a high cache hit ratio across multiple requests with similar prompts.
+
+**How to Use:**
+
+Set the `prompt_cache_key` parameter to enable caching:
+
+```bash
+curl -X POST "$BASE/v1/chat/completions" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "prompt_cache_key": "default",
+    "messages": [
+      {
+        "role": "system",
+        "content": "You are a helpful assistant with extensive knowledge..."
+      },
+      {"role": "user", "content": "What is 2 + 2?"}
+    ]
+  }'
+```
+
+**Granular Cache Control:**
+
+Enable caching for specific prompt sections using dot-separated values:
+
+- `"system"` - Cache system messages only
+- `"messages"` - Cache conversation history
+- `"tools"` - Cache tool/function definitions (Anthropic Claude only)
+- `"system.messages"` - Cache both system and messages
+- `"system.tools"` - Cache system and tools
+- `"messages.tools"` - Cache messages and tools
+- `"system.messages.tools"` - Cache all components
+- Any other non-empty value - Cache all components
+
+**Note:** Custom cache hash keys are not supported. The parameter is used only to control which sections are cached, not as a cache identifier.
+
+```json
+{
+  "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+  "prompt_cache_key": "system.tools",
+  "messages": [...],
+  "tools": [...]
+}
+```
+
+**Benefits:**
+
+- **Cost Reduction**: Cached tokens are billed at a lower rate than regular input tokens
+- **Lower Latency**: Cached prompts eliminate reprocessing time
+- **Automatic Management**: The API handles cache invalidation and updates
+
+**Usage Tracking:**
+
+Cached token usage is reported in the response:
+
+```json
+{
+  "usage": {
+    "prompt_tokens": 1500,
+    "completion_tokens": 100,
+    "total_tokens": 1600,
+    "prompt_tokens_details": {
+      "cached_tokens": 1200
+    }
+  }
+}
+```
+
+In this example, 1,200 tokens were retrieved from cache, with only 300 tokens requiring processing.
 
 ### ![AWS S3](styles/logo_amazon_s3.svg){ style="height: 1.2em; vertical-align: text-bottom;" } S3 Image Support
 

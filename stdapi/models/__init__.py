@@ -8,7 +8,7 @@ from functools import cached_property
 from importlib import import_module
 from pkgutil import iter_modules
 from secrets import token_hex
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, TypeVar
 
 from botocore.exceptions import ClientError
 from fastapi import BackgroundTasks, HTTPException
@@ -16,7 +16,13 @@ from pydantic import AwareDatetime, BaseModel
 from pydantic_core import from_json, to_json
 
 from stdapi.aws import get_client
-from stdapi.aws_bedrock import GUARDTRAIL_CONFIG_VAR, handle_bedrock_client_error
+from stdapi.aws_bedrock import (
+    GUARDTRAIL_CONFIG_VAR,
+    PROMPT_CACHING_SUPPORTED,
+    PROMPT_CACHING_TOOL_SUPPORTED,
+    PromptCaching,
+    handle_bedrock_client_error,
+)
 from stdapi.aws_s3 import aws_s3_cleanup
 from stdapi.config import SETTINGS
 from stdapi.models.deprecation import DEPRECATED_MODELS
@@ -33,6 +39,7 @@ if TYPE_CHECKING:
     from types_aiobotocore_bedrock_runtime import BedrockRuntimeClient
     from types_aiobotocore_bedrock_runtime.literals import TraceType
     from types_aiobotocore_bedrock_runtime.type_defs import (
+        CachePointBlockTypeDef,
         InferenceConfigurationTypeDef,
         InvokeModelRequestTypeDef,
         MessageTypeDef,
@@ -91,6 +98,11 @@ _CACHE: "_ModelCache" = {
 
 #: Always allowed inference types
 _INFERENCE_TYPES = {"INFERENCE_PROFILE", "ON_DEMAND"}
+
+#: Cached cache point for prompt caching
+_CACHE_POINT: 'dict[Literal["cachePoint"], CachePointBlockTypeDef]' = {
+    "cachePoint": {"type": "default"}
+}
 
 
 class ModelDetails(BaseModel):
@@ -797,6 +809,7 @@ async def prepare_converse_request(
     tool_config: "ToolConfigurationTypeDef | None",
     additional_request_fields: Mapping[str, Any],
     performance_config: "PerformanceConfigurationTypeDef",
+    prompt_caching: set[PromptCaching],
     *,
     inference_profile: bool = True,
 ) -> "tuple[BedrockRuntimeClient, ConverseRequestBaseTypeDef]":
@@ -809,7 +822,8 @@ async def prepare_converse_request(
         system_blocks: Optional top-level system instruction blocks.
         tool_config: Optional Bedrock tool configuration.
         additional_request_fields: Additional request fields.
-        performance_config: Prefered performance configuration.
+        performance_config: Preferred performance configuration.
+        prompt_caching: Prompt caching configuration.
         inference_profile: If True, use the inference profile. Otherwise, use the model ID.
 
     Returns:
@@ -830,7 +844,45 @@ async def prepare_converse_request(
         request["performanceConfig"] = performance_config
     with suppress(LookupError):
         request["guardrailConfig"] = GUARDTRAIL_CONFIG_VAR.get()
+    _enable_converse_prompt_caching(
+        model, system_blocks, tool_config, bedrock_messages, prompt_caching
+    )
     return get_client("bedrock-runtime", model.region), request
+
+
+def _enable_converse_prompt_caching(
+    model: ModelDetails,
+    system_blocks: "list[SystemContentBlockTypeDef]",
+    tool_config: "ToolConfigurationTypeDef | None",
+    bedrock_messages: "list[MessageTypeDef]",
+    prompt_caching: set[PromptCaching],
+) -> None:
+    """Enables prompt caching for specified components including system blocks, tools, and messages.
+
+    Args:
+        model: Model details.
+        bedrock_messages: A list of message objects of type MessageTypeDef,
+            on which caching will be applied if "messages" is in the prompt_caching set.
+        system_blocks: A list of system content blocks of type SystemContentBlockTypeDef to
+            which the cache point will be appended if "system" is in the prompt_caching set.
+        tool_config: An optional tool configuration of type ToolConfigurationTypeDef.
+            If "tools" is in prompt_caching and the configuration is provided,
+            the cache point is appended to its tools attribute.
+        prompt_caching: A set of PromptCaching values that specifies the components
+            (e.g., "system", "tools", "messages") for which caching should be enabled.
+    """
+    if model.id.startswith(PROMPT_CACHING_SUPPORTED):
+        if "system" in prompt_caching and system_blocks:
+            system_blocks.append(_CACHE_POINT)  # type: ignore[arg-type]
+        if "messages" in prompt_caching and bedrock_messages:
+            for message in bedrock_messages:
+                message["content"].append(_CACHE_POINT)  # type: ignore[attr-defined]
+        if (
+            "tools" in prompt_caching
+            and tool_config
+            and model.id.startswith(PROMPT_CACHING_TOOL_SUPPORTED)
+        ):
+            tool_config["tools"].append(_CACHE_POINT)  # type: ignore[attr-defined]
 
 
 async def validate_model(

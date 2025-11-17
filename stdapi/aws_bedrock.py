@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from re import IGNORECASE
 from re import compile as compile_regex
-from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 
 from aiohttp import ClientError as AIOHTTPClientError
 from aiohttp import ClientSession
@@ -123,6 +123,18 @@ _REASONING_EFFORT_BUDGET_FACTOR: dict[ReasoningEffort, float] = {
     "medium": 0.75,
     "high": 1.0,
 }
+
+#: Prompt caching type
+PromptCaching = Literal["system", "messages", "tools"]
+
+#: Available prompt caching
+PROMPT_CACHING: frozenset[PromptCaching] = frozenset(("system", "messages", "tools"))
+
+#: Models supporting prompt caching
+PROMPT_CACHING_SUPPORTED = ("anthropic.claude-", "amazon.nova-")
+
+#: Models supporting tools prompt caching
+PROMPT_CACHING_TOOL_SUPPORTED = ("anthropic.claude-",)
 
 
 class _DefaultModelParameters(BaseModel):

@@ -1206,8 +1206,11 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
         min_length=1,
         max_length=255,
         description="Used to cache responses for similar requests.\n"
-        "Replaces the `user` field.\n"
-        "UNSUPPORTED on this implementation.",
+        "Controls prompt caching for similar requests to reduce costs and improve response times.\n"
+        "- Set to any non-empty value to enable prompt caching globally on supported models\n"
+        "- Set to a dot-separated list of 'system', 'messages', and/or 'tools' to enable caching only for specific prompt sections\n"
+        "  Examples: 'system.tools' enables caching for system and tools sections; 'system.messages.tools' enables for all sections\n"
+        "Note: Custom hash keys are UNSUPPORTED in this implementation",
     )
     reasoning_effort: ReasoningEffort | None = Field(
         default=None,
@@ -1398,7 +1401,6 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
         "logprobs",
         "metadata",
         "prediction",
-        "prompt_cache_key",
         "response_format",
         "store",
         "verbosity",

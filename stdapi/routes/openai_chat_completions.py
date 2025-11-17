@@ -37,6 +37,8 @@ from stdapi.auth import authenticate
 from stdapi.aws_bedrock import (
     MIME_TYPES_TO_DOCUMENT_TYPE,
     MIME_TYPES_TO_VIDEO_TYPE,
+    PROMPT_CACHING,
+    PromptCaching,
     handle_bedrock_client_error,
     image_block_from_bytes,
     image_block_from_data_url,
@@ -91,6 +93,7 @@ from stdapi.types.openai_chat_completions import (
     FunctionCall,
     FunctionCallParam,
     OutputModalities,
+    PromptTokensDetails,
     ServiceTiers,
 )
 from stdapi.utils import b64decode, b64encode, parse_json_mapping
@@ -539,6 +542,22 @@ def _req_extract_function_blocks(
     return [{"toolResult": {"toolUseId": message_param.name, "content": content}}]
 
 
+def _parse_prompt_cache_key(prompt_cache_key: str | None) -> set[PromptCaching]:
+    """Parses and validates the given prompt cache key.
+
+    Args:
+        prompt_cache_key: The cache key string to be parsed.
+
+    Returns:
+        A set containing valid keys derived from the input `prompt_cache_key`.
+    """
+    if prompt_cache_key:
+        return (
+            set(prompt_cache_key.split(".")) & PROMPT_CACHING  # type: ignore[return-value]
+        ) or PROMPT_CACHING
+    return set()
+
+
 async def _req_map_messages(
     messages: list[ChatCompletionMessageParam],
 ) -> tuple[list["MessageTypeDef"], list["SystemContentBlockTypeDef"]]:
@@ -974,11 +993,16 @@ def _resp_stream_extract_usage_from_metadata(
     except KeyError:
         return None
     usage = metadata_event["usage"]
-    return CompletionUsage(
+    completion_usage = CompletionUsage(
         completion_tokens=usage["outputTokens"],
         prompt_tokens=usage["inputTokens"],
         total_tokens=usage["totalTokens"],
     )
+    with contextlib.suppress(KeyError):
+        completion_usage.prompt_tokens_details = PromptTokensDetails(
+            cached_tokens=usage["cacheReadInputTokens"]
+        )
+    return completion_usage
 
 
 async def _streaming_completion(
@@ -1079,10 +1103,12 @@ async def _non_streaming_completion(
     usage = CompletionUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
     reasoning_contents: list[str] = []
     tts_tasks: dict[int, Awaitable[ChatCompletionAudio]] = {}
+    cached_tokens = 0
     for index, response in enumerate(responses):
         usage.prompt_tokens += response["usage"]["inputTokens"]
         usage.completion_tokens += response["usage"]["outputTokens"]
         usage.total_tokens += response["usage"]["totalTokens"]
+        cached_tokens += response["usage"].get("cacheReadInputTokens", 0)
         message = response["output"]["message"]["content"]
         tool_calls, function_call = _resp_extract_tool_calls_from_converse(message)
         content, reasoning_content = _resp_extract_output_text_from_converse(message)
@@ -1107,7 +1133,8 @@ async def _non_streaming_completion(
                 ),
             )
         )
-
+    if cached_tokens:
+        usage.prompt_tokens_details = PromptTokensDetails(cached_tokens=cached_tokens)
     if reasoning_contents:
         # Estimate reasoning tokens, not included in Bedrock result
         reasoning_tokens = await estimate_token_count(*reasoning_contents)
@@ -1305,6 +1332,7 @@ async def create_chat_completion(
         tool_config=_req_build_tool_config(request),
         additional_request_fields=additional_request_fields,
         performance_config=performance_config,
+        prompt_caching=_parse_prompt_cache_key(request.prompt_cache_key),
     )
 
     if request.stream:

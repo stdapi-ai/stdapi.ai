@@ -1535,18 +1535,169 @@ class TestChatCompletions:
                 top_logprobs=5,
             )
 
-    def test_unsupported_prompt_cache_key_error(
-        self, openai_client: OpenAI, chat_model: str, use_openai_api: bool
+    def test_prompt_cache_key_with_long_system_prompt(
+        self, openai_client: OpenAI, chat_model: str
     ) -> None:
-        """prompt_cache_key is unsupported; expect 400 (skip on OpenAI)."""
-        if use_openai_api:
-            pytest.skip("Unsupported fields are project-specific here")
-        with pytest.raises(BadRequestError):
-            openai_client.chat.completions.create(
-                model=chat_model,
-                messages=[{"role": "user", "content": "Hi"}],
-                prompt_cache_key="cache-key",
-            )
+        """Test prompt_cache_key caches long system prompts with tools.
+
+        Validates that:
+        - First request with long system prompt + tools succeeds
+        - Second identical request shows cached_tokens > 0 in usage details
+        """
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_database",
+                    "description": "Search a database for information",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "Search query"},
+                            "limit": {
+                                "type": "integer",
+                                "description": "Maximum results",
+                            },
+                        },
+                        "required": ["query"],
+                    },
+                },
+            }
+        ]
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are an AI assistant. You are a highly capable, thoughtful, "
+                    "and nuanced conversational AI with strong reasoning abilities. "
+                    "Your purpose is to be helpful, harmless, and honest in all interactions."
+                ),
+            },
+            {"role": "user", "content": "What is 2 + 2?"},
+        ]
+
+        # First request - should cache the prompt
+        response1 = openai_client.chat.completions.create(
+            model=chat_model,
+            messages=messages,  # type: ignore[arg-type]
+            tools=tools,  # type: ignore[arg-type]
+            prompt_cache_key="default",
+            max_completion_tokens=50,
+        )
+
+        assert hasattr(response1, "choices")
+        assert len(response1.choices) == 1
+        assert response1.choices[0].message.role == "assistant"
+
+        # Second request - should use cached prompt
+        response2 = openai_client.chat.completions.create(
+            model=chat_model,
+            messages=messages,  # type: ignore[arg-type]
+            tools=tools,  # type: ignore[arg-type]
+            prompt_cache_key="default",
+            max_completion_tokens=50,
+        )
+
+        assert hasattr(response2, "choices")
+        assert len(response2.choices) == 1
+        assert response2.usage is not None
+        usage_details = getattr(response2.usage, "prompt_tokens_details", None)
+        assert usage_details is not None, "prompt_tokens_details not found in usage"
+        cached_tokens = getattr(usage_details, "cached_tokens", 0)
+        assert cached_tokens > 0, f"Expected cached_tokens > 0, got {cached_tokens}"
+
+    def test_prompt_cache_key_with_long_system_prompt_streaming(
+        self, openai_client: OpenAI, chat_model: str
+    ) -> None:
+        """Test prompt_cache_key caches long system prompts with tools in streaming mode.
+
+        Validates that:
+        - First streaming request with long system prompt + tools succeeds
+        - Second identical streaming request shows cached_tokens > 0 in usage details
+        """
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_database",
+                    "description": "Search a database for information",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "Search query"},
+                            "limit": {
+                                "type": "integer",
+                                "description": "Maximum results",
+                            },
+                        },
+                        "required": ["query"],
+                    },
+                },
+            }
+        ]
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are an AI assistant. You are a highly capable, thoughtful, "
+                    "and nuanced conversational AI with strong reasoning abilities. "
+                    "Your purpose is to be helpful, harmless, and honest in all interactions."
+                ),
+            },
+            {"role": "user", "content": "What is 2 + 2?"},
+        ]
+
+        # First streaming request - should cache the prompt
+        stream1 = openai_client.chat.completions.create(  # type: ignore[call-overload]
+            model=chat_model,
+            messages=messages,
+            tools=tools,
+            prompt_cache_key="default",
+            stream=True,
+            stream_options={"include_usage": True},
+            max_completion_tokens=50,
+        )
+
+        # Consume the first stream and get the last chunk with usage
+        last_chunk1 = None
+        for chunk in stream1:
+            if isinstance(chunk, str) and chunk == "[DONE]":
+                break
+            last_chunk1 = chunk
+
+        # Validate first stream was successful
+        assert last_chunk1 is not None
+        usage1 = getattr(last_chunk1, "usage", None)
+        assert usage1 is not None
+
+        # Second streaming request - should use cached prompt
+        stream2 = openai_client.chat.completions.create(  # type: ignore[call-overload]
+            model=chat_model,
+            messages=messages,
+            tools=tools,
+            prompt_cache_key="default",
+            stream=True,
+            stream_options={"include_usage": True},
+            max_completion_tokens=50,
+        )
+
+        # Consume the second stream and get the last chunk with usage
+        last_chunk2 = None
+        for chunk in stream2:
+            if isinstance(chunk, str) and chunk == "[DONE]":
+                break
+            last_chunk2 = chunk
+
+        # Validate second stream uses cache
+        assert last_chunk2 is not None
+        usage2 = getattr(last_chunk2, "usage", None)
+        assert usage2 is not None
+
+        # Check that cached tokens were used
+        usage_details = getattr(usage2, "prompt_tokens_details", None)
+        assert usage_details is not None, "prompt_tokens_details not found in usage"
+        cached_tokens = getattr(usage_details, "cached_tokens", 0)
+        assert cached_tokens > 0, f"Expected cached_tokens > 0, got {cached_tokens}"
 
     def test_unsupported_modalities_audio_error(
         self, openai_client: OpenAI, chat_model: str, use_openai_api: bool

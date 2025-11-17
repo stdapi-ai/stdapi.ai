@@ -11,7 +11,6 @@ The following features may be implemented in future releases based on community 
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**           | `/v1/completions`                            | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**           | `/v1/responses`                              | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
 | ![Claude](styles/logo_anthropic_claude.svg){: style="height:20px;width:20px"} **Claude** | `/v1/messages`                               | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
-|                                                                                          | Prompt caching                               | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - prompt caching    |
 | ![Claude](styles/logo_anthropic_claude.svg){: style="height:20px;width:20px"} **Claude** | Extended thinking mode                       | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - Claude thinking   |
 | ![Ollama](styles/logo_ollama.svg){: style="height:20px;width:20px"} **Ollama**           | `/api/generate`                              | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
 | ![Ollama](styles/logo_ollama.svg){: style="height:20px;width:20px"} **Ollama**           | `/api/chat`                                  | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
@@ -128,9 +127,15 @@ The following features may be implemented in future releases based on community 
 
 ## ✨ Release History
 
-### v1.1.0 – Embeddings Enhancement
+### v1.1.0 – Embeddings Enhancement & Prompt Caching
 
-Expands multimodal embedding capabilities.
+Expands multimodal embedding capabilities and adds prompt caching support.
+
+### 💬 Chat Completions
+
+| Provider                                                                       | Endpoint/Feature                                         | AWS Backend                                                                                                         |
+|--------------------------------------------------------------------------------|----------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------|
+| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | Prompt caching `/v1/chat/completions` `prompt_cache_key` | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - prompt caching |
 
 ### 🧠 Embeddings
 
