@@ -22,6 +22,7 @@
   --md-primary-fg-color--light: var(--primary-light);
   --md-primary-fg-color--dark: var(--primary-dark);
   --md-accent-fg-color: var(--accent);
+  --md-typeset-a-color: var(--accent-dark);
   --theme-contrasted: var(--accent-dark);
 }
 

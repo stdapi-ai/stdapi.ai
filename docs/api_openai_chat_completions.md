@@ -109,9 +109,11 @@ Reduce costs and improve response times by caching frequently-used prompt compon
 - **Anthropic Claude**: Full support for system, messages, and tools caching
 - **Amazon Nova**: Support for system and messages caching
 
-**Documentation:** [AWS Bedrock Prompt Caching - Supported Models](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html#prompt-caching-models)
+!!! info "Documentation"
+    See [AWS Bedrock Prompt Caching - Supported Models](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html#prompt-caching-models) for the complete list of models supporting prompt caching.
 
-**Important:** Cache creation incurs a higher cost than regular token processing. Only use prompt caching when you expect a high cache hit ratio across multiple requests with similar prompts.
+!!! warning "Cache Creation Costs"
+    Cache creation incurs a higher cost than regular token processing. Only use prompt caching when you expect a high cache hit ratio across multiple requests with similar prompts.
 
 **How to Use:**
 
@@ -147,7 +149,8 @@ Enable caching for specific prompt sections using dot-separated values:
 - `"system.messages.tools"` - Cache all components
 - Any other non-empty value - Cache all components
 
-**Note:** Custom cache hash keys are not supported. The parameter is used only to control which sections are cached, not as a cache identifier.
+!!! note "Custom Cache Keys Not Supported"
+    Custom cache hash keys are not supported. The parameter is used only to control which sections are cached, not as a cache identifier.
 
 ```json
 {
@@ -213,11 +216,8 @@ Simply reference your S3 images using the `s3://` URI scheme in `image_url` fiel
 }
 ```
 
-**Requirements:**
-
-- Your API service must have IAM permissions to read from the specified S3 buckets
-- S3 objects must be in the same AWS region as the executed model or accessible via your IAM role
-- Standard S3 data transfer and request costs apply
+!!! warning "IAM Permissions Required"
+    Your API service must have IAM permissions to read from the specified S3 buckets. S3 objects must be in the same AWS region as the executed model or accessible via your IAM role. Standard S3 data transfer and request costs apply.
 
 **Benefits:**
 
@@ -230,7 +230,8 @@ Simply reference your S3 images using the `s3://` URI scheme in `image_url` fiel
 
 Protect your applications with content filtering and safety policies using AWS Bedrock Guardrails. This implementation supports the same guardrails integration as AWS Bedrock's native OpenAI-compatible endpoint.
 
-**Documentation:** [AWS Bedrock OpenAI Chat Completions API - Include a guardrail in a chat completion](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-chat-completions.html#inference-chat-completions-guardrails)
+!!! info "Documentation"
+    See [AWS Bedrock OpenAI Chat Completions API - Include a guardrail in a chat completion](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-chat-completions.html#inference-chat-completions-guardrails) for detailed configuration instructions.
 
 **How to Use:**
 
@@ -261,13 +262,15 @@ curl -X POST "$BASE/v1/chat/completions" \
 - Responses are filtered according to your content safety rules
 - Violations are blocked and return appropriate error responses
 
-**Note:** The `tagSuffix` parameter is not supported in this implementation.
+!!! note "Unsupported Parameter"
+    The `tagSuffix` parameter is not supported in this implementation.
 
 ### Provider-Specific Parameters
 
 Unlock advanced model capabilities by passing provider-specific parameters directly in your requests. These parameters are forwarded to AWS Bedrock and allow you to access features unique to each foundation model provider.
 
-**Documentation:** [Bedrock Model Parameters](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters.html)
+!!! info "Documentation"
+    See [Bedrock Model Parameters](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters.html) for the complete list of available parameters per model.
 
 **How It Works:**
 
@@ -303,7 +306,8 @@ export DEFAULT_MODEL_PARAMS='{
 }'
 ```
 
-**Note:** Per-request parameters override server-wide defaults.
+!!! tip "Parameter Priority"
+    Per-request parameters override server-wide defaults.
 
 **Behavior:**
 
@@ -329,11 +333,14 @@ curl -X POST "$BASE/v1/chat/completions" \
   }'
 ```
 
-**Note:** You can also configure beta flags server-wide using the `DEFAULT_MODEL_PARAMS` environment variable (see [Provider-Specific Parameters](#provider-specific-parameters)). Unsupported flags that would change output return HTTP 400 errors.
+!!! tip "Server-Wide Configuration"
+    You can also configure beta flags server-wide using the `DEFAULT_MODEL_PARAMS` environment variable (see [Provider-Specific Parameters](#provider-specific-parameters)).
 
-**Documentation:**
+!!! warning "Unsupported Beta Flags"
+    Unsupported flags that would change output return HTTP 400 errors.
 
-- [Using Claude on AWS Bedrock](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-request-response.html)
+!!! info "Documentation"
+    See [Using Claude on AWS Bedrock](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-request-response.html) for more details on Claude-specific parameters.
 
 
 #### Reasoning Control
@@ -420,13 +427,15 @@ response = client.chat.completions.create(
 )
 ```
 
-**Note:** Models that support reasoning will include their thinking process in `reasoning_content` fields in the response.
+!!! note "Reasoning Output"
+    Models that support reasoning will include their thinking process in `reasoning_content` fields in the response.
 
 ### ![DeepSeek](styles/logo_deepSeek.svg){ style="height: 1.2em; vertical-align: text-bottom;" } DeepSeek Reasoning Support
 
 DeepSeek models with reasoning capabilities are automatically handled—their chain-of-thought reasoning appears in `reasoning_content` fields without any special configuration, just like DeepSeek's native chat completions endpoint.
 
-**Documentation:** [DeepSeek API - Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion)
+!!! info "Documentation"
+    See [DeepSeek API - Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion) for more information about DeepSeek's reasoning capabilities.
 
 **What You Get:**
 
