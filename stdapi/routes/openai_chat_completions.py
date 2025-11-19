@@ -1304,7 +1304,7 @@ async def create_chat_completion(
     performance_config: PerformanceConfigurationTypeDef = {}
     _LEGACY_FUNCTION.set(request.functions is not None)
 
-    if request.reasoning_effort is not None or request.enable_thinking:
+    if request.reasoning_effort not in (None, "none") or request.enable_thinking:
         set_reasoning_configuration(
             request.model,
             request.reasoning_effort,

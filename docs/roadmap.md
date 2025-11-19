@@ -133,9 +133,10 @@ Expands multimodal embedding capabilities and adds prompt caching support.
 
 ### 💬 Chat Completions
 
-| Provider                                                                       | Endpoint/Feature                                         | AWS Backend                                                                                                         |
-|--------------------------------------------------------------------------------|----------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------|
-| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | Prompt caching `/v1/chat/completions` `prompt_cache_key` | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - prompt caching |
+| Provider                                                                       | Endpoint/Feature                                                    | AWS Backend                                                                                                         |
+|--------------------------------------------------------------------------------|---------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------|
+| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | Prompt caching `/v1/chat/completions` `prompt_cache_key`            | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - prompt caching |
+| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/chat/completions` GPT5.1 API update  (`reasoning_effort=none`) |                                                                                                                     |
 
 ### 🧠 Embeddings
 
