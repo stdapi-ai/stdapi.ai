@@ -81,7 +81,7 @@ This OpenAI-compatible endpoint provides access to AWS Bedrock foundation models
 | Output tokens                            |   :material-check-circle:{ .success }    | Billing unit                                                    |
 | Reasoning tokens                         |   :material-minus-circle:{ .partial }    | Estimated                                                       |
 | **Other**                                |                                          |                                                                 |
-| Service tiers                            |   :material-check-circle:{ .success }    | Mapped to Bedrock latency options                               |
+| Service tiers                            |   :material-check-circle:{ .success }    | Mapped to Bedrock service tiers and latency options             |
 | `store` / `metadata`                     | :material-close-circle:{ .unsupported }  | OpenAI-specific features                                        |
 | `safety_identifier` / `user`             |   :material-minus-circle:{ .partial }    | Logged                                                          |
 | Bedrock Guardrails                       | :material-plus-circle:{ .extra-feature } | Content safety policies                                         |
@@ -228,16 +228,26 @@ Simply reference your S3 images using the `s3://` URI scheme in `image_url` fiel
 - Performance - Optimized data transfer within AWS infrastructure
 - Large images - No size limitations of data URIs or base64 encoding
 
-### AWS Bedrock Guardrails
+## Available Request Headers
 
-Protect your applications with content filtering and safety policies using AWS Bedrock Guardrails. This implementation supports the same guardrails integration as AWS Bedrock's native OpenAI-compatible endpoint.
+This endpoint supports standard Bedrock headers for enhanced control over your requests. All headers are optional and can be combined as needed.
 
-!!! info "Documentation"
-    See [AWS Bedrock OpenAI Chat Completions API - Include a guardrail in a chat completion](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-chat-completions.html#inference-chat-completions-guardrails) for detailed configuration instructions.
+### Content Safety (Guardrails)
 
-**How to Use:**
+| Header                               | Purpose                            | Valid Values                          |
+|--------------------------------------|------------------------------------|---------------------------------------|
+| `X-Amzn-Bedrock-GuardrailIdentifier` | Guardrail ID for content filtering | Your guardrail identifier             |
+| `X-Amzn-Bedrock-GuardrailVersion`    | Guardrail version                  | Version number (e.g., `1`)            |
+| `X-Amzn-Bedrock-Trace`               | Guardrail trace level              | `disabled`, `enabled`, `enabled_full` |
 
-Add guardrail headers to your chat completion requests to apply your configured safety policies:
+### Performance Optimization
+
+| Header                                     | Purpose                | Valid Values                  |
+|--------------------------------------------|------------------------|-------------------------------|
+| `X-Amzn-Bedrock-Service-Tier`              | Service tier selection | `priority`, `default`, `flex` |
+| `X-Amzn-Bedrock-PerformanceConfig-Latency` | Latency optimization   | `standard`, `optimized`       |
+
+**Example with all headers:**
 
 ```bash
 curl -X POST "$BASE/v1/chat/completions" \
@@ -245,27 +255,20 @@ curl -X POST "$BASE/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -H "X-Amzn-Bedrock-GuardrailIdentifier: your-guardrail-id" \
   -H "X-Amzn-Bedrock-GuardrailVersion: 1" \
-  -H "X-Amzn-Bedrock-Trace: ENABLED" \
+  -H "X-Amzn-Bedrock-Trace: enabled" \
+  -H "X-Amzn-Bedrock-Service-Tier: priority" \
+  -H "X-Amzn-Bedrock-PerformanceConfig-Latency: optimized" \
   -d '{
     "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```
 
-**Headers:**
+!!! info "Detailed Documentation"
+    For complete information about these headers, configuration options, and use cases, see:
 
-- **`X-Amzn-Bedrock-GuardrailIdentifier`** (required): The ID of your configured guardrail
-- **`X-Amzn-Bedrock-GuardrailVersion`** (required): The version number of your guardrail
-- **`X-Amzn-Bedrock-Trace`** (optional): Set to `ENABLED` to enable trace logging for debugging
-
-**What Happens:**
-
-- Requests are validated against your guardrail policies before reaching the model
-- Responses are filtered according to your content safety rules
-- Violations are blocked and return appropriate error responses
-
-!!! note "Unsupported Parameter"
-    The `tagSuffix` parameter is not supported in this implementation.
+    - [Bedrock Guardrails Configuration](operations_configuration.md#bedrock-guardrails)
+    - [Service Tier and Performance Configuration](operations_configuration.md#bedrock-service-tier-and-performance-configuration)
 
 ### AWS Bedrock System Tools
 

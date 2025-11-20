@@ -1757,35 +1757,30 @@ class TestChatCompletions:
         assert isinstance(body, dict)
         assert body["type"] == "invalid_request_error"
 
-    def test_service_tier_priority_and_scale(
-        self, openai_client: OpenAI, chat_model: str
+    def test_service_tier(
+        self, openai_client: OpenAI, chat_model: str, use_openai_api: bool
     ) -> None:
         """Validate service_tier mapping to response.service_tier."""
-        # priority -> response shows 'priority'
-        try:
-            r1 = openai_client.chat.completions.create(
-                model=chat_model,
-                messages=[{"role": "user", "content": "Say hi"}],
-                service_tier="priority",
-                max_completion_tokens=32,
-            )
-            assert getattr(r1, "service_tier", None)
-        except BadRequestError as error:
-            # Pass if argument properly passed but unsupported by model
-            if (
-                "Latency performance configuration is not supported "
-                not in error.message
-            ):
-                raise
-
-        # non-priority -> mapped to 'default' in response on this backend
-        r2 = openai_client.chat.completions.create(
+        response = openai_client.chat.completions.create(
             model=chat_model,
             messages=[{"role": "user", "content": "Say hi again"}],
-            service_tier="flex",
+            service_tier="default",
             max_completion_tokens=32,
         )
-        assert getattr(r2, "service_tier", None)
+        assert getattr(response, "service_tier", None) == "default"
+
+        # Test Bedrock headers
+        if not use_openai_api:
+            response = openai_client.chat.completions.create(
+                model=chat_model,
+                messages=[{"role": "user", "content": "Say hi again"}],
+                max_completion_tokens=32,
+                extra_headers={
+                    "X-Amzn-Bedrock-PerformanceConfig-Latency": "standard",
+                    "X-Amzn-Bedrock-Service-Tier": "default",
+                },
+            )
+            assert not getattr(response, "service_tier", None)
 
     def test_reasoning_effort_parameter(
         self, openai_client: OpenAI, chat_reasoning_model: str

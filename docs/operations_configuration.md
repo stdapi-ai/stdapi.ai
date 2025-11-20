@@ -2540,11 +2540,11 @@ export AWS_BEDROCK_GUARDRAIL_TRACE=enabled
 
 Override global guardrail settings for individual requests using HTTP headers:
 
-| Header | Purpose |
-|--------|---------|
-| `X-Amzn-Bedrock-GuardrailIdentifier` | Guardrail ID |
-| `X-Amzn-Bedrock-GuardrailVersion` | Guardrail version |
-| `X-Amzn-Bedrock-Trace` | Trace level |
+| Header                               | Purpose           | Valid Values                          |
+|--------------------------------------|-------------------|---------------------------------------|
+| `X-Amzn-Bedrock-GuardrailIdentifier` | Guardrail ID      | Your guardrail identifier             |
+| `X-Amzn-Bedrock-GuardrailVersion`    | Guardrail version | Version number (e.g., `1`)            |
+| `X-Amzn-Bedrock-Trace`               | Trace level       | `disabled`, `enabled`, `enabled_full` |
 
 ```bash title="Example cURL Request"
 curl -X POST https://api.example.com/v1/chat/completions \
@@ -2561,6 +2561,97 @@ The `amazon-bedrock-guardrailConfig` object in the request body is supported for
 
 !!! warning "Compatibility Note"
     Only fields compatible with Bedrock Converse API are honored. The `tagSuffix` field is documented in AWS but **not supported** in this implementation.
+
+---
+
+## Bedrock Service Tier and Performance Configuration
+
+Amazon Bedrock service tiers and performance configurations allow you to optimize AI workload performance and cost trade-offs. Configure latency optimization and throughput priority for your inference requests.
+
+!!! info "AWS Documentation"
+    For detailed information about service tiers, see:
+
+    - [Amazon Bedrock Service Tiers](https://aws.amazon.com/blogs/aws/new-amazon-bedrock-service-tiers-help-you-match-ai-workload-performance-with-cost/)
+
+### Service Tiers
+
+Service tiers help you match AI workload performance with cost by selecting the appropriate throughput and latency characteristics:
+
+- **`priority`** - Highest priority processing with guaranteed capacity and fastest response times. Best for latency-sensitive applications.
+- **`default`** - Standard processing with balanced performance and cost. Suitable for most production workloads.
+- **`flex`** - Cost-optimized processing with flexible scheduling. Best for batch jobs and non-time-sensitive workloads.
+
+### Performance Configuration
+
+Performance configuration allows you to optimize for latency:
+
+- **`standard`** - Standard latency profile with balanced performance
+- **`optimized`** - Optimized for lowest possible latency
+
+### Per-Request Configuration
+
+Configure service tier and performance settings per request using HTTP headers. These headers are available on all Bedrock-based routes (Chat Completions, Embeddings, Images):
+
+| Header                                     | Purpose                | Valid Values                  |
+|--------------------------------------------|------------------------|-------------------------------|
+| `X-Amzn-Bedrock-Service-Tier`              | Service tier selection | `priority`, `default`, `flex` |
+| `X-Amzn-Bedrock-PerformanceConfig-Latency` | Latency optimization   | `standard`, `optimized`       |
+
+```bash title="Example: Chat Completions with Priority Tier and Optimized Latency"
+curl -X POST https://api.example.com/v1/chat/completions \
+  -H "Authorization: Bearer sk-..." \
+  -H "X-Amzn-Bedrock-Service-Tier: priority" \
+  -H "X-Amzn-Bedrock-PerformanceConfig-Latency: optimized" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
+```
+
+```bash title="Example: Embeddings with Flex Tier for Batch Processing"
+curl -X POST https://api.example.com/v1/embeddings \
+  -H "Authorization: Bearer sk-..." \
+  -H "X-Amzn-Bedrock-Service-Tier: flex" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "amazon.nova-2-multimodal-embeddings-v1:0",
+    "input": ["text 1", "text 2", "text 3"]
+  }'
+```
+
+```bash title="Example: Image Generation with Default Tier"
+curl -X POST https://api.example.com/v1/images/generations \
+  -H "Authorization: Bearer sk-..." \
+  -H "X-Amzn-Bedrock-Service-Tier: default" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "amazon.nova-canvas-v1:0",
+    "prompt": "A serene mountain landscape"
+  }'
+```
+
+!!! tip "When to Use Each Tier"
+    **Priority Tier:**
+
+    - Real-time customer-facing applications
+    - Interactive chatbots and assistants
+    - Applications requiring guaranteed low latency
+    - Production workloads with strict SLAs
+
+    **Default Tier:**
+
+    - Standard production workloads
+    - General-purpose API usage
+    - Applications with moderate latency requirements
+
+    **Flex Tier:**
+
+    - Batch processing and bulk operations
+    - Offline content generation
+    - Data processing pipelines
+    - Non-time-sensitive workloads
+    - Cost-optimized inference at scale
 
 ---
 

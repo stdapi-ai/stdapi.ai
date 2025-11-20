@@ -32,7 +32,15 @@ FinishReason = Literal[
 ]
 
 #: Service tiers
-ServiceTiers = Literal["auto", "default", "flex", "scale", "priority"]
+ServiceTiers = Literal[
+    "auto",
+    "default",
+    "flex",
+    "scale",
+    "priority",
+    # Extra bedrock specific values
+    "reserved",
+]
 
 #: Tool choice literal values used in multiple request fields (OpenAI-compatible).
 ToolChoiceLiteral = Literal["none", "auto", "required"]
@@ -1030,7 +1038,9 @@ class _Completion(BaseModelResponse):
     )
     service_tier: ServiceTiers | None = Field(
         default=None,
-        description="Specifies the processing type used for serving the request.",
+        description="Specifies the processing type used for serving the request.\n"
+        "Values: 'auto', 'priority' (mission-critical), 'flex' (business-noncritical), "
+        "'default'/'scale' (business-standard).",
     )
     system_fingerprint: str | None = Field(
         default=None,
@@ -1252,10 +1262,15 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
         default=None,
         description="Specifies the processing type used for serving the request.\n"
         "- If set to 'auto', then the request will be processed with the default service tier.\n"
-        "- If set to 'priority', then the request will be processed with the "
-        "optimized latency performance configuration.\n"
+        "- If set to 'priority', then the request will be processed with optimized latency "
+        "performance for mission-critical workloads (e.g., customer service chat assistants, "
+        "real-time language translation, interactive AI assistants).\n"
+        "- If set to 'flex', then the request will be processed with cost-efficient processing "
+        "for business-noncritical workloads (e.g., model evaluations, content summarization, "
+        "multistep agentic workflows).\n"
         "- If set to any other value, then the request will be processed with standard "
-        "processing for the selected model.\n"
+        "processing for business-standard workloads (e.g., content generation, text analysis, "
+        "routine document processing).\n"
         "- When not set, the default behavior is 'auto'.\n"
         "When the `service_tier` parameter is set, the response body will include the "
         "`service_tier` value based on the processing mode actually used to serve the "

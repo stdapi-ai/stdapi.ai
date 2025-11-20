@@ -18,6 +18,7 @@ from pydantic_core import from_json, to_json
 from stdapi.aws import get_client
 from stdapi.aws_bedrock import (
     GUARDTRAIL_CONFIG_VAR,
+    PERFORMANCE_CONFIG_VAR,
     PROMPT_CACHING_SUPPORTED,
     PROMPT_CACHING_TOOL_SUPPORTED,
     PromptCaching,
@@ -45,13 +46,15 @@ if TYPE_CHECKING:
         PromptRouterTargetModelTypeDef,
     )
     from types_aiobotocore_bedrock_runtime import BedrockRuntimeClient
-    from types_aiobotocore_bedrock_runtime.literals import TraceType
+    from types_aiobotocore_bedrock_runtime.literals import (
+        ServiceTierTypeType,
+        TraceType,
+    )
     from types_aiobotocore_bedrock_runtime.type_defs import (
         CachePointBlockTypeDef,
         InferenceConfigurationTypeDef,
         InvokeModelRequestTypeDef,
         MessageTypeDef,
-        PerformanceConfigurationTypeDef,
         SystemContentBlockTypeDef,
         ToolConfigurationTypeDef,
     )
@@ -681,6 +684,12 @@ async def _prepare_bedrock_request(
             pass
         else:
             kwargs["trace"] = trace
+
+    latency, service_tier = PERFORMANCE_CONFIG_VAR.get()
+    if latency:
+        kwargs["performanceConfigLatency"] = latency
+    if service_tier:
+        kwargs["serviceTier"] = service_tier
     return bedrock_client, kwargs
 
 
@@ -712,7 +721,7 @@ async def prepare_converse_request(
     system_blocks: list["SystemContentBlockTypeDef"],
     tool_config: "ToolConfigurationTypeDef | None",
     additional_request_fields: Mapping[str, Any],
-    performance_config: "PerformanceConfigurationTypeDef",
+    service_tier: "ServiceTierTypeType| None",
     prompt_caching: set[PromptCaching],
     *,
     inference_profile: bool = True,
@@ -726,13 +735,15 @@ async def prepare_converse_request(
         system_blocks: Optional top-level system instruction blocks.
         tool_config: Optional Bedrock tool configuration.
         additional_request_fields: Additional request fields.
-        performance_config: Preferred performance configuration.
+        service_tier: Service tier configuration.
         prompt_caching: Prompt caching configuration.
         inference_profile: If True, use the inference profile. Otherwise, use the model ID.
 
     Returns:
         A tuple of (BedrockRuntimeClient, request payload dict).
     """
+    latency, default_service_tier = PERFORMANCE_CONFIG_VAR.get()
+    service_tier = service_tier or default_service_tier
     request: ConverseRequestBaseTypeDef = {
         "modelId": model.get_id(inference_profile=inference_profile),
         "messages": bedrock_messages,
@@ -744,8 +755,11 @@ async def prepare_converse_request(
         request["toolConfig"] = tool_config
     if additional_request_fields:
         request["additionalModelRequestFields"] = additional_request_fields
-    if performance_config:
-        request["performanceConfig"] = performance_config
+    if service_tier:
+        request["serviceTier"] = {"type": service_tier}
+    if latency:
+        request["performanceConfig"] = {"latency": latency}
+
     with suppress(LookupError):
         request["guardrailConfig"] = GUARDTRAIL_CONFIG_VAR.get()
     _enable_converse_prompt_caching(

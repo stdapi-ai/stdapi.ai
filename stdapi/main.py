@@ -17,7 +17,10 @@ from fastapi.responses import JSONResponse, Response
 
 from stdapi.auth import initialize_authentication
 from stdapi.aws import AWSConnectionManager, initialize_aws_account_info
-from stdapi.aws_bedrock import set_guardrail_configuration
+from stdapi.aws_bedrock import (
+    set_guardrail_configuration,
+    set_performance_configuration,
+)
 from stdapi.config import SETTINGS, LogLevel
 from stdapi.exceptions import ServerError
 from stdapi.metering import EDITION_TITLE, LICENCE_INFO, SERVER_FULL_VERSION, register
@@ -214,6 +217,7 @@ async def _middleware(
     else:
         with log_request_event(request) as log:
             set_guardrail_configuration(request.headers)
+            set_performance_configuration(request.headers)
             response = await call_next(request)
             log["status_code"] = response.status_code
             response.headers["x-request-id"] = log["id"]

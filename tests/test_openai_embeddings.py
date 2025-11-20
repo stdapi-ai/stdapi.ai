@@ -63,6 +63,22 @@ class TestEmbeddings:
         assert response.usage.prompt_tokens >= 0
         assert response.usage.total_tokens >= 0
 
+    def test_service_tier_headers(
+        self, openai_client: OpenAI, embedding_model: str, use_openai_api: bool
+    ) -> None:
+        """Validate service_tier headers."""
+        if use_openai_api:
+            pytest.skip("Service tiers headers are not supported on the official API")
+        response = openai_client.embeddings.create(
+            model=embedding_model,
+            input="The quick brown fox jumps over the lazy dog.",
+            extra_headers={
+                "X-Amzn-Bedrock-PerformanceConfig-Latency": "standard",
+                "X-Amzn-Bedrock-Service-Tier": "default",
+            },
+        )
+        assert hasattr(response, "object")
+
     def test_batch_input_processing(
         self, openai_client: OpenAI, embedding_model: str
     ) -> None:

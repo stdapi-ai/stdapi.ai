@@ -2276,7 +2276,7 @@ requires-dist = [
     { name = "aiobotocore", specifier = ">=3" },
     { name = "aiodns" },
     { name = "aiohttp" },
-    { name = "botocore", specifier = ">=1.40.62" },
+    { name = "botocore", specifier = ">=1.40.76" },
     { name = "fastapi" },
     { name = "granian", extras = ["uvloop"], marker = "extra == 'granian'" },
     { name = "langcodes", extras = ["data"] },

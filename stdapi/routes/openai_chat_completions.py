@@ -105,7 +105,7 @@ if TYPE_CHECKING:
     from types_aiobotocore_bedrock_runtime.client import BedrockRuntimeClient
     from types_aiobotocore_bedrock_runtime.literals import (
         ConversationRoleType,
-        PerformanceConfigLatencyType,
+        ServiceTierTypeType,
         StopReasonType,
         VideoFormatType,
     )
@@ -120,7 +120,6 @@ if TYPE_CHECKING:
         DocumentBlockTypeDef,
         MessageStopEventTypeDef,
         MessageTypeDef,
-        PerformanceConfigurationTypeDef,
         ReasoningContentBlockUnionTypeDef,
         SystemContentBlockTypeDef,
         SystemToolTypeDef,
@@ -163,6 +162,9 @@ _EMPTY_TOOL = {"type": "object"}
 
 #: Bedrock system tools prefix
 _SYSTEM_TOOL_PREFIX = "systemTool_"
+
+#: Services tiers that both exist in OpenAI and Bedrock specification
+_SERVICES_TIERS = frozenset({"priority", "flex", "reserved"})
 
 
 def _req_extract_system_content_blocks(
@@ -792,6 +794,24 @@ def _req_build_tool_config(
     return tool_config
 
 
+def _req_map_service_tier(
+    value: ServiceTiers | None,
+) -> "tuple[ServiceTierTypeType | None, ServiceTiers | None]":
+    """Map OpenAI service tier to Bedrock service tier.
+
+    Args:
+        value: OpenAI service tier.
+
+    Returns:
+        Bedrock service tier, Effective OpenAI service tier
+    """
+    if value is None:
+        return None, None
+    if value in _SERVICES_TIERS:
+        return value, value  # type: ignore[return-value]
+    return None, "default"
+
+
 def _resp_stream_initial_chunk(
     completion_id: str, created: int, model: str, service_tier: ServiceTiers | None
 ) -> ChatCompletionChunk:
@@ -1384,7 +1404,6 @@ async def create_chat_completion(
         top_k=request.top_k,
         **request.model_extra,
     )
-    performance_config: PerformanceConfigurationTypeDef = {}
     _LEGACY_FUNCTION.set(request.functions is not None)
 
     if request.reasoning_effort not in (None, "none") or request.enable_thinking:
@@ -1396,17 +1415,9 @@ async def create_chat_completion(
             additional_request_fields,
         )
 
-    if request.service_tier is not None:
-        if request.service_tier == "priority":
-            latency: PerformanceConfigLatencyType = "optimized"
-            service_tier: ServiceTiers | None = "priority"
-        else:
-            latency = "standard"
-            service_tier = "default"
-        performance_config["latency"] = latency
-    else:
-        service_tier = None
-
+    bedrock_service_tier, openai_service_tier = _req_map_service_tier(
+        request.service_tier
+    )
     bedrock_runtime, bedrock_request = await prepare_converse_request(
         model=model,
         bedrock_messages=bedrock_messages,
@@ -1414,7 +1425,7 @@ async def create_chat_completion(
         system_blocks=system_blocks,
         tool_config=_req_build_tool_config(request),
         additional_request_fields=additional_request_fields,
-        performance_config=performance_config,
+        service_tier=bedrock_service_tier,
         prompt_caching=_parse_prompt_cache_key(request.prompt_cache_key),
     )
 
@@ -1427,7 +1438,7 @@ async def create_chat_completion(
                     request.model,
                     bedrock_runtime,
                     bedrock_request,
-                    service_tier,
+                    openai_service_tier,
                     include_usage=(
                         request.stream_options is not None
                         and request.stream_options.include_usage is True
@@ -1441,7 +1452,7 @@ async def create_chat_completion(
         request.model,
         bedrock_runtime,
         bedrock_request,
-        service_tier,
+        openai_service_tier,
         choices_count,
         request.audio,
         request.modalities or _DEFAULT_OUTPUT_MODALITIES,

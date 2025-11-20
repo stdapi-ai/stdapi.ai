@@ -31,6 +31,8 @@ if TYPE_CHECKING:
         DocumentFormatType,
         GuardrailTraceType,
         ImageFormatType,
+        PerformanceConfigLatencyType,
+        ServiceTierTypeType,
         VideoFormatType,
     )
     from types_aiobotocore_bedrock_runtime.type_defs import (
@@ -41,6 +43,7 @@ if TYPE_CHECKING:
         MessageUnionTypeDef,
         PerformanceConfigurationTypeDef,
         PromptVariableValuesTypeDef,
+        ServiceTierTypeDef,
         SystemContentBlockTypeDef,
         ToolConfigurationTypeDef,
     )
@@ -63,6 +66,7 @@ if TYPE_CHECKING:
         requestMetadata: NotRequired[Mapping[str, str]]
         performanceConfig: NotRequired[PerformanceConfigurationTypeDef]
         guardrailConfig: NotRequired[GuardrailStreamConfigurationTypeDef]
+        serviceTier: NotRequired[ServiceTierTypeDef]
 
 
 #: Bedrock documents types with the matching MIME type
@@ -115,6 +119,12 @@ _GUARDTRAIL_VERSION_HEADER = "X-Amzn-Bedrock-GuardrailVersion"
 _GUARDTRAIL_TRACE_HEADER = "X-Amzn-Bedrock-Trace"
 _GUARDTRAIL_TRACE_VALUES = {"disabled", "enabled", "enabled_full"}
 
+#: Performance configuration for the request
+PERFORMANCE_CONFIG_VAR: ContextVar[
+    "tuple[PerformanceConfigLatencyType | None, ServiceTierTypeType | None]"
+] = ContextVar("performance_configuration")
+_PERFORMANCE_CONFIG_LATENCY_HEADER = "X-Amzn-Bedrock-PerformanceConfig-Latency"
+_SERVICE_TIER_HEADER = "X-Amzn-Bedrock-Service-Tier"
 
 #: Reasoning models: Budget factor over the token max count
 _REASONING_EFFORT_BUDGET_FACTOR: dict[ReasoningEffort, float] = {
@@ -202,6 +212,9 @@ def set_guardrail_configuration(headers: Headers) -> None:
     - X-Amzn-Bedrock-GuardrailIdentifier
     - X-Amzn-Bedrock-GuardrailVersion
     - X-Amzn-Bedrock-Trace
+
+    Args:
+        headers: The headers of the request.
     """
     if (
         _GUARDTRAIL_IDENTIFIER_HEADER in headers
@@ -229,6 +242,32 @@ def set_guardrail_configuration(headers: Headers) -> None:
     else:
         return
     GUARDTRAIL_CONFIG_VAR.set(config)
+
+
+def set_performance_configuration(headers: Headers) -> None:
+    """Set the AWS Bedrock performance configuration for the request.
+
+    Configured globally via environment variables.
+
+    Also, configurable per API call using the same headers as the
+    AWS Bedrock OpenAI Chat Completions API (Available for OpenAI models):
+    - X-Amzn-Bedrock-PerformanceConfig-Latency
+    - X-Amzn-Bedrock-Service-Tier
+
+    Args:
+        headers: The headers of the request.
+    """
+    latency: PerformanceConfigLatencyType | None = (
+        headers[_PERFORMANCE_CONFIG_LATENCY_HEADER].strip()  # type: ignore[assignment]
+        if _PERFORMANCE_CONFIG_LATENCY_HEADER in headers
+        else None
+    )
+    service_tier: ServiceTierTypeType | None = (
+        headers[_SERVICE_TIER_HEADER].strip()  # type: ignore[assignment]
+        if _SERVICE_TIER_HEADER in headers
+        else None
+    )
+    PERFORMANCE_CONFIG_VAR.set((latency, service_tier))
 
 
 def set_inference_configuration(
