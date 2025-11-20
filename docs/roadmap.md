@@ -73,10 +73,9 @@ The following features may be implemented in future releases based on community 
 
 ### 🎯 Model-Specific Features
 
-| Provider | Endpoint/Feature                       | AWS Backend                                                                                                                         |
-|----------|----------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------|
-|          | Running application inference profiles | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - application inference profiles |
-|          | Running Provisioned throughput         | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - provisioned models             |
+| Provider | Endpoint/Feature               | AWS Backend                                                                                                             |
+|----------|--------------------------------|-------------------------------------------------------------------------------------------------------------------------|
+|          | Running Provisioned throughput | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - provisioned models |
 
 ### 🤖 AWS Bedrock Advanced Features
 
@@ -127,9 +126,9 @@ The following features may be implemented in future releases based on community 
 
 ## ✨ Release History
 
-### v1.1.0 – Embeddings Enhancement & Prompt Caching
+### v1.1.0 – Embeddings Enhancement, Prompt Caching & Advanced Routing
 
-Expands multimodal embedding capabilities and adds prompt caching support.
+Expands multimodal embedding capabilities, adds prompt caching support, and introduces advanced routing with application inference profiles and prompt routers.
 
 ### 💬 Chat Completions
 
@@ -146,6 +145,15 @@ Expands multimodal embedding capabilities and adds prompt caching support.
 |                                                                                               | Intelligent Sync/async Bedrock invocation | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock |
 | ![Amazon Nova](styles/logo_amazon_nova.svg){: style="height:20px;width:20px"} **Amazon Nova** | Multimodal embeddings models              |                                                                                                    |
 | ![Twelve Labs](styles/logo_twelvelabs.svg){: style="height:20px;width:20px"} **Twelve Labs**  | Marengo V3 models                         |                                                                                                    |
+
+### 🎯 Advanced Routing
+
+| Feature                            | AWS Backend                                                                                                                         |
+|------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------|
+| Application inference profiles     | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - application inference profiles |
+| Prompt routers                     | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - prompt routers                 |
+| Server-side ARN mapping            | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock                                  |
+| Client-side ARN passing (optional) | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock                                  |
 
 ---
 

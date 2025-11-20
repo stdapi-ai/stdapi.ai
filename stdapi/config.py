@@ -44,7 +44,11 @@ from pydantic import (
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from stdapi.server import SERVER_NAME, SERVER_VERSION
-from stdapi.utils import stdout_write
+from stdapi.utils import (
+    match_bedrock_app_profile_arn,
+    match_bedrock_prompt_router_arn,
+    stdout_write,
+)
 
 #: HTTP download timeout
 DOWNLOAD_TIMEOUT = ClientTimeout(total=20, connect=5)
@@ -213,6 +217,55 @@ class _Settings(BaseSettings):
             "Required IAM permissions when set to true:\n"
             "- aws-marketplace:Subscribe\n"
             "- aws-marketplace:ViewSubscriptions"
+        ),
+    )
+
+    aws_bedrock_allow_cross_region_inference_profile_arn: bool = Field(
+        default=False,
+        description=(
+            "If True, allow users to pass cross-region inference profile ARNs directly as model IDs. "
+            "Cross-region inference profiles enable routing to multiple regions for better availability. "
+            "When disabled, only standard model IDs and configured profiles are accepted.\n\n"
+            "Example ARN: arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+        ),
+    )
+
+    aws_bedrock_allow_application_inference_profile_arn: bool = Field(
+        default=False,
+        description=(
+            "If True, allow users to pass application inference profile ARNs directly as model IDs. "
+            "Application inference profiles are custom routing configurations for specific use cases. "
+            "When disabled, only standard model IDs and configured profiles are accepted.\n\n"
+            "Example ARN: arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123xyz"
+        ),
+    )
+
+    aws_bedrock_allow_prompt_router_arn: bool = Field(
+        default=False,
+        description=(
+            "If True, allow users to pass prompt router ARNs directly as model IDs. "
+            "Prompt routers enable dynamic model selection based on prompt characteristics. "
+            "When disabled, only standard model IDs and configured profiles are accepted.\n\n"
+            "Example ARN: arn:aws:bedrock:us-east-1:123456789012:default-prompt-router/my-router"
+        ),
+    )
+
+    aws_bedrock_model_arn_mapping: dict[str, str] = Field(
+        default={},
+        description=(
+            "Map standard model IDs to custom inference profile or prompt router ARNs. "
+            "This allows server administrators to override the default cross-region inference profiles "
+            "with custom application inference profiles, cross-region inference profiles, or prompt routers.\n\n"
+            "The mapped ARN will be used instead of the default profile when clients request the model by its ID. "
+            "This provides centralized control over model routing without requiring client changes.\n\n"
+            "Supported ARN types:\n"
+            "- Cross-region inference profile: arn:aws:bedrock:REGION:ACCOUNT:inference-profile/ID\n"
+            "- Application inference profile: arn:aws:bedrock:REGION:ACCOUNT:application-inference-profile/ID\n"
+            "- Prompt router: arn:aws:bedrock:REGION:ACCOUNT:default-prompt-router/ID\n\n"
+            "Example: {\n"
+            '  "anthropic.claude-3-5-sonnet-20241022-v2:0": "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-custom-profile",\n'
+            '  "anthropic.claude-3-5-haiku-20241022-v1:0": "arn:aws:bedrock:us-east-1:123456789012:default-prompt-router/my-router"\n'
+            "}"
         ),
     )
 
@@ -647,6 +700,36 @@ class _Settings(BaseSettings):
             except (ZoneInfoNotFoundError, ValueError):
                 msg = f'Invalid timezone "{value}", possible values: {", ".join(available_timezones())}.'
                 raise ValueError(msg) from None
+        return value
+
+    @field_validator("aws_bedrock_model_arn_mapping")
+    @classmethod
+    def _validate_arn_mapping(cls, value: dict[str, str]) -> dict[str, str]:
+        """Validate that all ARN mappings have valid ARN formats.
+
+        Args:
+            value: Dictionary mapping model IDs to ARNs.
+
+        Returns:
+            The validated dictionary.
+
+        Raises:
+            ValueError: If any ARN has an invalid format.
+        """
+        invalid_arns = []
+        for model_id, arn in value.items():
+            if not (
+                match_bedrock_app_profile_arn(arn)
+                or match_bedrock_prompt_router_arn(arn)
+            ):
+                invalid_arns.append(f"  - {model_id}: {arn}")
+        if invalid_arns:
+            msg = (
+                "Invalid ARN format(s) in aws_bedrock_model_arn_mapping. "
+                "ARNs must be inference profiles or prompt routers:\n"
+                + "\n".join(invalid_arns)
+            )
+            raise ValueError(msg)
         return value
 
     @model_validator(mode="after")

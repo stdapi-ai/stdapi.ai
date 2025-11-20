@@ -84,6 +84,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                 auth_enabled = results[0]
                 register_usage_response = results[-1]
                 unavailable_models = results[1][1]
+                invalid_arn_mappings = results[1][2]
                 update_unified_models_collections()
             start_event = EventLog(
                 type="start",
@@ -109,6 +110,11 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
             if unavailable_models:
                 start_event.setdefault("server_warnings", []).append(
                     {"unavailable_bedrock_models": unavailable_models}  # type: ignore[dict-item]
+                )
+                start_event["level"] = "warning"
+            if invalid_arn_mappings:
+                start_event.setdefault("server_warnings", []).append(
+                    {"invalid_bedrock_model_arn_mappings": invalid_arn_mappings}  # type: ignore[dict-item]
                 )
                 start_event["level"] = "warning"
             write_log_event(start_event)

@@ -146,13 +146,17 @@ This section provides a quick reference of all available configuration options. 
 
 | Variable                                                                        | Default | Description                                                                                       |
 |---------------------------------------------------------------------------------|---------|---------------------------------------------------------------------------------------------------|
-| [`AWS_BEDROCK_CROSS_REGION_INFERENCE`](#cross-region-inference)                 | `true`  | Allow automatic model routing to other configured regions                                         |
-| [`AWS_BEDROCK_CROSS_REGION_INFERENCE_GLOBAL`](#cross-region-global)             | `true`  | Allow global cross-region inference routing to any region worldwide (disable for GDPR compliance) |
-| [`AWS_BEDROCK_LEGACY`](#bedrock-legacy)                                         | `true`  | Allow usage of deprecated/legacy Bedrock models                                                   |
-| [`AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE`](#bedrock-marketplace-auto-subscribe) | `true`  | Allow automatic subscription to new models in AWS Marketplace                                     |
-| [`AWS_BEDROCK_GUARDRAIL_IDENTIFIER`](#aws-bedrock-guardrail-identifier)         | None    | Bedrock Guardrails ID for content filtering and safety controls                                   |
-| [`AWS_BEDROCK_GUARDRAIL_VERSION`](#aws-bedrock-guardrail-version)               | None    | Bedrock Guardrails version number (required with identifier)                                      |
-| [`AWS_BEDROCK_GUARDRAIL_TRACE`](#aws-bedrock-guardrail-trace)                   | None    | Guardrails trace level: `disabled`, `enabled`, or `enabled_full`                                  |
+| [`AWS_BEDROCK_CROSS_REGION_INFERENCE`](#cross-region-inference)                                         | `true`  | Allow automatic model routing to other configured regions                                         |
+| [`AWS_BEDROCK_CROSS_REGION_INFERENCE_GLOBAL`](#cross-region-global)                                     | `true`  | Allow global cross-region inference routing to any region worldwide (disable for GDPR compliance) |
+| [`AWS_BEDROCK_LEGACY`](#bedrock-legacy)                                                                 | `true`  | Allow usage of deprecated/legacy Bedrock models                                                   |
+| [`AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE`](#bedrock-marketplace-auto-subscribe)                         | `true`  | Allow automatic subscription to new models in AWS Marketplace                                     |
+| [`AWS_BEDROCK_ALLOW_CROSS_REGION_INFERENCE_PROFILE_ARN`](#bedrock-allow-cross-region-profile-arn)       | `false` | Allow users to pass cross-region inference profile ARNs directly as model IDs                     |
+| [`AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN`](#bedrock-allow-application-profile-arn)         | `false` | Allow users to pass application inference profile ARNs directly as model IDs                      |
+| [`AWS_BEDROCK_ALLOW_PROMPT_ROUTER_ARN`](#bedrock-allow-prompt-router-arn)                               | `false` | Allow users to pass prompt router ARNs directly as model IDs                                      |
+| [`AWS_BEDROCK_MODEL_ARN_MAPPING`](#bedrock-model-arn-mapping)                                           | `{}`    | Map model IDs to custom inference profile or prompt router ARNs (server-controlled routing)       |
+| [`AWS_BEDROCK_GUARDRAIL_IDENTIFIER`](#aws-bedrock-guardrail-identifier)                                 | None    | Bedrock Guardrails ID for content filtering and safety controls                                   |
+| [`AWS_BEDROCK_GUARDRAIL_VERSION`](#aws-bedrock-guardrail-version)                                       | None    | Bedrock Guardrails version number (required with identifier)                                      |
+| [`AWS_BEDROCK_GUARDRAIL_TRACE`](#aws-bedrock-guardrail-trace)                                           | None    | Guardrails trace level: `disabled`, `enabled`, or `enabled_full`                                  |
 
 ### :material-lock: Authentication
 
@@ -600,6 +604,229 @@ export AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE=false
 !!! info "AWS Documentation"
     For more information about Bedrock model access and marketplace registration, see the [AWS Bedrock Model Access documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html).
 
+#### `AWS_BEDROCK_ALLOW_CROSS_REGION_INFERENCE_PROFILE_ARN` { #bedrock-allow-cross-region-profile-arn }
+
+:octicons-package-24: **Purpose**
+:   Allow users to pass cross-region inference profile ARNs directly as model IDs in API requests
+
+:octicons-database-24: **Type**
+:   Boolean
+
+:octicons-gear-24: **Default**
+:   `false`
+
+:octicons-workflow-24: **Behavior**
+:   When enabled, users can use cross-region inference profile ARNs instead of model IDs in the `model` parameter. Cross-region inference profiles enable routing to multiple regions for better availability
+
+:octicons-lock-24: **IAM Permissions Required**
+:   `bedrock:GetInferenceProfile` (see [IAM Permissions](#bedrock-inference-profiles-and-prompt-routers-optional))
+
+```bash
+# Disabled (default) - users can only use standard model IDs
+# No environment variable needed
+
+# Enable cross-region inference profile ARN support
+export AWS_BEDROCK_ALLOW_CROSS_REGION_INFERENCE_PROFILE_ARN=true
+```
+
+!!! warning "Additional IAM Permissions Required"
+    Enabling this setting requires adding the `bedrock:GetInferenceProfile` IAM permission to your role/user. Without this permission, API requests using inference profile ARNs will fail with authorization errors.
+
+    See the [Bedrock Inference Profiles and Prompt Routers IAM section](#bedrock-inference-profiles-and-prompt-routers-optional) for the complete policy configuration.
+
+!!! example "Example ARN"
+    ```
+    arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-3-5-sonnet-20241022-v2:0
+    ```
+
+!!! info "What are Cross-Region Inference Profiles?"
+    Cross-region inference profiles are AWS-managed routing configurations that automatically distribute requests across multiple AWS regions to improve availability and reduce latency. When a model is unavailable in one region, the request is automatically routed to another region where the model is available.
+
+!!! success "Automatic Cross-Region Routing (Default Behavior)"
+    **By default, stdapi.ai automatically determines and uses the best cross-region inference profile for each model.** You don't need to manually specify cross-region inference profile ARNs in most cases.
+
+    The automatic behavior is controlled by these settings:
+
+    - [`AWS_BEDROCK_REGIONS`](#aws-bedrock-regions) - Defines which regions are available for routing
+    - [`AWS_BEDROCK_CROSS_REGION_INFERENCE`](#cross-region-inference) (default: `true`) - Enables automatic cross-region routing
+    - [`AWS_BEDROCK_CROSS_REGION_INFERENCE_GLOBAL`](#cross-region-global) (default: `true`) - Allows global routing beyond configured regions
+
+    When using standard model IDs, the application automatically:
+
+    - :material-auto-fix: Selects the optimal AWS-managed cross-region inference profile for each model
+    - :material-earth: Routes requests across your configured regions for best availability
+    - :material-speedometer: Optimizes for latency and regional availability
+
+    **Manually specifying cross-region inference profile ARNs should only be done in rare cases** when you need to override the automatic selection for specific requirements.
+
+!!! tip "When to Enable"
+    Enable this setting only in rare cases when:
+
+    - :material-cog: You need to override automatic cross-region profile selection
+    - :material-earth: You have specific cross-region routing requirements that differ from defaults
+    - :material-api: You're testing or comparing different inference profile configurations
+
+    **For most deployments, leave this disabled** and let the application handle cross-region routing automatically.
+
+#### `AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN` { #bedrock-allow-application-profile-arn }
+
+:octicons-package-24: **Purpose**
+:   Allow users to pass application inference profile ARNs directly as model IDs in API requests
+
+:octicons-database-24: **Type**
+:   Boolean
+
+:octicons-gear-24: **Default**
+:   `false`
+
+:octicons-workflow-24: **Behavior**
+:   When enabled, users can use application inference profile ARNs instead of model IDs in the `model` parameter. Application inference profiles are custom routing configurations for specific use cases
+
+:octicons-lock-24: **IAM Permissions Required**
+:   `bedrock:GetInferenceProfile` (see [IAM Permissions](#bedrock-inference-profiles-and-prompt-routers-optional))
+
+```bash
+# Disabled (default) - users can only use standard model IDs
+# No environment variable needed
+
+# Enable application inference profile ARN support
+export AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN=true
+```
+
+!!! warning "Additional IAM Permissions Required"
+    Enabling this setting requires adding the `bedrock:GetInferenceProfile` IAM permission to your role/user. Without this permission, API requests using application inference profile ARNs will fail with authorization errors.
+
+    See the [Bedrock Inference Profiles and Prompt Routers IAM section](#bedrock-inference-profiles-and-prompt-routers-optional) for the complete policy configuration.
+
+!!! example "Example ARN"
+    ```
+    arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123xyz
+    ```
+
+!!! info "What are Application Inference Profiles?"
+    Application inference profiles are custom routing configurations that you create in your AWS account. They allow you to define specific routing behavior, region preferences, and failover strategies tailored to your application's needs.
+
+!!! tip "When to Enable"
+    Enable this setting when:
+
+    - :material-application: You have custom application inference profiles configured in your AWS account
+    - :material-cog: You need application-specific routing configurations
+    - :material-account-multiple: You want to give users access to custom profiles you've created
+
+#### `AWS_BEDROCK_ALLOW_PROMPT_ROUTER_ARN` { #bedrock-allow-prompt-router-arn }
+
+:octicons-package-24: **Purpose**
+:   Allow users to pass prompt router ARNs directly as model IDs in API requests
+
+:octicons-database-24: **Type**
+:   Boolean
+
+:octicons-gear-24: **Default**
+:   `false`
+
+:octicons-workflow-24: **Behavior**
+:   When enabled, users can use prompt router ARNs instead of model IDs in the `model` parameter. Prompt routers enable dynamic model selection based on prompt characteristics
+
+:octicons-lock-24: **IAM Permissions Required**
+:   `bedrock:GetPromptRouter` (see [IAM Permissions](#bedrock-inference-profiles-and-prompt-routers-optional))
+
+```bash
+# Disabled (default) - users can only use standard model IDs
+# No environment variable needed
+
+# Enable prompt router ARN support
+export AWS_BEDROCK_ALLOW_PROMPT_ROUTER_ARN=true
+```
+
+!!! warning "Additional IAM Permissions Required"
+    Enabling this setting requires adding the `bedrock:GetPromptRouter` IAM permission to your role/user. Without this permission, API requests using prompt router ARNs will fail with authorization errors.
+
+    See the [Bedrock Inference Profiles and Prompt Routers IAM section](#bedrock-inference-profiles-and-prompt-routers-optional) for the complete policy configuration.
+
+!!! example "Example ARN"
+    ```
+    arn:aws:bedrock:us-east-1:123456789012:default-prompt-router/my-router
+    ```
+
+!!! info "What are Prompt Routers?"
+    Prompt routers are intelligent routing systems that analyze prompt characteristics (length, complexity, language) and dynamically select the most appropriate model. This enables cost optimization and performance tuning based on request patterns.
+
+!!! tip "When to Enable"
+    Enable this setting when:
+
+    - :material-robot: You have prompt routers configured in your AWS account
+    - :material-cash: You want intelligent cost optimization through dynamic model selection
+    - :material-speedometer: You need automatic model selection based on prompt complexity
+
+#### `AWS_BEDROCK_MODEL_ARN_MAPPING` { #bedrock-model-arn-mapping }
+
+:octicons-package-24: **Purpose**
+:   Map standard model IDs to custom inference profile or prompt router ARNs for server-controlled routing
+
+:octicons-code-24: **Format**
+:   JSON object with model IDs as keys and ARNs as values
+
+:octicons-gear-24: **Default**
+:   `{}` (empty, no mappings)
+
+:octicons-workflow-24: **Behavior**
+:   When configured, the mapped ARN is used instead of the default cross-region inference profile when clients request the model by its standard ID. This provides centralized control over model routing without requiring client changes
+
+```bash
+export AWS_BEDROCK_MODEL_ARN_MAPPING='{
+  "anthropic.claude-3-5-sonnet-20241022-v2:0": "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-custom-profile",
+  "anthropic.claude-3-5-haiku-20241022-v1:0": "arn:aws:bedrock:us-east-1:123456789012:default-prompt-router/my-router"
+}'
+```
+
+!!! info "What is Model ARN Mapping?"
+    Model ARN mapping allows server administrators to override the default routing behavior for specific models. When a client requests a model using its standard ID (e.g., `anthropic.claude-3-5-sonnet-20241022-v2:0`), the server automatically uses the mapped ARN for routing instead.
+
+    **Supported ARN Types:**
+
+    - :material-earth: **Cross-region inference profiles** - AWS-managed multi-region routing
+    - :material-application: **Application inference profiles** - Custom routing configurations
+    - :material-robot: **Prompt routers** - Intelligent dynamic model selection
+
+!!! success "Key Benefits"
+    - :material-server: **Centralized Control** - Change routing behavior without modifying client code
+    - :material-account-group: **Transparent to Clients** - Clients use standard model IDs, server handles routing
+    - :material-swap-horizontal: **Easy Migration** - Switch between routing strategies by updating server config
+    - :material-cog: **Environment-Specific** - Different mappings for dev/staging/production environments
+
+!!! example "Use Cases"
+
+    **Cost Optimization with Prompt Router:**
+    ```bash
+    export AWS_BEDROCK_MODEL_ARN_MAPPING='{
+      "anthropic.claude-3-5-sonnet-20241022-v2:0": "arn:aws:bedrock:us-east-1:123456789012:default-prompt-router/cost-optimizer"
+    }'
+    ```
+    Automatically route simple prompts to cheaper models, complex prompts to premium models.
+
+    **Custom Application Profile:**
+    ```bash
+    export AWS_BEDROCK_MODEL_ARN_MAPPING='{
+      "anthropic.claude-3-5-sonnet-20241022-v2:0": "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/production-profile"
+    }'
+    ```
+    Use your custom inference profile with specific region preferences and failover behavior.
+
+    **Environment-Specific Routing:**
+    ```bash
+    # Production: Use cost-optimized prompt router
+    export AWS_BEDROCK_MODEL_ARN_MAPPING='{"anthropic.claude-3-5-sonnet-20241022-v2:0": "arn:aws:bedrock:us-east-1:123456789012:default-prompt-router/prod-router"}'
+
+    # Development: Use standard cross-region profile
+    export AWS_BEDROCK_MODEL_ARN_MAPPING='{}'
+    ```
+
+!!! tip "Best Practices"
+    - :material-test-tube: Test mappings in development before deploying to production
+    - :material-file-document: Document your ARN mappings and their purposes
+    - :material-update: Keep ARN mappings in version control alongside other configuration
+    - :material-monitor: Monitor routing behavior after updating mappings
+
 ### Other AWS Services
 
 !!! note "Optional Configuration"
@@ -807,19 +1034,8 @@ These permissions are mandatory for stdapi.ai to discover and invoke Bedrock mod
         "bedrock:ListInferenceProfiles"
       ],
       "Resource": "*"
-    },
-    {
-      "Sid": "STSGetCallerIdentity",
-      "Effect": "Allow",
-      "Action": [
-        "sts:GetCallerIdentity"
-      ],
-      "Resource": "*"
     }
     ```
-
-    !!! note "ECS Deployments"
-        When running on ECS, the `sts:GetCallerIdentity` permission is not required. ECS deployments automatically retrieve the account ID from ECS task metadata, eliminating the need for this STS API call.
 
 ### Bedrock Marketplace Auto-Subscribe (Optional) { #bedrock-marketplace-auto-subscribe-iam }
 
@@ -842,6 +1058,33 @@ Required only if you want to enable automatic subscription to new models in the 
 
     !!! warning "Cost Consideration"
         Automatic marketplace subscriptions may incur costs. Review AWS Marketplace pricing for individual models before enabling this feature, or set `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE=false` to require manual marketplace subscription.
+
+### Bedrock Inference Profiles and Prompt Routers (Optional)
+
+**Environment Variables**: [`AWS_BEDROCK_ALLOW_CROSS_REGION_INFERENCE_PROFILE_ARN`](#bedrock-allow-cross-region-profile-arn), [`AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN`](#bedrock-allow-application-profile-arn), [`AWS_BEDROCK_ALLOW_PROMPT_ROUTER_ARN`](#bedrock-allow-prompt-router-arn), [`AWS_BEDROCK_MODEL_ARN_MAPPING`](#bedrock-model-arn-mapping)
+
+Required only if you enable ARN-based routing features that allow users to pass inference profile or prompt router ARNs directly as model IDs, or if you configure server-side ARN mappings.
+
+??? example "Bedrock Inference Profiles and Prompt Routers IAM Policy Statement"
+    ```json
+    {
+      "Sid": "BedrockInferenceProfilesAndPromptRouters",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:GetInferenceProfile",
+        "bedrock:GetPromptRouter"
+      ],
+      "Resource": "*"
+    }
+    ```
+
+    !!! note "When to Include"
+        Add these permissions when:
+
+        - `AWS_BEDROCK_ALLOW_CROSS_REGION_INFERENCE_PROFILE_ARN=true`
+        - `AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN=true`
+        - `AWS_BEDROCK_ALLOW_PROMPT_ROUTER_ARN=true`
+        - `AWS_BEDROCK_MODEL_ARN_MAPPING` is configured with any mappings
 
 ### Bedrock Guardrails (Optional)
 
@@ -1088,14 +1331,6 @@ Required if you configure API authentication. See [Authentication](#authenticati
           "Resource": "*"
         },
         {
-          "Sid": "STSGetCallerIdentity",
-          "Effect": "Allow",
-          "Action": [
-            "sts:GetCallerIdentity"
-          ],
-          "Resource": "*"
-        },
-        {
           "Sid": "BedrockMarketplaceAutoSubscribe",
           "Effect": "Allow",
           "Action": [
@@ -1110,9 +1345,6 @@ Required if you configure API authentication. See [Authentication](#authenticati
 
     !!! note "Marketplace Auto-Subscribe (Default Enabled)"
         The marketplace permissions are included because `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE` defaults to `true`. If you set it to `false`, you can remove the `BedrockMarketplaceAutoSubscribe` statement.
-
-    !!! note "ECS Deployments"
-        When running on ECS, the `STSGetCallerIdentity` statement is not required. ECS deployments automatically retrieve the account ID from ECS task metadata.
 
 ??? example "Production Policy (Bedrock + S3 + Authentication)"
     ```json
@@ -1137,14 +1369,6 @@ Required if you configure API authentication. See [Authentication](#authenticati
             "bedrock:GetFoundationModelAvailability",
             "bedrock:ListProvisionedModelThroughputs",
             "bedrock:ListInferenceProfiles"
-          ],
-          "Resource": "*"
-        },
-        {
-          "Sid": "STSGetCallerIdentity",
-          "Effect": "Allow",
-          "Action": [
-            "sts:GetCallerIdentity"
           ],
           "Resource": "*"
         },
@@ -1182,9 +1406,6 @@ Required if you configure API authentication. See [Authentication](#authenticati
     !!! note "Marketplace Auto-Subscribe (Default Enabled)"
         The marketplace permissions are included because `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE` defaults to `true`. If you set it to `false`, you can remove the `BedrockMarketplaceAutoSubscribe` statement to follow the principle of least privilege.
 
-    !!! note "ECS Deployments"
-        When running on ECS, the `STSGetCallerIdentity` statement is not required. ECS deployments automatically retrieve the account ID from ECS task metadata.
-
 ### Permission Notes
 
 !!! tip "Least Privilege Principle"
@@ -1192,21 +1413,21 @@ Required if you configure API authentication. See [Authentication](#authenticati
 
 ### Feature-Specific Permission Requirements
 
-| Feature | Required Permissions | Configuration |
-|---------|---------------------|---------------|
-| **Bedrock Models (Invoke)** | `bedrock:InvokeModel`<br>`bedrock:InvokeModelWithResponseStream` | Always required |
-| **Bedrock Models (Discovery)** | `bedrock:ListFoundationModels`<br>`bedrock:GetFoundationModelAvailability`<br>`bedrock:ListProvisionedModelThroughputs`<br>`bedrock:ListInferenceProfiles` | Always required |
-| **AWS Account Identity** | `sts:GetCallerIdentity` | Always required (except ECS, which uses task metadata) |
-| **Bedrock Marketplace Auto-Subscribe** | `aws-marketplace:Subscribe`<br>`aws-marketplace:ViewSubscriptions` | `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE=true` (default) |
-| **Bedrock Guardrails** | `bedrock:ApplyGuardrail` | `AWS_BEDROCK_GUARDRAIL_IDENTIFIER` |
-| **File Storage** | `s3:PutObject`<br>`s3:GetObject`<br>`s3:DeleteObject` | `AWS_S3_BUCKET` |
-| **KMS Encrypted S3 Buckets** | `kms:Decrypt`<br>`kms:GenerateDataKey`<br>with `kms:ViaService` condition | If S3 buckets use KMS encryption |
-| **Text-to-Speech** | `polly:SynthesizeSpeech`<br>`polly:DescribeVoices` | `AWS_POLLY_REGION` |
-| **Speech-to-Text** | `transcribe:StartTranscriptionJob`<br>`transcribe:GetTranscriptionJob`<br>`transcribe:DeleteTranscriptionJob`<br>`s3:PutObject` (transcribe bucket) | `AWS_TRANSCRIBE_REGION`<br>`AWS_TRANSCRIBE_S3_BUCKET` |
-| **Language Detection** | `comprehend:DetectDominantLanguage` | `AWS_COMPREHEND_REGION` |
-| **Translation** | `translate:TranslateText` | `AWS_TRANSLATE_REGION` |
-| **SSM Parameter Store** | `ssm:GetParameter`<br>`kms:Decrypt` (if encrypted) | `API_KEY_SSM_PARAMETER` |
-| **Secrets Manager** | `secretsmanager:GetSecretValue` | `API_KEY_SECRETSMANAGER_SECRET` |
+| Feature                                         | Required Permissions                                                                                                                                       | Configuration                                                                |
+|-------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------|
+| **Bedrock Models (Invoke)**                     | `bedrock:InvokeModel`<br>`bedrock:InvokeModelWithResponseStream`                                                                                           | Always required                                                              |
+| **Bedrock Models (Discovery)**                  | `bedrock:ListFoundationModels`<br>`bedrock:GetFoundationModelAvailability`<br>`bedrock:ListProvisionedModelThroughputs`<br>`bedrock:ListInferenceProfiles` | Always required                                                              |
+| **Bedrock Marketplace Auto-Subscribe**          | `aws-marketplace:Subscribe`<br>`aws-marketplace:ViewSubscriptions`                                                                                         | `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE=true` (default)                      |
+| **Bedrock Inference Profiles & Prompt Routers** | `bedrock:GetInferenceProfile`<br>`bedrock:GetPromptRouter`                                                                                                 | `AWS_BEDROCK_ALLOW_*_ARN=true` or `AWS_BEDROCK_MODEL_ARN_MAPPING` configured |
+| **Bedrock Guardrails**                          | `bedrock:ApplyGuardrail`                                                                                                                                   | `AWS_BEDROCK_GUARDRAIL_IDENTIFIER`                                           |
+| **File Storage**                                | `s3:PutObject`<br>`s3:GetObject`<br>`s3:DeleteObject`                                                                                                      | `AWS_S3_BUCKET`                                                              |
+| **KMS Encrypted S3 Buckets**                    | `kms:Decrypt`<br>`kms:GenerateDataKey`<br>with `kms:ViaService` condition                                                                                  | If S3 buckets use KMS encryption                                             |
+| **Text-to-Speech**                              | `polly:SynthesizeSpeech`<br>`polly:DescribeVoices`                                                                                                         | `AWS_POLLY_REGION`                                                           |
+| **Speech-to-Text**                              | `transcribe:StartTranscriptionJob`<br>`transcribe:GetTranscriptionJob`<br>`transcribe:DeleteTranscriptionJob`<br>`s3:PutObject` (transcribe bucket)        | `AWS_TRANSCRIBE_REGION`<br>`AWS_TRANSCRIBE_S3_BUCKET`                        |
+| **Language Detection**                          | `comprehend:DetectDominantLanguage`                                                                                                                        | `AWS_COMPREHEND_REGION`                                                      |
+| **Translation**                                 | `translate:TranslateText`                                                                                                                                  | `AWS_TRANSLATE_REGION`                                                       |
+| **SSM Parameter Store**                         | `ssm:GetParameter`<br>`kms:Decrypt` (if encrypted)                                                                                                         | `API_KEY_SSM_PARAMETER`                                                      |
+| **Secrets Manager**                             | `secretsmanager:GetSecretValue`                                                                                                                            | `API_KEY_SECRETSMANAGER_SECRET`                                              |
 
 ### IAM Role vs. IAM User
 
@@ -2418,7 +2639,7 @@ stdapi.ai automatically discovers and caches available Bedrock models from confi
 :   `900` (15 minutes)
 
 :octicons-workflow-24: **Behavior**
-:   When a request needs the model list (e.g., model lookup, `/models` endpoint) and the cache has expired, the server queries AWS Bedrock to discover newly available models, check for model access changes, and update inference profile configurations
+:   When a request needs the model list (e.g., model lookup, `/models` endpoint) and the cache has expired, the server queries AWS Bedrock to discover newly available models, check for model access changes, and update inference profile configurations. This cache also applies to application inference profile and prompt router information when users pass ARNs directly (if enabled via [`AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN`](#bedrock-allow-application-profile-arn) or [`AWS_BEDROCK_ALLOW_PROMPT_ROUTER_ARN`](#bedrock-allow-prompt-router-arn))
 
 ```bash
 # Default: 15 minutes
@@ -2557,4 +2778,147 @@ graph LR
 2. :material-numeric-2-circle: **Request parameters** override defaults if both are specified
 3. :material-numeric-3-circle: **Provider-specific fields** are forwarded to Bedrock as additional model request fields
 4. :material-numeric-4-circle: **Unsupported fields** that would change output cause HTTP 400 error; otherwise ignored
+
+---
+
+## Using Inference Profile and Prompt Router ARNs
+
+stdapi.ai supports passing ARNs directly as model IDs in API requests, enabling advanced routing capabilities beyond standard model selection.
+
+### Overview
+
+Instead of using standard model IDs like `anthropic.claude-3-5-sonnet-20241022-v2:0`, you can pass ARNs that reference:
+
+- **Cross-Region Inference Profiles** - AWS-managed multi-region routing
+- **Application Inference Profiles** - Your custom routing configurations
+- **Prompt Routers** - Intelligent dynamic model selection
+
+!!! info "Automatic Cross-Region Routing"
+    **stdapi.ai automatically handles cross-region routing by default.** When you use standard model IDs, the application automatically selects and uses the optimal AWS-managed cross-region inference profile based on your configured `AWS_BEDROCK_REGIONS`.
+
+    You typically **do not need to manually pass cross-region inference profile ARNs**. The automatic selection handles routing across your configured regions for best availability and latency.
+
+    Manual ARN passing is primarily useful for:
+
+    - :material-application: **Application inference profiles** - Your custom routing configurations
+    - :material-robot: **Prompt routers** - Intelligent cost optimization and dynamic model selection
+    - :material-cog: **Rare cases** - When you need to override automatic cross-region profile selection
+
+### Enabling ARN Support
+
+By default, users can only pass standard model IDs. To allow ARN usage, enable the appropriate settings:
+
+```bash
+# Allow cross-region inference profile ARNs
+export AWS_BEDROCK_ALLOW_CROSS_REGION_INFERENCE_PROFILE_ARN=true
+
+# Allow application inference profile ARNs
+export AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN=true
+
+# Allow prompt router ARNs
+export AWS_BEDROCK_ALLOW_PROMPT_ROUTER_ARN=true
+```
+
+!!! warning "Security Consideration"
+    These settings are disabled by default. Only enable them when you want to give users explicit control over ARN-based routing. For centralized server-controlled routing, use [`AWS_BEDROCK_MODEL_ARN_MAPPING`](#bedrock-model-arn-mapping) instead.
+
+### Using ARNs in API Requests
+
+Once enabled, users can pass ARNs directly in the `model` parameter:
+
+**Cross-Region Inference Profile Example:**
+
+```bash
+curl -X POST https://api.example.com/v1/chat/completions \
+  -H "Authorization: Bearer sk-..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+    "messages": [
+      {"role": "user", "content": "Hello!"}
+    ]
+  }'
+```
+
+**Application Inference Profile Example:**
+
+```bash
+curl -X POST https://api.example.com/v1/chat/completions \
+  -H "Authorization: Bearer sk-..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-custom-profile",
+    "messages": [
+      {"role": "user", "content": "Hello!"}
+    ]
+  }'
+```
+
+**Prompt Router Example:**
+
+```bash
+curl -X POST https://api.example.com/v1/chat/completions \
+  -H "Authorization: Bearer sk-..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "arn:aws:bedrock:us-east-1:123456789012:default-prompt-router/my-router",
+    "messages": [
+      {"role": "user", "content": "Hello!"}
+    ]
+  }'
+```
+
+### Use Case Comparison
+
+| Approach                    | Best For                                    | Configuration                                                 |
+|-----------------------------|---------------------------------------------|---------------------------------------------------------------|
+| **Standard Model IDs**      | Most common use case, simple routing        | No special configuration needed                               |
+| **Server-Side ARN Mapping** | Centralized control, transparent to clients | [`AWS_BEDROCK_MODEL_ARN_MAPPING`](#bedrock-model-arn-mapping) |
+| **Client-Side ARN Passing** | User-controlled routing, advanced use cases | Enable `AWS_BEDROCK_ALLOW_*_ARN` settings                     |
+
+### Best Practices
+
+!!! success "Recommended Approach"
+    **For most deployments, use server-side ARN mapping** ([`AWS_BEDROCK_MODEL_ARN_MAPPING`](#bedrock-model-arn-mapping)):
+
+    - :material-server: Centralized control over routing behavior
+    - :material-account-group: Transparent to API clients
+    - :material-cog: Easy to change routing without modifying client code
+    - :material-shield-check: Better security (server controls which ARNs are used)
+
+!!! info "When to Allow Client-Side ARNs"
+    Enable `AWS_BEDROCK_ALLOW_*_ARN` settings when:
+
+    - :material-api: Clients need fine-grained control over routing
+    - :material-cog: Different clients require different routing strategies
+    - :material-dev-to: Advanced users managing their own inference profiles
+    - :material-test-tube: Testing and comparing different routing configurations
+
+!!! warning "Security and Governance"
+    When enabling client-side ARN passing:
+
+    - :material-shield-alert: Clients can bypass server-configured routing
+    - :material-cash: Monitor usage to prevent unexpected costs
+    - :material-account-check: Ensure appropriate IAM permissions are in place
+    - :material-chart-line: Track ARN usage through logs and monitoring
+
+### Required IAM Permissions
+
+When using ARN-based routing, ensure your IAM role/user has the appropriate permissions:
+
+```json
+{
+  "Sid": "BedrockARNRouting",
+  "Effect": "Allow",
+  "Action": [
+    "bedrock:GetInferenceProfile",
+    "bedrock:GetPromptRouter",
+  ],
+  "Resource": "*"
+}
+```
+
+See the [IAM Permissions](#iam-permissions) section for complete policy examples.
+
+---
 

@@ -1,7 +1,7 @@
 """Models."""
 
 from asyncio import Lock, Queue, create_task, gather, sleep
-from collections.abc import AsyncGenerator, Iterable, Mapping
+from collections.abc import AsyncGenerator, Iterable, Mapping, Sequence
 from contextlib import suppress
 from datetime import timedelta
 from functools import cached_property
@@ -27,14 +27,22 @@ from stdapi.aws_s3 import aws_s3_cleanup
 from stdapi.config import SETTINGS
 from stdapi.models.deprecation import DEPRECATED_MODELS
 from stdapi.monitoring import REQUEST_ID, REQUEST_LOG, log_error_details
-from stdapi.openai_exceptions import OpenaiUnsupportedModelError
-from stdapi.utils import b64decode_data_uri, get_base64_decoded_size, get_data_uri_type
+from stdapi.openai_exceptions import OpenaiError, OpenaiUnsupportedModelError
+from stdapi.utils import (
+    b64decode_data_uri,
+    get_base64_decoded_size,
+    get_data_uri_type,
+    match_bedrock_app_profile_arn,
+    match_bedrock_prompt_router_arn,
+)
 
 if TYPE_CHECKING:
     from types_aiobotocore_bedrock.client import BedrockClient
     from types_aiobotocore_bedrock.type_defs import (
+        InferenceProfileModelTypeDef,
         ListInferenceProfilesRequestTypeDef,
         ListProvisionedModelThroughputsRequestTypeDef,
+        PromptRouterTargetModelTypeDef,
     )
     from types_aiobotocore_bedrock_runtime import BedrockRuntimeClient
     from types_aiobotocore_bedrock_runtime.literals import TraceType
@@ -59,6 +67,7 @@ if TYPE_CHECKING:
         update_interval: timedelta
         update_lock: Lock
         access_lock: Lock
+        user_profiles_access_lock: Lock
 
 
 #: Models details
@@ -94,6 +103,7 @@ _CACHE: "_ModelCache" = {
     "update_lock": Lock(),
     "update_interval": timedelta(seconds=SETTINGS.model_cache_seconds),
     "access_lock": Lock(),
+    "user_profiles_access_lock": Lock(),
 }
 
 #: Always allowed inference types
@@ -103,6 +113,9 @@ _INFERENCE_TYPES = {"INFERENCE_PROFILE", "ON_DEMAND"}
 _CACHE_POINT: 'dict[Literal["cachePoint"], CachePointBlockTypeDef]' = {
     "cachePoint": {"type": "default"}
 }
+
+#: Cached application inference profiles & prompt routers
+_USER_PROFILES: dict[str, tuple["ModelDetails", AwareDatetime]] = {}
 
 
 class ModelDetails(BaseModel):
@@ -540,14 +553,17 @@ async def _get_bedrock_models_from_region(region: str) -> list[ModelDetails]:
     ]
 
 
-async def initialize_bedrock_models() -> tuple[bool, dict[str, dict[str, list[str]]]]:
+async def initialize_bedrock_models() -> tuple[
+    bool, dict[str, dict[str, list[str]]], dict[str, str]
+]:
     """Get all available Bedrock models from all configured regions.
 
     Returns:
-        Tuple of (True if the model list was updated, map of unavailable models).
+        Tuple of (True if the model list was updated, map of unavailable models, map of invalid ARN mappings).
     """
     updated = False
     unavailable_models: dict[str, dict[str, list[str]]] = {}
+
     async with _CACHE["update_lock"]:
         if _CACHE["update_next"] is None or _CACHE["update_next"] <= SETTINGS.now():
             regions = SETTINGS.aws_bedrock_regions
@@ -565,6 +581,8 @@ async def initialize_bedrock_models() -> tuple[bool, dict[str, dict[str, list[st
                         for model in models
                     )
                 )
+
+            invalid_arn_mappings = _apply_user_profiles(all_models)
 
             models_input: dict[str, set[str]] = {}
             models_output: dict[str, set[str]] = {}
@@ -590,7 +608,37 @@ async def initialize_bedrock_models() -> tuple[bool, dict[str, dict[str, list[st
                 if updated and _CACHE["update_next"] is not None:
                     update_unified_models_collections()
             _CACHE["update_next"] = SETTINGS.now() + _CACHE["update_interval"]
-    return updated, unavailable_models
+        else:
+            invalid_arn_mappings = {}
+    return updated, unavailable_models, invalid_arn_mappings
+
+
+def _apply_user_profiles(all_models: dict[str, ModelDetails]) -> dict[str, str]:
+    """Applies user-specified AWS Bedrock ARNs as inference profiles to the respective models.
+
+    Args:
+        all_models: A dictionary where keys are model IDs and
+            values are `ModelDetails` objects representing the available models.
+
+    Returns:
+        A dictionary containing invalid ARN mappings where keys are model IDs and
+        values are error messages indicating the issue.
+    """
+    invalid_arn_mappings: dict[str, str] = {}
+    for model_id, arn in SETTINGS.aws_bedrock_model_arn_mapping.items():
+        try:
+            model = all_models[model_id]
+        except KeyError:
+            invalid_arn_mappings[model_id] = (
+                "Model not found in available Bedrock models"
+            )
+            continue
+        model.inference_profile = arn
+        if arn_match := (
+            match_bedrock_app_profile_arn(arn) or match_bedrock_prompt_router_arn(arn)
+        ):
+            model.region = arn_match.group("region")
+    return invalid_arn_mappings
 
 
 async def _filter_model(
@@ -906,13 +954,16 @@ async def validate_model(
     Raises:
         HTTPException: If model is not found or not supported
     """
-    # First, try to get the model from the cache
-    models = _MODELS if bedrock_only else _ALL_MODELS
-    async with _CACHE["access_lock"]:
-        try:
-            model = models[model_id]
-        except KeyError:
-            model = None
+    if model_id.startswith("arn:"):
+        model = await _validate_model_from_arn(model_id)
+    else:
+        # First, try to get the model from the cache
+        models = _MODELS if bedrock_only else _ALL_MODELS
+        async with _CACHE["access_lock"]:
+            try:
+                model = models[model_id]
+            except KeyError:
+                model = None
 
     # If not found, update the cache and retry, if still not found, raise an error
     if model is None:
@@ -960,6 +1011,135 @@ async def validate_model(
     log = REQUEST_LOG.get()
     log["model_id"] = model_id
     return model
+
+
+async def _validate_model_from_arn(arn: str) -> ModelDetails | None:
+    """Validates the model associated with a given ARN and returns its details.
+
+    This function internally checks the cached user profiles and their expiration timestamps.
+    If the model data is not available in the cache, it delegates the retrieval to external
+    services based on the ARN. If a valid model is fetched, its details are cached for
+    future use.
+
+    Args:
+        arn: The Amazon Resource Name (ARN) of the model to be validated and retrieved.
+
+    Returns:
+        The details of the validated model if available.
+
+    Raises:
+        OpenaiError: If the ARN does not correspond to a valid application inference profile
+        or prompt router, or if the model cannot be found for the provided ARN.
+        HTTPException: If the ARN type is not allowed by the server configuration.
+    """
+    models: (
+        Sequence[InferenceProfileModelTypeDef]
+        | Sequence[PromptRouterTargetModelTypeDef]
+        | None
+    ) = None
+    async with _CACHE["user_profiles_access_lock"]:
+        try:
+            model, expiration = _USER_PROFILES[arn]
+            if expiration > SETTINGS.now():
+                return model
+            del _USER_PROFILES[arn]
+        except KeyError:
+            pass
+
+        try:
+            models, region = (
+                await _get_application_inference_profile_models(arn)
+                or await _get_prompt_router_models(arn)
+                or (None, None)
+            )
+        except ClientError as error:
+            if (
+                error.response["Error"]["Code"] != "ResourceNotFoundException"
+            ):  # pragma: no cover
+                raise
+
+        model_arn = None
+        while True:
+            if not models or not region:
+                msg = f"ARN does not match a valid inference profile or prompt router: {model_arn or arn}"
+                raise OpenaiError(msg)
+
+            model_arn = models[0]["modelArn"]
+            if "inference-profile" in model_arn:
+                models = (
+                    await get_client("bedrock", region).get_inference_profile(
+                        inferenceProfileIdentifier=model_arn
+                    )
+                ).get("models") or ()
+                continue
+
+            model_id = model_arn.rsplit("/", 1)[1]
+            break
+
+        async with _CACHE["access_lock"]:
+            try:
+                base_model = _MODELS[model_id].model_copy()
+            except KeyError:
+                msg = f"model {model_id} not found for ARN: {arn}"
+                raise OpenaiError(msg) from None
+        model = base_model.model_copy()
+        model.inference_profile = arn
+        model.region = region
+        _USER_PROFILES[arn] = (model, SETTINGS.now() + _CACHE["update_interval"])
+        return model
+
+
+async def _get_prompt_router_models(
+    arn: str,
+) -> "tuple[Sequence[PromptRouterTargetModelTypeDef], str] | None":
+    """Retrieves a list of models associated with a given Prompt Router ARN from AWS Bedrock.
+
+    Args:
+        arn: The ARN of the Prompt Router for which the associated models are to be
+            retrieved.
+
+    Returns:
+        A sequence of target model definitions associated with the provided Prompt
+        Router ARN, the region of the provided Prompt
+    """
+    if result := match_bedrock_prompt_router_arn(arn):
+        if not SETTINGS.aws_bedrock_allow_prompt_router_arn:
+            msg = "Prompt router are not allowed by server configuration."
+            raise OpenaiError(msg)
+        region = result.group("region")
+        return (
+            await get_client("bedrock", region).get_prompt_router(promptRouterArn=arn)
+        ).get("models") or (), region
+    return None
+
+
+async def _get_application_inference_profile_models(
+    arn: str,
+) -> "tuple[Sequence[InferenceProfileModelTypeDef], str] | None":
+    """Fetches inference profile models associated with the specified ARN.
+
+    Args:
+        arn: The Amazon Resource Name (ARN) of the application inference profile.
+
+    Returns:
+        A sequence of models associated with the application inference profile,
+        the region of the application inference profile
+    """
+    if result := match_bedrock_app_profile_arn(arn):
+        if "application-inference-profile" in arn:
+            if not SETTINGS.aws_bedrock_allow_application_inference_profile_arn:
+                msg = "Application inference profile are not allowed by server configuration."
+                raise OpenaiError(msg)
+        elif not SETTINGS.aws_bedrock_allow_cross_region_inference_profile_arn:
+            msg = "Cross-region inference profile are not allowed by server configuration."
+            raise OpenaiError(msg)
+        region = result.group("region")
+        return (
+            await get_client("bedrock", region).get_inference_profile(
+                inferenceProfileIdentifier=arn
+            )
+        ).get("models") or (), region
+    return None
 
 
 async def _wait_for_async_invocation_completion(

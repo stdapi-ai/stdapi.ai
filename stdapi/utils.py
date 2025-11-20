@@ -23,6 +23,17 @@ from pydantic_core import from_json, to_json
 T = TypeVar("T")
 
 
+#: Application inference profile ARN regex matcher
+match_bedrock_app_profile_arn = compile_regex(
+    "arn:aws(?:-[^:]+)?:bedrock:(?P<region>[a-z0-9-]{1,20}):[0-9]{12}:(?:inference-profile|application-inference-profile)/[a-zA-Z0-9-:.]+"
+).match
+
+#: Prompt router ARN regex matcher
+match_bedrock_prompt_router_arn = compile_regex(
+    "arn:aws(?:-[^:]+)?:bedrock:(?P<region>[a-z0-9-]{1,20}):[0-9]{12}:(?:prompt-router|default-prompt-router)/[a-zA-Z0-9-:.]+"
+).match
+
+
 @contextmanager
 def validation_error_handler() -> Generator[None]:
     """Context manager to convert Pydantic ValidationError to FastAPI RequestValidationError.

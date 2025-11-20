@@ -6,10 +6,12 @@ specification, ensuring compatibility with the official OpenAI API behavior.
 
 import base64
 import json as _json
+from asyncio import sleep
 from collections.abc import Iterable
 from secrets import token_hex
 
 import pytest
+from aioboto3 import Session
 from openai import BadRequestError, NotFoundError, OpenAI
 from pybase64 import b64encode
 
@@ -2206,3 +2208,117 @@ class TestChatCompletions:
             # (or minimal audio from any brief text response)
             # This validates audio is not generated for tool call responses
             assert choice.finish_reason == "tool_calls"
+
+    async def test_inference_profile_as_model(
+        self,
+        openai_client: OpenAI,
+        use_openai_api: bool,
+        aws_region: str,
+        aws_account_id: str,
+    ) -> None:
+        """Test that application inference profiles can be passed as model parameter.
+
+        This test creates an application inference profile, uses it as the model parameter
+        in a chat completion request, and then deletes the profile. Only runs when not
+        testing against the official OpenAI API.
+        """
+        if use_openai_api:
+            pytest.skip("Application inference profiles are AWS Bedrock specific")
+
+        inference_profile_arn = None
+        async with Session().client("bedrock") as bedrock:
+            try:
+                # Create the application inference profile
+                inference_profile_arn = (
+                    await bedrock.create_inference_profile(
+                        inferenceProfileName=f"test-profile-{token_hex(8)}",
+                        description="Test inference profile for automated testing",
+                        modelSource={
+                            "copyFrom": f"arn:aws:bedrock:{aws_region}:{aws_account_id}:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0"
+                        },
+                    )
+                )["inferenceProfileArn"]
+
+                max_wait = 30  # seconds
+                wait_interval = 1  # second
+                elapsed = 0
+                while elapsed < max_wait:
+                    if (
+                        await bedrock.get_inference_profile(
+                            inferenceProfileIdentifier=inference_profile_arn
+                        )
+                    )["status"] == "ACTIVE":
+                        break
+                    await sleep(wait_interval)
+                    elapsed += wait_interval
+                else:
+                    pytest.fail(
+                        f"Inference profile did not become active within {max_wait} seconds"
+                    )
+
+                # Test using the inference profile as model parameter
+                response = openai_client.chat.completions.create(
+                    model=inference_profile_arn,
+                    messages=[{"role": "user", "content": "Say OK"}],
+                    max_completion_tokens=10,
+                )
+
+                # Validate response structure
+                assert hasattr(response, "choices")
+                assert len(response.choices) == 1
+                assert response.choices[0].message.role == "assistant"
+                assert isinstance(response.choices[0].message.content, str)
+                assert len(response.choices[0].message.content) > 0
+
+            finally:
+                if inference_profile_arn:
+                    await bedrock.delete_inference_profile(
+                        inferenceProfileIdentifier=inference_profile_arn
+                    )
+
+    async def test_prompt_router_as_model(
+        self,
+        openai_client: OpenAI,
+        use_openai_api: bool,
+        aws_region: str,
+        aws_account_id: str,
+    ) -> None:
+        """Test that prompt routers can be passed as model parameter.
+
+        This test uses a default prompt router as the model parameter
+        in a chat completion request. Only runs when not testing against
+        the official OpenAI API.
+        """
+        if use_openai_api:
+            pytest.skip("Prompt routers are AWS Bedrock specific")
+
+        # Test using the prompt router as model parameter
+        response = openai_client.chat.completions.create(
+            model=f"arn:aws:bedrock:{aws_region}:{aws_account_id}:default-prompt-router/amazon.nova:1",
+            messages=[{"role": "user", "content": "Say OK"}],
+            max_completion_tokens=10,
+        )
+
+        # Validate response structure
+        assert hasattr(response, "choices")
+        assert len(response.choices) == 1
+        assert response.choices[0].message.role == "assistant"
+        assert isinstance(response.choices[0].message.content, str)
+        assert len(response.choices[0].message.content) > 0
+
+        # Test bad ARN
+        with pytest.raises(BadRequestError) as exc_info:
+            openai_client.chat.completions.create(
+                model=f"arn:aws:bedrock:{aws_region}:{aws_account_id}:prompt-router/not.exists",
+                messages=[{"role": "user", "content": "Say OK"}],
+                max_completion_tokens=10,
+            )
+        assert "ARN does not match a valid" in str(exc_info)
+
+        with pytest.raises(BadRequestError) as exc_info:
+            openai_client.chat.completions.create(
+                model=f"arn:aws:bedrock:{aws_region}:{aws_account_id}:foundation-model/not.exists",
+                messages=[{"role": "user", "content": "Say OK"}],
+                max_completion_tokens=10,
+            )
+        assert "ARN does not match a valid" in str(exc_info)

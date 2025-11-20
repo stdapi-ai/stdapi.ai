@@ -9,6 +9,7 @@ from secrets import token_hex
 from time import monotonic, sleep
 
 import pytest
+from aioboto3 import Session
 from httpx import Client, ConnectError, ConnectTimeout, ReadTimeout, Timeout
 from openai import OpenAI
 from pybase64 import b64encode
@@ -259,6 +260,8 @@ def openai_client(request: pytest.FixtureRequest) -> Generator[OpenAI]:
                 "otel_enabled": "true",
                 "tokens_estimation": "true",
                 "trusted_hosts": '["*"]',
+                "aws_bedrock_allow_application_inference_profile_arn": "true",
+                "aws_bedrock_allow_prompt_router_arn": "true",
             }
         )
         from stdapi.main import app  # noqa: PLC0415
@@ -405,3 +408,34 @@ def sample_video_file_base64(sample_video_file: bytes) -> str:
     if sample_video_file:
         return f"data:video/mp4;base64,{b64encode(sample_video_file).decode('utf-8')}"
     return ""
+
+
+@pytest.fixture(scope="session")
+async def aws_session_info() -> tuple[str, str]:
+    """Get AWS region and account ID from STS client in a single call.
+
+    Returns:
+        tuple[str, str]: A tuple containing (region, account_id).
+    """
+    async with Session().client("sts") as sts:
+        return sts.meta.region_name, (await sts.get_caller_identity())["Account"]
+
+
+@pytest.fixture(scope="session")
+async def aws_region(aws_session_info: tuple[str, str]) -> str:
+    """Get AWS region from session info.
+
+    Returns:
+        str: AWS region name.
+    """
+    return aws_session_info[0]
+
+
+@pytest.fixture(scope="session")
+async def aws_account_id(aws_session_info: tuple[str, str]) -> str:
+    """Get AWS account ID from session info.
+
+    Returns:
+        str: AWS account ID.
+    """
+    return aws_session_info[1]
