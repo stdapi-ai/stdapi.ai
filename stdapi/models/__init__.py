@@ -1,7 +1,7 @@
 """Models."""
 
-from asyncio import Lock, Queue, create_task, gather, sleep
-from collections.abc import AsyncGenerator, Iterable, Mapping, Sequence
+from asyncio import Lock, gather, sleep
+from collections.abc import Iterable, Mapping, Sequence
 from contextlib import suppress
 from datetime import timedelta
 from functools import cached_property
@@ -214,25 +214,6 @@ class ModelBase[RequestT, ResponseT]:
             *(self.invoke(body, inference_profile=inference_profile) for body in bodies)
         )
 
-    async def invoke_stream(
-        self, body: RequestT, *, inference_profile: bool = True
-    ) -> AsyncGenerator[ResponseT]:
-        """Invoke the model through AWS Bedrock with streaming response.
-
-        Args:
-            body: The input data to invoke the operation.
-            inference_profile: If True, use the inference profile. Otherwise, use the model ID.
-
-        Yields:
-            Streaming response chunks from the invoked operation.
-        """
-        async for chunk in invoke_json_stream(
-            self._model_id,
-            body,  # type: ignore[arg-type]
-            inference_profile=inference_profile,
-        ):
-            yield chunk  # type: ignore[misc]
-
     async def invoke_async(
         self,
         body: RequestT,
@@ -260,96 +241,6 @@ class ModelBase[RequestT, ResponseT]:
             inference_profile=inference_profile,
             output_file=output_file,
         )
-
-    async def batch_invoke_async(
-        self,
-        bodies: Iterable[RequestT],
-        background_tasks: BackgroundTasks,
-        *,
-        inference_profile: bool = True,
-    ) -> list[ResponseT]:
-        """Invoke the model multiple times through AWS Bedrock asynchronously.
-
-        Args:
-            bodies: The input data to invoke the operation.
-            background_tasks: FastAPI background tasks for cleanup.
-            inference_profile: If True, use the inference profile. Otherwise, use the model ID.
-
-        Returns:
-            The results of the invoked operations.
-        """
-        return await gather(
-            *(
-                self.invoke_async(
-                    body, background_tasks, inference_profile=inference_profile
-                )
-                for body in bodies
-            )
-        )
-
-    async def batch_invoke_stream(
-        self, bodies: Iterable[RequestT], *, inference_profile: bool = True
-    ) -> AsyncGenerator[tuple[int, ResponseT]]:
-        """Invoke the model multiple times through AWS Bedrock with streaming responses.
-
-        Args:
-            bodies: The input data to invoke the operation.
-            inference_profile: If True, use the inference profile. Otherwise, use the model ID.
-
-        Yields:
-            Tuples of (generator_index, response_chunk) where generator_index indicates
-            which input body the response chunk corresponds to.
-        """
-        generators = [
-            self.invoke_stream(body, inference_profile=inference_profile)
-            for body in bodies
-        ]
-        if generators:
-            queue: Queue[tuple[int, ResponseT] | None] = Queue()
-            tasks = [
-                create_task(self._generator_to_queue(gen, queue, index))
-                for index, gen in enumerate(generators)
-            ]
-            completed_generators = 0
-            try:
-                while completed_generators < len(generators):
-                    item = await queue.get()
-                    if item is None:
-                        completed_generators += 1
-                    else:
-                        yield item
-            finally:
-                for task in tasks:
-                    if not task.done():
-                        task.cancel()
-                await gather(*tasks)
-
-    @staticmethod
-    async def _generator_to_queue(
-        gen: AsyncGenerator[ResponseT],
-        queue: Queue[tuple[int, ResponseT] | None],
-        index: int,
-    ) -> None:
-        """Converts an asynchronous generator into an asyncio queue and signals completion.
-
-        This static method consumes items from an asynchronous generator and places them into the
-        provided asyncio queue along with their associated index. After consuming all items, it
-        places a completion signal (None) into the queue.
-
-        Args:
-            gen: An asynchronous generator yielding responses.
-            queue: The asyncio queue where
-                the generator items will be placed. The queue also receives a completion
-                signal (None) after processing all items.
-            index: An index associated with the generator, used to track which
-                generator the items originate from.
-        """
-        try:
-            async for item in gen:
-                await queue.put((index, item))
-        finally:
-            await queue.put(None)  # Signal completion
-            await gen.aclose()
 
 
 ModelT = TypeVar("ModelT", bound=ModelBase[Any, Any])
@@ -440,14 +331,14 @@ async def _get_provisioned_models(bedrock_client: "BedrockClient") -> set[str]:
             params["nextToken"] = next_token
         try:
             response = await bedrock_client.list_provisioned_model_throughputs(**params)
-        except ClientError as exc:
+        except ClientError as exc:  # pragma: no cover
             error = exc.response["Error"]
             if (
                 error["Code"] == "AccessDeniedException"
                 and "not supported" in error["Message"]
             ):
                 break
-            raise  # pragma: no cover
+            raise
         for model in response["provisionedModelSummaries"]:
             models_ids.add(model["modelArn"].rsplit("/", 1)[-1])
         next_token = response.get("nextToken")
@@ -812,41 +703,6 @@ async def invoke_json(
     with handle_bedrock_client_error():
         response = await bedrock_client.invoke_model(**kwargs)
     return from_json(await response["body"].read())  # type: ignore[no-any-return]
-
-
-async def invoke_json_stream(
-    model_id: str, body: Mapping[str, Any], *, inference_profile: bool = True
-) -> AsyncGenerator[Mapping[str, Any]]:
-    """Invoke a Bedrock model from a JSON payload and return a streaming JSON response.
-
-    Args:
-        model_id: Model ID.
-        body: JSON payload.
-        inference_profile: If True, use the inference profile. Otherwise, use the model ID.
-
-    Yields:
-        JSON response chunks from the streaming response.
-    """
-    bedrock_client, kwargs = await _prepare_bedrock_request(
-        model_id, body, inference_profile=inference_profile
-    )
-    with handle_bedrock_client_error():
-        response = await bedrock_client.invoke_model_with_response_stream(**kwargs)
-        async for event in response["body"]:
-            if "chunk" in event:
-                yield from_json(event["chunk"]["bytes"])
-                continue
-            for key, value in event:  # type: ignore[misc]
-                if key.endswith("Exception"):  # type: ignore[has-type]
-                    raise ClientError(
-                        error_response={
-                            "Error": {
-                                "Code": f"{key[0]}{key[1:]}",  # type: ignore[has-type]
-                                "Message": value["message"],  # type: ignore[has-type]
-                            }
-                        },
-                        operation_name="InvokeModelWithResponseStream",
-                    )
 
 
 async def prepare_converse_request(
