@@ -46,6 +46,7 @@ This OpenAI-compatible endpoint provides access to AWS Bedrock foundation models
 | Parallel tool calls                      |       :material-cog:{ .model-dep }       | Multiple tools in one turn                                      |
 | Disable Parallel tool calls              | :material-close-circle:{ .unsupported }  | Parallel tool calls are always on                               |
 | Non-function tool types                  | :material-close-circle:{ .unsupported }  | Only function tools supported                                   |
+| System tools (`systemTool_*`)            | :material-plus-circle:{ .extra-feature } | AWS Bedrock system tools (e.g., web grounding with citations)   |
 | **Generation Control**                   |                                          |                                                                 |
 | `max_tokens` / `max_completion_tokens`   |   :material-check-circle:{ .success }    | Output length limits                                            |
 | `temperature`                            |       :material-cog:{ .model-dep }       | Mapped to Bedrock inference params                              |
@@ -74,6 +75,7 @@ This OpenAI-compatible endpoint provides access to AWS Bedrock foundation models
 | Audio                                    |   :material-check-circle:{ .success }    | Synthesis from text output                                      |
 | `response_format` (JSON mode)            |       :material-cog:{ .model-dep }       | Model-specific JSON support                                     |
 | `reasoning_content` (From Deepseek API)  |       :material-cog:{ .model-dep }       | Text reasoning messages                                         |
+| `annotations` (URL citations)            |   :material-check-circle:{ .success }    | URL citations from system tools (non-streaming only)            |
 | **Usage tracking**                       |                                          |                                                                 |
 | Input text tokens                        |   :material-check-circle:{ .success }    | Billing unit                                                    |
 | Output tokens                            |   :material-check-circle:{ .success }    | Billing unit                                                    |
@@ -264,6 +266,95 @@ curl -X POST "$BASE/v1/chat/completions" \
 
 !!! note "Unsupported Parameter"
     The `tagSuffix` parameter is not supported in this implementation.
+
+### AWS Bedrock System Tools
+
+AWS Bedrock system tools are built-in capabilities that foundation models can use directly without requiring you to implement backend integrations. Access any AWS Bedrock system tool by adding the `systemTool_` prefix to its name—this works for current tools and any future system tools AWS releases.
+
+**How to Use:**
+
+Add system tools to your `tools` array using the `systemTool_` prefix followed by the tool name. System tools don't require parameter definitions—just specify the tool name and the model will handle the rest.
+
+As AWS releases new system tools, simply use the same `systemTool_` prefix pattern to access them.
+
+#### ![Amazon Nova](styles/logo_amazon_nova.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Nova Web Grounding
+
+Amazon Nova Web Grounding enables models to search the web for current information, helping answer questions requiring real-time data like news, weather, product availability, or recent events. The model automatically determines when to use web grounding based on the user's query.
+
+!!! info "Learn More"
+    - [Amazon Nova Web Grounding - User Guide](https://docs.aws.amazon.com/nova/latest/userguide/grounding.html)
+    - [Build More Accurate AI Applications with Amazon Nova Web Grounding - Blog Post](https://aws.amazon.com/fr/blogs/aws/build-more-accurate-ai-applications-with-amazon-nova-web-grounding/)
+
+**Usage:**
+
+```bash
+curl -X POST "$BASE/v1/chat/completions" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "amazon.nova-premier-v1:0",
+    "messages": [
+      {
+        "role": "user",
+        "content": "What are the current AWS Regions and their locations?"
+      }
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "systemTool_nova_grounding"
+        }
+      }
+    ]
+  }'
+```
+
+**Response Format:**
+
+When using web grounding, the API response includes `annotations` with URL citations in non-streaming mode:
+
+```json
+{
+  "choices": [{
+    "message": {
+      "role": "assistant",
+      "content": "The AWS Regions include...",
+      "annotations": [
+        {
+          "type": "url_citation",
+          "url_citation": {
+            "url": "https://aws.amazon.com/about-aws/global-infrastructure/",
+            "title": "AWS Global Infrastructure"
+          }
+        }
+      ]
+    }
+  }]
+}
+```
+
+!!! note "Streaming Mode"
+    Citations are only available in non-streaming responses. The OpenAI API does not support annotations in streaming mode.
+
+**Use Cases:**
+
+- **Current Events**: Get up-to-date information about news, weather, stock prices, or sports scores
+- **Dynamic Data**: Query information that changes frequently like AWS service availability or product prices
+- **Verification**: Cross-reference facts with current web sources for improved accuracy
+- **Knowledge Extension**: Supplement model training data with real-time information
+
+**Benefits:**
+
+- **Zero Integration**: No need to implement or maintain web search APIs
+- **Automatic Invocation**: Models intelligently decide when to use web grounding
+- **Enhanced Accuracy**: Reduce hallucinations with real-time information retrieval
+- **OpenAI-Compatible**: Works seamlessly with standard tool calling patterns
+
+!!! warning "Model and Region Compatibility"
+    **Model**: Only Amazon Nova Premier (`amazon.nova-premier-v1:0`) supports the `systemTool_nova_grounding` tool.
+
+    **Region**: Web Grounding is only available in US regions.
 
 ### Provider-Specific Parameters
 

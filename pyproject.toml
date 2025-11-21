@@ -7,6 +7,7 @@ requires-python = ">=3.13"
 dependencies = [
     "fastapi",
     "aiobotocore>=3",
+    "botocore>=1.40.62",
     "pydantic>=2",
     "pydantic-settings>=2",
     "sse-starlette",

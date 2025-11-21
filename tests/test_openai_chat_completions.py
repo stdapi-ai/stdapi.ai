@@ -2322,3 +2322,80 @@ class TestChatCompletions:
                 max_completion_tokens=10,
             )
         assert "ARN does not match a valid" in str(exc_info)
+
+    def test_system_tool_with_citations(
+        self, openai_client: OpenAI, use_openai_api: bool
+    ) -> None:
+        """Test system tools (e.g., nova_grounding) return citations in non-streaming mode.
+
+        This test validates that AWS Bedrock system tools like nova_grounding
+        correctly return URL citations in the response annotations field.
+        Only runs when not testing against the official OpenAI API.
+
+        Note: Web Grounding is only available in US regions and requires
+        Amazon Nova Premier model.
+
+        Args:
+            openai_client: OpenAI client instance for API calls
+            use_openai_api: Whether testing against official OpenAI API
+
+        Validates:
+            - System tool can be invoked with systemTool_ prefix
+            - Response completes successfully
+            - Annotations are present in the response
+            - URL citations have proper structure (url, title, indices)
+        """
+        if use_openai_api:
+            pytest.skip("System tools are AWS Bedrock specific")
+
+        # Make request with nova_grounding system tool
+        response = openai_client.chat.completions.create(
+            model="amazon.nova-premier-v1:0",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "What are the current AWS Regions and their locations?",
+                }
+            ],
+            tools=[
+                {"type": "function", "function": {"name": "systemTool_nova_grounding"}}
+            ],
+        )
+
+        # Validate basic response structure
+        assert hasattr(response, "choices")
+        assert len(response.choices) > 0
+        assert response.choices[0].message.role == "assistant"
+        assert isinstance(response.choices[0].message.content, str)
+        assert len(response.choices[0].message.content) > 0
+
+        # Validate annotations are present
+        assert hasattr(response.choices[0].message, "annotations")
+        annotations = response.choices[0].message.annotations
+        assert annotations is not None, (
+            "Annotations should be present when using web grounding"
+        )
+        assert len(annotations) > 0, "At least one citation should be returned"
+
+        # Validate citation structure
+        first_annotation = annotations[0]
+        assert hasattr(first_annotation, "type")
+        assert first_annotation.type == "url_citation"
+        assert hasattr(first_annotation, "url_citation")
+
+        url_citation = first_annotation.url_citation
+        assert hasattr(url_citation, "url")
+        assert isinstance(url_citation.url, str)
+        assert len(url_citation.url) > 0
+        assert url_citation.url.startswith("http")
+
+        # Title should be present (either from citation or domain fallback)
+        assert hasattr(url_citation, "title")
+        assert isinstance(url_citation.title, str)
+        assert len(url_citation.title) > 0
+
+        # Indices should be present (set to 0 for Bedrock)
+        assert hasattr(url_citation, "start_index")
+        assert hasattr(url_citation, "end_index")
+        assert isinstance(url_citation.start_index, int)
+        assert isinstance(url_citation.end_index, int)

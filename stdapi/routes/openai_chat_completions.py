@@ -57,10 +57,13 @@ from stdapi.monitoring import (
     log_request_stream_event,
     log_response_params,
 )
+from stdapi.openai_exceptions import OpenaiError
 from stdapi.routes.openai_audio_speech import generate_audio
 from stdapi.tokenizer import estimate_token_count
 from stdapi.types.openai import FunctionDefinition
 from stdapi.types.openai_chat_completions import (
+    Annotation,
+    AnnotationURLCitation,
     ChatCompletion,
     ChatCompletionAssistantMessageParam,
     ChatCompletionAudio,
@@ -107,6 +110,7 @@ if TYPE_CHECKING:
         VideoFormatType,
     )
     from types_aiobotocore_bedrock_runtime.type_defs import (
+        CitationOutputTypeDef,
         ContentBlockDeltaEventTypeDef,
         ContentBlockOutputTypeDef,
         ContentBlockStartEventTypeDef,
@@ -119,10 +123,12 @@ if TYPE_CHECKING:
         PerformanceConfigurationTypeDef,
         ReasoningContentBlockUnionTypeDef,
         SystemContentBlockTypeDef,
+        SystemToolTypeDef,
         ToolChoiceTypeDef,
         ToolConfigurationTypeDef,
         ToolResultContentBlockUnionTypeDef,
         ToolSpecificationTypeDef,
+        ToolTypeDef,
         VideoBlockTypeDef,
     )
 
@@ -154,6 +160,9 @@ _DEFAULT_OUTPUT_MODALITIES: list[OutputModalities] = ["text"]
 
 #: Minimal tool JSON input schema for Bedrock
 _EMPTY_TOOL = {"type": "object"}
+
+#: Bedrock system tools prefix
+_SYSTEM_TOOL_PREFIX = "systemTool_"
 
 
 def _req_extract_system_content_blocks(
@@ -728,39 +737,55 @@ def _req_map_tool_or_function(
 
 
 def _req_map_tool_spec(
-    tool: ChatCompletionToolUnionParam,
-) -> "ToolSpecificationTypeDef":
-    """Convert an OpenAI tool dict to a Bedrock ToolSpecification, if possible."""
+    tool: ChatCompletionToolUnionParam, tools: "list[ToolTypeDef]"
+) -> None:
+    """Maps a tool's specification to the provided tools list based on its type.
+
+    Args:
+        tool: The tool to be processed and mapped.
+        tools: The list where processed tool specifications will be appended.
+    """
     tool_type = tool.type
     if tool_type == "function":
         function_tool: ChatCompletionFunctionToolParam = tool  # type: ignore[assignment]
         function_spec = function_tool.function
-        return {
-            "name": function_spec.name,
-            "description": function_spec.description or tool_type,
-            "inputSchema": {"json": function_spec.parameters or _EMPTY_TOOL},
-        }
-    raise HTTPException(  # pragma: no cover
-        status_code=400,
-        detail=f"Unsupported tool type '{tool_type}': {to_json(tool).decode()}",
-    )
+        name = function_spec.name
+        if name.startswith(_SYSTEM_TOOL_PREFIX) and not function_spec.parameters:
+            system_tool: SystemToolTypeDef = {
+                "name": name.removeprefix(_SYSTEM_TOOL_PREFIX)
+            }
+            tools.append({"systemTool": system_tool})
+        else:
+            tool_spec: ToolSpecificationTypeDef = {
+                "name": function_spec.name,
+                "description": function_spec.description or tool_type,
+                "inputSchema": {"json": function_spec.parameters or _EMPTY_TOOL},
+            }
+            tools.append({"toolSpec": tool_spec})
+    else:  # pragma: no cover
+        msg = f"Unsupported tool type '{tool_type}': {to_json(tool).decode()}"
+        raise OpenaiError(msg)
 
 
 def _req_build_tool_config(
     request: "CompletionCreateParams",
 ) -> "ToolConfigurationTypeDef | None":
-    """Build Bedrock tool configuration from OpenAI tools/function fields.
+    """Builds a configuration for tools based on the provided request.
 
-    Returns None when no usable function tools are provided.
+    Args:
+        request: The request object containing the data
+            to map and configure tools.
+
+    Returns:
+        The mapped tool configuration object if tools are present, otherwise None.
     """
-    tools_specs: list[ToolSpecificationTypeDef] = []
-    tools_specs.extend(_req_map_tool_spec(tool) for tool in _req_map_tools(request))
-    if not tools_specs:
+    tools: list[ToolTypeDef] = []
+    for tool in _req_map_tools(request):
+        _req_map_tool_spec(tool, tools)
+    if not tools:
         return None
 
-    tool_config: ToolConfigurationTypeDef = {
-        "tools": [{"toolSpec": spec} for spec in tools_specs]
-    }
+    tool_config: ToolConfigurationTypeDef = {"tools": tools}
     tool_choice_bedrock = _req_map_tool_or_function(request)
     if tool_choice_bedrock:
         tool_config["toolChoice"] = tool_choice_bedrock
@@ -946,6 +971,59 @@ def _resp_extract_output_text_from_converse(
     ) if reasoning_text else None
 
 
+def _resp_extract_citation_from_bedrock(
+    citation: "CitationOutputTypeDef",
+) -> "Annotation | None":
+    """Extract a single URL citation from Bedrock citation data.
+
+    Args:
+        citation: A Bedrock CitationOutputTypeDef from non-streaming response.
+
+    Returns:
+        An Annotation object with URL citation, or None if no web URL found.
+    """
+    try:
+        web_location = citation["location"]["web"]
+        url = web_location["url"]
+    except KeyError:
+        return None
+    return Annotation(
+        type="url_citation",
+        url_citation=AnnotationURLCitation(
+            url=url,
+            title=citation.get("title") or web_location.get("domain", ""),
+            start_index=0,
+            end_index=0,
+        ),
+    )
+
+
+def _resp_extract_citations_from_output_blocks(
+    contents: "list[ContentBlockOutputTypeDef]",
+) -> "list[Annotation] | None":
+    """Extract URL citations from Bedrock non-streaming content blocks.
+
+    Args:
+        contents: content blocks from Bedrock Converse response (non-streaming).
+
+    Returns:
+        List of Annotation objects with URL citations, or None if no citations found.
+    """
+    annotations: list[Annotation] = []
+    for block in contents:
+        try:
+            citations = block["citationsContent"]["citations"]
+        except KeyError:
+            continue
+
+        for citation in citations:
+            annotation = _resp_extract_citation_from_bedrock(citation)
+            if annotation:
+                annotations.append(annotation)
+
+    return annotations if annotations else None
+
+
 def _resp_extract_tool_calls_from_converse(
     contents: "list[ContentBlockOutputTypeDef]",
 ) -> tuple[list[ChatCompletionMessageToolCallUnion] | None, FunctionCall | None]:
@@ -1115,6 +1193,7 @@ async def _non_streaming_completion(
         message = response["output"]["message"]["content"]
         tool_calls, function_call = _resp_extract_tool_calls_from_converse(message)
         content, reasoning_content = _resp_extract_output_text_from_converse(message)
+        annotations = _resp_extract_citations_from_output_blocks(message)
         if reasoning_content:
             reasoning_contents.append(reasoning_content)
         if audio_params and content:
@@ -1133,6 +1212,7 @@ async def _non_streaming_completion(
                     reasoning_content=reasoning_content,
                     tool_calls=tool_calls,
                     function_call=function_call,
+                    annotations=annotations,
                 ),
             )
         )

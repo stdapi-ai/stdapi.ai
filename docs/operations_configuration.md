@@ -1023,7 +1023,8 @@ These permissions are mandatory for stdapi.ai to discover and invoke Bedrock mod
       "Action": [
         "bedrock:GetAsyncInvoke",
         "bedrock:InvokeModel",
-        "bedrock:InvokeModelWithResponseStream"
+        "bedrock:InvokeModelWithResponseStream",
+        "bedrock:InvokeTool"
       ],
       "Resource": "*"
     },
@@ -1318,7 +1319,8 @@ Required if you configure API authentication. See [Authentication](#authenticati
           "Action": [
             "bedrock:GetAsyncInvoke",
             "bedrock:InvokeModel",
-            "bedrock:InvokeModelWithResponseStream"
+            "bedrock:InvokeModelWithResponseStream",
+            "bedrock:InvokeTool"
           ],
           "Resource": "*"
         },
@@ -1360,7 +1362,8 @@ Required if you configure API authentication. See [Authentication](#authenticati
           "Action": [
             "bedrock:GetAsyncInvoke",
             "bedrock:InvokeModel",
-            "bedrock:InvokeModelWithResponseStream"
+            "bedrock:InvokeModelWithResponseStream",
+            "bedrock:InvokeTool"
           ],
           "Resource": "*"
         },
@@ -1418,7 +1421,7 @@ Required if you configure API authentication. See [Authentication](#authenticati
 
 | Feature                                         | Required Permissions                                                                                                                                       | Configuration                                                                |
 |-------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------|
-| **Bedrock Models (Invoke)**                     | `bedrock:InvokeModel`<br>`bedrock:InvokeModelWithResponseStream`                                                                                           | Always required                                                              |
+| **Bedrock Models (Invoke)**                     | `bedrock:InvokeModel`<br>`bedrock:InvokeModelWithResponseStream`<br>`bedrock:InvokeTool`                                                                   | Always required                                                              |
 | **Bedrock Models (Discovery)**                  | `bedrock:ListFoundationModels`<br>`bedrock:GetFoundationModelAvailability`<br>`bedrock:ListProvisionedModelThroughputs`<br>`bedrock:ListInferenceProfiles` | Always required                                                              |
 | **Bedrock Marketplace Auto-Subscribe**          | `aws-marketplace:Subscribe`<br>`aws-marketplace:ViewSubscriptions`                                                                                         | `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE=true` (default)                      |
 | **Bedrock Inference Profiles & Prompt Routers** | `bedrock:GetInferenceProfile`<br>`bedrock:GetPromptRouter`                                                                                                 | `AWS_BEDROCK_ALLOW_*_ARN=true` or `AWS_BEDROCK_MODEL_ARN_MAPPING` configured |
