@@ -152,6 +152,9 @@ _LEGACY_FUNCTION: ContextVar[bool] = ContextVar("legacy_function")
 #: Default output modalities
 _DEFAULT_OUTPUT_MODALITIES: list[OutputModalities] = ["text"]
 
+#: Minimal tool JSON input schema for Bedrock
+_EMPTY_TOOL = {"type": "object"}
+
 
 def _req_extract_system_content_blocks(
     content: str | Iterable[ChatCompletionContentPartTextParam],
@@ -735,7 +738,7 @@ def _req_map_tool_spec(
         return {
             "name": function_spec.name,
             "description": function_spec.description or tool_type,
-            "inputSchema": {"json": function_spec.parameters or {}},
+            "inputSchema": {"json": function_spec.parameters or _EMPTY_TOOL},
         }
     raise HTTPException(  # pragma: no cover
         status_code=400,

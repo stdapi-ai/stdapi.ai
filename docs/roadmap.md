@@ -155,6 +155,10 @@ Expands multimodal embedding capabilities, adds prompt caching support, and intr
 | Server-side ARN mapping            | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock                                  |
 | Client-side ARN passing (optional) | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock                                  |
 
+### Fixes
+
+- `/v1/chat/completions`: Fix default value passed to the converse API for tools without parameters.
+
 ---
 
 ### v1.0.0 – Foundation Release
