@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 PRODUCT_CODE = ""
 LICENCE_INFO = (
-    {"name": "Commercial License", "url": "https://stdapi.ai/commercial_license"}
+    {"name": "Commercial License", "url": "https://stdapi.ai/operations_licensing/"}
     if PRODUCT_CODE
     else {
         "name": "GNU Affero General Public License v3.0 or later (Commercial license available)",
