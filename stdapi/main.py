@@ -81,6 +81,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                     register(),
                 )
                 auth_enabled = results[0]
+                register_usage_response = results[-1]
                 unavailable_models = results[1][1]
                 update_unified_models_collections()
             start_event = EventLog(
@@ -91,6 +92,8 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                 server_version=SERVER_FULL_VERSION,
                 server_start_time_ms=(time_ns() - start) // 1000000,
             )
+            if register_usage_response:
+                start_event["register_usage_response"] = register_usage_response
             if not auth_enabled:
                 start_event.setdefault("server_warnings", []).append(
                     "SECURITY risk: Authentication is not enabled "

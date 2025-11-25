@@ -1,5 +1,7 @@
 """AWS Marketplace Metering."""
 
+from typing import TYPE_CHECKING
+
 from botocore.exceptions import ClientError as _ClientError
 
 from stdapi.aws import CONFIG, REGION, SESSION
@@ -9,6 +11,11 @@ from stdapi.exceptions import (
     UnsupportedPlatformError,
 )
 from stdapi.server import SERVER_ID, SERVER_VERSION
+
+if TYPE_CHECKING:
+    from types_aiobotocore_meteringmarketplace.type_defs import (
+        RegisterUsageResultTypeDef,
+    )
 
 PRODUCT_CODE = ""
 LICENCE_INFO = (
@@ -23,7 +30,7 @@ EDITION_TITLE = f"stdapi.ai ({'Professional' if PRODUCT_CODE else 'Community'} E
 SERVER_FULL_VERSION = f"{SERVER_VERSION}+{'p' if PRODUCT_CODE else 'c'}"
 
 
-async def register() -> None:
+async def register() -> "RegisterUsageResultTypeDef | None":
     """Register AWS Marketplace for the current host.
 
     For ECS, EKS & Fargate hosts running hourly billed products.
@@ -38,7 +45,7 @@ async def register() -> None:
             "meteringmarketplace", config=CONFIG, region_name=REGION
         ) as metering:
             try:
-                await metering.register_usage(
+                return await metering.register_usage(
                     ProductCode=PRODUCT_CODE,
                     PublicKeyVersion=product_public_key_version,
                     Nonce=SERVER_ID,
@@ -81,3 +88,4 @@ async def register() -> None:
                 if exc_type:
                     raise exc_type(exc_msg) from None
                 raise  # pragma: no cover
+    return None

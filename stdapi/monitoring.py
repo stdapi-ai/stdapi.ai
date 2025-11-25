@@ -17,6 +17,9 @@ from stdapi.utils import stdout_write, webuuid
 
 if TYPE_CHECKING:
     from pydantic.main import IncEx
+    from types_aiobotocore_meteringmarketplace.type_defs import (
+        RegisterUsageResultTypeDef,
+    )
 
     from stdapi.monitoring_otel import OpenTelemetryManager
 
@@ -48,6 +51,7 @@ class EventLog(TypedDict):
     # "start" type
     server_start_time_ms: NotRequired[int]
     server_warnings: NotRequired[list[JsonValue]]
+    register_usage_response: "NotRequired[RegisterUsageResultTypeDef]"
 
     # "stop" type
     server_uptime_ms: NotRequired[int]
