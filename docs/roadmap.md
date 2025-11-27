@@ -158,6 +158,7 @@ Expands multimodal embedding capabilities, adds prompt caching support, and intr
 ### Fixes
 
 - `/v1/chat/completions`: Fix default value passed to the converse API for tools without parameters.
+- [stdapi-ai Terraform module](https://github.com/stdapi-ai/terraform-aws-stdapi-ai): Fix error if alarms_enabled = true but sns_topic_arn undefined.
 
 ---
 
