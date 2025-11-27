@@ -64,60 +64,41 @@ The Terraform module provides production-ready infrastructure with minimal confi
 2. Install [Terraform](https://www.terraform.io/downloads) or [OpenTofu](https://opentofu.org/docs/intro/install/) >= 1.5
 3. Configure [AWS credentials](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html)
 
-#### Example 1: Quick Start (3 lines of code)
+#### Example 1: Quick Start
 
-The simplest deployment option. Ideal for first-time users, testing, or proof-of-concept.
+The simplest production-ready deployment. Ideal for first-time users, testing, or getting started quickly.
 
-```hcl
-module "stdapi_ai" {
-  source  = "stdapi-ai/stdapi-ai/aws"
-  version = "~> 1.0"
-}
-```
+> **Ready-to-use example:** [getting_started_production](https://github.com/stdapi-ai/samples/tree/main/getting_started_production)
 
 **Deploy it:**
 
 ```bash
+git clone https://github.com/stdapi-ai/samples.git
+cd samples/getting_started_production/terraform
 terraform init
 terraform apply
 ```
 
-Your API is now running. The endpoint URL will be shown in the Terraform outputs.
-
 **What you get:**
 
-- ECS Fargate service (0.25 vCPU, 512 MiB RAM)
-- Secure VPC with private subnets and NAT gateways
-- CloudWatch logging
-- Internal service discovery
+- Production-grade deployment with HTTPS and auto-generated domain
+- WAF protection with rate limiting
+- CloudWatch alarms and monitoring
+- Auto-scaling and API key authentication
+- Interactive API documentation at `/docs`
+- IP-restricted access (your IP only)
 
-**How to access your API:**
-
-After deployment, retrieve your endpoint:
+**Get your credentials:**
 
 ```bash
-terraform output
+terraform output -raw api_key
+terraform output api_endpoint
+terraform output docs_url
 ```
 
-For external access, you have two options:
+**Monthly cost:** ~$68 (Fargate ~$7 + NAT ~$37 + ALB ~$17 + WAF ~$5 + KMS $1 + Certificate $1) + AI model usage + license
 
-1. **Add a load balancer** (recommended for production):
-   ```hcl
-   module "stdapi_ai" {
-     source  = "stdapi-ai/stdapi-ai/aws"
-     version = "~> 1.0"
-
-     alb_enabled = true  # Adds Application Load Balancer
-   }
-   ```
-
-2. **Use with existing infrastructure** - See Example 2 below
-
-**Monthly cost:** ~$45 (Fargate ~$7 + NAT Gateway ~$37 + KMS $1) + AI model usage + license
-
-*Costs shown are for a single AZ deployment in the default configuration.*
-
-**First deployment?** Start here, make your first API call, then explore other examples for production features or cost optimization.
+**First deployment?** This example provides a complete, secure setup ready for testing and production use.
 
 For lower costs, see Example 2 (~$8/month with existing infrastructure) or Example 4 (~$2.50/month for development).
 
@@ -618,6 +599,11 @@ terraform output -raw api_key  # Copy this for API calls
 **Monthly cost:** ~$68 (Fargate ~$7 + NAT ~$37 + ALB ~$17 + WAF ~$5 + KMS $1 + Certificate $1) + AI model usage + license
 
 Production-grade infrastructure with HTTPS, WAF protection, and monitoring without multi-region complexity.
+
+> **Ready-to-use examples on GitHub:**
+> - Single region: [getting_started_production](https://github.com/stdapi-ai/samples/tree/main/getting_started_production)
+> - Multi-region GDPR (EU): [getting_started_production_gdpr](https://github.com/stdapi-ai/samples/tree/main/getting_started_production_gdpr)
+> - Multi-region US: [getting_started_production_us](https://github.com/stdapi-ai/samples/tree/main/getting_started_production_us)
 
 ---
 
