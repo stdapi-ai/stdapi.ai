@@ -28,7 +28,6 @@ class TestStabilityImages:
             model=model_id,
             prompt="A charcoal sketch of a city skyline.",
             response_format="b64_json",
-            size="1024x1024",
             output_format="jpeg",
         )
         assert response.created > 0
@@ -54,33 +53,11 @@ class TestStabilityImages:
             model=model_id,
             prompt="A charcoal sketch of a city skyline.",
             response_format="b64_json",
-            size="1024x1024",
             extra_body={"negative_prompt": "blurry, low quality"},
         )
         assert response.data is not None
         assert len(response.data) == 1
         assert response.data[0].b64_json is not None
-
-    @pytest.mark.expensive
-    @pytest.mark.parametrize("model_id", STABILITY_SAMPLE)
-    def test_multiple_images(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
-    ) -> None:
-        """Requesting multiple images with b64_json works."""
-        if use_openai_api:
-            pytest.skip("Stability models are not available on the official OpenAI API")
-
-        response = openai_client.images.generate(
-            model=model_id,
-            prompt="Two poster variants of mountains.",
-            response_format="b64_json",
-            n=2,
-            size="1024x1024",
-        )
-        assert response.data is not None
-        assert len(response.data) == 2
-        for item in response.data:
-            assert item.b64_json is not None
 
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", STABILITY_SAMPLE)

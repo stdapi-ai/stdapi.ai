@@ -109,3 +109,80 @@ class TestAmazonTitanImageGenerator:
                 style="natural",
                 response_format="b64_json",
             )
+
+    @pytest.mark.expensive
+    @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
+    def test_generate_with_color_guided_task_type(
+        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+    ) -> None:
+        """Test generation with COLOR_GUIDED_GENERATION taskType."""
+        if use_openai_api:
+            pytest.skip(
+                "Amazon Titan models are not available on the official OpenAI API"
+            )
+
+        response = openai_client.images.generate(
+            model=model_id,
+            prompt="A vibrant sunset with these specific colors",
+            response_format="b64_json",
+            size="512x512",
+            extra_body={
+                "taskType": "COLOR_GUIDED_GENERATION",
+                "colorGuidedGenerationParams": {
+                    "colors": ["#FF6B6B", "#FFA500", "#FFD700"],
+                    "negativeText": "dark, gloomy",
+                },
+            },
+        )
+
+        assert response.created > 0
+        assert response.data is not None
+        assert len(response.data) == 1
+        assert response.data[0].b64_json is not None
+        assert response.size == "512x512"  # type: ignore[comparison-overlap]
+
+    @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
+    def test_generate_with_invalid_task_type(
+        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+    ) -> None:
+        """Test that invalid taskType raises BadRequestError."""
+        if use_openai_api:
+            pytest.skip(
+                "Amazon Titan models are not available on the official OpenAI API"
+            )
+
+        with pytest.raises(BadRequestError) as exc_info:
+            openai_client.images.generate(
+                model=model_id,
+                prompt="A test prompt",
+                response_format="b64_json",
+                size="512x512",
+                extra_body={"taskType": "INVALID_TASK_TYPE"},
+            )
+
+        assert (
+            "taskType" in str(exc_info.value).lower()
+            or "TEXT_IMAGE" in str(exc_info.value)
+            or "COLOR_GUIDED_GENERATION" in str(exc_info.value)
+        )
+
+    @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
+    def test_generate_color_guided_missing_colors(
+        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+    ) -> None:
+        """Test that COLOR_GUIDED_GENERATION without colors raises BadRequestError."""
+        if use_openai_api:
+            pytest.skip(
+                "Amazon Titan models are not available on the official OpenAI API"
+            )
+
+        with pytest.raises(BadRequestError) as exc_info:
+            openai_client.images.generate(
+                model=model_id,
+                prompt="A test prompt",
+                response_format="b64_json",
+                size="512x512",
+                extra_body={"taskType": "COLOR_GUIDED_GENERATION"},
+            )
+
+        assert "colorGuidedGenerationParams.colors" in str(exc_info.value)

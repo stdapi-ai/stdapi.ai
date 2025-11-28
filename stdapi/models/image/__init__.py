@@ -12,7 +12,6 @@ Design:
 - The package auto-loads and registers these classes once on import.
 """
 
-from abc import ABC, abstractmethod
 from asyncio import Lock, as_completed, gather
 from typing import TYPE_CHECKING, Any, TypeVar
 
@@ -21,12 +20,24 @@ from pydantic import BaseModel, JsonValue
 from stdapi.aws_s3 import put_object_and_get_url
 from stdapi.models import ModelBase, get_model, load_model_plugins
 from stdapi.monitoring import REQUEST_ID
+from stdapi.openai_exceptions import OpenaiError
 from stdapi.utils import b64decode, convert_base64_image, get_base64_image_size
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Iterable
+    from re import Pattern
 
     from stdapi.types.openai_images import ImageOutputFormats, ImageOutputQuality
+
+__all__ = [
+    "ImageGenerationJobBase",
+    "ImageGenerationResponse",
+    "ImageModelBase",
+    "get_image_model",
+]
+
+#: Default prompt for variation if not provided
+DEFAULT_VARIATION_PROMPT = "Generate variations of the image."
 
 
 class ImageGenerationResponse(BaseModel):
@@ -45,8 +56,8 @@ class ImageGenerationResponse(BaseModel):
 ImageModelT = TypeVar("ImageModelT", bound="ImageModelBase[Any, Any, Any]")
 
 
-class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"](ABC):
-    """Image generation job base class."""
+class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"]:
+    """Image generation job base class supporting both generation and editing."""
 
     __slots__ = (
         "_count",
@@ -150,16 +161,121 @@ class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"](ABC):
         """Final image quality."""
         return self._output_format or self._response_output_format
 
+    @staticmethod
+    def _validate_no_mask(mask: str | None, reason: str = "") -> None:
+        """Validate mask parameter is not set.
+
+        Args:
+            mask: Mask parameter value (None or string).
+            reason: Extra reason for validation failure.
+
+        Raises:
+            OpenaiError: If mask requirement is not met.
+        """
+        if mask is not None:
+            msg = f'"mask" parameter is not supported{" " if reason else ""}{reason}.'
+            raise OpenaiError(msg)
+
+    @staticmethod
+    def _validate_mask(mask: str | None, reason: str = "") -> str:
+        """Validate mask parameter is set.
+
+        Args:
+            mask: Mask parameter value (None or string).
+            reason: Extra reason for validation failure.
+
+        Raises:
+            OpenaiError: If mask requirement is not met.
+        """
+        if mask is None:
+            msg = f'"mask" parameter is required{" " if reason else ""}{reason}.'
+            raise OpenaiError(msg)
+        return mask
+
+    def _validate_no_quality(self) -> None:
+        """Validate that quality parameter is not provided.
+
+        Raises:
+            HTTPException: If quality parameter is provided.
+        """
+        if self._quality is not None:
+            msg = '"quality" parameter is not supported by this model.'
+            raise OpenaiError(msg)
+
+    def _validate_no_style(self) -> None:
+        """Validate that style parameter is not provided.
+
+        Raises:
+            HTTPException: If style parameter is provided.
+        """
+        if self._style is not None:
+            msg = '"style" parameter is not supported by this model.'
+            raise OpenaiError(msg)
+
+    def _get_one_image_from_list(self, images: list[str]) -> str:
+        """Extracts a single image from the provided list of images.
+
+        Args:
+            images (list[str]): A list containing the image paths or identifiers.
+
+        Returns:
+            str: The single image path or identifier from the input list.
+
+        Raises:
+            OpenaiError: If the provided list of images does not contain exactly one image.
+        """
+        if len(images) != 1:
+            msg = "Exactly one image must be provided."
+            raise OpenaiError(msg)
+        return images[0]
+
     async def generate_images(self) -> Iterable[ImageGenerationResponse]:
         """Generate images from text prompt.
 
-        Yields:
+        Returns:
             Images.
         """
         return await gather(
             *(
                 self._ensure_image_output_format(result)
-                for result in await self._generate_images()
+                for result in await self._generate_images_from_text()
+            )
+        )
+
+    async def edit_images(
+        self, images: list[str], mask: str | None = None
+    ) -> Iterable[ImageGenerationResponse]:
+        """Edit images using inpainting.
+
+        Args:
+            images: List of base64-encoded source images.
+            mask: Base64-encoded mask image (optional).
+
+        Returns:
+            Images.
+        """
+        return await gather(
+            *(
+                self._ensure_image_output_format(result)
+                for result in await self._edit_image(images, mask)
+            )
+        )
+
+    async def create_variations(
+        self, images: list[str]
+    ) -> Iterable[ImageGenerationResponse]:
+        """Create variations of existing images.
+
+        Args:
+            images: List of base64-encoded source images.
+
+        Returns:
+            Images.
+        """
+        return await gather(
+            *(
+                self._ensure_image_output_format(result)
+                for result in await self._create_image_variations(images)
             )
         )
 
@@ -177,13 +293,76 @@ class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"](ABC):
         async for result in self._generate_images_stream(partial_images):
             yield await self._ensure_image_output_format(result)
 
-    @abstractmethod
-    async def _generate_images(self) -> Iterable[Awaitable[ImageGenerationResponse]]:
-        """Generate images from text prompt.
+    async def edit_images_stream(
+        self,
+        images: list[str],
+        mask: str | None = None,
+        partial_images: int | None = None,
+    ) -> AsyncGenerator[ImageGenerationResponse]:
+        """Edit images using inpainting (streaming).
+
+        Args:
+            images: List of base64-encoded source images.
+            mask: Base64-encoded mask image (optional).
+            partial_images: Number of partial images to generate during streaming.
 
         Yields:
             Images.
         """
+        async for result in self._edit_images_stream(images, mask, partial_images):
+            yield await self._ensure_image_output_format(result)
+
+    async def _generate_images_from_text(
+        self,
+    ) -> Iterable[Awaitable[ImageGenerationResponse]]:
+        """Generate images from text prompt.
+
+        Returns:
+            Iterable of awaitable image generation responses.
+
+        Raises:
+            HTTPException: If the model does not support text-to-image generation.
+        """
+        msg = f"Text-to-image generation is not supported by {self._model.model.id}"
+        raise OpenaiError(msg)
+
+    async def _edit_image(
+        self,
+        images: list[str],  # noqa: ARG002
+        mask: str | None,  # noqa: ARG002
+    ) -> Iterable[Awaitable[ImageGenerationResponse]]:
+        """Edit images.
+
+        Args:
+            images: List of base64-encoded source images.
+            mask: Base64-encoded mask image (optional).
+
+        Returns:
+            Iterable of awaitable image generation responses.
+
+        Raises:
+            HTTPException: If the model does not support inpainting.
+        """
+        msg = "Image editing is not supported by {self._model.model.id}."
+        raise OpenaiError(msg)
+
+    async def _create_image_variations(
+        self,
+        images: list[str],  # noqa: ARG002
+    ) -> Iterable[Awaitable[ImageGenerationResponse]]:
+        """Create variations of existing images.
+
+        Args:
+            images: List of base64-encoded source images.
+
+        Returns:
+            Iterable of awaitable image generation responses.
+
+        Raises:
+            HTTPException: If the model does not support image variations.
+        """
+        msg = f"Image variations are not supported by {self._model.model.id}."
+        raise OpenaiError(msg)
 
     async def _generate_images_stream(
         self,
@@ -197,9 +376,31 @@ class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"](ABC):
         Yields:
             Streamed images.
         """
+        results = await self._generate_images_from_text()
         for result in as_completed(
-            self._ensure_image_output_format(result)
-            for result in await self._generate_images()
+            self._ensure_image_output_format(result) for result in results
+        ):
+            yield await result
+
+    async def _edit_images_stream(
+        self,
+        images: list[str],
+        mask: str | None = None,
+        partial_images: int | None = None,  # noqa:ARG002
+    ) -> AsyncGenerator[ImageGenerationResponse]:
+        """Stream edited images using inpainting.
+
+        Args:
+            images: List of base64-encoded source images.
+            mask: Base64-encoded mask image (optional).
+            partial_images: Number of partial images to generate during streaming.
+
+        Yields:
+            Streamed images.
+        """
+        results = await self._edit_image(images, mask)
+        for result in as_completed(
+            self._ensure_image_output_format(result) for result in results
         ):
             yield await result
 
@@ -326,8 +527,90 @@ class ImageModelBase[RequestT, ResponseT, ImageGenerationJobT](
             is_url=is_url,
         )
 
+    def get_image_edit_job(
+        self,
+        prompt: str,
+        count: int,
+        width: int,
+        height: int,
+        output_format: ImageOutputFormats | None,
+        output_compression: int,
+        extra_params: dict[str, JsonValue],
+        *,
+        is_url: bool = False,
+    ) -> ImageGenerationJobT:
+        """Initialize an image edit job.
 
-_MODEL_REGISTRY: list[tuple[str, type[ImageModelBase[Any, Any, Any]]]] = []
+        Args:
+            prompt: Text prompt for image editing.
+            count: Number of images to generate.
+            width: Image width.
+            height: Image height.
+            output_format: Output format.
+            output_compression: Output compression.
+            extra_params: Extra model parameters.
+            is_url: If True, return image URL instead of base64 image.
+
+        Returns:
+            Job instance - call edit_images(image, mask) on it.
+        """
+        return self.IMAGE_GENERATION_JOB_CLASS(  # type: ignore[call-arg]
+            model=self,
+            prompt=prompt,
+            count=count,
+            width=width,
+            height=height,
+            quality=None,
+            style=None,
+            output_format=output_format,
+            output_compression=output_compression,
+            extra_params=extra_params,
+            is_url=is_url,
+        )
+
+    def get_image_variation_job(
+        self,
+        count: int,
+        width: int,
+        height: int,
+        output_format: ImageOutputFormats | None,
+        output_compression: int,
+        extra_params: dict[str, JsonValue],
+        *,
+        is_url: bool = False,
+    ) -> ImageGenerationJobT:
+        """Initialize an image variation job.
+
+        Args:
+            count: Number of images to generate.
+            width: Image width.
+            height: Image height.
+            output_format: Output format.
+            output_compression: Output compression.
+            extra_params: Extra model parameters.
+            is_url: If True, return image URL instead of base64 image.
+
+        Returns:
+            Job instance - call create_variations(images) on it.
+        """
+        return self.IMAGE_GENERATION_JOB_CLASS(  # type: ignore[call-arg]
+            model=self,
+            prompt="",  # No prompt for variations
+            count=count,
+            width=width,
+            height=height,
+            quality=None,
+            style=None,
+            output_format=output_format,
+            output_compression=output_compression,
+            extra_params=extra_params,
+            is_url=is_url,
+        )
+
+
+_MODEL_REGISTRY: list[
+    tuple[str | Pattern[str], type[ImageModelBase[Any, Any, Any]]]
+] = []
 _MODEL_CACHE: dict[str, ImageModelBase[Any, Any, Any]] = {}
 
 

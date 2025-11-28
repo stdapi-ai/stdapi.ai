@@ -22,6 +22,8 @@ from pydantic_core import from_json, to_json
 if TYPE_CHECKING:
     from collections.abc import Buffer, Generator
 
+    from fastapi import UploadFile
+
 T = TypeVar("T")
 
 
@@ -159,6 +161,23 @@ async def b64encode(value: Buffer, altchars: str | Buffer | None = None) -> str:
         The base64 encoded representation of the input binary data.
     """
     return (await to_thread(_b64encode, value, altchars=altchars)).decode()
+
+
+async def read_and_b64encode_file(file: UploadFile) -> str:
+    """Read an uploaded file and encode it to base64.
+
+    Args:
+        file: The uploaded file to read and encode.
+
+    Returns:
+        Base64-encoded string representation of the file contents.
+    """
+    content = await file.read()
+    close_task = file.close()
+    try:
+        return await b64encode(content)
+    finally:
+        await close_task
 
 
 #: PIL image formats
@@ -371,6 +390,18 @@ def get_data_uri_type(string: str) -> str:
     if match and match.group(1):
         return match.group(1)
     return "text/plain"
+
+
+def get_data_uri_data(string: str) -> str:
+    """Return the base64 data of data URI or a base64 encoded string.
+
+    Args:
+        string: The string to check
+
+    Returns:
+        Media type.
+    """
+    return string.split(",", 1)[-1] if is_data_uri(string) else string
 
 
 def hide_security_details(status: int, message: str) -> str:

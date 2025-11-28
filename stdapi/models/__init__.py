@@ -6,6 +6,7 @@ from datetime import timedelta
 from functools import cached_property
 from importlib import import_module
 from pkgutil import iter_modules
+from re import Pattern
 from secrets import token_hex
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, TypeVar
 
@@ -162,7 +163,7 @@ class ModelBase[RequestT, ResponseT]:
 
     __slots__ = ("_model_id",)
 
-    MATCHER: ClassVar[str] = ""
+    MATCHER: ClassVar[str | Pattern[str]] = ""
 
     def __init__(self, model_id: str) -> None:
         """Initialize the model with a specific model identifier.
@@ -594,14 +595,14 @@ async def _filter_model(
 def load_model_plugins(
     package_name: str,
     class_type: type[ModelT],
-    registry: list[tuple[str, type[ModelT]]],
+    registry: list[tuple[str | Pattern[str], type[ModelT]]],
 ) -> None:
     """Import all modules in the specified package and auto-register model classes.
 
     Args:
         package_name: Package name under which to import the model
         class_type: Class name under which to import the model
-        registry: Models classes registry.
+        registry: Models classes registry with string prefix or regex pattern matchers.
     """
     class_name = class_type.__name__.removesuffix("Base")
     for module_info in iter_modules(import_module(package_name).__path__):
@@ -625,14 +626,16 @@ def load_model_plugins(
 
 
 def get_model(
-    model_id: str, cache: dict[str, ModelT], registry: list[tuple[str, type[ModelT]]]
+    model_id: str,
+    cache: dict[str, ModelT],
+    registry: list[tuple[str | Pattern[str], type[ModelT]]],
 ) -> ModelT:
     """Resolve the model class matching the provided identifier.
 
     Args:
         model_id: The provider model identifier.
         cache: Model cache dictionary.
-        registry: Models classes registry.
+        registry: Models classes registry with string prefix or regex pattern matchers.
 
     Returns:
         The model associated with the ``model_id``.
@@ -644,7 +647,15 @@ def get_model(
         return cache[model_id]
     except KeyError:
         for matcher, model_cls in registry:
-            if model_id.startswith(matcher):
+            # Support both string prefix and compiled regex patterns
+            matched = (
+                model_id.startswith(matcher)
+                if isinstance(matcher, str)
+                else matcher.match(model_id)
+                if isinstance(matcher, Pattern)
+                else False
+            )
+            if matched:
                 cache[model_id] = model_cls(model_id)
                 return cache[model_id]
     raise OpenaiUnsupportedModelError(model_id)

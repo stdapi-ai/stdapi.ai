@@ -49,7 +49,6 @@ from stdapi.config import SETTINGS
 from stdapi.models import prepare_converse_request, validate_model
 from stdapi.monitoring import (
     REQUEST_ID,
-    REQUEST_LOG,
     REQUEST_TIME,
     log_request_params,
     log_request_stream_event,
@@ -1377,12 +1376,7 @@ async def create_chat_completion(
     Raises:
         HTTPException: If model is invalid or does not support text output.
     """
-    log_request_params(request)
-    request_user_id = request.safety_identifier or request.user
-    if request_user_id:
-        log = REQUEST_LOG.get()
-        log["request_user_id"] = request_user_id
-
+    log_request_params(request, user_id=request.safety_identifier or request.user)
     model = await validate_model(request.model)
     created = int(REQUEST_TIME.get().timestamp())
     completion_id = f"chatcmpl-{REQUEST_ID.get()}"

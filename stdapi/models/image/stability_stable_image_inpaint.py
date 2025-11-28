@@ -1,0 +1,48 @@
+"""Stability AI inpaint model.
+
+Supported Models:
+- stability.stable-image-inpaint-v1:* (mask-based inpainting)
+"""
+
+from re import compile as compile_regex
+from typing import TYPE_CHECKING
+
+from stdapi.models.image._stability import (
+    InpaintRequest,
+    StabilityImageGenerationJobBase,
+    StabilityImageModelBase,
+)
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Iterable
+
+    from stdapi.models.image import ImageGenerationResponse
+
+
+class _InpaintJob(StabilityImageGenerationJobBase):
+    """Job for inpaint model."""
+
+    async def _edit_image(
+        self, images: list[str], mask: str | None
+    ) -> Iterable[Awaitable[ImageGenerationResponse]]:
+        """Inpaint image regions."""
+        self._validate_no_quality()
+
+        request: InpaintRequest = {
+            "prompt": self._prompt,
+            "image": self._get_one_image_from_list(images),
+        }
+        if mask:
+            request["mask"] = mask
+        self._finalize_request(request)
+        return tuple(
+            self._get_image_from_response(request, index)
+            for index in range(self._count)
+        )
+
+
+class ImageModel(StabilityImageModelBase):
+    """Stability AI inpaint model."""
+
+    MATCHER = compile_regex(r"^stability\.stable-image-inpaint-v\d+:\d+$")
+    IMAGE_GENERATION_JOB_CLASS = _InpaintJob

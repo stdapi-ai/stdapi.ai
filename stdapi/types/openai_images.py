@@ -2,12 +2,33 @@
 
 from typing import Literal, Self
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from stdapi.config import SETTINGS
 from stdapi.monitoring import log_error_details
-from stdapi.types import BaseModelRequestWithExtra, BaseModelResponse
+from stdapi.types import (
+    BaseModelRequestWithExtra,
+    BaseModelRequestWithFormExtra,
+    BaseModelResponse,
+)
 from stdapi.types.openai import Auto
+
+__all__ = [
+    "Image",
+    "ImageBackground",
+    "ImageBackgroundAuto",
+    "ImageEditParams",
+    "ImageGenCompletedEvent",
+    "ImageGenPartialImageEvent",
+    "ImageGenerateParams",
+    "ImageOutputFormats",
+    "ImageOutputQuality",
+    "ImageOutputQualityAuto",
+    "ImageVariationParams",
+    "ImagesResponse",
+    "Usage",
+    "UsageInputTokensDetails",
+]
 
 #: Supported image output formats
 ImageOutputFormats = Literal["png", "jpeg", "webp"]
@@ -19,6 +40,9 @@ ImageOutputQualityAuto = Auto | ImageOutputQuality
 #: Supported image background
 ImageBackground = Literal["transparent", "opaque"]
 ImageBackgroundAuto = Auto | ImageBackground
+
+#: Supported image input fidelity
+ImageInputFidelity = Literal["low", "high"]
 
 
 # Ref: openai.types.image.Image
@@ -177,8 +201,65 @@ class ImageGenPartialImageEvent(BaseModelResponse):
     )
 
 
+class _ImageBaseParams(BaseModelRequestWithExtra):
+    """Request body for generating images."""
+
+    model: str = Field(
+        description="The model to use for image generation.",
+        min_length=1,
+        max_length=255,
+    )
+    response_format: Literal["url", "b64_json"] = Field(
+        default="url",
+        description="The format in which the generated images are returned. "
+        "Must be one of url or b64_json. "
+        "URLs are only valid for 60 minutes after the image has been generated.\n"
+        "This parameter isn't supported with streaming which will always "
+        "return base64-encoded images.",
+    )
+    n: int = Field(
+        default=1, description="The number of images to generate.", ge=1, le=10
+    )
+    size: str = Field(  # Support different values than OpenAI
+        default="1024x1024",
+        pattern=r"^(\d+)x(\d+)$",
+        description="The size of the generated images."
+        "\nSupported values depend on the model. "
+        "With some models, output size may be different.",
+    )
+    user: str | None = Field(
+        default=None,
+        description="A unique identifier representing your end-user, which can help to monitor and detect abuse.",
+        min_length=1,
+        max_length=255,
+    )
+
+    @field_validator("response_format", mode="after")
+    @classmethod
+    def _validate_response_format(cls, value: str) -> str:
+        """Ensure S3 bucket is configured for 'url' format.
+
+        Args:
+            value: The response format to validate.
+
+        Returns:
+            The validated response format.
+        """
+        if value == "url" and not SETTINGS.aws_s3_bucket:
+            log_error_details(
+                "No S3 bucket configured for presigned URLs. "
+                "AWS_S3_BUCKET environment variable is not set."
+            )
+            msg = (
+                "The url response format is not enabled on this server. "
+                "Please contact the administrator to enabled it."
+            )
+            raise ValueError(msg)
+        return value
+
+
 # Ref: openai.types.image_generate_params.ImageGenerateParams
-class ImageGenerateParams(BaseModelRequestWithExtra):
+class ImageGenerateParams(_ImageBaseParams):
     """Request body for generating images."""
 
     prompt: str = Field(
@@ -191,19 +272,11 @@ class ImageGenerateParams(BaseModelRequestWithExtra):
         "\ntransparent is UNSUPPORTED on this implementation.",
         default="auto",
     )
-    model: str = Field(
-        description="The model to use for image generation.",
-        min_length=1,
-        max_length=255,
-    )
     moderation: Literal["low", "auto"] = Field(
         description="Control the content-moderation level for generated images.\n"
         "Must be either `low` for less restrictive filtering or `auto` (default value)."
         "\nlow is UNSUPPORTED on this implementation.",
         default="auto",
-    )
-    n: int = Field(
-        default=1, description="The number of images to generate.", ge=1, le=10
     )
     output_compression: int = Field(
         description="The compression level (0-100%) for the generated images.",
@@ -236,31 +309,10 @@ class ImageGenerateParams(BaseModelRequestWithExtra):
         min_length=1,
         max_length=255,
     )
-    response_format: Literal["url", "b64_json"] = Field(
-        default="url",
-        description="The format in which the generated images are returned. "
-        "Must be one of url or b64_json. "
-        "URLs are only valid for 60 minutes after the image has been generated.\n"
-        "This parameter isn't supported with streaming which will always "
-        "return base64-encoded images.",
-    )
-    size: str = Field(  # Support different values than OpenAI
-        default="1024x1024",
-        pattern=r"^(\d+)x(\d+)$",
-        description="The size of the generated images."
-        "\nSupported values depend on the model. "
-        "With some models, output size may be different.",
-    )
     style: str | None = Field(  # Support different values than OpenAI
         default=None,
         description="The style of the generated images.\n"
         "Supported values depend on the model.",
-        min_length=1,
-        max_length=255,
-    )
-    user: str | None = Field(
-        default=None,
-        description="A unique identifier representing your end-user, which can help to monitor and detect abuse.",
         min_length=1,
         max_length=255,
     )
@@ -284,14 +336,89 @@ class ImageGenerateParams(BaseModelRequestWithExtra):
         if self.moderation != "auto":
             msg = "The 'moderation' parameter is not supported on this backend."
             raise ValueError(msg)
-        if self.response_format == "url" and not SETTINGS.aws_s3_bucket:
-            log_error_details(
-                "No S3 bucket configured for presigned URLs. "
-                "AWS_S3_BUCKET environment variable is not set."
-            )
-            msg = (
-                "The url response format is not enabled on this server. "
-                "Please contact the administrator to enabled it."
-            )
+        return self
+
+
+# Ref: openai.types.image_edit_params.ImageEditParams
+class ImageEditParams(_ImageBaseParams, BaseModelRequestWithFormExtra):
+    """Request body for editing images (multipart/form-data)."""
+
+    # image: handled in route
+    # mask: handled in route
+    prompt: str = Field(
+        description="A text description of the desired image(s). "
+        "Required for a majority of models.",
+        default="",
+    )
+    background: ImageBackgroundAuto = Field(
+        description="Allows to set transparency for the background of the generated image(s).\n"
+        "If `transparent`, the output format needs to support transparency, "
+        "so it should be set to either `png` (default value) or `webp`."
+        "\ntransparent is UNSUPPORTED on this implementation.",
+        default="auto",
+    )
+    input_fidelity: ImageInputFidelity = Field(
+        description="Control how much effort the model will exert to match the style and "
+        "features, especially facial features, of input images."
+        "\nUNSUPPORTED on this implementation.",
+        default="low",
+    )
+    output_compression: int = Field(
+        description="The compression level (0-100%) for the generated images.",
+        default=100,
+        ge=1,
+        le=100,
+    )
+    output_format: ImageOutputFormats | None = Field(
+        default=None,
+        description="The format in which the generated images are returned. "
+        "Must be one of `png`, `jpeg`, or `webp`.",
+    )
+    partial_images: int | None = Field(
+        description="The number of partial images to generate.\n"
+        "This parameter is used for streaming responses that return partial images. "
+        "Value must be between 0 and 3. "
+        "When set to 0, the response will be a single image sent in one streaming event.\n"
+        "Note that the final image may be sent before the full number of partial images "
+        "are generated if the full image is generated more quickly.\n"
+        "Partial images are only sent if the model supports it.",
+        ge=0,
+        le=3,
+        default=None,
+    )
+    quality: str = Field(  # Support different values than OpenAI
+        default="auto",
+        description="The quality of the image that will be generated.\n"
+        "`auto` (default value) will automatically select the best quality for the given model.\n"
+        "Supported values depend on the model.",
+        min_length=1,
+        max_length=255,
+    )
+    stream: bool = Field(
+        default=False, description="Generate the image in streaming mode."
+    )
+
+    @model_validator(mode="after")
+    def _unsupported(self) -> Self:
+        """Validate unsupported or incompatible options.
+
+        Raises:
+            ValueError: When an unsupported option is requested or options are incompatible.
+        """
+        if self.partial_images is not None and not self.stream:
+            msg = "partial_images requires streaming mode."
+            raise ValueError(msg)
+        if self.background == "transparent":
+            msg = "Background transparency is not supported on this backend."
+            raise ValueError(msg)
+        if self.input_fidelity != "low":
+            msg = "The 'input_fidelity' parameter is not supported on this backend."
             raise ValueError(msg)
         return self
+
+
+# Ref: openai.types.image_create_variation_params.ImageCreateVariationParams
+class ImageVariationParams(_ImageBaseParams, BaseModelRequestWithFormExtra):
+    """Request body for creating image variations (multipart/form-data)."""
+
+    # image: handled in route

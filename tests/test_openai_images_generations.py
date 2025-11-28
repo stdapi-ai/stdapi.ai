@@ -15,6 +15,7 @@ from openai import BadRequestError, OpenAI
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
+    from openai.types import ImageEditCompletedEvent, ImageEditPartialImageEvent
     from openai.types.image_gen_completed_event import ImageGenCompletedEvent
     from openai.types.image_gen_partial_image_event import ImageGenPartialImageEvent
 
@@ -125,7 +126,12 @@ def validate_error_response(
 
 
 def validate_streaming_image_response(
-    response: Iterable[ImageGenCompletedEvent | ImageGenPartialImageEvent],
+    response: Iterable[
+        ImageGenCompletedEvent
+        | ImageGenPartialImageEvent
+        | ImageEditPartialImageEvent
+        | ImageEditCompletedEvent
+    ],
 ) -> None:
     """Validate a streaming image generation response according to OpenAI API specification.
 
@@ -173,9 +179,7 @@ def validate_streaming_image_response(
             assert "x" in event.size, f"Invalid size format: {event.size}"
 
             # Usage should have token information
-            assert hasattr(event.usage, "total_tokens"), (
-                f"Usage missing total_tokens: {event.usage}"
-            )
+            assert event.usage, f"Usage missing total_tokens: {event.usage}"
 
         elif event.type in ["image_generation.partial", "image_generation.progress"]:
             # Partial/progress events should have basic metadata
@@ -621,4 +625,22 @@ class TestImageGeneration:
             expected_type="invalid_request_error",
             expected_code="unknown_parameter",
             expected_param="partial_images",
+        )
+
+    def test_model_not_supporting_text_to_image(self, openai_client: OpenAI) -> None:
+        """Test error when model doesn't support text-to-image generation."""
+        # Use a model that only supports variations (not text-to-image)
+        with pytest.raises(BadRequestError) as exc_info:
+            openai_client.images.generate(
+                prompt="A test image",
+                model="stability.stable-fast-upscale-v1:0",  # Upscale model doesn't support text-to-image
+                n=1,
+                size="512x512",
+            )
+
+        error_msg = str(exc_info.value).lower()
+        assert (
+            "not supported" in error_msg
+            or "text-to-image" in error_msg
+            or "invalid value" in error_msg
         )

@@ -15,7 +15,7 @@ from stdapi.aws_bedrock import get_extra_model_parameters
 from stdapi.config import SETTINGS
 from stdapi.models import validate_model
 from stdapi.models.embedding import get_embedding_model
-from stdapi.monitoring import REQUEST_LOG, log_request_params, log_response_params
+from stdapi.monitoring import log_request_params, log_response_params
 from stdapi.types.openai_embeddings import (
     CreateEmbeddingResponse,
     Embedding,
@@ -83,11 +83,7 @@ async def create_embeddings(
         HTTPException: With 404 if the model does not exist; 400 on unsupported
             options or invalid values.
     """
-    log_request_params(request)
-    if request.user:
-        log = REQUEST_LOG.get()
-        log["request_user_id"] = request.user
-
+    log_request_params(request, user_id=request.user)
     await validate_model(request.model, "EMBEDDING")
     if isinstance(request.input, str):
         input_texts: list[str] = [request.input]

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
 from fastapi import HTTPException
 
 from stdapi.models.image import (
+    DEFAULT_VARIATION_PROMPT,
     ImageGenerationJobBase,
     ImageGenerationResponse,
     ImageModelBase,
@@ -17,6 +18,8 @@ from stdapi.models.image.amazon_titan_image_generator import (
     get_amz_quality,
     random_seed,
 )
+from stdapi.openai_exceptions import OpenaiError
+from stdapi.utils import get_data_uri_data
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Iterable
@@ -59,7 +62,7 @@ class _ImageVariationParams(TypedDict):
 
     images: list[str]  # Required: 1-5 Base64 encoded images
     similarityStrength: NotRequired[float]  # 0.2-1.0
-    text: str  # Required: 1-1024 characters
+    text: NotRequired[str]  # Required: 1-1024 characters
     negativeText: NotRequired[str]  # Optional: 1-1024 characters
 
 
@@ -208,68 +211,424 @@ class _Response(TypedDict):
 
 
 class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
-    """Image generation job."""
+    """Image generation job supporting both text-to-image and inpainting."""
 
     @staticmethod
-    async def _get_image_from_response(
-        image_base64: str, index: int
-    ) -> ImageGenerationResponse:
-        """Get image response from model response.
+    async def _create_response(image: str, index: int) -> ImageGenerationResponse:
+        """Create an ImageGenerationResponse from image data.
 
         Args:
-            image_base64: Base64 image.
+            image: Base64 encoded image.
             index: Image index.
 
-        Response:
-            Image response.
+        Returns:
+            ImageGenerationResponse object.
         """
-        return ImageGenerationResponse(image=image_base64, index=index)
+        return ImageGenerationResponse(image=image, index=index)
 
-    async def _generate_images(self) -> Iterable[Awaitable[ImageGenerationResponse]]:
-        """Generate images from text prompt.
+    async def _invoke_and_process_response(
+        self, request: _Request
+    ) -> Iterable[Awaitable[ImageGenerationResponse]]:
+        """Common logic to invoke model and process response.
 
-        Yields:
-            Images.
+        Args:
+            request: The request to send to the model.
+
+        Returns:
+            Iterable of awaitable image generation responses.
+
+        Raises:
+            HTTPException: If model returns an error.
         """
-        request = _Request(
-            taskType="TEXT_IMAGE",
-            textToImageParams=_TextToImageParams(text=self._prompt),
-            imageGenerationConfig=_ImageGenerationConfig(
-                width=self._width,
-                height=self._height,
-                numberOfImages=self._count,
-                seed=random_seed(),
-            ),
-        )
-        if self._extra_params:
-            if "textToImageParams" in self._extra_params:
-                request["textToImageParams"].update(
-                    self._extra_params["textToImageParams"]  # type:ignore[typeddict-item]
-                )
-            if "imageGenerationConfig" in self._extra_params:
-                request["imageGenerationConfig"].update(
-                    self._extra_params["imageGenerationConfig"]  # type:ignore[typeddict-item]
-                )
-
         self._response_height = self._height
         self._response_width = self._width
         self._response_output_format = "png"
 
-        amz_quality = get_amz_quality(self._quality)
-        if amz_quality:
-            request["imageGenerationConfig"]["quality"] = amz_quality
-            self._response_quality = "high" if amz_quality == "premium" else "medium"
-
-        if self._style:
-            request["textToImageParams"]["style"] = self._style.upper()  # type: ignore[typeddict-item]
-
         response = await self._model.invoke(request)
         if "error" in response:
             raise HTTPException(status_code=400, detail=response["error"])
+
         return tuple(
-            self._get_image_from_response(image, index)
+            self._create_response(image, index)
             for index, image in enumerate(response["images"])
         )
+
+    def _apply_extra_params(self, request: _Request, task_params_key: str) -> None:
+        """Apply extra parameters to request.
+
+        Args:
+            request: The request to modify.
+            task_params_key: Key for task-specific params (e.g., "textToImageParams").
+        """
+        if self._extra_params:
+            if task_params_key in self._extra_params:
+                request[task_params_key].update(  # type: ignore[literal-required]
+                    self._extra_params[task_params_key]
+                )
+            if "imageGenerationConfig" in self._extra_params:
+                request["imageGenerationConfig"].update(
+                    self._extra_params["imageGenerationConfig"]  # type: ignore[typeddict-item]
+                )
+
+    async def _generate_images_from_text(
+        self,
+    ) -> Iterable[Awaitable[ImageGenerationResponse]]:
+        """Generate images from text prompt.
+
+        Returns:
+            Iterable of awaitable image generation responses.
+        """
+        image_generation_config = _ImageGenerationConfig(
+            width=self._width,
+            height=self._height,
+            numberOfImages=self._count,
+            seed=random_seed(),
+        )
+
+        task_type: str = self._extra_params.get("taskType", "TEXT_IMAGE")  # type: ignore[assignment]
+        if task_type == "TEXT_IMAGE":
+            request = self._get_request_text_image(image_generation_config)
+        elif task_type == "COLOR_GUIDED_GENERATION":
+            request = self._get_request_color_guided_generation(image_generation_config)
+        else:
+            msg = '"taskType" value must be "TEXT_IMAGE" or "COLOR_GUIDED_GENERATION".'
+            raise OpenaiError(msg)
+
+        return await self._invoke_and_process_response(request)
+
+    async def _edit_image(
+        self, images: list[str], mask: str | None
+    ) -> Iterable[Awaitable[ImageGenerationResponse]]:
+        """Edit images.
+
+        Args:
+            images: List of base64-encoded source images.
+            mask: Base64-encoded mask image (optional).
+
+        Returns:
+            Iterable of awaitable image generation responses.
+        """
+        image_generation_config = _ImageGenerationConfig(
+            width=self._width,
+            height=self._height,
+            numberOfImages=self._count,
+            seed=random_seed(),
+        )
+
+        image = self._get_one_image_from_list(images)
+        task_type: str = self._extra_params.get("taskType", "INPAINTING")  # type: ignore[assignment]
+        if task_type == "INPAINTING":
+            request = self._get_request_inpainting(image_generation_config, image, mask)
+        elif task_type == "OUTPAINTING":
+            request = self._get_request_outpainting(
+                image_generation_config, image, mask
+            )
+        elif task_type == "BACKGROUND_REMOVAL":
+            request = self._get_request_background_removal(
+                image_generation_config, image, mask
+            )
+        elif task_type == "VIRTUAL_TRY_ON":
+            request = self._get_request_virtual_try_on(
+                image_generation_config, image, mask
+            )
+        else:
+            msg = '"taskType" value must be "INPAINTING", "OUTPAINTING", "BACKGROUND_REMOVAL" or "VIRTUAL_TRY_ON".'
+            raise OpenaiError(msg)
+
+        return await self._invoke_and_process_response(request)
+
+    async def _create_image_variations(
+        self, images: list[str]
+    ) -> Iterable[Awaitable[ImageGenerationResponse]]:
+        """Create variations of existing images.
+
+        Args:
+            images: List of base64-encoded source images.
+
+        Returns:
+            Iterable of awaitable image generation responses.
+        """
+        image_generation_config = _ImageGenerationConfig(
+            width=self._width,
+            height=self._height,
+            numberOfImages=self._count,
+            seed=random_seed(),
+        )
+
+        task_type: str = self._extra_params.get("taskType", "IMAGE_VARIATION")  # type: ignore[assignment]
+        if task_type == "IMAGE_VARIATION":
+            request = self._get_request_image_variation(image_generation_config, images)
+        elif task_type == "TEXT_IMAGE":
+            request = self._get_request_text_image(image_generation_config, images)
+        elif task_type == "COLOR_GUIDED_GENERATION":
+            request = self._get_request_color_guided_generation(
+                image_generation_config, images
+            )
+        else:
+            msg = '"taskType" value must be "IMAGE_VARIATION", "TEXT_IMAGE" or "COLOR_GUIDED_GENERATION".'
+            raise OpenaiError(msg)
+
+        return await self._invoke_and_process_response(request)
+
+    def _get_request_inpainting(
+        self,
+        image_generation_config: _ImageGenerationConfig,
+        image: str,
+        mask: str | None,
+    ) -> _Request:
+        """Get request for INPAINTING task.
+
+        Args:
+            image_generation_config: Image generation configuration.
+            image: Base64-encoded source image.
+            mask: Optional base64-encoded mask image.
+
+        Returns:
+            Request object for INPAINTING task.
+        """
+        request = _Request(
+            taskType="INPAINTING",
+            inPaintingParams=_InPaintingParams(image=image, text=self._prompt),
+            imageGenerationConfig=image_generation_config,
+        )
+
+        if mask:
+            request["inPaintingParams"]["maskImage"] = mask
+
+        self._apply_extra_params(request, "inPaintingParams")
+        self._response_quality = "medium"
+        return request
+
+    def _get_request_outpainting(
+        self,
+        image_generation_config: _ImageGenerationConfig,
+        image: str,
+        mask: str | None,
+    ) -> _Request:
+        """Get request for OUTPAINTING task.
+
+        Args:
+            image_generation_config: Image generation configuration.
+            image: Base64-encoded source image.
+            mask: Optional base64-encoded mask image.
+
+        Returns:
+            Request object for OUTPAINTING task.
+        """
+        request = _Request(
+            taskType="OUTPAINTING",
+            outPaintingParams=_OutPaintingParams(image=image, text=self._prompt),
+            imageGenerationConfig=image_generation_config,
+        )
+
+        if mask:
+            request["outPaintingParams"]["maskImage"] = mask
+
+        self._apply_extra_params(request, "outPaintingParams")
+        self._response_quality = "medium"
+        return request
+
+    def _get_request_background_removal(
+        self,
+        image_generation_config: _ImageGenerationConfig,
+        image: str,
+        mask: str | None,
+    ) -> _Request:
+        """Get request for BACKGROUND_REMOVAL task.
+
+        Args:
+            image_generation_config: Image generation configuration.
+            image: Base64-encoded source image.
+            mask: Optional mask (not supported).
+
+        Returns:
+            Request object for BACKGROUND_REMOVAL task.
+        """
+        self._validate_no_mask(mask, reason="with BACKGROUND_REMOVAL taskType")
+        request = _Request(
+            taskType="BACKGROUND_REMOVAL",
+            backgroundRemovalParams=_BackgroundRemovalParams(image=image),
+            imageGenerationConfig=image_generation_config,
+        )
+
+        self._apply_extra_params(request, "backgroundRemovalParams")
+        self._response_quality = "medium"
+        return request
+
+    def _get_request_virtual_try_on(
+        self,
+        image_generation_config: _ImageGenerationConfig,
+        image: str,
+        mask: str | None,
+    ) -> _Request:
+        """Get request for VIRTUAL_TRY_ON task.
+
+        Args:
+            image_generation_config: Image generation configuration.
+            image: Base64-encoded source image.
+            mask: Optional mask image for specifying the try-on region.
+
+        Returns:
+            Request object for VIRTUAL_TRY_ON task.
+        """
+        mask_str = self._validate_mask(mask, "with VIRTUAL_TRY_ON taskType")
+        user_params: _VirtualTryOnParams = self._extra_params.get(  # type: ignore[assignment]
+            "virtualTryOnParams", {}
+        )
+        mask_type = user_params.get("maskType", "PROMPT")
+
+        if mask_type == "PROMPT":
+            params = _VirtualTryOnParams(
+                sourceImage=image,
+                referenceImage=mask_str,
+                maskType=mask_type,
+                promptBasedMask=_PromptBasedMask(maskPrompt=self._prompt),
+            )
+            params["promptBasedMask"].update(user_params.pop("promptBasedMask", {}))
+        elif mask_type == "GARMENT":
+            params = _VirtualTryOnParams(
+                sourceImage=image,
+                referenceImage=mask_str,
+                maskType="GARMENT",
+                # Try using prompt as the default garment class
+                garmentBasedMask=_GarmentBasedMask(garmentClass=self._prompt),  # type: ignore[typeddict-item]
+            )
+            params["garmentBasedMask"].update(user_params.pop("garmentBasedMask", {}))
+        elif mask_type == "IMAGE":
+            params = _VirtualTryOnParams(
+                sourceImage=image,
+                referenceImage=mask_str,
+                maskType="IMAGE",
+                # Try using prompt as default base64 encoded mask image
+                imageBasedMask=_ImageBasedMask(
+                    maskImage=get_data_uri_data(self._prompt)
+                ),
+            )
+            params["imageBasedMask"].update(user_params.pop("imageBasedMask", {}))
+        else:
+            msg = f'Invalid virtualTryOnParams.maskType "{mask_type}". Must be one of "PROMPT", "GARMENT" or "IMAGE".'
+            raise OpenaiError(msg)
+
+        request = _Request(
+            taskType="VIRTUAL_TRY_ON",
+            virtualTryOnParams=params,
+            imageGenerationConfig=image_generation_config,
+        )
+        self._apply_extra_params(request, "virtualTryOnParams")
+        self._response_quality = "medium"
+        return request
+
+    def _get_request_text_image(
+        self,
+        image_generation_config: _ImageGenerationConfig,
+        images: list[str] | None = None,
+    ) -> _Request:
+        """Get request for TEXT_IMAGE task.
+
+        Args:
+            image_generation_config: Image generation configuration.
+            images: Optional list of images for condition image generation.
+
+        Returns:
+            Request object for TEXT_IMAGE task.
+        """
+        request = _Request(
+            taskType="TEXT_IMAGE",
+            textToImageParams=_TextToImageParams(
+                text=self._prompt or DEFAULT_VARIATION_PROMPT
+            ),
+            imageGenerationConfig=image_generation_config,
+        )
+
+        if images:
+            request["textToImageParams"]["conditionImage"] = (
+                self._get_one_image_from_list(images)
+            )
+
+        self._apply_extra_params(request, "textToImageParams")
+        self._apply_quality_and_style(request, "textToImageParams")
+        return request
+
+    def _get_request_color_guided_generation(
+        self,
+        image_generation_config: _ImageGenerationConfig,
+        images: list[str] | None = None,
+    ) -> _Request:
+        """Get request for COLOR_GUIDED_GENERATION task.
+
+        Args:
+            image_generation_config: Image generation configuration.
+            images: Optional list of images for reference image.
+
+        Returns:
+            Request object for COLOR_GUIDED_GENERATION task.
+        """
+        try:
+            color_params = self._extra_params["colorGuidedGenerationParams"]
+            colors: list[str] = color_params["colors"]  # type: ignore[call-overload,assignment,index]
+        except (KeyError, TypeError, IndexError) as exc:
+            msg = "Required parameter for COLOR_GUIDED_GENERATION: colorGuidedGenerationParams.colors"
+            raise OpenaiError(msg) from exc
+
+        request = _Request(
+            taskType="COLOR_GUIDED_GENERATION",
+            colorGuidedGenerationParams=_ColorGuidedGenerationParams(
+                text=self._prompt or DEFAULT_VARIATION_PROMPT, colors=colors
+            ),
+            imageGenerationConfig=image_generation_config,
+        )
+
+        if images:
+            request["colorGuidedGenerationParams"]["referenceImage"] = (
+                self._get_one_image_from_list(images)
+            )
+
+        self._apply_extra_params(request, "colorGuidedGenerationParams")
+        self._apply_quality_and_style(request, None)
+        return request
+
+    def _get_request_image_variation(
+        self, image_generation_config: _ImageGenerationConfig, images: list[str]
+    ) -> _Request:
+        """Get request for IMAGE_VARIATION task.
+
+        Args:
+            image_generation_config: Image generation configuration.
+            images: List of base64-encoded images.
+
+        Returns:
+            Request object for IMAGE_VARIATION task.
+        """
+        request = _Request(
+            taskType="IMAGE_VARIATION",
+            imageVariationParams=_ImageVariationParams(images=images),
+            imageGenerationConfig=image_generation_config,
+        )
+        if self._prompt:
+            request["imageVariationParams"]["text"] = self._prompt
+
+        self._apply_extra_params(request, "imageVariationParams")
+        self._apply_quality_and_style(request, None)
+        return request
+
+    def _apply_quality_and_style(
+        self, request: _Request, task_params_key: str | None
+    ) -> None:
+        """Apply quality and style settings to request.
+
+        Args:
+            request: The request to modify.
+            task_params_key: Key for task-specific params that support style (e.g., "textToImageParams").
+        """
+        # Apply quality settings
+        amz_quality = get_amz_quality(self._quality)
+        if amz_quality and "imageGenerationConfig" in request:
+            request["imageGenerationConfig"]["quality"] = amz_quality
+            self._response_quality = "high" if amz_quality == "premium" else "medium"
+
+        # Apply style if specified and supported by the task
+        if self._style and task_params_key:
+            request[task_params_key]["style"] = self._style.upper()  # type: ignore[literal-required]
 
 
 class ImageModel(ImageModelBase[_Request, _Response, _ImageGenerationJob]):

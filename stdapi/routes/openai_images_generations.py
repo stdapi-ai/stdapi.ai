@@ -15,18 +15,21 @@ from stdapi.auth import authenticate
 from stdapi.aws_bedrock import get_extra_model_parameters
 from stdapi.config import SETTINGS
 from stdapi.models import validate_model
-from stdapi.models.image import ImageGenerationJobBase, get_image_model
+from stdapi.models.image import (
+    ImageGenerationJobBase,
+    ImageGenerationResponse,
+    get_image_model,
+)
 from stdapi.monitoring import (
-    REQUEST_LOG,
     REQUEST_TIME,
     log_request_params,
     log_request_stream_event,
     log_response_params,
 )
 from stdapi.openai_exceptions import OpenaiError, OpenaiUnsupportedModelError
+from stdapi.routes._images_common import build_images_response
 from stdapi.tokenizer import estimate_token_count
 from stdapi.types.openai_images import (
-    Image,
     ImageGenCompletedEvent,
     ImageGenerateParams,
     ImageGenPartialImageEvent,
@@ -55,16 +58,18 @@ _OPENAI_QUALITY_LEVELS: dict[str, ImageOutputQuality | None] = {
 
 
 async def stream_generator(
-    job: ImageGenerationJobBase[Any], partial_images: int | None, created: int
+    image_stream: AsyncGenerator[ImageGenerationResponse],
+    job: ImageGenerationJobBase[Any],
+    created: int,
 ) -> AsyncGenerator[JSONServerSentEvent]:
-    """Asynchronously generates a stream of server-sent events for image generation.
+    """Asynchronously generates a stream of server-sent events for image generation/editing.
 
-    This function consumes an image generation job, processes its output as it
-    streams, and delivers defined JSON server-sent events to the caller.
+    This function consumes an image stream, processes its output, and delivers
+    JSON server-sent events to the caller.
 
     Args:
-        job: The active image generation job to process the stream of image data.
-        partial_images: Specifies the number of partial images to receive during image generation.
+        image_stream: Async generator yielding image generation responses.
+        job: The image generation/edit job containing metadata (dimensions, format, etc).
         created: A timestamp representing the creation time for the events.
 
     Yields:
@@ -72,12 +77,12 @@ async def stream_generator(
             yields server-sent events (JSONServerSentEvent) containing either
             partial or final image data.
     """
-    token_task = create_task(estimate_token_count(job.prompt))
+    token_task = create_task(estimate_token_count(job.prompt)) if job.prompt else None
     indexes: dict[int, int] = {}
     estimated_input_tokens: int | None = None
-    async for result in job.generate_images_stream(partial_images=partial_images):
+    async for result in image_stream:
         if estimated_input_tokens is None:
-            estimated_input_tokens = await token_task or 0
+            estimated_input_tokens = (await token_task or 0) if token_task else 0
         usage = Usage(
             input_tokens=estimated_input_tokens,
             input_tokens_details=UsageInputTokensDetails(
@@ -114,7 +119,7 @@ async def stream_generator(
                 ).model_dump(mode="json", exclude_none=True)
             )
     if estimated_input_tokens is None:
-        estimated_input_tokens = await token_task or 0
+        estimated_input_tokens = (await token_task or 0) if token_task else 0
     usage = Usage(
         input_tokens=estimated_input_tokens,
         input_tokens_details=UsageInputTokensDetails(
@@ -198,11 +203,7 @@ async def create_images(
         HTTPException: With 404 if the model does not exist; 400 on unsupported
             options or invalid values.
     """
-    log_request_params(request)
-    if request.user:
-        log = REQUEST_LOG.get()
-        log["request_user_id"] = request.user
-
+    log_request_params(request, user_id=request.user)
     try:
         await validate_model(
             request.model, input_modality="TEXT", output_modality="IMAGE"
@@ -224,14 +225,17 @@ async def create_images(
         is_url=request.response_format == "url" and not request.stream,
         extra_params=get_extra_model_parameters(request.model, request),
     )
-    created = int(REQUEST_TIME.get().timestamp())
 
     # Handle streaming requests
     if request.stream:
         return EventSourceResponse(
             await log_request_stream_event(
                 stream_generator(
-                    job=job, partial_images=request.partial_images, created=created
+                    image_stream=job.generate_images_stream(
+                        partial_images=request.partial_images
+                    ),
+                    job=job,
+                    created=int(REQUEST_TIME.get().timestamp()),
                 )
             )
         )
@@ -239,28 +243,13 @@ async def create_images(
     # Handle non-streaming requests
     token_task = create_task(estimate_token_count(request.prompt))
     results = await job.generate_images()
-    if request.response_format == "b64_json":
-        images = [Image(b64_json=result.image) for result in results]
-    else:
-        images = [Image(url=result.image) for result in results]
+    text_tokens = await token_task or 0
 
-    estimated_input_tokens = await token_task or 0
-    return log_response_params(
-        ImagesResponse(
-            created=created,
-            data=images,
-            output_format=job.output_format,
-            size=f"{job.width}x{job.height}",
-            background="opaque",
-            quality=job.quality,
-            usage=Usage(
-                input_tokens=estimated_input_tokens,
-                input_tokens_details=UsageInputTokensDetails(
-                    image_tokens=0, text_tokens=estimated_input_tokens
-                ),
-                output_tokens=request.n,
-                total_tokens=estimated_input_tokens + request.n,
-            ),
-        ),
-        exclude={"data"},
+    return await build_images_response(
+        job=job,
+        results=results,
+        response_format=request.response_format,
+        image_count=request.n,
+        text_tokens=text_tokens,
+        image_tokens=0,
     )

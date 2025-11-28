@@ -211,20 +211,24 @@ def log_request_event(request: Request) -> Generator[EventLog]:
 
 
 def log_request_params[ParamsT: "BaseModel | dict[str, Any] | list[Any] | None"](
-    request: ParamsT, exclude: IncEx | None = None
+    request: ParamsT, exclude: IncEx | None = None, user_id: str | None = None
 ) -> ParamsT:
     """Logs the request and response parameters if the respective setting is enabled.
 
     Args:
         request: The request data to be logged. Must be JSON serializable.
         exclude: An iterable of keys to exclude from the log.
+        user_id: The user ID associated with the request, if available.
 
     Returns:
         Unmodified request.
     """
     if SETTINGS.log_request_params:
-        log = REQUEST_LOG.get()
-        _format_params(log, "request_params", request, exclude, exclude_unset=True)
+        _format_params(
+            REQUEST_LOG.get(), "request_params", request, exclude, exclude_unset=True
+        )
+    if user_id:
+        REQUEST_LOG.get()["request_user_id"] = user_id
     return request
 
 
@@ -241,8 +245,7 @@ def log_response_params[ParamsT: "BaseModel | dict[str, Any] | list[Any] | None"
         Unmodified response.
     """
     if SETTINGS.log_request_params:
-        log = REQUEST_LOG.get()
-        _format_params(log, "request_response", response, exclude)
+        _format_params(REQUEST_LOG.get(), "request_response", response, exclude)
     return response
 
 

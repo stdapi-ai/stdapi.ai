@@ -30,34 +30,39 @@ Generate images with AWS Bedrock image models like Stability AI and Amazon Nova 
 
 <div class="feature-table" markdown>
 
-| Feature                        |                  Status                  | Notes                                                                    |
-|--------------------------------|:----------------------------------------:|--------------------------------------------------------------------------|
-| **Generation**                 |                                          |                                                                          |
-| Text-to-image (`/generations`) |   :material-check-circle:{ .success }    | Generate images from prompts                                             |
-| **Parameters**                 |                                          |                                                                          |
-| `prompt`                       |   :material-check-circle:{ .success }    | Text description for generation                                          |
-| `n` (number of images)         |   :material-check-circle:{ .success }    | Generate multiple images per request                                     |
-| `size` (WIDTHxHEIGHT)          |       :material-cog:{ .model-dep }       | Supported dimensions vary by model; some may approximate requested sizes |
-| `quality`                      |       :material-cog:{ .model-dep }       | `low`, `medium`, `high` + model specific quality levels                  |
-| `style`                        |       :material-cog:{ .model-dep }       | Some models support style parameters                                     |
-| `output_compression`           |   :material-check-circle:{ .success }    | Supported on all input formats                                           |
-| `background`                   |   :material-minus-circle:{ .partial }    | Only opaque is supported                                                 |
-| `moderation`                   |   :material-minus-circle:{ .partial }    | Only `auto` is supported                                                 |
-| Extra model-specific params    | :material-plus-circle:{ .extra-feature } | Extra model-specific parameters not supported by the OpenAI API          |
-| **Output**                     |                                          |                                                                          |
-| URL response format            |   :material-check-circle:{ .success }    | Temporary URLs to generated images                                       |
-| Base64 JSON format             |   :material-check-circle:{ .success }    | Inline base64-encoded images                                             |
-| PNG format                     |   :material-check-circle:{ .success }    | Lossless image output                                                    |
-| JPEG format                    |   :material-check-circle:{ .success }    | Compressed image output                                                  |
-| WebP format                    |   :material-check-circle:{ .success }    | Modern compressed format                                                 |
-| **Streaming**                  |                                          |                                                                          |
-| SSE streaming                  |   :material-check-circle:{ .success }    | Real-time generation updates                                             |
-| Partial images                 |       :material-cog:{ .model-dep }       | Progressive previews when available                                      |
-| **Usage tracking**             |                                          |                                                                          |
-| Input text tokens              |   :material-minus-circle:{ .partial }    | Estimated for reference                                                  |
-| Output image tokens            |   :material-check-circle:{ .success }    | Image count (billing unit)                                               |
-| **Other**                      |                                          |                                                                          |
-| `user`                         |   :material-minus-circle:{ .partial }    | Logged                                                                   |
+| Feature                        |                  Status                  | Notes                                                               |
+|--------------------------------|:----------------------------------------:|---------------------------------------------------------------------|
+| **Generation**                 |                                          |                                                                     |
+| Text-to-image (`/generations`) |   :material-check-circle:{ .success }    | Generate images from prompts                                        |
+| **Parameters**                 |                                          |                                                                     |
+| `prompt`                       |   :material-check-circle:{ .success }    | Text description for generation (required, min 1 char)              |
+| `model`                        |   :material-check-circle:{ .success }    | Required parameter                                                  |
+| `n` (number of images)         |   :material-check-circle:{ .success }    | Generate multiple images per request (1-10, default: 1)             |
+| `size` (WIDTHxHEIGHT)          |   :material-check-circle:{ .success }    | Output dimensions (default: 1024x1024, format validated)            |
+| `response_format`              |   :material-check-circle:{ .success }    | `url` or `b64_json` (default: `url`)                                |
+| `quality`                      |       :material-cog:{ .model-dep }       | Quality setting (default: `auto`, supports OpenAI & model-specific) |
+| `style`                        |       :material-cog:{ .model-dep }       | Model-specific style parameters                                     |
+| `output_format`                |   :material-check-circle:{ .success }    | `png`, `jpeg`, or `webp` (model-specific)                           |
+| `output_compression`           |   :material-check-circle:{ .success }    | Compression level 1-100% (default: 100)                             |
+| `stream`                       |   :material-check-circle:{ .success }    | Generate images in streaming mode with partial results              |
+| `partial_images`               |       :material-cog:{ .model-dep }       | Number of partial images in stream (0-3, model-specific)            |
+| `background`                   | :material-close-circle:{ .unsupported }  | Always `auto`, transparent backgrounds unsupported                  |
+| `moderation`                   | :material-close-circle:{ .unsupported }  | Always `auto`, other values unsupported                             |
+| Extra model-specific params    | :material-plus-circle:{ .extra-feature } | Extra model-specific parameters via JSON body                       |
+| **Output**                     |                                          |                                                                     |
+| URL response format            |   :material-check-circle:{ .success }    | Temporary URLs to generated images (requires AWS_S3_BUCKET)         |
+| Base64 JSON format             |   :material-check-circle:{ .success }    | Inline base64-encoded images                                        |
+| PNG format                     |   :material-check-circle:{ .success }    | Lossless image output                                               |
+| JPEG format                    |       :material-cog:{ .model-dep }       | Lossy compression (model-specific)                                  |
+| WebP format                    |       :material-cog:{ .model-dep }       | Modern format with compression (model-specific)                     |
+| **Streaming**                  |                                          |                                                                     |
+| SSE streaming                  |   :material-check-circle:{ .success }    | Server-sent events with partial and final images                    |
+| Partial images                 |       :material-cog:{ .model-dep }       | Progressive previews when available                                 |
+| **Usage tracking**             |                                          |                                                                     |
+| Input text tokens              |   :material-check-circle:{ .success }    | Estimated from prompt using tiktoken                                |
+| Output image tokens            |   :material-check-circle:{ .success }    | Number of images generated (`n` parameter)                          |
+| **Other**                      |                                          |                                                                     |
+| `user`                         |   :material-minus-circle:{ .partial }    | Logged but not used for abuse monitoring                            |
 
 </div>
 
@@ -72,6 +77,24 @@ Generate images with AWS Bedrock image models like Stability AI and Amazon Nova 
 * :material-plus-circle:{ .extra-feature } **Extra Feature** — Enhanced capability beyond OpenAI API
 
 </div>
+
+## Model Support
+
+### ![Amazon](styles/logo_amazon.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Models
+
+| Model                             | Supported Task Types                    | Notes                                                                                       |
+|-----------------------------------|-----------------------------------------|---------------------------------------------------------------------------------------------|
+| amazon.nova-canvas-v1:0           | `TEXT_IMAGE`, `COLOR_GUIDED_GENERATION` | Supports standard text-to-image generation and color-guided generation with 8 style presets |
+| amazon.titan-image-generator-v1   | `TEXT_IMAGE`                            | Basic text-to-image generation                                                              |
+| amazon.titan-image-generator-v2:0 | `TEXT_IMAGE`, `COLOR_GUIDED_GENERATION` | Enhanced text-to-image generation with color-guided generation support                      |
+
+### ![Stability AI](styles/logo_stabilityai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Stability AI Models
+
+| Model                             | Supported Task Types | Notes                                             |
+|-----------------------------------|----------------------|---------------------------------------------------|
+| stability.sd3-5-large-v1:0        | `TEXT_IMAGE`         | Stable Diffusion 3.5 Large - high quality output  |
+| stability.stable-image-core-v1:0  | `TEXT_IMAGE`         | Stable Image Core - balanced quality and speed    |
+| stability.stable-image-ultra-v1:0 | `TEXT_IMAGE`         | Stable Image Ultra - premium quality and detail   |
 
 !!! warning "Configuration Required"
     You must configure the `AWS_S3_BUCKET` environment variable with a bucket to use the URL response format.
@@ -146,9 +169,157 @@ Add provider-specific fields at the top level of your request body alongside sta
 {
   "model": "amazon.nova-canvas-v1:0",
   "prompt": "An abstract watercolor painting",
-  "textToImageParams": {"negativeText": "blurry, distorted, low quality, watermark"},
+  "textToImageParams": {"negativeText": "blurry, distorted, low quality, watermark"}
 }
 ```
+
+### ![Amazon Nova](styles/logo_amazon_nova.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Nova Canvas Extra Features
+
+**Basic Usage (Standard OpenAI Parameters):**
+
+```bash
+curl -X POST "$BASE/v1/images/generations" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "amazon.nova-canvas-v1:0",
+    "prompt": "A futuristic cityscape at night"
+  }'
+```
+
+**Parameter Mapping:**
+
+| OpenAI Parameter | Maps to                                | Notes                               |
+|------------------|----------------------------------------|-------------------------------------|
+| `prompt`         | Depends on `taskType`                  | See taskType-specific mapping below |
+| `size`           | `imageGenerationConfig.width/height`   | Flexible (320-4096)                 |
+| `quality`        | `imageGenerationConfig.quality`        | "high" → "premium"                  |
+| `style`          | `textToImageParams.style`              | 8 preset styles                     |
+| `n`              | `imageGenerationConfig.numberOfImages` | 1-5 images                          |
+
+**TaskType-Specific Parameter Mapping:**
+
+| taskType                  | `prompt` maps to                   |
+|---------------------------|------------------------------------|
+| `TEXT_IMAGE` (default)    | `textToImageParams.text`           |
+| `COLOR_GUIDED_GENERATION` | `colorGuidedGenerationParams.text` |
+
+**Advanced Generation Modes:**
+
+Default `taskType` is `"TEXT_IMAGE"`.
+
+Available task types:
+
+- `"TEXT_IMAGE"` - Standard text-to-image generation
+- `"COLOR_GUIDED_GENERATION"` - Generate images based on color palette
+
+```bash
+# Color-Guided Generation
+curl -X POST "$BASE/v1/images/generations" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "amazon.nova-canvas-v1:0",
+    "prompt": "A sunset landscape",
+    "taskType": "COLOR_GUIDED_GENERATION",
+    "colorGuidedGenerationParams": {
+      "colors": ["#FF6B6B", "#FFD93D", "#6BCB77"]
+    }
+  }'
+```
+
+!!! info "Full Parameter Reference"
+    For all parameters, styles, and task types, see [Amazon Nova Canvas documentation](https://docs.aws.amazon.com/nova/latest/userguide/image-generation.html)
+
+### ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Titan Image Generator Extra Features
+
+**Basic Usage (Standard OpenAI Parameters):**
+
+```bash
+curl -X POST "$BASE/v1/images/generations" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "amazon.titan-image-generator-v2:0",
+    "prompt": "A beautiful landscape with mountains"
+  }'
+```
+
+**Parameter Mapping:**
+
+| OpenAI Parameter | Maps to                                | Notes                               |
+|------------------|----------------------------------------|-------------------------------------|
+| `prompt`         | Depends on `taskType`                  | See taskType-specific mapping below |
+| `size`           | `imageGenerationConfig.width/height`   | Fixed sizes (512-2048)              |
+| `quality`        | `imageGenerationConfig.quality`        | "high" → "premium"                  |
+| `n`              | `imageGenerationConfig.numberOfImages` | 1-5 images                          |
+
+**TaskType-Specific Parameter Mapping:**
+
+| taskType                  | `prompt` maps to                   |
+|---------------------------|------------------------------------|
+| `TEXT_IMAGE` (default)    | `textToImageParams.text`           |
+| `COLOR_GUIDED_GENERATION` | `colorGuidedGenerationParams.text` |
+
+**Advanced Generation Modes:**
+
+Default `taskType` is `"TEXT_IMAGE"`.
+
+Available task types:
+
+- `"TEXT_IMAGE"` - Standard text-to-image generation
+- `"COLOR_GUIDED_GENERATION"` - Generate images based on color palette
+
+```bash
+# Color-Guided Generation
+curl -X POST "$BASE/v1/images/generations" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "amazon.titan-image-generator-v2:0",
+    "prompt": "Nature scene with colors",
+    "taskType": "COLOR_GUIDED_GENERATION",
+    "colorGuidedGenerationParams": {
+      "colors": ["#2ECC71", "#3498DB", "#F39C12"]
+    }
+  }'
+```
+
+!!! info "Full Parameter Reference"
+    For all parameters and task types, see [Amazon Titan Image Generator documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-image.html)
+
+### ![Stability AI](styles/logo_stabilityai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Stability AI Models
+
+**Basic Usage (Standard OpenAI Parameters):**
+
+```bash
+curl -X POST "$BASE/v1/images/generations" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "stability.stable-image-ultra-v1:0",
+    "prompt": "A photorealistic mountain landscape at sunset"
+  }'
+```
+
+**Parameter Mapping:**
+
+| OpenAI Parameter | Maps to        | Notes                                        |
+|------------------|----------------|----------------------------------------------|
+| `prompt`         | `prompt`       | Text description for generation              |
+| `size`           | `aspect_ratio` | Inferred from size (e.g., 1024x1024 → "1:1") |
+| `n`              | Multiple calls | Each image is a separate request             |
+
+**Model Comparison:**
+
+| Model                             | Output Formats  | Best For                              |
+|-----------------------------------|-----------------|---------------------------------------|
+| stability.sd3-5-large-v1:0        | png, jpeg, webp | High quality, versatile compositions  |
+| stability.stable-image-core-v1:0  | png, jpeg       | Balanced quality and speed            |
+| stability.stable-image-ultra-v1:0 | png, jpeg       | Premium quality and detail            |
+
+!!! info "Full Parameter Reference"
+    For all Stability AI parameters, see [Stability AI documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-stability-diffusion.html)
 
 **Configuration Options:**
 

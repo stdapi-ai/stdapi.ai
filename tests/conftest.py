@@ -1,6 +1,7 @@
 """Pytest configuration and fixtures."""
 
 import base64
+from io import BytesIO
 from os import environ
 from pathlib import Path
 from secrets import token_hex
@@ -9,6 +10,7 @@ from typing import TYPE_CHECKING
 import pytest
 from aiobotocore.session import get_session
 from openai import OpenAI
+from PIL import Image as PILImage
 from pybase64 import b64encode
 from starlette.testclient import TestClient
 
@@ -50,6 +52,8 @@ MODEL_MAPPINGS = {
 }
 _CACHE_DIR = Path(__file__).parent / ".cache"
 SAMPLES_DIR = Path(__file__).parent / "samples"
+OUTPUT_DIR = Path(__file__).parent / "output"
+OUTPUT_DIR.mkdir(exist_ok=True)
 _OPENAI_ORGANIZATION = "tests_stdapi.ai"
 
 
@@ -309,7 +313,7 @@ def sample_image_file(openai_client: OpenAI, image_generation_model: str) -> byt
     """Create a sample PNG image for testing using the Images API.
 
     The fixture prefers the b64_json response format to avoid external downloads.
-    It generates a small 256x256 image once, caches it under tests/.cache/image.png,
+    It generates a small 512x512 image once, caches it under tests/.cache/image.png,
     and returns its bytes for reuse across tests and sessions.
     """
     image_file = _CACHE_DIR / "image.png"
@@ -321,7 +325,7 @@ def sample_image_file(openai_client: OpenAI, image_generation_model: str) -> byt
         prompt="A rainbow llama",
         model=image_generation_model,
         n=1,
-        size="256x256",
+        size="512x512",
         response_format="b64_json",
     )
     # Extract and decode base64 image
@@ -346,6 +350,28 @@ def sample_image_file_base64(sample_image_file: bytes) -> str:
         str: A string representing the data URL of a PNG image in base64 encoding.
     """
     return f"data:image/png;base64,{b64encode(sample_image_file).decode('utf-8')}"
+
+
+@pytest.fixture(scope="session")
+def sample_mask_file(sample_image_file: bytes) -> bytes:
+    """Create a test mask image with white area in center (masked zone).
+
+    Args:
+        sample_image_file: Sample image file to get dimensions from
+
+    Returns:
+        Mask image bytes
+    """
+    width, height = PILImage.open(BytesIO(sample_image_file)).size
+
+    mask = PILImage.new("RGB", (width, height), color=(0, 0, 0))
+    for x in range(width // 4, 3 * width // 4):
+        for y in range(height // 4, 3 * height // 4):
+            mask.putpixel((x, y), (255, 255, 255))
+
+    buffer = BytesIO()
+    mask.save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 @pytest.fixture(scope="session")

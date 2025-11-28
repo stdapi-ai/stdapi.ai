@@ -20,6 +20,8 @@ from pydantic import BaseModel, JsonValue
 from stdapi.models import ModelBase, RequestT, ResponseT, get_model, load_model_plugins
 
 if TYPE_CHECKING:
+    from re import Pattern
+
     from fastapi import BackgroundTasks
 
 
@@ -61,7 +63,9 @@ class EmbeddingModelBase(ModelBase[RequestT, ResponseT]):
         """
 
 
-_MODEL_REGISTRY: list[tuple[str, type[EmbeddingModelBase[Any, Any]]]] = []
+_MODEL_REGISTRY: list[
+    tuple[str | Pattern[str], type[EmbeddingModelBase[Any, Any]]]
+] = []
 _MODEL_CACHE: dict[str, EmbeddingModelBase[Any, Any]] = {}
 
 
