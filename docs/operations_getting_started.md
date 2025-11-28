@@ -42,6 +42,9 @@ By the end of this guide, you'll have:
 **Don't use Terraform?**
 - [**Manual ECS Deployment**](#option-b-manual-ecs-deployment) - Deploy the container directly
 
+**Testing locally?**
+- [**Local Development with Docker/Podman**](#option-c-local-development-with-dockerpodman) - Run the community AGPL image locally
+
 ---
 
 ### Option A: Terraform Module (Recommended)
@@ -818,6 +821,118 @@ After subscribing, the container image is available from AWS Marketplace ECR:
 - CloudWatch monitoring
 
 **Recommendation:** Use the Terraform module (Option A) for a complete, production-ready deployment with all best practices included.
+
+---
+
+### Option C: Local Development with Docker/Podman
+
+For local testing and development, you can use the community AGPL container image.
+
+#### Community AGPL Container Image
+
+The community version is available as a public container image:
+
+```
+ghcr.io/stdapi-ai/stdapi.ai-community:latest
+```
+
+This image is released under the AGPL-3.0 license and is suitable for testing, development, and non-commercial use.
+
+**Building from source:** If you prefer to build the image yourself, see the [Dockerfile](https://github.com/stdapi-ai/stdapi.ai/blob/main/Dockerfile). However, we recommend using the prebuilt image for simplicity and convenience.
+
+**Note:** The container runs using [Granian](https://github.com/emmett-framework/granian), a high-performance Python ASGI server. This means Granian environment variables are supported for configuring the server (e.g., `GRANIAN_PORT`, `GRANIAN_WORKERS`, etc.). This applies to both community and AWS Marketplace container images.
+
+#### Running Locally with Docker or Podman
+
+**Basic example:**
+
+```bash
+docker run --rm -p 8000:8000 \
+  -e AWS_BEDROCK_REGIONS=eu-west-3,eu-central-1,eu-west-1 \
+  -e ENABLE_DOCS=true \
+  ghcr.io/stdapi-ai/stdapi.ai-community:latest
+```
+
+**With AWS credentials (after `aws sso login`):**
+
+```bash
+docker run --rm -p 8000:8000 \
+  -v ~/.aws:/home/nonroot/.aws:ro \
+  -e AWS_BEDROCK_REGIONS=eu-west-3,eu-central-1,eu-west-1 \
+  -e ENABLE_DOCS=true \
+  ghcr.io/stdapi-ai/stdapi.ai-community:latest
+```
+
+Alternatively, you can pass AWS credentials as environment variables instead of mounting the `.aws` directory:
+
+```bash
+docker run --rm -p 8000:8000 \
+  -e AWS_ACCESS_KEY_ID=your-access-key-id \
+  -e AWS_SECRET_ACCESS_KEY=your-secret-access-key \
+  -e AWS_SESSION_TOKEN=your-session-token \
+  -e AWS_BEDROCK_REGIONS=eu-west-3,eu-central-1,eu-west-1 \
+  -e ENABLE_DOCS=true \
+  ghcr.io/stdapi-ai/stdapi.ai-community:latest
+```
+
+**On Fedora/RHEL systems with SELinux (Podman):**
+
+If you encounter permission denied errors when mounting volumes with Podman, add the `:z` SELinux label to the volume mount and use `--userns=keep-id` to preserve user ID mapping:
+
+```bash
+podman run --rm -p 8000:8000 \
+  --userns=keep-id \
+  -v ~/.aws:/home/nonroot/.aws:ro,z \
+  -e AWS_BEDROCK_REGIONS=eu-west-3,eu-central-1,eu-west-1 \
+  -e ENABLE_DOCS=true \
+  ghcr.io/stdapi-ai/stdapi.ai-community:latest
+```
+
+The `:z` flag tells Podman to relabel the files with a private unshared label that only allows the container to access them. Alternatively, use `:Z` for a shared label if multiple containers need to access the same volume. The `--userns=keep-id` flag is specific to Podman and ensures that your host user ID is mapped to the container's user, avoiding permission issues with mounted volumes.
+
+**What you get:**
+
+- stdapi.ai running locally on http://localhost:8000
+- Access to AWS Bedrock models in the specified regions
+- Interactive API documentation at http://localhost:8000/docs
+- Perfect for local development and testing
+
+**Environment variables:**
+
+- `AWS_BEDROCK_REGIONS` - Comma-separated list of AWS regions (e.g., `eu-west-3,eu-central-1,eu-west-1`)
+- `ENABLE_DOCS` - Enable interactive API documentation at `/docs` (default: false)
+- See [Configuration](operations_configuration.md) for all available options
+
+**Note:** The local container uses your AWS credentials from `~/.aws` (mounted to `/home/nonroot/.aws` inside the container) to access Bedrock services. Make sure you've authenticated with `aws sso login` or configured your credentials using `aws configure` before running the container.
+
+**Testing the API:**
+
+```bash
+# Check health
+curl http://localhost:8000/health
+
+# List available models
+curl http://localhost:8000/v1/models
+
+# Make a chat completion request
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
+```
+
+**Important:** This is the community AGPL version suitable for testing and development. For production deployments, we recommend the AWS Marketplace container image which includes:
+
+- Security hardening and enhanced security features
+- Performance improvements and optimizations
+- Commercial licensing and enterprise support
+- Production-ready configurations
+
+See [Option A: Terraform Module](#option-a-terraform-module-recommended) or [Licensing](operations_licensing.md) for more information.
+
+---
 
 ## Make Your First API Call
 

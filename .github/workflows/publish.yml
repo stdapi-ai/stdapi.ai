@@ -1,0 +1,121 @@
+name: Publish version
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}-community
+
+jobs:
+  validate-version:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      is_prerelease: ${{ steps.check.outputs.is_prerelease }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Validate version matches tag
+        run: |
+          TAG_VERSION="${{ github.ref_name }}"
+          SERVER_VERSION=$(grep -oP 'SERVER_VERSION = "\K[^"]+' stdapi/server.py)
+          if [ "$TAG_VERSION" != "v$SERVER_VERSION" ]; then
+            echo "Error: Tag version ($TAG_VERSION) does not match SERVER_VERSION (v$SERVER_VERSION)"
+            echo "Deleting invalid tag..."
+            gh api -X DELETE /repos/${{ github.repository }}/git/refs/tags/$TAG_VERSION
+            exit 1
+          fi
+          echo "Version validation passed: $TAG_VERSION matches v$SERVER_VERSION"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check if prerelease
+        id: check
+        run: |
+          TAG_VERSION="${{ github.ref_name }}"
+          # Remove 'v' prefix for semver checking
+          VERSION="${TAG_VERSION#v}"
+          # Check if version contains prerelease identifiers (-, alpha, beta, rc, etc.)
+          if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+            echo "This is a stable release: $VERSION"
+          else
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+            echo "This is a prerelease: $VERSION"
+          fi
+
+  build-and-push:
+    needs: validate-version
+    environment: github-container-registry
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable=${{ needs.validate-version.outputs.is_prerelease == 'false' }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  publish:
+    needs: validate-version
+    runs-on: ubuntu-latest
+    environment: github-releases
+    permissions:
+      contents: write
+    steps:
+      - name: Create GitHub Release
+        run: |
+          PRERELEASE_FLAG=""
+          if [ "${{ needs.validate-version.outputs.is_prerelease }}" == "true" ]; then
+            PRERELEASE_FLAG="--prerelease"
+            echo "Creating prerelease for ${{ github.ref_name }}"
+          else
+            echo "Creating stable release for ${{ github.ref_name }}"
+          fi
+
+          gh release create ${{ github.ref_name }} \
+            --title "Release ${{ github.ref_name }}" \
+            --generate-notes \
+            --notes-start-tag "" \
+            --notes "See our [Roadmap & Changelog](https://stdapi.ai/roadmap/) for more details." \
+            $PRERELEASE_FLAG
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

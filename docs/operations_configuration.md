@@ -13,6 +13,9 @@ stdapi.ai is configured entirely through environment variables, which are read o
     - **IAM Permissions** to access required AWS services (see [IAM Permissions](#iam-permissions) section)
     - **S3 Bucket** (optional, but recommended for production use with file operations)
 
+!!! info "Container Runtime"
+    Both the AWS Marketplace and community Docker images run using [Granian](https://github.com/emmett-framework/granian), a high-performance Python ASGI server. In addition to the stdapi.ai-specific configuration variables documented below, you can also use Granian environment variables to configure the server runtime (e.g., `GRANIAN_PORT`, `GRANIAN_WORKERS`, `GRANIAN_THREADS`, etc.).
+
 ## Quick Start
 
 For production deployments, configure these essential settings:
