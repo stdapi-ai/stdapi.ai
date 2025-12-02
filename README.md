@@ -5,7 +5,7 @@
 
 **The OpenAI-compatible API for AWS AI**
 
-Access 40+ Bedrock models (Claude, Llama, Nova) and AWS AI services (Polly, Transcribe, Translate) with your existing OpenAI clients—no code changes required.
+Access 80+ Bedrock models (Claude, Llama, Nova) and AWS AI services (Polly, Transcribe, Translate) with your existing OpenAI clients—no code changes required.
 
 [![AWS Marketplace](https://img.shields.io/badge/AWS-Marketplace-FF9900?logo=amazon-aws&logoColor=white)](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo)
 [![Documentation](https://img.shields.io/badge/docs-stdapi.ai-blue)](https://stdapi.ai)
@@ -30,11 +30,11 @@ Access 40+ Bedrock models (Claude, Llama, Nova) and AWS AI services (Polly, Tran
 
 ## 🎯 Key Features
 
-### 40+ AI Models
+### 80+ AI Models
 Access models from:
 - **Anthropic** (Claude for reasoning and coding)
 - **Amazon** (Nova family for cost-effective performance)
-- **Meta** (Llama), **Mistral AI**, **Cohere**, **Stability AI**, **DeepSeek**, **Qwen**, and more
+- **OpenAI**, **Meta** (Llama), **Mistral AI**, **Google**, **Cohere**, **Stability AI**, **DeepSeek**, **Qwen**, and more
 
 ### Comprehensive AWS AI Services
 Beyond Bedrock language models:

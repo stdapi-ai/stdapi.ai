@@ -28,7 +28,7 @@ By the end of this guide, you'll have:
 ### Choose Your Deployment Path
 
 **New to stdapi.ai? Start here:**
-- [**Quick Start (3 lines of code)**](#example-1-quick-start-3-lines-of-code) - Get running in 5 minutes
+- [**Quick Start (3 lines of code)**](#example-1-quick-start) - Get running in 5 minutes
 
 **Already have AWS infrastructure?**
 - [**Integrate with Existing VPC/ALB**](#example-2-integration-with-existing-infrastructure) - Most cost-effective

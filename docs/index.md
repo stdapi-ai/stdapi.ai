@@ -7,7 +7,7 @@ hide:
 
 <div class="hero hero--home" markdown>
 # Run Any OpenAI App on AWS AI
-Use your favorite AI applications with powerful AWS models like Claude, Llama, and Nova. No code changes needed—just point your app to stdapi.ai and instantly access 40+ models with better privacy and lower costs.
+Use your favorite AI applications with powerful AWS models like Claude, Llama, and Nova. No code changes needed—just point your app to stdapi.ai and instantly access 80+ models with better privacy and lower costs.
 
 <div class="buttons" markdown>
 [Get started](operations_getting_started.md){ .md-button .md-button--primary }
@@ -23,7 +23,7 @@ Use your favorite AI applications with powerful AWS models like Claude, Llama, a
   <br>Use Open WebUI, LibreChat, Continue.dev, LangChain, or any ChatGPT-compatible tool. Just update the API endpoint—no code changes needed.
 
 - :material-brain: __Access superior models__
-  <br>Get Claude for reasoning and coding, Nova for cost-effective tasks, plus Llama, Mistral, and 40+ more models. Switch anytime.
+  <br>Get Claude for reasoning and coding, Nova for cost-effective tasks, plus Llama, OpenAI, Mistral, Google, and 80+ more models. Switch anytime.
 
 - :material-microphone: __Beyond chat__
   <br>Generate images, transcribe audio, translate text, and more. One platform for all your AI needs.
@@ -66,6 +66,10 @@ Use your favorite AI applications with powerful AWS models like Claude, Llama, a
       <img src="styles/logo_meta.svg" alt="Meta logo" />
       <span>Meta Llama</span>
     </a>
+    <a class="logo-item" href="https://www.nvidia.com/en-us/ai/" target="_blank" rel="noopener" title="Nvidia" aria-label="Nvidia">
+      <img src="styles/logo_nvidia.svg" alt="Nvidia logo" />
+      <span>Nvidia</span>
+    </a>
     <a class="logo-item" href="https://qwen.ai" target="_blank" rel="noopener" title="Qwen" aria-label="Qwen">
       <img src="styles/logo_qwen.svg" alt="Qwen logo" />
       <span>Qwen</span>
@@ -73,6 +77,10 @@ Use your favorite AI applications with powerful AWS models like Claude, Llama, a
     <a class="logo-item" href="https://openai.com" target="_blank" rel="noopener" title="OpenAI" aria-label="OpenAI">
       <img src="styles/logo_openai.svg" alt="OpenAI logo" />
       <span>OpenAI</span>
+    </a>
+    <a class="logo-item" href="https://www.moonshot.ai/" target="_blank" rel="noopener" title="Moonshot AI" aria-label="Moonshot AI">
+      <img src="styles/logo_moonshot.svg" alt="Moonshot AI logo" />
+      <span>Moonshot AI</span>
     </a>
     <a class="logo-item" href="https://aws.amazon.com/translate/" target="_blank" rel="noopener" title="Amazon Translate" aria-label="Amazon Translate">
       <img src="styles/logo_amazon_translate.svg" alt="Amazon Translate logo" />
@@ -90,6 +98,10 @@ Use your favorite AI applications with powerful AWS models like Claude, Llama, a
       <img src="styles/logo_stabilityai.svg" alt="Stability AI logo" />
       <span>Stability AI</span>
     </a>
+    <a class="logo-item" href="https://www.minimax.io/" target="_blank" rel="noopener" title="Minimax" aria-label="Minimax">
+      <img src="styles/logo_minimax.svg" alt="Minimax logo" />
+      <span>Minimax</span>
+    </a>
     <a class="logo-item" href="https://aws.amazon.com/transcribe/" target="_blank" rel="noopener" title="Amazon Transcribe" aria-label="Amazon Transcribe">
       <img src="styles/logo_amazon_transcribe.svg" alt="Amazon Transcribe logo" />
       <span>AWS Transcribe</span>
@@ -105,6 +117,10 @@ Use your favorite AI applications with powerful AWS models like Claude, Llama, a
     <a class="logo-item" href="https://aws.amazon.com/bedrock/nova/" target="_blank" rel="noopener" title="Amazon Nova" aria-label="Amazon Nova">
       <img src="styles/logo_amazon_nova.svg" alt="Amazon Nova logo" />
       <span>AWS Nova</span>
+    </a>
+    <a class="logo-item" href="https://ai.google/" target="_blank" rel="noopener" title="Google" aria-label="Google">
+      <img src="styles/logo_google.svg" alt="Google logo" />
+      <span>Google AI</span>
     </a>
     <a class="logo-item" href="https://luma.ai" target="_blank" rel="noopener" title="Luma AI" aria-label="Luma AI">
       <img src="styles/logo_luma.svg" alt="Luma AI logo" />
