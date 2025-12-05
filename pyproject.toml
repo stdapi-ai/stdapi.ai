@@ -11,7 +11,7 @@ dependencies = [
     "pydantic>=2",
     "pydantic-settings>=2",
     "sse-starlette",
-    "langcodes",
+    "langcodes[data]",
     "python-multipart",
     "aiohttp",
     "aiodns",
