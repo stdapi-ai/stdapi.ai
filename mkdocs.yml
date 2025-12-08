@@ -99,6 +99,7 @@ markdown_extensions:
       emoji_generator: !!python/name:material.extensions.emoji.to_svg
 
 extra:
+  generator: false
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/stdapi-ai/stdapi.ai
@@ -115,3 +116,5 @@ extra:
       link: https://github.com/stdapi-ai/stdapi.ai
     - label: AWS Marketplace
       link: https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo
+
+copyright: <a href="https://jgoutin.dev/">JGoutin-dev SARL - 994495422 R.C.S. Aix-en-Provence, France</a>
