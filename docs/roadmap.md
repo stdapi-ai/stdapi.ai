@@ -130,14 +130,14 @@ The following features may be implemented in future releases based on community 
 
 Expands multimodal embedding capabilities, adds prompt caching support, and introduces advanced routing with application inference profiles and prompt routers.
 
-### 💬 Chat Completions
+#### 💬 Chat Completions
 
 | Provider                                                                       | Endpoint/Feature                                                    | AWS Backend                                                                                                         |
 |--------------------------------------------------------------------------------|---------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------|
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | Prompt caching `/v1/chat/completions` `prompt_cache_key`            | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - prompt caching |
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/chat/completions` GPT5.1 API update  (`reasoning_effort=none`) |                                                                                                                     |
 
-### 🧠 Embeddings
+#### 🧠 Embeddings
 
 | Provider                                                                                      | Endpoint/Feature                          | AWS Backend                                                                                        |
 |-----------------------------------------------------------------------------------------------|-------------------------------------------|----------------------------------------------------------------------------------------------------|
@@ -146,7 +146,7 @@ Expands multimodal embedding capabilities, adds prompt caching support, and intr
 | ![Amazon Nova](styles/logo_amazon_nova.svg){: style="height:20px;width:20px"} **Amazon Nova** | Multimodal embeddings models              |                                                                                                    |
 | ![Twelve Labs](styles/logo_twelvelabs.svg){: style="height:20px;width:20px"} **Twelve Labs**  | Marengo V3 models                         |                                                                                                    |
 
-### 🎯 Advanced Routing
+#### 🎯 Advanced Routing
 
 | Feature                            | AWS Backend                                                                                                                         |
 |------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------|
@@ -155,7 +155,7 @@ Expands multimodal embedding capabilities, adds prompt caching support, and intr
 | Server-side ARN mapping            | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock                                  |
 | Client-side ARN passing (optional) | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock                                  |
 
-### Fixes
+#### Fixes
 
 - `/v1/chat/completions`: Fix default value passed to the converse API for tools without parameters.
 - [stdapi-ai Terraform module](https://github.com/stdapi-ai/terraform-aws-stdapi-ai): Fix error if alarms_enabled = true but sns_topic_arn undefined.
@@ -166,7 +166,7 @@ Expands multimodal embedding capabilities, adds prompt caching support, and intr
 
 The initial release establishes core OpenAI API compatibility with AWS Bedrock backing.
 
-### 💬 Chat Completions
+#### 💬 Chat Completions
 
 | Provider                                                                             | Endpoint/Feature                                   | AWS Backend                                                                                                            |
 |--------------------------------------------------------------------------------------|----------------------------------------------------|------------------------------------------------------------------------------------------------------------------------|
@@ -176,7 +176,7 @@ The initial release establishes core OpenAI API compatibility with AWS Bedrock b
 | ![Qwen](styles/logo_qwen.svg){: style="height:20px;width:20px"} **Qwen**             | `enable_thinking` + `thinking_budget` parameter    | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
 | ![Qwen](styles/logo_qwen.svg){: style="height:20px;width:20px"} **Qwen**             | `top_k` parameter                                  | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
 
-### 🧠 Embeddings
+#### 🧠 Embeddings
 
 | Provider                                                                                     | Endpoint/Feature      | AWS Backend                                                                                                           |
 |----------------------------------------------------------------------------------------------|-----------------------|-----------------------------------------------------------------------------------------------------------------------|
@@ -185,7 +185,7 @@ The initial release establishes core OpenAI API compatibility with AWS Bedrock b
 | ![Twelve Labs](styles/logo_twelvelabs.svg){: style="height:20px;width:20px"} **Twelve Labs** | Marengo V2  models    |                                                                                                                       |
 | ![Amazon](styles/logo_amazon.svg){: style="height:20px;width:20px"} **Amazon Titan**         | Embed V1 & V2  models |                                                                                                                       |
 
-### 🎙️ Speech & Audio
+#### 🎙️ Speech & Audio
 
 | Provider                                                                       | Endpoint/Feature           | AWS Backend                                                                                                                    |
 |--------------------------------------------------------------------------------|----------------------------|--------------------------------------------------------------------------------------------------------------------------------|
@@ -193,7 +193,7 @@ The initial release establishes core OpenAI API compatibility with AWS Bedrock b
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/audio/transcriptions` | ![Amazon Transcribe](styles/logo_amazon_transcribe.svg){: style="height:20px;width:20px"} Amazon Transcribe                    |
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/audio/translations`   | ![Amazon Transcribe](styles/logo_amazon_transcribe.svg){: style="height:20px;width:20px"} Amazon Transcribe + Amazon Translate |
 
-### 🎨 Image Generation
+#### 🎨 Image Generation
 
 | Provider                                                                                        | Endpoint/Feature                        | AWS Backend                                                                                                       |
 |-------------------------------------------------------------------------------------------------|-----------------------------------------|-------------------------------------------------------------------------------------------------------------------|
@@ -202,7 +202,7 @@ The initial release establishes core OpenAI API compatibility with AWS Bedrock b
 | ![Amazon](styles/logo_amazon.svg){: style="height:20px;width:20px"} **Amazon Titan**            | Image Generator V1 & V2  models         |                                                                                                                   |
 | ![Stability AI](styles/logo_stabilityai.svg){: style="height:20px;width:20px"} **Stability AI** | Image Core, Ultra et SD3.5 Large models |                                                                                                                   |
 
-### 📋 Model Discovery
+#### 📋 Model Discovery
 
 | Provider                                                                       | Endpoint/Feature | AWS Backend                                                                                                        |
 |--------------------------------------------------------------------------------|------------------|--------------------------------------------------------------------------------------------------------------------|
