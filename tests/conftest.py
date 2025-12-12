@@ -9,7 +9,7 @@ from secrets import token_hex
 from time import monotonic, sleep
 
 import pytest
-from aioboto3 import Session
+from aiobotocore.session import get_session
 from httpx import Client, ConnectError, ConnectTimeout, ReadTimeout, Timeout
 from openai import OpenAI
 from pybase64 import b64encode
@@ -417,8 +417,10 @@ async def aws_session_info() -> tuple[str, str]:
     Returns:
         tuple[str, str]: A tuple containing (region, account_id).
     """
-    async with Session().client("sts") as sts:
-        return sts.meta.region_name, (await sts.get_caller_identity())["Account"]
+    session = get_session()
+    async with session.create_client("sts") as sts:
+        region = session.get_config_variable("region")
+        return region, (await sts.get_caller_identity())["Account"]
 
 
 @pytest.fixture(scope="session")

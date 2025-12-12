@@ -30,7 +30,7 @@ from datetime import datetime
 from typing import Annotated, Literal, Self
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
-from aioboto3 import Session
+from aiobotocore.session import get_session
 from aiohttp import ClientTimeout
 from pydantic import (
     AwareDatetime,
@@ -55,6 +55,9 @@ DOWNLOAD_TIMEOUT = ClientTimeout(total=20, connect=5)
 
 #: Logging levels
 LogLevel = Literal["info", "warning", "error", "critical"]
+
+#: AWS Session
+AWS_SESSION = get_session()
 
 
 class _Settings(BaseSettings):
@@ -661,10 +664,10 @@ class _Settings(BaseSettings):
                 region for region in (v.strip() for v in value.split(",")) if region
             ]
         if not value:
-            # Let Boto3 try to detect the region if not specified
-            session = Session()
-            if session.region_name:
-                value.append(session.region_name)
+            # Let AWS SDK try to detect the region if not specified
+            region = AWS_SESSION.get_config_variable("region")
+            if region:
+                value.append(region)
             else:
                 msg = "No AWS region specified in environment or configuration."
                 raise ValueError(msg)
@@ -817,3 +820,8 @@ except ValidationError as error:
         }
     )
     sys.exit(1)
+
+#: Current detected region
+AWS_REGION: str = (
+    AWS_SESSION.get_config_variable("region") or SETTINGS.aws_bedrock_regions[0]
+)

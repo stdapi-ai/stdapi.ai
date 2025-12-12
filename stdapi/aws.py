@@ -4,22 +4,14 @@ import os
 from contextlib import AsyncExitStack
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from aioboto3 import Session
 from aiobotocore.config import AioConfig
 from aiohttp import ClientError, ClientSession, ClientTimeout
 
-from stdapi.config import SETTINGS
+from stdapi.config import AWS_REGION, AWS_SESSION, SETTINGS
 from stdapi.server import USER_AGENT
 
 if TYPE_CHECKING:
     from types import TracebackType
-
-
-#: Current detected region
-REGION: str = Session().region_name or SETTINGS.aws_bedrock_regions[0]
-
-#: Session with the default region
-SESSION = Session(region_name=SETTINGS.aws_bedrock_regions[0])
 
 #: AWS account information (populated during startup)
 AWS_ACCOUNT_INFO: dict[str, str] = {}
@@ -61,7 +53,7 @@ class AWSConnectionManager:
         """
         await self._exit_stack.__aenter__()
         for service, region in {
-            (service, region or SESSION.region_name)
+            (service, region or SETTINGS.aws_bedrock_regions[0])
             for service, region in self._client_specs
         }:
             config = (
@@ -78,9 +70,9 @@ class AWSConnectionManager:
             _CLIENTS.setdefault(service, {})[
                 region
             ] = await self._exit_stack.enter_async_context(
-                SESSION.client(
+                AWS_SESSION.create_client(  # type: ignore[call-overload]
                     service.split(".", 1)[0], region_name=region, config=config
-                )  # type: ignore[call-overload]
+                )
             )
         return self
 
@@ -121,7 +113,7 @@ def get_client(service: str, region_name: str | None = None) -> Any:  # noqa:ANN
     """
     clients = _CLIENTS[service]
     try:
-        return clients[region_name or SESSION.region_name]
+        return clients[region_name or SETTINGS.aws_bedrock_regions[0]]
     except KeyError:
         if len(clients) == 1:
             return next(iter(clients.values()))
@@ -154,7 +146,9 @@ async def initialize_aws_account_info() -> None:
         except (OSError, ClientError):
             pass
 
-    async with SESSION.client("sts", config=CONFIG, region_name=REGION) as sts_client:
+    async with AWS_SESSION.create_client(
+        "sts", config=CONFIG, region_name=AWS_REGION
+    ) as sts_client:
         AWS_ACCOUNT_INFO["account_id"] = (await sts_client.get_caller_identity())[
             "Account"
         ]

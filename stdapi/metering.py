@@ -4,7 +4,8 @@ from typing import TYPE_CHECKING
 
 from botocore.exceptions import ClientError as _ClientError
 
-from stdapi.aws import CONFIG, REGION, SESSION
+from stdapi.aws import CONFIG
+from stdapi.config import AWS_REGION, AWS_SESSION
 from stdapi.exceptions import (
     InvalidProductError,
     NotEntitledError,
@@ -41,8 +42,8 @@ async def register() -> "RegisterUsageResultTypeDef | None":
     if PRODUCT_CODE:
         product_public_key_version = 1
         product_url = ""
-        async with SESSION.client(
-            "meteringmarketplace", config=CONFIG, region_name=REGION
+        async with AWS_SESSION.create_client(
+            "meteringmarketplace", config=CONFIG, region_name=AWS_REGION
         ) as metering:
             try:
                 return await metering.register_usage(

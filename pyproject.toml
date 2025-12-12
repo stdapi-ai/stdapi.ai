@@ -6,8 +6,7 @@ authors = [{ name = "J.Goutin", email = "contact@stdapi.ai" }]
 requires-python = ">=3.13"
 dependencies = [
     "fastapi",
-    "aioboto3>=15.1.0",
-    "aiobotocore>=2.24.0",
+    "aiobotocore>=3",
     "pydantic>=2",
     "pydantic-settings>=2",
     "sse-starlette",
@@ -50,7 +49,7 @@ lint = [
     "stdapi[opentelemetry, uvicorn]",
     "mypy",
     "ruff",
-    "types-aioboto3[bedrock, bedrock-runtime, polly, comprehend, meteringmarketplace, s3, sts, transcribe, translate]",
+    "types-aiobotocore[bedrock, bedrock-runtime, polly, comprehend, meteringmarketplace, s3, sts, transcribe, translate]",
     "types-PyYAML",
 ]
 docs = [

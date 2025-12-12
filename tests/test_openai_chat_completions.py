@@ -11,7 +11,7 @@ from collections.abc import Iterable
 from secrets import token_hex
 
 import pytest
-from aioboto3 import Session
+from aiobotocore.session import get_session
 from openai import BadRequestError, NotFoundError, OpenAI
 from pybase64 import b64encode
 
@@ -2226,7 +2226,7 @@ class TestChatCompletions:
             pytest.skip("Application inference profiles are AWS Bedrock specific")
 
         inference_profile_arn = None
-        async with Session().client("bedrock") as bedrock:
+        async with get_session().create_client("bedrock") as bedrock:
             try:
                 # Create the application inference profile
                 inference_profile_arn = (

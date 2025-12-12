@@ -10,8 +10,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import SecretBytes, SecretStr
 from pydantic_core import from_json
 
-from stdapi.aws import CONFIG, REGION, SESSION
-from stdapi.config import SETTINGS
+from stdapi.aws import CONFIG
+from stdapi.config import AWS_REGION, AWS_SESSION, SETTINGS
 from stdapi.monitoring import log_error_details
 
 #: HTTPBearer security scheme for API key authentication
@@ -89,8 +89,8 @@ class AuthenticationHandler:
             ClientError: If there's an error retrieving the API key from SSM.
             ValueError: If the SSM parameter is not found.
         """
-        async with SESSION.client(
-            "ssm", config=CONFIG, region_name=REGION
+        async with AWS_SESSION.create_client(
+            "ssm", config=CONFIG, region_name=AWS_REGION
         ) as ssm_client:
             try:
                 return SecretStr(
@@ -117,8 +117,8 @@ class AuthenticationHandler:
             ClientError: If there's an error retrieving the API key from Secrets Manager.
             ValueError: If the secret or key is not found.
         """
-        async with SESSION.client(
-            "secretsmanager", config=CONFIG, region_name=REGION
+        async with AWS_SESSION.create_client(
+            "secretsmanager", config=CONFIG, region_name=AWS_REGION
         ) as secrets_client:
             try:
                 secret_data = from_json(
