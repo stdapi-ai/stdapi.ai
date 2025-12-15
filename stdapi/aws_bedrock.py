@@ -132,6 +132,7 @@ _REASONING_EFFORT_BUDGET_FACTOR: dict[ReasoningEffort, float] = {
     "low": 0.5,
     "medium": 0.75,
     "high": 1.0,
+    "xhigh": 1.0,
 }
 
 #: Prompt caching type

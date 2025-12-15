@@ -24,7 +24,7 @@ from stdapi.types.openai import (
 )
 
 #: Reasoning effort selector for reasoning models.
-ReasoningEffort = Literal["none", "minimal", "low", "medium", "high"]
+ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
 
 #: Finish reasons compatible with OpenAI.
 FinishReason = Literal[
@@ -1225,11 +1225,11 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
     reasoning_effort: ReasoningEffort | None = Field(
         default=None,
         description="Constrains effort on reasoning for reasoning models.\n"
-        "Currently supported values are `none`, `minimal`, `low`, `medium`, and `high`.\n"
+        "Currently supported values are `none`, `minimal`, `low`, `medium`, `high` and `xhigh`.\n"
         "Reducing reasoning effort can result in faster responses and fewer tokens used on reasoning in a response.\n"
         "Enable reasoning on opt-in reasoning models. "
         "Effort is calculated based on the `max_completion_tokens` value as follow: "
-        "minimal = 0.25 x max tokens, low = 0.50 x max tokens, medium = 0.75 x max tokens, high = max tokens",
+        "minimal = 0.25 x max tokens, low = 0.50 x max tokens, medium = 0.75 x max tokens, high = xhigh = max tokens",
     )
     response_format: ResponseFormat | None = Field(
         default=None,
