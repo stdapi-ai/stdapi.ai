@@ -101,6 +101,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
       - name: Create GitHub Release
         run: |
           PRERELEASE_FLAG=""

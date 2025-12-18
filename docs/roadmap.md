@@ -126,6 +126,38 @@ The following features may be implemented in future releases based on community 
 
 ## ✨ Release History
 
+### v1.2.0 – Service Tiers, System Tools & Performance Enhancements
+
+Introduces service tiers and latency headers for all Bedrock routes, Bedrock-specific system tools (Nova grounding), GPT5.2 API compatibility, configurable guardrail overrides, and Python 3.14 optimization.
+
+#### 💬 Chat Completions
+
+| Provider                                                                       | Endpoint/Feature                                                      | AWS Backend                                                                                                        |
+|--------------------------------------------------------------------------------|-----------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------|
+| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/chat/completions` `service_tier` parameter                       | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - service tiers |
+| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/chat/completions` Bedrock-specific system tools (Nova grounding) | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - system tools  |
+| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/chat/completions` GPT5.2 API update (`reasoning_effort=xhigh`)   |                                                                                                                    |
+
+#### 🛡️ Content Safety & Moderation
+
+| Feature                                         | AWS Backend                                                                                                   |
+|-------------------------------------------------|---------------------------------------------------------------------------------------------------------------|
+| Configuration flag for guardrail override allow | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock Guardrails |
+
+#### Platform Features
+
+| Feature                                                | AWS Backend / Description                                                                                          |
+|--------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------|
+| Service tiers and latency headers (all Bedrock routes) | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - service tiers |
+| Python 3.14 support                                    | Upgraded to Python 3.14 with performance optimization                                                              |
+| Dependency update                                      | Direct aiobotocore usage (replaced aioboto3)                                                                       |
+
+#### Fixes
+
+- Fix warnings for duplicated FastAPI routes (`/docs` and `/openapi.json`).
+
+---
+
 ### v1.1.0 – Embeddings Enhancement, Prompt Caching & Advanced Routing
 
 Expands multimodal embedding capabilities, adds prompt caching support, and introduces advanced routing with application inference profiles and prompt routers.
