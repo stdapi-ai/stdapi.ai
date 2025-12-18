@@ -214,11 +214,15 @@ def set_guardrail_configuration(headers: Headers) -> None:
     - X-Amzn-Bedrock-GuardrailVersion
     - X-Amzn-Bedrock-Trace
 
+    Note: Request-level headers are allowed when aws_bedrock_allow_guardrail_override is True.
+    This setting is automatically enabled when no global guardrail configuration exists.
+
     Args:
         headers: The headers of the request.
     """
     if (
-        _GUARDTRAIL_IDENTIFIER_HEADER in headers
+        SETTINGS.aws_bedrock_allow_guardrail_override
+        and _GUARDTRAIL_IDENTIFIER_HEADER in headers
         and _GUARDTRAIL_VERSION_HEADER in headers
     ):
         config: GuardrailStreamConfigurationTypeDef = {

@@ -147,19 +147,20 @@ This section provides a quick reference of all available configuration options. 
 
 ### :material-shield-check: Bedrock Advanced
 
-| Variable                                                                        | Default | Description                                                                                       |
-|---------------------------------------------------------------------------------|---------|---------------------------------------------------------------------------------------------------|
-| [`AWS_BEDROCK_CROSS_REGION_INFERENCE`](#cross-region-inference)                                         | `true`  | Allow automatic model routing to other configured regions                                         |
-| [`AWS_BEDROCK_CROSS_REGION_INFERENCE_GLOBAL`](#cross-region-global)                                     | `true`  | Allow global cross-region inference routing to any region worldwide (disable for GDPR compliance) |
-| [`AWS_BEDROCK_LEGACY`](#bedrock-legacy)                                                                 | `true`  | Allow usage of deprecated/legacy Bedrock models                                                   |
-| [`AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE`](#bedrock-marketplace-auto-subscribe)                         | `true`  | Allow automatic subscription to new models in AWS Marketplace                                     |
-| [`AWS_BEDROCK_ALLOW_CROSS_REGION_INFERENCE_PROFILE_ARN`](#bedrock-allow-cross-region-profile-arn)       | `false` | Allow users to pass cross-region inference profile ARNs directly as model IDs                     |
-| [`AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN`](#bedrock-allow-application-profile-arn)         | `false` | Allow users to pass application inference profile ARNs directly as model IDs                      |
-| [`AWS_BEDROCK_ALLOW_PROMPT_ROUTER_ARN`](#bedrock-allow-prompt-router-arn)                               | `false` | Allow users to pass prompt router ARNs directly as model IDs                                      |
-| [`AWS_BEDROCK_MODEL_ARN_MAPPING`](#bedrock-model-arn-mapping)                                           | `{}`    | Map model IDs to custom inference profile or prompt router ARNs (server-controlled routing)       |
-| [`AWS_BEDROCK_GUARDRAIL_IDENTIFIER`](#aws-bedrock-guardrail-identifier)                                 | None    | Bedrock Guardrails ID for content filtering and safety controls                                   |
-| [`AWS_BEDROCK_GUARDRAIL_VERSION`](#aws-bedrock-guardrail-version)                                       | None    | Bedrock Guardrails version number (required with identifier)                                      |
-| [`AWS_BEDROCK_GUARDRAIL_TRACE`](#aws-bedrock-guardrail-trace)                                           | None    | Guardrails trace level: `disabled`, `enabled`, or `enabled_full`                                  |
+| Variable                                                                                          | Default | Description                                                                                        |
+|---------------------------------------------------------------------------------------------------|---------|----------------------------------------------------------------------------------------------------|
+| [`AWS_BEDROCK_CROSS_REGION_INFERENCE`](#cross-region-inference)                                   | `true`  | Allow automatic model routing to other configured regions                                          |
+| [`AWS_BEDROCK_CROSS_REGION_INFERENCE_GLOBAL`](#cross-region-global)                               | `true`  | Allow global cross-region inference routing to any region worldwide (disable for GDPR compliance)  |
+| [`AWS_BEDROCK_LEGACY`](#bedrock-legacy)                                                           | `true`  | Allow usage of deprecated/legacy Bedrock models                                                    |
+| [`AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE`](#bedrock-marketplace-auto-subscribe)                   | `true`  | Allow automatic subscription to new models in AWS Marketplace                                      |
+| [`AWS_BEDROCK_ALLOW_CROSS_REGION_INFERENCE_PROFILE_ARN`](#bedrock-allow-cross-region-profile-arn) | `false` | Allow users to pass cross-region inference profile ARNs directly as model IDs                      |
+| [`AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN`](#bedrock-allow-application-profile-arn)   | `false` | Allow users to pass application inference profile ARNs directly as model IDs                       |
+| [`AWS_BEDROCK_ALLOW_PROMPT_ROUTER_ARN`](#bedrock-allow-prompt-router-arn)                         | `false` | Allow users to pass prompt router ARNs directly as model IDs                                       |
+| [`AWS_BEDROCK_MODEL_ARN_MAPPING`](#bedrock-model-arn-mapping)                                     | `{}`    | Map model IDs to custom inference profile or prompt router ARNs (server-controlled routing)        |
+| [`AWS_BEDROCK_GUARDRAIL_IDENTIFIER`](#aws-bedrock-guardrail-identifier)                           | None    | Bedrock Guardrails ID for content filtering and safety controls                                    |
+| [`AWS_BEDROCK_GUARDRAIL_VERSION`](#aws-bedrock-guardrail-version)                                 | None    | Bedrock Guardrails version number (required with identifier)                                       |
+| [`AWS_BEDROCK_GUARDRAIL_TRACE`](#aws-bedrock-guardrail-trace)                                     | None    | Guardrails trace level: `disabled`, `enabled`, or `enabled_full`                                   |
+| [`AWS_BEDROCK_ALLOW_GUARDRAIL_OVERRIDE`](#aws-bedrock-allow-guardrail-override)                   | `false` | Allow users to override global guardrail configuration via request headers (security: default off) |
 
 ### :material-lock: Authentication
 
@@ -2529,16 +2530,43 @@ export AWS_BEDROCK_GUARDRAIL_VERSION=1
 export AWS_BEDROCK_GUARDRAIL_TRACE=enabled
 ```
 
+#### `AWS_BEDROCK_ALLOW_GUARDRAIL_OVERRIDE` { #aws-bedrock-allow-guardrail-override }
+
+:octicons-package-24: **Purpose**
+:   Control whether users can override the global guardrail configuration at request level via HTTP headers
+
+:octicons-gear-24: **Default**
+:   `false` (disabled for security)
+
+:octicons-shield-24: **Security Consideration**
+:   When set to `false` (default) and a global guardrail is configured, only the global configuration is enforced, preventing users from bypassing or modifying safety controls. Set to `true` if you need to allow per-request guardrail customization to override the global configuration.
+
+:octicons-info-24: **Auto-Enable Behavior**
+:   If no global guardrail configuration is set (both `AWS_BEDROCK_GUARDRAIL_IDENTIFIER` and `AWS_BEDROCK_GUARDRAIL_VERSION` are unset), this setting is automatically set to `true` at startup, allowing per-request guardrails when no global policy is enforced.
+
+```bash
+export AWS_BEDROCK_ALLOW_GUARDRAIL_OVERRIDE=true
+```
+
 !!! example "Complete Guardrail Configuration"
     ```bash
     export AWS_BEDROCK_GUARDRAIL_IDENTIFIER=abc123def456
     export AWS_BEDROCK_GUARDRAIL_VERSION=1
     export AWS_BEDROCK_GUARDRAIL_TRACE=enabled
+    export AWS_BEDROCK_ALLOW_GUARDRAIL_OVERRIDE=false  # Default: prevent overrides
     ```
 
 ### Per-Request Configuration
 
-Override global guardrail settings for individual requests using HTTP headers:
+!!! info "Header Usage Behavior"
+    Request headers can be used when [`AWS_BEDROCK_ALLOW_GUARDRAIL_OVERRIDE`](#aws-bedrock-allow-guardrail-override) is `true`:
+
+    - **No global guardrail configured**: Setting is automatically `true` at startup, enabling per-request guardrails
+    - **Global guardrail configured**: Setting defaults to `false` for security; set to `true` to allow overrides
+
+    This prevents users from bypassing configured safety controls while still allowing flexibility when no global policy exists.
+
+Use HTTP headers to specify guardrail settings per request:
 
 | Header                               | Purpose           | Valid Values                          |
 |--------------------------------------|-------------------|---------------------------------------|

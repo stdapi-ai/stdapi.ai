@@ -298,6 +298,20 @@ class _Settings(BaseSettings):
         ),
     )
 
+    aws_bedrock_allow_guardrail_override: bool = Field(
+        default=False,
+        description=(
+            "Allow users to override the global guardrail configuration at request level using headers. "
+            "When enabled, users can specify per-request guardrail settings via:\n"
+            "- X-Amzn-Bedrock-GuardrailIdentifier\n"
+            "- X-Amzn-Bedrock-GuardrailVersion\n"
+            "- X-Amzn-Bedrock-Trace\n\n"
+            "When disabled and a global guardrail is configured, request headers are ignored for security. "
+            "Note: If no global guardrail is configured, request headers are always allowed regardless of this setting. "
+            "Defaults to False for security to prevent users from bypassing configured safety controls."
+        ),
+    )
+
     aws_transcribe_region: str | None = Field(
         default=None, description="AWS region for Transcribe speech-to-text service"
     )
@@ -774,6 +788,13 @@ class _Settings(BaseSettings):
                 "are required to configure Amazon Bedrock Guardrails."
             )
             raise ValueError(msg)
+
+        if (
+            not self.aws_bedrock_guardrail_identifier
+            and not self.aws_bedrock_guardrail_version
+        ):
+            self.aws_bedrock_allow_guardrail_override = True
+
         if not self.aws_transcribe_s3_bucket:
             self.aws_transcribe_s3_bucket = self.aws_s3_bucket
         if (
