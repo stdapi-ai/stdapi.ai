@@ -403,6 +403,3 @@ async def handle_botocore_client_error(_: Request, exc: ClientError) -> JSONResp
             }
         },
     )
-
-
-discover_routers(app)
