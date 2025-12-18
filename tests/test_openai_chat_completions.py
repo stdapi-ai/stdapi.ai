@@ -7,13 +7,16 @@ specification, ensuring compatibility with the official OpenAI API behavior.
 import base64
 import json as _json
 from asyncio import sleep
-from collections.abc import Iterable
 from secrets import token_hex
+from typing import TYPE_CHECKING
 
 import pytest
 from aiobotocore.session import get_session
 from openai import BadRequestError, NotFoundError, OpenAI
 from pybase64 import b64encode
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 
 @pytest.fixture(scope="session")

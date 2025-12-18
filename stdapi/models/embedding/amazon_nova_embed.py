@@ -6,8 +6,6 @@
 from asyncio import create_task, gather
 from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
 
-from fastapi import BackgroundTasks
-from pydantic import JsonValue
 from pydantic_core import from_json
 
 from stdapi.aws import get_client
@@ -20,6 +18,8 @@ from stdapi.openai_exceptions import OpenaiError
 from stdapi.tokenizer import estimate_token_count
 
 if TYPE_CHECKING:
+    from fastapi import BackgroundTasks
+    from pydantic import JsonValue
     from types_aiobotocore_s3.client import S3Client
 
 _TaskType = Literal["SINGLE_EMBEDDING", "SEGMENTED_EMBEDDING"]
@@ -568,7 +568,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
 
     @staticmethod
     async def _fetch_and_parse_embedding_jsonl(
-        s3_client: "S3Client", bucket: str, key: str
+        s3_client: S3Client, bucket: str, key: str
     ) -> tuple[_SegmentedEmbeddingData, ...]:
         """Fetch and parse a single embedding JSONL file from S3.
 

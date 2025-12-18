@@ -1,7 +1,11 @@
 """Basic tests for Amazon Nova multimodal embedding models via OpenAI-compatible API."""
 
+from typing import TYPE_CHECKING
+
 import pytest
-from openai import OpenAI
+
+if TYPE_CHECKING:
+    from openai import OpenAI
 
 NOVA_V1 = "amazon.nova-2-multimodal-embeddings-v1:0"
 

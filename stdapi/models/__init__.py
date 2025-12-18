@@ -1,7 +1,6 @@
 """Models."""
 
 from asyncio import Lock, gather, sleep
-from collections.abc import Iterable, Mapping, Sequence
 from contextlib import suppress
 from datetime import timedelta
 from functools import cached_property
@@ -38,6 +37,8 @@ from stdapi.utils import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable, Mapping, Sequence
+
     from types_aiobotocore_bedrock.client import BedrockClient
     from types_aiobotocore_bedrock.type_defs import (
         InferenceProfileModelTypeDef,
@@ -74,13 +75,13 @@ if TYPE_CHECKING:
 
 
 #: Models details
-_MODELS: dict[str, "ModelDetails"] = {}
+_MODELS: dict[str, ModelDetails] = {}
 
 #: Non Bedrock models details
-EXTRA_MODELS: dict[str, "ModelDetails"] = {}
+EXTRA_MODELS: dict[str, ModelDetails] = {}
 
 #: All models
-_ALL_MODELS: dict[str, "ModelDetails"] = {}
+_ALL_MODELS: dict[str, ModelDetails] = {}
 
 #: Models by output modality
 _MODELS_OUTPUT_MODALITY: dict[str, set[str]] = {}
@@ -101,7 +102,7 @@ EXTRA_MODELS_INPUT_MODALITY: dict[str, set[str]] = {}
 _ALL_MODELS_INPUT_MODALITY: dict[str, set[str]] = {}
 
 #: Model cache configuration
-_CACHE: "_ModelCache" = {
+_CACHE: _ModelCache = {
     "update_next": None,
     "update_lock": Lock(),
     "update_interval": timedelta(seconds=SETTINGS.model_cache_seconds),
@@ -113,12 +114,12 @@ _CACHE: "_ModelCache" = {
 _INFERENCE_TYPES = {"INFERENCE_PROFILE", "ON_DEMAND"}
 
 #: Cached cache point for prompt caching
-_CACHE_POINT: 'dict[Literal["cachePoint"], CachePointBlockTypeDef]' = {
+_CACHE_POINT: dict[Literal["cachePoint"], CachePointBlockTypeDef] = {
     "cachePoint": {"type": "default"}
 }
 
 #: Cached application inference profiles & prompt routers
-_USER_PROFILES: dict[str, tuple["ModelDetails", AwareDatetime]] = {}
+_USER_PROFILES: dict[str, tuple[ModelDetails, AwareDatetime]] = {}
 
 
 class ModelDetails(BaseModel):
@@ -317,7 +318,7 @@ def update_unified_models_collections() -> None:
         )
 
 
-async def _get_provisioned_models(bedrock_client: "BedrockClient") -> set[str]:
+async def _get_provisioned_models(bedrock_client: BedrockClient) -> set[str]:
     """Retrieve provisioned models from AWS Bedrock.
 
     Args:
@@ -350,7 +351,7 @@ async def _get_provisioned_models(bedrock_client: "BedrockClient") -> set[str]:
     return models_ids
 
 
-async def _get_inference_profiles(bedrock_client: "BedrockClient") -> dict[str, str]:
+async def _get_inference_profiles(bedrock_client: BedrockClient) -> dict[str, str]:
     """Retrieve cross region inference profiles from AWS Bedrock.
 
     Args:
@@ -536,9 +537,9 @@ def _apply_user_profiles(all_models: dict[str, ModelDetails]) -> dict[str, str]:
 
 
 async def _filter_model(
-    bedrock_client: "BedrockClient",
+    bedrock_client: BedrockClient,
     model: ModelDetails,
-    models: dict[str, "ModelDetails"],
+    models: dict[str, ModelDetails],
     unavailable_models: dict[str, dict[str, list[str]]],
 ) -> None:
     """Filter and validate a Bedrock model for availability and authorization.
@@ -651,7 +652,7 @@ def get_model(
 
 async def _prepare_bedrock_request(
     model_id: str, body: Mapping[str, Any], *, inference_profile: bool = True
-) -> "tuple[BedrockRuntimeClient, InvokeModelRequestTypeDef]":
+) -> tuple[BedrockRuntimeClient, InvokeModelRequestTypeDef]:
     """Prepare a Bedrock request with common setup logic.
 
     Args:
@@ -716,16 +717,16 @@ async def invoke_json(
 
 async def prepare_converse_request(
     model: ModelDetails,
-    bedrock_messages: list["MessageTypeDef"],
-    inference_cfg: "InferenceConfigurationTypeDef",
-    system_blocks: list["SystemContentBlockTypeDef"],
-    tool_config: "ToolConfigurationTypeDef | None",
+    bedrock_messages: list[MessageTypeDef],
+    inference_cfg: InferenceConfigurationTypeDef,
+    system_blocks: list[SystemContentBlockTypeDef],
+    tool_config: ToolConfigurationTypeDef | None,
     additional_request_fields: Mapping[str, Any],
-    service_tier: "ServiceTierTypeType| None",
+    service_tier: ServiceTierTypeType | None,
     prompt_caching: set[PromptCaching],
     *,
     inference_profile: bool = True,
-) -> "tuple[BedrockRuntimeClient, ConverseRequestBaseTypeDef]":
+) -> tuple[BedrockRuntimeClient, ConverseRequestBaseTypeDef]:
     """Prepare a Bedrock Converse request payload and client.
 
     Args:
@@ -770,9 +771,9 @@ async def prepare_converse_request(
 
 def _enable_converse_prompt_caching(
     model: ModelDetails,
-    system_blocks: "list[SystemContentBlockTypeDef]",
-    tool_config: "ToolConfigurationTypeDef | None",
-    bedrock_messages: "list[MessageTypeDef]",
+    system_blocks: list[SystemContentBlockTypeDef],
+    tool_config: ToolConfigurationTypeDef | None,
+    bedrock_messages: list[MessageTypeDef],
     prompt_caching: set[PromptCaching],
 ) -> None:
     """Enables prompt caching for specified components including system blocks, tools, and messages.
@@ -961,7 +962,7 @@ async def _validate_model_from_arn(arn: str) -> ModelDetails | None:
 
 async def _get_prompt_router_models(
     arn: str,
-) -> "tuple[Sequence[PromptRouterTargetModelTypeDef], str] | None":
+) -> tuple[Sequence[PromptRouterTargetModelTypeDef], str] | None:
     """Retrieves a list of models associated with a given Prompt Router ARN from AWS Bedrock.
 
     Args:
@@ -985,7 +986,7 @@ async def _get_prompt_router_models(
 
 async def _get_application_inference_profile_models(
     arn: str,
-) -> "tuple[Sequence[InferenceProfileModelTypeDef], str] | None":
+) -> tuple[Sequence[InferenceProfileModelTypeDef], str] | None:
     """Fetches inference profile models associated with the specified ARN.
 
     Args:
@@ -1013,7 +1014,7 @@ async def _get_application_inference_profile_models(
 
 
 async def _wait_for_async_invocation_completion(
-    bedrock_client: "BedrockRuntimeClient", invocation_arn: str
+    bedrock_client: BedrockRuntimeClient, invocation_arn: str
 ) -> str:
     """Wait for async invocation to complete.
 
@@ -1108,7 +1109,7 @@ async def invoke_json_async(
             )
 
 
-def get_model_s3_bucket(model: ModelDetails) -> "tuple[str, S3Client]":
+def get_model_s3_bucket(model: ModelDetails) -> tuple[str, S3Client]:
     """Retrieve the S3 bucket and S3 client for a given model's region.
 
     This function determines the appropriate S3 bucket and initializes the S3 client
@@ -1151,7 +1152,7 @@ def get_model_s3_bucket(model: ModelDetails) -> "tuple[str, S3Client]":
 
 
 async def put_to_s3(
-    content: "BlobTypeDef | str", model: ModelDetails, content_type: str = ""
+    content: BlobTypeDef | str, model: ModelDetails, content_type: str = ""
 ) -> tuple[str, str]:
     """Uploads content to an S3 bucket under a temporary key.
 

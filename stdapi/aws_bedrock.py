@@ -1,7 +1,6 @@
 """Common AWS Bedrock utilities."""
 
 from binascii import Error as BinasciiError
-from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from re import IGNORECASE
@@ -14,19 +13,17 @@ from botocore.exceptions import ClientError
 from fastapi import HTTPException
 from magic import from_buffer
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, JsonValue
-from starlette.datastructures import Headers
 
 from stdapi.config import DOWNLOAD_TIMEOUT, SETTINGS
 from stdapi.openai_exceptions import OpenaiError
 from stdapi.security import validate_url_ssrf
 from stdapi.server import HTTP_CLIENT_HEADERS
-from stdapi.types import BaseModelRequestWithExtra
-from stdapi.types.openai_chat_completions import ReasoningEffort
 from stdapi.utils import b64decode, validation_error_handler
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Generator, Mapping, Sequence
 
+    from starlette.datastructures import Headers
     from types_aiobotocore_bedrock_runtime.literals import (
         DocumentFormatType,
         GuardrailTraceType,
@@ -47,6 +44,9 @@ if TYPE_CHECKING:
         SystemContentBlockTypeDef,
         ToolConfigurationTypeDef,
     )
+
+    from stdapi.types import BaseModelRequestWithExtra
+    from stdapi.types.openai_chat_completions import ReasoningEffort
 
     class ConverseRequestBaseTypeDef(TypedDict):
         """Converse request base type definition.
@@ -70,7 +70,7 @@ if TYPE_CHECKING:
 
 
 #: Bedrock documents types with the matching MIME type
-MIME_TYPES_TO_DOCUMENT_TYPE: "dict[str, DocumentFormatType]" = {
+MIME_TYPES_TO_DOCUMENT_TYPE: dict[str, DocumentFormatType] = {
     "csv": "csv",
     "html": "html",
     "pdf": "pdf",
@@ -83,7 +83,7 @@ MIME_TYPES_TO_DOCUMENT_TYPE: "dict[str, DocumentFormatType]" = {
 }
 
 #: Bedrock videos types with the matching MIME type
-MIME_TYPES_TO_VIDEO_TYPE: "dict[str, VideoFormatType]" = {
+MIME_TYPES_TO_VIDEO_TYPE: dict[str, VideoFormatType] = {
     # Only list values that differ
     "x-matroska": "mkv",
     "quicktime": "mov",
@@ -111,7 +111,7 @@ _BEDROCK_MODEL_ERROR_CODES = {
 }
 
 #: Guardtrail configuration for the request.
-GUARDTRAIL_CONFIG_VAR: ContextVar["GuardrailStreamConfigurationTypeDef"] = ContextVar(
+GUARDTRAIL_CONFIG_VAR: ContextVar[GuardrailStreamConfigurationTypeDef] = ContextVar(
     "guardtrail_configuration"
 )
 _GUARDTRAIL_IDENTIFIER_HEADER = "X-Amzn-Bedrock-GuardrailIdentifier"
@@ -121,7 +121,7 @@ _GUARDTRAIL_TRACE_VALUES = {"disabled", "enabled", "enabled_full"}
 
 #: Performance configuration for the request
 PERFORMANCE_CONFIG_VAR: ContextVar[
-    "tuple[PerformanceConfigLatencyType | None, ServiceTierTypeType | None]"
+    tuple[PerformanceConfigLatencyType | None, ServiceTierTypeType | None]
 ] = ContextVar("performance_configuration")
 _PERFORMANCE_CONFIG_LATENCY_HEADER = "X-Amzn-Bedrock-PerformanceConfig-Latency"
 _SERVICE_TIER_HEADER = "X-Amzn-Bedrock-Service-Tier"
@@ -279,7 +279,7 @@ def set_inference_configuration(
     max_tokens: int | None = None,
     stop_sequences: list[str] | str | None = None,
     **extra_params: JsonValue,
-) -> "InferenceConfigurationTypeDef":
+) -> InferenceConfigurationTypeDef:
     """Configures the inference settings.
 
     Args:
@@ -442,7 +442,7 @@ def handle_bedrock_client_error() -> Generator[None]:
         raise  # pragma: no cover
 
 
-def image_block_from_bytes(data: bytes, mime: str = "") -> "ContentBlockTypeDef":
+def image_block_from_bytes(data: bytes, mime: str = "") -> ContentBlockTypeDef:
     """Build a Bedrock image content block from raw bytes.
 
     Infers the image format using the provided MIME type when available, otherwise
@@ -465,7 +465,7 @@ def image_block_from_bytes(data: bytes, mime: str = "") -> "ContentBlockTypeDef"
     return {"image": image_block}
 
 
-async def image_block_from_s3_url(url: str) -> "ContentBlockTypeDef | None":
+async def image_block_from_s3_url(url: str) -> ContentBlockTypeDef | None:
     """Convert an s3:// URL to a Bedrock image content block using s3Location.
 
     Args:
@@ -490,7 +490,7 @@ async def image_block_from_s3_url(url: str) -> "ContentBlockTypeDef | None":
     raise HTTPException(status_code=400, detail=f"Invalid image data URL: {url}")
 
 
-async def image_block_from_http_url(url: str) -> "ContentBlockTypeDef | None":
+async def image_block_from_http_url(url: str) -> ContentBlockTypeDef | None:
     """Download an image over HTTP(S) and return a Bedrock content block.
 
     Args:
@@ -525,7 +525,7 @@ async def image_block_from_http_url(url: str) -> "ContentBlockTypeDef | None":
     return None
 
 
-async def image_block_from_data_url(url: str) -> "ContentBlockTypeDef | None":
+async def image_block_from_data_url(url: str) -> ContentBlockTypeDef | None:
     """Convert a data: URL to a Bedrock image content block.
 
     Supports common image mime types and base64 payloads only. Returns None when

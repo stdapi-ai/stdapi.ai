@@ -3,7 +3,7 @@ name = "stdapi"
 version = "1.0.0"
 description = "Standard API for AI on AWS"
 authors = [{ name = "J.Goutin", email = "contact@stdapi.ai" }]
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 dependencies = [
     "fastapi",
     "aiobotocore>=3",

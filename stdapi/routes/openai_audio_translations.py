@@ -277,7 +277,7 @@ async def translate_subtitle_content(
 
 
 def format_translation_response(
-    transcript_data: "TranscriptionJobData",
+    transcript_data: TranscriptionJobData,
     text: str,
     response_format: AudioResponseFormat,
 ) -> str | TranslationCreateResponse:

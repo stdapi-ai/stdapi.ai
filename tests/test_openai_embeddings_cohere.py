@@ -1,7 +1,11 @@
 """Basic tests for Cohere embedding models via OpenAI-compatible embeddings API."""
 
+from typing import TYPE_CHECKING
+
 import pytest
-from openai import OpenAI
+
+if TYPE_CHECKING:
+    from openai import OpenAI
 
 COHERE_V3 = "cohere.embed-english-v3"
 COHERE_V4 = "cohere.embed-v4:0"

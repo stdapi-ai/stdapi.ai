@@ -18,8 +18,10 @@ Note:
 
 from importlib import import_module
 from pkgutil import iter_modules
+from typing import TYPE_CHECKING
 
-from fastapi import FastAPI
+if TYPE_CHECKING:
+    from fastapi import FastAPI
 
 
 def discover_routers(app: FastAPI) -> None:

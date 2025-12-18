@@ -23,7 +23,7 @@ router = APIRouter(
 )
 
 #: /v1/models route response cache
-_ALL_MODELS: list["Model"] = []
+_ALL_MODELS: list[Model] = []
 _ALL_MODELS_LOCK = Lock()
 
 #: Default model timestamp

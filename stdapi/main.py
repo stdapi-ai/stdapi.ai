@@ -5,10 +5,10 @@ and AWS service integrations for providing OpenAI-compatible endpoints.
 """
 
 from asyncio import gather
-from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from time import time_ns
 from traceback import format_exception
+from typing import TYPE_CHECKING
 
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import FastAPI, HTTPException, Request
@@ -40,6 +40,9 @@ from stdapi.routes.openai_audio_speech import initialize_polly_models
 from stdapi.routes.openai_audio_transcriptions import initialize_transcribe_models
 from stdapi.server import SERVER_NAME, SERVER_VERSION
 from stdapi.utils import hide_security_details
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, Awaitable, Callable
 
 
 @asynccontextmanager

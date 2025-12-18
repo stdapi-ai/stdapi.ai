@@ -14,16 +14,19 @@ Design:
 
 from abc import ABC, abstractmethod
 from asyncio import Lock, as_completed, gather
-from collections.abc import AsyncGenerator, Awaitable, Iterable
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from pydantic import BaseModel, JsonValue
 
 from stdapi.aws_s3 import put_object_and_get_url
 from stdapi.models import ModelBase, get_model, load_model_plugins
 from stdapi.monitoring import REQUEST_ID
-from stdapi.types.openai_images import ImageOutputFormats, ImageOutputQuality
 from stdapi.utils import b64decode, convert_base64_image, get_base64_image_size
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, Awaitable, Iterable
+
+    from stdapi.types.openai_images import ImageOutputFormats, ImageOutputQuality
 
 
 class ImageGenerationResponse(BaseModel):
@@ -66,7 +69,7 @@ class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"](ABC):
 
     def __init__(
         self,
-        model: "ImageModelT",
+        model: ImageModelT,
         prompt: str,
         count: int,
         width: int,

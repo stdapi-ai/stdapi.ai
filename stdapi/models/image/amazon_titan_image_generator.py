@@ -4,9 +4,8 @@
 - amazon.titan-image-generator-v2:0
 """
 
-from collections.abc import Awaitable, Iterable
 from secrets import randbelow
-from typing import Literal, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
 
 from fastapi import HTTPException
 
@@ -15,7 +14,11 @@ from stdapi.models.image import (
     ImageGenerationResponse,
     ImageModelBase,
 )
-from stdapi.types.openai_images import ImageOutputQuality
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Iterable
+
+    from stdapi.types.openai_images import ImageOutputQuality
 
 AmzQuality = Literal["standard", "premium"]
 

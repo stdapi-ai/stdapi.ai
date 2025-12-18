@@ -1,7 +1,6 @@
 """Media-related utilities."""
 
 from asyncio import CancelledError, create_subprocess_exec, create_task
-from collections.abc import AsyncGenerator
 from contextlib import suppress
 from subprocess import PIPE
 from typing import TYPE_CHECKING
@@ -11,6 +10,7 @@ from stdapi.openai_exceptions import OpenaiError
 
 if TYPE_CHECKING:
     from asyncio.streams import StreamReader, StreamWriter
+    from collections.abc import AsyncGenerator
 
 #: Format aliases for ffmpeg (only when output format differs from requested format)
 _FFMPEG_FORMAT_ALIASES = {"aac": "adts", "pcm": "s16le", "vorbis": "ogg"}
@@ -20,7 +20,7 @@ _CHUNK_SIZE = 65536
 
 
 async def _process_input_stream(
-    stream: AsyncGenerator[bytes], stdin: "StreamWriter | None"
+    stream: AsyncGenerator[bytes], stdin: StreamWriter | None
 ) -> None:
     """Process input stream and feed to process.
 
@@ -136,7 +136,7 @@ async def encode_audio_stream(
             await process.wait()
 
 
-async def stream_body(stream: "StreamReader") -> AsyncGenerator[bytes]:
+async def stream_body(stream: StreamReader) -> AsyncGenerator[bytes]:
     """Convert Stream reader to async generator of bytes.
 
     Args:

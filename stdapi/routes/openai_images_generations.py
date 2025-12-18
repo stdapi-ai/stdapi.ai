@@ -6,8 +6,7 @@ Amazon Nova Canvas) to generate images.
 """
 
 from asyncio import create_task
-from collections.abc import AsyncGenerator
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 from fastapi import APIRouter, Depends
 from sse_starlette import EventSourceResponse, JSONServerSentEvent
@@ -36,6 +35,9 @@ from stdapi.types.openai_images import (
     Usage,
     UsageInputTokensDetails,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
 
 router = APIRouter(
     prefix=f"{SETTINGS.openai_routes_prefix}/v1", tags=["images", "openai"]

@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 
 async def aws_s3_cleanup(
-    s3_client: "S3Client", s3_objects_to_delete: list[tuple[str, str]], request_id: str
+    s3_client: S3Client, s3_objects_to_delete: list[tuple[str, str]], request_id: str
 ) -> None:
     """Cleanup tasks for S3 temporary resources.
 

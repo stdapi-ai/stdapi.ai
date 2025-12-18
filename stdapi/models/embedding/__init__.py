@@ -13,12 +13,14 @@ Design:
 """
 
 from abc import abstractmethod
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from fastapi import BackgroundTasks
 from pydantic import BaseModel, JsonValue
 
 from stdapi.models import ModelBase, RequestT, ResponseT, get_model, load_model_plugins
+
+if TYPE_CHECKING:
+    from fastapi import BackgroundTasks
 
 
 class EmbeddingResponse(BaseModel):

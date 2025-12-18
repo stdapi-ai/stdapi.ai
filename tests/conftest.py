@@ -2,11 +2,11 @@
 
 import base64
 import socket
-from collections.abc import Generator
 from os import environ
 from pathlib import Path
 from secrets import token_hex
 from time import monotonic, sleep
+from typing import TYPE_CHECKING
 
 import pytest
 from aiobotocore.session import get_session
@@ -14,6 +14,9 @@ from httpx import Client, ConnectError, ConnectTimeout, ReadTimeout, Timeout
 from openai import OpenAI
 from pybase64 import b64encode
 from starlette.testclient import TestClient
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
 
 # Model mappings for different test contexts
 MODEL_MAPPINGS = {

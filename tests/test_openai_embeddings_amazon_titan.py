@@ -1,7 +1,11 @@
 """Basic tests for Amazon Titan embedding models via OpenAI-compatible API."""
 
+from typing import TYPE_CHECKING
+
 import pytest
-from openai import OpenAI
+
+if TYPE_CHECKING:
+    from openai import OpenAI
 
 TITAN_V1_TEXT = "amazon.titan-embed-text-v1"
 TITAN_V1_IMAGE = "amazon.titan-embed-image-v1"

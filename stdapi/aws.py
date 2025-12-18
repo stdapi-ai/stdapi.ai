@@ -2,7 +2,7 @@
 
 import os
 from contextlib import AsyncExitStack
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, Self, TypeVar
 
 from aiobotocore.config import AioConfig
 from aiohttp import ClientError, ClientSession, ClientTimeout
@@ -45,7 +45,7 @@ class AWSConnectionManager:
         self._exit_stack: AsyncExitStack = AsyncExitStack()
         self._client_specs = clients
 
-    async def __aenter__(self) -> "AWSConnectionManager":
+    async def __aenter__(self) -> Self:
         """Initialize AWS clients.
 
         Returns:
@@ -80,7 +80,7 @@ class AWSConnectionManager:
         self,
         exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
-        exc_tb: "TracebackType | None",
+        exc_tb: TracebackType | None,
     ) -> None:
         """Cleanup all AWS clients.
 

@@ -56,7 +56,7 @@ class OpenTelemetryManager(_OpenTelemetryManager):
         propagate.set_global_textmap(AwsXRayPropagator())
 
     @staticmethod
-    def instrument(app: "FastAPI") -> None:
+    def instrument(app: FastAPI) -> None:
         """Instrument FastAPI application with OpenTelemetry.
 
         Args:
@@ -69,7 +69,7 @@ class OpenTelemetryManager(_OpenTelemetryManager):
         self._tracer_provider.force_flush()
         self._tracer_provider.shutdown()
 
-    def start_span(self, name: str, attributes: dict[str, str]) -> "Span":
+    def start_span(self, name: str, attributes: dict[str, str]) -> Span:
         """Starts a new span with a given name and attributes.
 
         This method initializes a new span within a tracing system using the
@@ -91,7 +91,7 @@ class OpenTelemetryManager(_OpenTelemetryManager):
         return self.tracer.start_span(name, attributes=attributes)
 
     @contextmanager
-    def use_span(self, span: "Span") -> "Generator[None]":  # type: ignore[override]
+    def use_span(self, span: Span) -> Generator[None]:  # type: ignore[override]
         """Provides a context manager to manage the usage of a given span.
 
         The method ensures that the provided span is used as the active span within

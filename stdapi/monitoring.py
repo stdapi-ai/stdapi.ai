@@ -1,13 +1,11 @@
 """Monitoring."""
 
-from collections.abc import AsyncGenerator, Generator
 from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from time import perf_counter_ns
 from traceback import format_exception
 from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict, TypeVar
 
-from fastapi import Request
 from pydantic import AwareDatetime, BaseModel, JsonValue
 
 from stdapi.config import SETTINGS, LogLevel
@@ -16,6 +14,9 @@ from stdapi.server import SERVER_NAME
 from stdapi.utils import stdout_write, webuuid
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, Generator
+
+    from fastapi import Request
     from pydantic.main import IncEx
     from types_aiobotocore_meteringmarketplace.type_defs import (
         RegisterUsageResultTypeDef,
@@ -51,7 +52,7 @@ class EventLog(TypedDict):
     # "start" type
     server_start_time_ms: NotRequired[int]
     server_warnings: NotRequired[list[JsonValue]]
-    register_usage_response: "NotRequired[RegisterUsageResultTypeDef]"
+    register_usage_response: NotRequired[RegisterUsageResultTypeDef]
 
     # "stop" type
     server_uptime_ms: NotRequired[int]
@@ -210,7 +211,7 @@ def log_request_event(request: Request) -> Generator[EventLog]:
 
 
 def log_request_params[ParamsT: "BaseModel | dict[str, Any] | list[Any] | None"](
-    request: ParamsT, exclude: "IncEx | None" = None
+    request: ParamsT, exclude: IncEx | None = None
 ) -> ParamsT:
     """Logs the request and response parameters if the respective setting is enabled.
 
@@ -228,7 +229,7 @@ def log_request_params[ParamsT: "BaseModel | dict[str, Any] | list[Any] | None"]
 
 
 def log_response_params[ParamsT: "BaseModel | dict[str, Any] | list[Any] | None"](
-    response: ParamsT, exclude: "IncEx | None" = None
+    response: ParamsT, exclude: IncEx | None = None
 ) -> ParamsT:
     """Logs the request and response parameters if the respective setting is enabled.
 
@@ -265,7 +266,7 @@ def _format_params(
     log: EventLog,
     key: Literal["request_params", "request_response"],
     value: BaseModel | dict[str, Any] | list[Any] | None,
-    exclude: "IncEx | None" = None,
+    exclude: IncEx | None = None,
     *,
     exclude_unset: bool = False,
 ) -> None:

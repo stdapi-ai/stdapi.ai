@@ -1,11 +1,13 @@
 """OpenAI API common."""
 
 from contextlib import suppress
-
-from fastapi import Request
-from fastapi.responses import Response
+from typing import TYPE_CHECKING
 
 from stdapi.monitoring import REQUEST_LOG
+
+if TYPE_CHECKING:
+    from fastapi import Request
+    from fastapi.responses import Response
 
 #: OpenAI request API header
 OPENAI_ORGANIZATION_HEADER = "OpenAI-Organization"

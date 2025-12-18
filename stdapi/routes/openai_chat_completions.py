@@ -23,13 +23,11 @@ Functions:
 import contextlib
 from asyncio import create_task, gather
 from binascii import Error as BinasciiError
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Iterable
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 from magic import from_buffer
-from pydantic import JsonValue
 from pydantic_core import to_json
 from sse_starlette import EventSourceResponse, JSONServerSentEvent
 
@@ -102,6 +100,9 @@ from stdapi.types.openai_chat_completions import (
 from stdapi.utils import b64decode, b64encode, parse_json_mapping
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Iterable
+
+    from pydantic import JsonValue
     from types_aiobotocore_bedrock_runtime.client import BedrockRuntimeClient
     from types_aiobotocore_bedrock_runtime.literals import (
         ConversationRoleType,
@@ -141,7 +142,7 @@ router = APIRouter(
 )
 
 #: OpenAI finish reasons to Badrock mapping
-_FINISH_REASONS: "dict[StopReasonType | None, FinishReason]" = {
+_FINISH_REASONS: dict[StopReasonType | None, FinishReason] = {
     "max_tokens": "length",
     "content_filtered": "content_filter",
     "guardrail_intervened": "content_filter",
@@ -169,7 +170,7 @@ _SERVICES_TIERS = frozenset({"priority", "flex", "reserved"})
 
 def _req_extract_system_content_blocks(
     content: str | Iterable[ChatCompletionContentPartTextParam],
-) -> "list[SystemContentBlockTypeDef]":
+) -> list[SystemContentBlockTypeDef]:
     """Extract Bedrock system content blocks from an OpenAI content field.
 
     Args:
@@ -196,7 +197,7 @@ _IMAGES_FUNCTIONS = (
 
 async def _req_extract_image_content_block(
     image_part: ChatCompletionContentPartImageParam,
-) -> "ContentBlockTypeDef":
+) -> ContentBlockTypeDef:
     """Convert an OpenAI image_url section to a Bedrock content block.
 
     Supports data URLs, s3:// URIs, and http(s) URLs (downloaded via aiohttp).
@@ -218,7 +219,7 @@ async def _req_extract_image_content_block(
     raise HTTPException(status_code=400, detail=f"Invalid image URL: {url}")
 
 
-async def _req_extract_file_content_block(file_part: File) -> "ContentBlockTypeDef":
+async def _req_extract_file_content_block(file_part: File) -> ContentBlockTypeDef:
     """Convert an OpenAI file section to a Bedrock content block.
 
     The OpenAI File part contains base64-encoded bytes (file_data). This helper
@@ -298,7 +299,7 @@ async def _req_extract_content_blocks(
         ]
         | None
     ),
-) -> list["ContentBlockTypeDef"]:
+) -> list[ContentBlockTypeDef]:
     """Extract Bedrock content blocks from OpenAI message content.
 
     Supports:
@@ -329,7 +330,7 @@ async def _req_extract_content_blocks(
 
 def _req_build_tool_use_block(
     name: str, arguments: str | JsonValue, call_id: str
-) -> "ContentBlockTypeDef":
+) -> ContentBlockTypeDef:
     """Build a Bedrock toolUse content block from OpenAI function call data.
 
     Args:
@@ -353,7 +354,7 @@ def _req_build_tool_use_block(
 
 def _req_extract_assistant_blocks(
     message_param: ChatCompletionAssistantMessageParam,
-) -> list["ContentBlockTypeDef"]:
+) -> list[ContentBlockTypeDef]:
     """Append assistant tool use and content blocks.
 
     Appends Bedrock toolUse blocks derived from OpenAI assistant message
@@ -411,7 +412,7 @@ def _req_extract_assistant_blocks(
 
 
 def _req_map_assistant_content(
-    content_blocks: "list[ContentBlockTypeDef]",
+    content_blocks: list[ContentBlockTypeDef],
     message_param: ChatCompletionAssistantMessageParam,
 ) -> None:
     """Maps the assistant message content into content block structures.
@@ -441,7 +442,7 @@ def _req_map_assistant_content(
 
 
 def _req_map_assistant_reasoning_content(
-    content_blocks: "list[ContentBlockTypeDef]",
+    content_blocks: list[ContentBlockTypeDef],
     message_param: ChatCompletionAssistantMessageParam,
 ) -> None:
     """Maps the reasoning message content into content block structures.
@@ -472,7 +473,7 @@ def _req_map_assistant_reasoning_content(
         content_blocks.append({"reasoningContent": reasoning_block})
 
 
-def _req_parse_tool_content(text_content: str) -> "ToolResultContentBlockUnionTypeDef":
+def _req_parse_tool_content(text_content: str) -> ToolResultContentBlockUnionTypeDef:
     """Parses the content of a tool's textual output to determine its structure.
 
     The function attempts to parse the provided textual content as JSON. If it
@@ -498,7 +499,7 @@ def _req_parse_tool_content(text_content: str) -> "ToolResultContentBlockUnionTy
 
 def _req_extract_tool_blocks(
     message_param: ChatCompletionToolMessageParam,
-) -> list["ContentBlockTypeDef"]:
+) -> list[ContentBlockTypeDef]:
     """Extracts tool blocks from the given message parameter.
 
     This function processes the content of a `ChatCompletionToolMessageParam` to break it
@@ -533,7 +534,7 @@ def _req_extract_tool_blocks(
 
 def _req_extract_function_blocks(
     message_param: ChatCompletionFunctionMessageParam,
-) -> list["ContentBlockTypeDef"]:
+) -> list[ContentBlockTypeDef]:
     """Extracts function blocks from the given message parameter.
 
     This function processes a message parameter with possible tool content,
@@ -574,7 +575,7 @@ def _parse_prompt_cache_key(prompt_cache_key: str | None) -> set[PromptCaching]:
 
 async def _req_map_messages(
     messages: list[ChatCompletionMessageParam],
-) -> tuple[list["MessageTypeDef"], list["SystemContentBlockTypeDef"]]:
+) -> tuple[list[MessageTypeDef], list[SystemContentBlockTypeDef]]:
     """Convert OpenAI chat messages to Bedrock Converse format.
 
     Splits incoming OpenAI messages into Bedrock messages (user/assistant) and
@@ -637,7 +638,7 @@ async def _req_map_messages(
 
 
 def _req_map_tools(
-    request: "CompletionCreateParams",
+    request: CompletionCreateParams,
 ) -> list[ChatCompletionToolUnionParam]:
     """Collect OpenAI tools (including legacy `functions` as function tools).
 
@@ -662,7 +663,7 @@ def _req_map_tools(
     return tools
 
 
-def _req_map_tool_choice_literal(value: str) -> "ToolChoiceTypeDef":
+def _req_map_tool_choice_literal(value: str) -> ToolChoiceTypeDef:
     """Map OpenAI tool_choice literal to Bedrock ToolChoiceTypeDef.
 
     Args:
@@ -682,7 +683,7 @@ def _req_map_tool_choice_literal(value: str) -> "ToolChoiceTypeDef":
 
 def _req_map_tool_choice(
     tool_choice: ChatCompletionToolChoiceOptionParam | None,
-) -> "ToolChoiceTypeDef | None":
+) -> ToolChoiceTypeDef | None:
     """Convert OpenAI tool_choice union to a Bedrock ToolChoiceTypeDef.
 
     Args:
@@ -713,7 +714,7 @@ def _req_map_tool_choice(
 
 def _req_map_function_call(
     function_call: FunctionCallParam | None,
-) -> "ToolChoiceTypeDef | None":
+) -> ToolChoiceTypeDef | None:
     """Map legacy function_call to Bedrock ToolChoiceTypeDef.
 
     Args:
@@ -730,8 +731,8 @@ def _req_map_function_call(
 
 
 def _req_map_tool_or_function(
-    request: "CompletionCreateParams",
-) -> "ToolChoiceTypeDef | None":
+    request: CompletionCreateParams,
+) -> ToolChoiceTypeDef | None:
     """Map OpenAI tool_choice/function_call to Bedrock ToolChoiceTypeDef."""
     return _req_map_tool_choice(request.tool_choice) or _req_map_function_call(
         request.function_call
@@ -739,7 +740,7 @@ def _req_map_tool_or_function(
 
 
 def _req_map_tool_spec(
-    tool: ChatCompletionToolUnionParam, tools: "list[ToolTypeDef]"
+    tool: ChatCompletionToolUnionParam, tools: list[ToolTypeDef]
 ) -> None:
     """Maps a tool's specification to the provided tools list based on its type.
 
@@ -770,8 +771,8 @@ def _req_map_tool_spec(
 
 
 def _req_build_tool_config(
-    request: "CompletionCreateParams",
-) -> "ToolConfigurationTypeDef | None":
+    request: CompletionCreateParams,
+) -> ToolConfigurationTypeDef | None:
     """Builds a configuration for tools based on the provided request.
 
     Args:
@@ -796,7 +797,7 @@ def _req_build_tool_config(
 
 def _req_map_service_tier(
     value: ServiceTiers | None,
-) -> "tuple[ServiceTierTypeType | None, ServiceTiers | None]":
+) -> tuple[ServiceTierTypeType | None, ServiceTiers | None]:
     """Map OpenAI service tier to Bedrock service tier.
 
     Args:
@@ -837,7 +838,7 @@ def _resp_stream_initial_chunk(
 
 
 def _resp_stream_get_content_block_delta(
-    choice_delta: ChoiceDelta, delta_block: "ContentBlockDeltaEventTypeDef"
+    choice_delta: ChoiceDelta, delta_block: ContentBlockDeltaEventTypeDef
 ) -> None:
     """Apply Bedrock contentBlockDelta to an OpenAI ChoiceDelta.
 
@@ -873,10 +874,10 @@ def _resp_stream_delta_chunk(
     completion_id: str,
     created: int,
     model: str,
-    event: "ConverseStreamOutputTypeDef",
+    event: ConverseStreamOutputTypeDef,
     service_tier: ServiceTiers | None,
     chunk: ChatCompletionChunk | None = None,
-) -> "tuple[ChatCompletionChunk | None, bool]":
+) -> tuple[ChatCompletionChunk | None, bool]:
     """Build or update a streaming chunk based on a Bedrock stream event.
 
     Handles contentBlockStart (tool call start), contentBlockDelta (text/reasoning
@@ -951,7 +952,7 @@ def _resp_stream_delta_chunk(
     return chunk, end
 
 
-def _resp_map_bedrock_stop_reason(stop_reason: "StopReasonType | None") -> FinishReason:
+def _resp_map_bedrock_stop_reason(stop_reason: StopReasonType | None) -> FinishReason:
     """Translate Bedrock stop reasons to OpenAI finish reasons.
 
     Args:
@@ -967,7 +968,7 @@ def _resp_map_bedrock_stop_reason(stop_reason: "StopReasonType | None") -> Finis
 
 
 def _resp_extract_output_text_from_converse(
-    contents: "list[ContentBlockOutputTypeDef]",
+    contents: list[ContentBlockOutputTypeDef],
 ) -> tuple[str | None, str | None]:
     """Extract concatenated text from Bedrock Converse response output.
 
@@ -992,8 +993,8 @@ def _resp_extract_output_text_from_converse(
 
 
 def _resp_extract_citation_from_bedrock(
-    citation: "CitationOutputTypeDef",
-) -> "Annotation | None":
+    citation: CitationOutputTypeDef,
+) -> Annotation | None:
     """Extract a single URL citation from Bedrock citation data.
 
     Args:
@@ -1019,8 +1020,8 @@ def _resp_extract_citation_from_bedrock(
 
 
 def _resp_extract_citations_from_output_blocks(
-    contents: "list[ContentBlockOutputTypeDef]",
-) -> "list[Annotation] | None":
+    contents: list[ContentBlockOutputTypeDef],
+) -> list[Annotation] | None:
     """Extract URL citations from Bedrock non-streaming content blocks.
 
     Args:
@@ -1045,7 +1046,7 @@ def _resp_extract_citations_from_output_blocks(
 
 
 def _resp_extract_tool_calls_from_converse(
-    contents: "list[ContentBlockOutputTypeDef]",
+    contents: list[ContentBlockOutputTypeDef],
 ) -> tuple[list[ChatCompletionMessageToolCallUnion] | None, FunctionCall | None]:
     """Extract tool call from a Bedrock Converse response.
 
@@ -1079,8 +1080,8 @@ def _resp_extract_tool_calls_from_converse(
 
 
 def _resp_stream_extract_usage_from_metadata(
-    stream_event: "ConverseStreamOutputTypeDef",
-) -> "CompletionUsage | None":
+    stream_event: ConverseStreamOutputTypeDef,
+) -> CompletionUsage | None:
     """Extract token usage from a Bedrock stream metadata event.
 
     Args:
@@ -1110,8 +1111,8 @@ async def _streaming_completion(
     completion_id: str,
     created: int,
     model_id: str,
-    bedrock_runtime: "BedrockRuntimeClient",
-    request: "ConverseRequestBaseTypeDef",
+    bedrock_runtime: BedrockRuntimeClient,
+    request: ConverseRequestBaseTypeDef,
     service_tier: ServiceTiers | None,
     *,
     include_usage: bool = False,
@@ -1168,8 +1169,8 @@ async def _non_streaming_completion(
     completion_id: str,
     created: int,
     model_id: str,
-    bedrock_runtime: "BedrockRuntimeClient",
-    request: "ConverseRequestBaseTypeDef",
+    bedrock_runtime: BedrockRuntimeClient,
+    request: ConverseRequestBaseTypeDef,
     service_tier: ServiceTiers | None,
     choices_count: int,
     audio_params: ChatCompletionAudioParam | None,

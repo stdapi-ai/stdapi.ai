@@ -6,14 +6,15 @@
 """
 
 from asyncio import create_task
-from typing import Literal, NotRequired, TypedDict
-
-from fastapi import BackgroundTasks
-from pydantic import JsonValue
+from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
 
 from stdapi.models.embedding import EmbeddingModelBase, EmbeddingResponse
 from stdapi.tokenizer import estimate_token_count
 from stdapi.utils import is_data_uri
+
+if TYPE_CHECKING:
+    from fastapi import BackgroundTasks
+    from pydantic import JsonValue
 
 _EmbeddingType = Literal["float", "int8", "uint8", "binary", "ubinary"]
 

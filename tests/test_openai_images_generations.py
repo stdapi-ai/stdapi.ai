@@ -7,12 +7,16 @@ validating functionality, error handling, and compliance with OpenAI API specifi
 import base64
 import re
 import time
-from collections.abc import Iterable
+from typing import TYPE_CHECKING
 
 import pytest
 from openai import BadRequestError, OpenAI
-from openai.types.image_gen_completed_event import ImageGenCompletedEvent
-from openai.types.image_gen_partial_image_event import ImageGenPartialImageEvent
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from openai.types.image_gen_completed_event import ImageGenCompletedEvent
+    from openai.types.image_gen_partial_image_event import ImageGenPartialImageEvent
 
 
 def validate_base64_image(b64_data: str) -> str:

@@ -2,14 +2,13 @@
 
 from asyncio import to_thread
 from base64 import b32encode
-from collections.abc import Buffer, Generator
 from contextlib import contextmanager
 from io import BytesIO
 from os.path import splitext
 from re import ASCII
 from re import compile as compile_regex
 from sys import stdout
-from typing import Any, Literal, NotRequired, TypedDict, TypeVar
+from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict, TypeVar
 from uuid import uuid4 as uuid  # TODO: replace by new UUID6
 
 from fastapi.exceptions import RequestValidationError
@@ -19,6 +18,9 @@ from pybase64 import b64decode as _b64decode
 from pybase64 import b64encode as _b64encode
 from pydantic import JsonValue, ValidationError
 from pydantic_core import from_json, to_json
+
+if TYPE_CHECKING:
+    from collections.abc import Buffer, Generator
 
 T = TypeVar("T")
 

@@ -5,8 +5,7 @@
 - stability.stable-image-ultra-v1:1
 """
 
-from collections.abc import Awaitable, Iterable
-from typing import Literal, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
 
 from fastapi import HTTPException
 
@@ -15,6 +14,9 @@ from stdapi.models.image import (
     ImageGenerationResponse,
     ImageModelBase,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Iterable
 
 # Aspect ratios supported by the model
 _AspectRatio = Literal[

@@ -31,7 +31,7 @@ EDITION_TITLE = f"stdapi.ai ({'Professional' if PRODUCT_CODE else 'Community'} E
 SERVER_FULL_VERSION = f"{SERVER_VERSION}+{'p' if PRODUCT_CODE else 'c'}"
 
 
-async def register() -> "RegisterUsageResultTypeDef | None":
+async def register() -> RegisterUsageResultTypeDef | None:
     """Register AWS Marketplace for the current host.
 
     For ECS, EKS & Fargate hosts running hourly billed products.

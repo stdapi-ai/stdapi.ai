@@ -5,12 +5,10 @@
 """
 
 from asyncio import create_task, gather
-from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import Literal, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
 
 from fastapi import BackgroundTasks, HTTPException
-from pydantic import JsonValue
 
 from stdapi.aws import AWS_ACCOUNT_INFO, get_client
 from stdapi.aws_bedrock import BEDROCK_BODY_SIZE_LIMIT
@@ -19,6 +17,11 @@ from stdapi.models import get_content_type_and_size, put_to_s3
 from stdapi.models.embedding import EmbeddingModelBase, EmbeddingResponse
 from stdapi.monitoring import REQUEST_ID
 from stdapi.tokenizer import estimate_token_count
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
+    from pydantic import JsonValue
 
 _EmbeddingOption_V2 = Literal["visual-text", "visual-image", "audio"]
 _EmbeddingOption = Literal["visual", "audio", "transcription"]

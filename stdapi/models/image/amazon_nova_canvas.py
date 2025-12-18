@@ -3,8 +3,7 @@
 - amazon.nova-canvas-v1:0
 """
 
-from collections.abc import Awaitable, Iterable
-from typing import Literal, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
 
 from fastapi import HTTPException
 
@@ -18,6 +17,9 @@ from stdapi.models.image.amazon_titan_image_generator import (
     get_amz_quality,
     random_seed,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Iterable
 
 
 class _TextToImageParams(TypedDict):

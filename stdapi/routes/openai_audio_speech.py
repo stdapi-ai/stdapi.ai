@@ -1,7 +1,6 @@
 """OpenAI-compatible Text-to-Speech API implementation using AWS Polly."""
 
 from asyncio import gather
-from collections.abc import AsyncGenerator, Generator
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Annotated
 
@@ -9,7 +8,6 @@ from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, Response
 from fastapi.exceptions import HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import JsonValue
 from sse_starlette import EventSourceResponse, JSONServerSentEvent
 
 from stdapi.auth import authenticate
@@ -40,6 +38,9 @@ from stdapi.types.openai_audio import (
 from stdapi.utils import b64encode, format_language_code, validation_error_handler
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, Generator
+
+    from pydantic import JsonValue
     from types_aiobotocore_comprehend.client import ComprehendClient
     from types_aiobotocore_polly.client import PollyClient
     from types_aiobotocore_polly.literals import (
@@ -66,7 +67,7 @@ router = APIRouter(
 _POLLY_PREFIX = "amazon.polly-"
 
 #: Polly output format name if different from the response format name
-_FORMAT_POLLY: "dict[str, OutputFormatType]" = {"ogg": "ogg_vorbis", "opus": "ogg_opus"}
+_FORMAT_POLLY: dict[str, OutputFormatType] = {"ogg": "ogg_vorbis", "opus": "ogg_opus"}
 
 #: Content-type format name if different from the response format name
 _FORMAT_CONTENT_TYPE = {"mp3": "mpeg"}
@@ -100,13 +101,13 @@ _SUPPORTED_SPEECH_MODELS: set[str] = {
     f"{_POLLY_PREFIX}generative",
 }
 
-_VOICES_DESCRIPTIONS: "dict[VoiceIdType, str]" = {}
-_VOICES_BY_GENDERS: "dict[GenderType, set[VoiceIdType]]" = {}
-_VOICES_BY_LANGUAGE: "dict[LanguageCodeType, set[VoiceIdType]]" = {}
-_VOICES_BY_ENGINE: "dict[EngineType, set[VoiceIdType]]" = {}
+_VOICES_DESCRIPTIONS: dict[VoiceIdType, str] = {}
+_VOICES_BY_GENDERS: dict[GenderType, set[VoiceIdType]] = {}
+_VOICES_BY_LANGUAGE: dict[LanguageCodeType, set[VoiceIdType]] = {}
+_VOICES_BY_ENGINE: dict[EngineType, set[VoiceIdType]] = {}
 
 #: OpenAI voices and matching gender (No Neutral support with Polly, fallback to Female)
-_OPENAI_VOICES_GENDER: "dict[str, GenderType]" = {
+_OPENAI_VOICES_GENDER: dict[str, GenderType] = {
     "alloy": "Female",
     "ash": "Male",
     "ballad": "Female",
@@ -129,7 +130,7 @@ class _PollyExtraParams(BaseModelResponse):
     SampleRate: int | None = None
 
 
-def _engine_from_model(model: str) -> "EngineType":
+def _engine_from_model(model: str) -> EngineType:
     """Retrieve engine from model name.
 
     Args:
@@ -143,7 +144,7 @@ def _engine_from_model(model: str) -> "EngineType":
     return model.removeprefix(_POLLY_PREFIX)  # type: ignore[return-value]
 
 
-async def _get_voices_per_engine(engine: "EngineType") -> None:
+async def _get_voices_per_engine(engine: EngineType) -> None:
     """Retrieve voices from Poly.
 
     Args:
@@ -258,8 +259,8 @@ async def _speech_audio_sse(
 
 
 async def _select_voice(
-    text: str, voice: str, engine: "EngineType"
-) -> "tuple[VoiceIdType, LanguageCodeType | None]":
+    text: str, voice: str, engine: EngineType
+) -> tuple[VoiceIdType, LanguageCodeType | None]:
     """Select a voice based on OpenAI compatibility.
 
     Args:
@@ -288,7 +289,7 @@ async def _select_voice(
     return voice, None  # type: ignore[return-value]
 
 
-async def _detect_language(text: str) -> "LanguageCodeType":
+async def _detect_language(text: str) -> LanguageCodeType:
     """Detect language from a short sample of the full text.
 
     Fallback to English if no language is detected.
@@ -320,9 +321,7 @@ async def _detect_language(text: str) -> "LanguageCodeType":
     return "en-US"
 
 
-def _prepare_text_for_speech(
-    input_text: str, speed: float
-) -> tuple[str, "TextTypeType"]:
+def _prepare_text_for_speech(input_text: str, speed: float) -> tuple[str, TextTypeType]:
     """Prepare text for speech synthesis with speed adjustment.
 
     Args:
@@ -343,7 +342,7 @@ def _prepare_text_for_speech(
 
 @contextmanager
 def _handle_polly_error(
-    model_id: str, voice_id: str, engine: "EngineType"
+    model_id: str, voice_id: str, engine: EngineType
 ) -> Generator[None]:
     """Context manager to handle Polly service errors and raise appropriate HTTP exceptions.
 

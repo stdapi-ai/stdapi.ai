@@ -6,7 +6,7 @@ from pydantic import AliasChoices, Field, model_validator
 
 from stdapi.openai_exceptions import OpenaiUnsupportedParameterError
 from stdapi.types import BaseModelRequest, BaseModelRequestWithExtra, BaseModelResponse
-from stdapi.types.bedrock import AmazonBedrockGuardrailConfigParams
+from stdapi.types.bedrock import AmazonBedrockGuardrailConfigParams  # noqa: TC001
 from stdapi.types.openai import (
     AssistantRoleLiteral,
     Base64Str,

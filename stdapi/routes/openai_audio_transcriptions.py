@@ -1,7 +1,6 @@
 """OpenAI-compatible Audio Transcription API implementation using AWS Transcribe."""
 
 from asyncio import gather, sleep
-from collections.abc import AsyncGenerator, Generator
 from contextlib import contextmanager
 from math import ceil
 from pathlib import Path
@@ -63,6 +62,7 @@ from stdapi.utils import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, Generator
     from typing import NotRequired
 
     from types_aiobotocore_s3.client import S3Client
@@ -147,7 +147,7 @@ def _build_transcription_job_params(
     s3_bucket: str,
     language: str | None,
     response_format: AudioResponseFormat,
-) -> "StartTranscriptionJobRequestTypeDef":
+) -> StartTranscriptionJobRequestTypeDef:
     """Build transcription job parameters.
 
     Args:
@@ -210,7 +210,7 @@ def _handle_transcription_error(language: str | None) -> Generator[None]:
 
 
 async def _wait_for_transcription_completion(
-    transcribe: "TranscribeServiceClient", job_id: str
+    transcribe: TranscribeServiceClient, job_id: str
 ) -> None:
     """Wait for transcription job to complete.
 
@@ -233,11 +233,11 @@ async def _wait_for_transcription_completion(
 
 
 async def _get_transcription_results(
-    s3_client: "S3Client",
+    s3_client: S3Client,
     s3_bucket: str,
     job_id: str,
     response_format: AudioResponseFormat,
-) -> "TranscriptionJobData":
+) -> TranscriptionJobData:
     """Get transcription results from S3.
 
     Args:
@@ -269,7 +269,7 @@ async def _get_transcription_results(
 
 
 async def _delete_transcription_job(
-    transcribe: "TranscribeServiceClient", job_name: str
+    transcribe: TranscribeServiceClient, job_name: str
 ) -> None:
     """Deletes a transcription job with the specified job name.
 
@@ -289,8 +289,8 @@ async def _delete_transcription_job(
 
 
 async def _transcribe_cleanup(
-    s3_client: "S3Client",
-    transcribe: "TranscribeServiceClient",
+    s3_client: S3Client,
+    transcribe: TranscribeServiceClient,
     s3_bucket: str,
     s3_tmp_objects: set[str],
     transcribe_tmp_jobs: set[str],
@@ -324,7 +324,7 @@ async def perform_transcription_task(
     background_tasks: BackgroundTasks,
     language: str | None = None,
     response_format: AudioResponseFormat = "json",
-) -> "TranscriptionJobData":
+) -> TranscriptionJobData:
     """Perform complete transcription task using AWS Transcribe with integrated cleanup.
 
     This function handles the entire transcription workflow from audio upload
@@ -405,9 +405,7 @@ async def perform_transcription_task(
             )
 
 
-async def _get_result_from_s3(
-    s3_client: "S3Client", s3_bucket: str, s3_key: str
-) -> str:
+async def _get_result_from_s3(s3_client: S3Client, s3_bucket: str, s3_key: str) -> str:
     """Retrieve and decode S3 object content as a string.
 
     Downloads the specified object from S3 and decodes its binary content
@@ -479,7 +477,7 @@ async def _transcript_audio_sse(
         )
 
 
-def get_transcript_text(transcript_data: "TranscriptionJobData") -> str:
+def get_transcript_text(transcript_data: TranscriptionJobData) -> str:
     """Extract and concatenate transcript text from AWS Transcribe response data.
 
     Args:
@@ -494,7 +492,7 @@ def get_transcript_text(transcript_data: "TranscriptionJobData") -> str:
 
 
 def format_text_or_json_response(
-    transcript_data: "TranscriptionJobData",
+    transcript_data: TranscriptionJobData,
     text: str,
     response_format: AudioResponseFormat,
     timestamp_granularities: list[AudioTimestampGranularities] | None = None,
@@ -569,7 +567,7 @@ def format_text_or_json_response(
     return log_response_params(Transcription(text=text, usage=usage_duration))
 
 
-def get_audio_duration(transcript_data: "TranscriptionJobData") -> float:
+def get_audio_duration(transcript_data: TranscriptionJobData) -> float:
     """Get audio duration from AWS Transcribe response data.
 
     Args:
