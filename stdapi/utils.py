@@ -9,7 +9,7 @@ from re import ASCII
 from re import compile as compile_regex
 from sys import stdout
 from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict, TypeVar
-from uuid import uuid4 as uuid  # TODO: replace by new UUID6
+from uuid import uuid7 as uuid
 
 from fastapi.exceptions import RequestValidationError
 from langcodes import Language
