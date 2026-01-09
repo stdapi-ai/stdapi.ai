@@ -20,9 +20,9 @@ Functions:
     Various helper functions for message conversion, validation, and response processing
 """
 
-import contextlib
 from asyncio import create_task, gather
 from binascii import Error as BinasciiError
+from contextlib import suppress
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Annotated
 
@@ -847,9 +847,9 @@ def _resp_stream_get_content_block_delta(
     but available in Deepseek variant.
     """
     delta = delta_block["delta"]
-    with contextlib.suppress(KeyError):
+    with suppress(KeyError):
         choice_delta.content = delta["text"]
-    with contextlib.suppress(KeyError):
+    with suppress(KeyError):
         choice_delta.reasoning_content = delta["reasoningContent"]["text"]
     try:
         delta_tool_use = delta["toolUse"]
@@ -983,9 +983,9 @@ def _resp_extract_output_text_from_converse(
     content_text: list[str] = []
     reasoning_text: list[str] = []
     for block in contents:
-        with contextlib.suppress(KeyError):
+        with suppress(KeyError):
             content_text.append(block["text"])
-        with contextlib.suppress(KeyError):
+        with suppress(KeyError):
             reasoning_text.append(block["reasoningContent"]["reasoningText"]["text"])
     return "".join(content_text) if content_text else None, "".join(
         reasoning_text
@@ -1100,7 +1100,7 @@ def _resp_stream_extract_usage_from_metadata(
         prompt_tokens=usage["inputTokens"],
         total_tokens=usage["totalTokens"],
     )
-    with contextlib.suppress(KeyError):
+    with suppress(KeyError):
         completion_usage.prompt_tokens_details = PromptTokensDetails(
             cached_tokens=usage["cacheReadInputTokens"]
         )

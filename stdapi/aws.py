@@ -1,7 +1,7 @@
 """AWS client management and connection pooling."""
 
-import os
 from contextlib import AsyncExitStack
+from os import environ
 from typing import TYPE_CHECKING, Any, Self, TypeVar
 
 from aiobotocore.config import AioConfig
@@ -128,7 +128,7 @@ async def initialize_aws_account_info() -> None:
     Stores results in AWS_ACCOUNT_INFO dict.
     """
     try:
-        metadata_path = os.environ["ECS_CONTAINER_METADATA_URI_V4"]
+        metadata_path = environ["ECS_CONTAINER_METADATA_URI_V4"]
     except KeyError:
         # Not running in ECS
         pass

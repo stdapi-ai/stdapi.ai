@@ -214,7 +214,7 @@ def _convert_image(
                     background.paste(image, mask=image.split()[-1])
                 else:
                     background.paste(image)
-                image = background
+                image = background  # type: ignore[assignment]
 
         elif output_format == "PNG":
             # PNG uses compress_level (0-9)
@@ -306,7 +306,7 @@ async def get_base64_image_size(content: str | Buffer) -> tuple[int, int]:
         A tuple containing the width and height of the image as integers.
     """
     with BytesIO(await b64decode(content)) as buffer, Image.open(buffer) as image:
-        return image.size  # type: ignore[no-any-return]
+        return image.size
 
 
 def webuuid() -> str:

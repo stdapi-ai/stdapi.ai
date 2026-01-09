@@ -1,16 +1,13 @@
 """Pytest configuration and fixtures."""
 
 import base64
-import socket
 from os import environ
 from pathlib import Path
 from secrets import token_hex
-from time import monotonic, sleep
 from typing import TYPE_CHECKING
 
 import pytest
 from aiobotocore.session import get_session
-from httpx import Client, ConnectError, ConnectTimeout, ReadTimeout, Timeout
 from openai import OpenAI
 from pybase64 import b64encode
 from starlette.testclient import TestClient
@@ -186,46 +183,6 @@ def image_generation_hd_model(models: dict[str, str]) -> str:
 def image_generation_stream_model(models: dict[str, str]) -> str:
     """Provide the appropriate advanced image generation model."""
     return models["image_generation_stream"]
-
-
-def _wait_ready(url: str) -> None:
-    """Waits for a given URL to be ready.
-
-    Args:
-        url (str): The URL to check for readiness.
-
-    Raises:
-        TimeoutError: If the URL does not respond within the given timeout period.
-    """
-    timeout = 60.0
-    start = monotonic()
-    with Client(timeout=Timeout(5.0)) as client:
-        while True:
-            try:
-                resp = client.request("GET", url)
-            except (ConnectError, ConnectTimeout, ReadTimeout):
-                pass
-            else:
-                resp.raise_for_status()
-                return
-            if monotonic() - start > timeout:
-                msg = f"{url} did not return within {timeout}s"
-                raise TimeoutError(msg)
-            sleep(0.1)
-
-
-def _get_port() -> int:
-    """Get a free port number.
-
-    Returns:
-    Port number.
-    """
-    sock = socket.socket()
-    try:
-        sock.bind(("", 0))
-        return sock.getsockname()[1]  # type: ignore[no-any-return]
-    finally:
-        sock.close()
 
 
 @pytest.fixture(scope="session")

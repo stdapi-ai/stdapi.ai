@@ -5,6 +5,8 @@ on:
   push:
   pull_request:
     branches: ["**"]
+permissions:
+  contents: read
 
 jobs:
   static-analysis:
