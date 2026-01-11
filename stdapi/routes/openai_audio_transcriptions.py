@@ -21,6 +21,7 @@ from pydantic_core import from_json
 from sse_starlette import EventSourceResponse, JSONServerSentEvent
 
 from stdapi.auth import authenticate
+from stdapi.aws_s3 import put_upload_file_to_s3
 from stdapi.config import SETTINGS
 from stdapi.models import (
     EXTRA_MODELS,
@@ -320,7 +321,7 @@ async def _transcribe_cleanup(
 
 
 async def perform_transcription_task(
-    audio_content: bytes,
+    audio_content: UploadFile,
     background_tasks: BackgroundTasks,
     language: str | None = None,
     response_format: AudioResponseFormat = "json",
@@ -333,7 +334,7 @@ async def perform_transcription_task(
     and translation workflows by automatically detecting or using specified languages.
 
     Args:
-        audio_content: Audio file content as bytes
+        audio_content: Audio file content file
         background_tasks: FastAPI background tasks for cleanup
         language: Optional language code for the input audio (ISO-639-1 format)
         response_format: Format for the output response (json, text, srt, vtt, verbose_json)
@@ -366,9 +367,7 @@ async def perform_transcription_task(
         # Upload audio to S3
         s3_prefix = SETTINGS.aws_s3_tmp_prefix
         s3_input_key = f"{s3_prefix}{request_id}/input"
-        await s3_client.put_object(
-            Bucket=s3_bucket, Key=s3_input_key, Body=audio_content
-        )
+        await put_upload_file_to_s3(audio_content, s3_client, s3_bucket, s3_input_key)
         s3_tmp_objects.add(s3_input_key)
 
         # Build job parameters and start transcription
@@ -781,7 +780,7 @@ async def create_transcription(
     log["model_id"] = model
 
     transcript_data = await perform_transcription_task(
-        audio_content=await file.read(),
+        audio_content=file,
         background_tasks=background_tasks,
         language=request.language,
         response_format=request.response_format,

@@ -9,7 +9,9 @@ from stdapi.monitoring import log_background_event, log_error_details
 from stdapi.openai_exceptions import OpenaiError
 
 if TYPE_CHECKING:
+    from fastapi import UploadFile
     from types_aiobotocore_s3.client import S3Client
+    from types_aiobotocore_s3.type_defs import PutObjectRequestTypeDef
 
 
 async def aws_s3_cleanup(
@@ -76,3 +78,33 @@ async def put_object_and_get_url(body: bytes, content_type: str, filename: str) 
             ),
         )
     )[0]
+
+
+async def put_upload_file_to_s3(
+    file: UploadFile, client: S3Client, bucket: str, s3_key: str
+) -> None:
+    """Uploads a UploadFile to an S3 bucket using the specified client and key.
+
+    This function reads the file asynchronously from the provided `UploadFile`,
+    and uploads it to S3.
+
+    Args:
+        file: The file to be uploaded.
+        client: An instance of `S3Client`.
+        bucket: The name of the S3 bucket where the file will be uploaded.
+        s3_key: The key in the S3 bucket under which the file will be stored.
+    """
+    kwargs: PutObjectRequestTypeDef = {
+        "Bucket": bucket,
+        "Key": s3_key,
+        "Body": await file.read(),  # Passing UploadFile as StreamingBody doesn't work
+    }
+    if file.content_type:
+        kwargs["ContentType"] = file.content_type
+    if file.filename:
+        kwargs["ContentDisposition"] = f'attachment; filename="{file.filename}"'
+    close_task = file.close()
+    try:
+        await client.put_object(**kwargs)
+    finally:
+        await close_task

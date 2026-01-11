@@ -449,7 +449,7 @@ async def create_translation(
     log["model_id"] = model
 
     transcript_data = await perform_transcription_task(
-        audio_content=await file.read(),
+        audio_content=file,
         background_tasks=background_tasks,
         language=None,  # Auto-detect source language
         response_format=request.response_format,
