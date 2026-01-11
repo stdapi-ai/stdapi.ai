@@ -1,6 +1,6 @@
 [project]
 name = "stdapi"
-version = "1.2.0"
+version = "1.3.0"
 description = "Standard API for AI on AWS"
 authors = [{ name = "J.Goutin", email = "contact@stdapi.ai" }]
 requires-python = ">=3.14"
