@@ -170,7 +170,7 @@ async def retrieve_model(
     model: str = Path(  # noqa: FAST002
         ...,
         description="The ID of the model to use for this request",
-        example="amazon.nova-micro-v1:0",
+        examples=["amazon.nova-micro-v1:0"],
         min_length=1,
         max_length=255,
         str_strip_whitespace=True,
