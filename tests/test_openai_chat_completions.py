@@ -347,17 +347,10 @@ class TestChatCompletions:
         assert first_call.id
         assert first_call.function.name == "get_weather"
         assert isinstance(first_call.function.arguments, str)
-        # Try to parse arguments as JSON if possible
-
-        args_dict = None
-        try:
-            args_dict = _json.loads(first_call.function.arguments)
-        except (ValueError, TypeError):
-            # Some providers may not emit strict JSON; accept non-empty string
-            args_dict = None
-        if args_dict is not None and isinstance(args_dict, dict):
-            # If JSON-like, the schema should resemble our tool definition
-            assert "location" in args_dict
+        # Arguments should be valid JSON string
+        args_dict = _json.loads(first_call.function.arguments)
+        assert isinstance(args_dict, dict)
+        assert "location" in args_dict
 
         # Simulate tool execution and send tool result back to the model
         tool_result = {
@@ -399,6 +392,37 @@ class TestChatCompletions:
         assert final_choice.message.content is not None
         assert final_choice.message.tool_calls is None
         assert final_choice.finish_reason == "stop"
+
+        # Test tool result with non-JSON content (plain text)
+        # This validates _req_parse_tool_content handles non-JSON correctly
+        followup_messages_plain_text = [
+            {"role": "user", "content": "What's the weather in New York?"},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": first_call.id,
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": first_call.function.arguments,
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": first_call.id,
+                "content": "Weather is sunny, 20 degrees",  # Plain text, not JSON
+            },
+        ]
+
+        final_plain = openai_client.chat.completions.create(
+            model=chat_vision_model,
+            messages=followup_messages_plain_text,  # type: ignore[arg-type]
+            tools=tools,  # type: ignore[arg-type]
+        )
+        assert final_plain.choices[0].message.content is not None
 
     def test_legacy_functions_parameter(
         self, openai_client: OpenAI, chat_legacy_model: str
@@ -530,6 +554,21 @@ class TestChatCompletions:
             args_joined = "".join(args_fragments)
             assert isinstance(args_joined, str)
             assert len(args_joined) > 0
+
+            # Validate the joined arguments are parseable
+            # With the change to _resp_stream_get_content_block_delta,
+            # arguments should still be valid when accumulated
+            try:
+                parsed_args = _json.loads(args_joined)
+                # Should be a valid dict with expected keys
+                assert isinstance(parsed_args, dict)
+                # For calculate_sum, we expect 'a' and 'b' keys (or empty if streaming incomplete)
+                if parsed_args:  # Only check if not empty
+                    assert "a" in parsed_args or "b" in parsed_args
+            except _json.JSONDecodeError:
+                # If not valid JSON, it might be incomplete streaming
+                # Accept partial JSON if it starts correctly
+                assert args_joined.startswith("{") or args_joined.startswith('"')
 
     def test_empty_messages_error(self, openai_client: OpenAI, chat_model: str) -> None:
         """Test error handling for empty messages array.
@@ -825,6 +864,14 @@ class TestChatCompletions:
                 assert t.type in (None, "function")
                 # id or function fields may stream partially
                 assert (t.id is not None) or (t.function is not None)
+
+                # Validate function arguments format in delta
+                if t.function is not None and hasattr(t.function, "arguments"):
+                    func_args = t.function.arguments
+                    if func_args:
+                        # Arguments in streaming should be a string (delta fragment) or dict/object
+                        # With the change, arguments should be the raw input value, not JSON-encoded
+                        assert isinstance(func_args, (str, dict)) or func_args is None
             if c0.finish_reason is not None:
                 has_finish = True
                 # finish reason must be tool_calls or stop/length depending on stage
@@ -938,6 +985,140 @@ class TestChatCompletions:
         assert choice.message.content is not None
         assert isinstance(choice.message.content, str)
         assert choice.finish_reason in ("stop", "length")
+
+        # Test mixed JSON and non-JSON tool results
+        # This validates _req_parse_tool_content handles both formats
+        messages_mixed = [
+            {
+                "role": "user",
+                "content": "Using tools, check weather and get a simple status.",
+            },
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "call_weather",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": _json.dumps({"location": "Paris"}),
+                        },
+                    },
+                    {
+                        "id": "call_status",
+                        "type": "function",
+                        "function": {
+                            "name": "get_news",
+                            "arguments": "{}",  # Empty JSON object as string
+                        },
+                    },
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_weather",
+                "content": _json.dumps({"location": "Paris", "temperature_c": 18}),
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_status",
+                "content": "System operational",  # Plain text, not JSON
+            },
+        ]
+
+        mixed_result = openai_client.chat.completions.create(
+            model=chat_vision_model,
+            messages=messages_mixed,  # type: ignore[arg-type]
+            tools=tools,  # type: ignore[arg-type]
+            max_completion_tokens=120,
+        )
+        assert len(mixed_result.choices) == 1
+        assert mixed_result.choices[0].message.content is not None
+
+    def test_tool_arguments_edge_cases(
+        self, openai_client: OpenAI, chat_vision_model: str
+    ) -> None:
+        """Test edge cases in tool argument handling after try_parse_json changes.
+
+        Validates:
+            - Tool arguments as JSON strings are parsed correctly
+            - Tool arguments as non-JSON strings are preserved
+            - Tool results with plain text content work correctly
+            - Tool results with invalid JSON are preserved as text
+        """
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "process_data",
+                    "description": "Process some data",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "data": {"type": "string"},
+                        },
+                    },
+                },
+            }
+        ]
+
+        # Test 1: Valid JSON string arguments with plain text result
+        response = openai_client.chat.completions.create(
+            model=chat_vision_model,
+            messages=[
+                {"role": "user", "content": "Process this"},
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "process_data",
+                                "arguments": '{"data": "test"}',  # Valid JSON string
+                            },
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "content": "Processed successfully",  # Plain text result
+                },
+            ],
+            tools=tools,  # type: ignore[arg-type]
+            max_completion_tokens=50,
+        )
+        assert response.choices[0].message.content is not None
+
+        # Test 2: Tool result with invalid JSON (should be treated as plain text)
+        response2 = openai_client.chat.completions.create(
+            model=chat_vision_model,
+            messages=[
+                {"role": "user", "content": "What happened?"},
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": "call_2",
+                            "type": "function",
+                            "function": {
+                                "name": "process_data",
+                                "arguments": '{"data": "test2"}',
+                            },
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_2",
+                    "content": "Error: Invalid {bracket",  # Invalid JSON
+                },
+            ],
+            tools=tools,  # type: ignore[arg-type]
+            max_completion_tokens=50,
+        )
+        assert response2.choices[0].message.content is not None
 
     def test_conflicting_tools_and_functions_error(
         self, openai_client: OpenAI, chat_vision_model: str

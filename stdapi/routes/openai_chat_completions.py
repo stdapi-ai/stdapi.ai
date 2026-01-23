@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 from magic import from_buffer
-from pydantic_core import to_json
+from pydantic_core import from_json, to_json
 from sse_starlette import EventSourceResponse, JSONServerSentEvent
 
 from stdapi.auth import authenticate
@@ -96,7 +96,7 @@ from stdapi.types.openai_chat_completions import (
     PromptTokensDetails,
     ServiceTiers,
 )
-from stdapi.utils import b64decode, b64encode, parse_json_mapping
+from stdapi.utils import b64decode, b64encode, try_parse_json
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Iterable
@@ -128,6 +128,7 @@ if TYPE_CHECKING:
         ToolResultContentBlockUnionTypeDef,
         ToolSpecificationTypeDef,
         ToolTypeDef,
+        ToolUseBlockTypeDef,
         VideoBlockTypeDef,
     )
 
@@ -335,20 +336,17 @@ def _req_build_tool_use_block(
     Args:
         name: Function/tool name.
         arguments: Either a JSON string (function tools) or a JSON value (custom tools).
-        call_id: Optional stable tool call id..
+        call_id: Optional stable tool call id.
 
     Returns:
         A ContentBlockTypeDef representing a toolUse block.
     """
-    return {
-        "toolUse": {
-            "toolUseId": call_id,
-            "name": name,
-            "input": parse_json_mapping(arguments)
-            if isinstance(arguments, str)
-            else (arguments if isinstance(arguments, dict) else {}),
-        }
+    tool_use: ToolUseBlockTypeDef = {
+        "toolUseId": call_id,
+        "name": name,
+        "input": try_parse_json(arguments) if isinstance(arguments, str) else arguments,  # type: ignore[typeddict-item]
     }
+    return {"toolUse": tool_use}
 
 
 def _req_extract_assistant_blocks(
@@ -489,7 +487,7 @@ def _req_parse_tool_content(text_content: str) -> ToolResultContentBlockUnionTyp
         text_content} otherwise.
     """
     try:
-        json_content = parse_json_mapping(text_content)
+        json_content = from_json(text_content)
     except ValueError:
         return {"text": text_content}
     else:
@@ -854,9 +852,7 @@ def _resp_stream_get_content_block_delta(
         delta_tool_use = delta["toolUse"]
     except KeyError:
         return
-    function = ChoiceDeltaFunctionCall(
-        arguments=to_json(delta_tool_use["input"]).decode()
-    )
+    function = ChoiceDeltaFunctionCall(arguments=delta_tool_use["input"])
     if _LEGACY_FUNCTION.get():
         choice_delta.function_call = function
     else:

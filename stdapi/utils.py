@@ -8,7 +8,7 @@ from os.path import splitext
 from re import ASCII
 from re import compile as compile_regex
 from sys import stdout
-from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict, TypeVar
+from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict, TypeVar
 from uuid import uuid7 as uuid
 
 from fastapi.exceptions import RequestValidationError
@@ -79,23 +79,19 @@ def language_code_to_name(language_code: str) -> str:
     return Language(language_code.split("-", 1)[0]).language_name().lower()
 
 
-def parse_json_mapping(text: str) -> dict[str, Any]:
-    """Parse JSON mapping from text.
+def try_parse_json(text: str) -> JsonValue:
+    """Try to parse JSON.
 
     Args:
         text: Input text.
 
     Returns:
-        JSON mapping.
-
-    Raises:
-        ValueError: If text is not valid JSON or not a mapping.
+        JSON or initial text if parsing failed.
     """
-    content = from_json(text.strip().encode(), allow_partial=True)
-    if isinstance(content, dict):
-        return content
-    msg = "Invalid JSON mapping."
-    raise ValueError(msg)
+    try:
+        return from_json(text.strip().encode(), allow_partial=True)  # type: ignore[no-any-return]
+    except ValueError:
+        return text
 
 
 async def b64decode(
