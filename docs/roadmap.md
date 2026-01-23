@@ -124,6 +124,17 @@ The following features may be implemented in future releases based on community 
 
 ## ✨ Release History
 
+### v1.3.1 – Bug Fixes & Documentation
+
+Addresses JSON parsing issues and corrects OpenAPI documentation.
+
+#### Fixes
+
+- Improve JSON parsing and handling for tool arguments and results.
+- Correct `example` field to `examples` in OpenAPI model path parameter.
+
+---
+
 ### v1.3.0 – Image Editing & Variation Support
 
 Adds support for OpenAI's image editing and variation endpoints, enabling image manipulation capabilities backed by Amazon Bedrock.
