@@ -575,7 +575,11 @@ def get_audio_duration(transcript_data: TranscriptionJobData) -> float:
     Returns:
         Duration in seconds
     """
-    return float(transcript_data["audio_segments"][-1]["end_time"])
+    try:
+        segment = transcript_data["audio_segments"][-1]
+    except IndexError:
+        return 0.0
+    return float(segment["end_time"])
 
 
 def format_subtitle_response(
