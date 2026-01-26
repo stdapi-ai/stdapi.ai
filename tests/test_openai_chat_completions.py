@@ -568,7 +568,7 @@ class TestChatCompletions:
             except _json.JSONDecodeError:
                 # If not valid JSON, it might be incomplete streaming
                 # Accept partial JSON if it starts correctly
-                assert args_joined.startswith("{") or args_joined.startswith('"')
+                assert args_joined.startswith(("{", '"'))
 
     def test_empty_messages_error(self, openai_client: OpenAI, chat_model: str) -> None:
         """Test error handling for empty messages array.
@@ -1054,9 +1054,7 @@ class TestChatCompletions:
                     "description": "Process some data",
                     "parameters": {
                         "type": "object",
-                        "properties": {
-                            "data": {"type": "string"},
-                        },
+                        "properties": {"data": {"type": "string"}},
                     },
                 },
             }
