@@ -6,10 +6,15 @@ to edit images using inpainting techniques.
 """
 
 from asyncio import create_task, gather
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from pydantic import AliasChoices, ValidationError
 from sse_starlette import EventSourceResponse
+from starlette.datastructures import UploadFile as StarletteUploadFile
+
+if TYPE_CHECKING:
+    from starlette.datastructures import FormData
 
 from stdapi.auth import authenticate
 from stdapi.aws_bedrock import get_extra_model_parameters
@@ -35,7 +40,67 @@ router = APIRouter(
 )
 
 #: Includes model fields and file parameters handled separately in the route
-_KNOWN_PARAMS = set(ImageEditParams.model_fields.keys()) | {"image", "mask"}
+_KNOWN_PARAMS = set(ImageEditParams.model_fields.keys()) | {"image", "image[]", "mask"}
+
+
+def _merge_image_parameters(
+    form_data: FormData, image_param: list[UploadFile] | None
+) -> list[UploadFile]:
+    """Merge image files from both 'image' and 'image[]' form parameters.
+
+    FastAPI does not support validation_alias for File parameters in multipart/form-data
+    requests. The parameter name matching occurs at the request parsing level before
+    Pydantic validation, preventing alias resolution from working.
+
+    This function provides a workaround by manually extracting files uploaded with the
+    'image[]' parameter name and merging them with files from the standard 'image'
+    parameter, enabling OpenAI API compatibility for array-style parameter notation.
+
+    Args:
+        form_data: Parsed multipart form data from the request.
+        image_param: Files uploaded via the 'image' parameter, or None if not provided.
+
+    Returns:
+        Combined list of UploadFile objects from both parameters.
+
+    Raises:
+        ValidationError: If no images are provided via either parameter.
+    """
+    images: list[UploadFile] = list(image_param) if image_param else []
+
+    for key, value in form_data.multi_items():
+        if key == "image[]":
+            if isinstance(value, StarletteUploadFile):
+                images.append(value)  # type: ignore[arg-type]
+            else:
+                msg = "ValidationError"
+                raise ValidationError.from_exception_data(
+                    msg,
+                    [
+                        {
+                            "type": "is_instance_of",
+                            "loc": ("body", "image[]"),
+                            "input": value,
+                            "ctx": {"class": "UploadFile"},
+                        }
+                    ],
+                )
+
+    if not images:
+        msg = "ValidationError"
+        raise ValidationError.from_exception_data(
+            msg,
+            [
+                {
+                    "type": "too_short",
+                    "loc": ("body", "image"),
+                    "input": [],
+                    "ctx": {"field_type": "List", "min_length": 1, "actual_length": 0},
+                }
+            ],
+        )
+
+    return images
 
 
 @router.post(
@@ -55,8 +120,13 @@ async def edit_images(
     http_request: Request,
     *,
     image: Annotated[
-        list[UploadFile], File(description="The image(s) to edit.", min_length=1)
-    ],
+        list[UploadFile] | None,
+        File(
+            description="The image(s) to edit.",
+            min_length=1,
+            validation_alias=AliasChoices("image", "image[]"),
+        ),
+    ] = None,
     prompt: Annotated[
         str,
         Form(
@@ -199,7 +269,10 @@ async def edit_images(
         HTTPException: With 404 if the model does not exist; 400 on unsupported
             options or invalid values.
     """
+    form_data = await http_request.form()
+
     with validation_error_handler():
+        image = _merge_image_parameters(form_data, image)
         request = ImageEditParams(
             prompt=prompt,
             model=model,
@@ -215,9 +288,7 @@ async def edit_images(
             quality=quality,
             stream=stream,
             **{  # type: ignore[arg-type]
-                k: v
-                for k, v in (await http_request.form()).items()
-                if k not in _KNOWN_PARAMS
+                k: v for k, v in form_data.items() if k not in _KNOWN_PARAMS
             },
         )
     log_request_params(request, user_id=request.user)
