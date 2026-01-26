@@ -124,6 +124,24 @@ The following features may be implemented in future releases based on community 
 
 ## ✨ Release History
 
+### v1.3.2 – Image Edits Enhancement & TTS Optimization
+
+Improves image editing API compatibility and adds TTS language configuration for better performance.
+
+#### 🎙️ Speech & Audio
+
+| Feature                        | Description                                                   |
+|--------------------------------|---------------------------------------------------------------|
+| `DEFAULT_TTS_LANGUAGE` setting | Configurable default language for TTS to optimize performance |
+
+#### Fixes
+
+- Support `image[]` array-style notation for OpenAI image edits.
+- Handle empty audio segments in transcription duration calculation.
+- Fix Ruff linters on tests.
+
+---
+
 ### v1.3.1 – Bug Fixes & Documentation
 
 Addresses JSON parsing issues and corrects OpenAPI documentation.
