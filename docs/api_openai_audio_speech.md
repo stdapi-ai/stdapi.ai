@@ -89,6 +89,20 @@ Generate audio from text for voiceovers, audiobooks, accessibility features, or 
 !!! tip "Performance Tips: Optimize Speed & Cost"
     - **Use native Polly formats** (mp3, ogg, PCM) to skip server-side conversion
     - **Specify a Polly voice ID** to bypass language detection—faster responses, no AWS Comprehend charges
+    - **Configure a default language** via `DEFAULT_TTS_LANGUAGE` environment variable to skip language detection for all requests using OpenAI voice names
+
+!!! info "Language Detection Behavior"
+    When using OpenAI voice names without specifying a default language, the system analyzes only the first 500 characters of your text to detect the language. This approach:
+
+    - **Works best** with long, single-language texts where the first 500 characters are representative
+    - **May be inconsistent** with very short texts (< 100 characters) where language detection has limited context
+    - **Can produce mixed results** with multi-language content where different parts use different languages
+
+    **For consistent behavior across requests**, consider:
+
+    - Setting `DEFAULT_TTS_LANGUAGE` for applications serving primarily one language
+    - Using Polly voice IDs directly when you know the target language
+    - Structuring multi-language applications to make separate API calls per language
 
 ### Provider-Specific Parameters
 

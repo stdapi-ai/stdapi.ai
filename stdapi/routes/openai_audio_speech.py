@@ -292,6 +292,8 @@ async def _select_voice(
 async def _detect_language(text: str) -> LanguageCodeType:
     """Detect language from a short sample of the full text.
 
+    If a default language is configured in settings, use it instead of auto-detection.
+    Otherwise, use AWS Comprehend to detect the language.
     Fallback to English if no language is detected.
 
     Args:
@@ -300,25 +302,27 @@ async def _detect_language(text: str) -> LanguageCodeType:
     Returns:
         Language code.
     """
-    comprehend: ComprehendClient = get_client("comprehend")
-    response = await comprehend.detect_dominant_language(
-        Text=text
-        if len(text) <= _LANG_DETECT_SAMPLE_SIZE
-        else text[
-            : (
-                pos
-                if (pos := text.rfind(" ", 0, _LANG_DETECT_SAMPLE_SIZE)) != -1
-                else _LANG_DETECT_SAMPLE_SIZE
-            )
-        ]
-    )
-    if response.get("Languages"):
-        language = format_language_code(
-            max(response["Languages"], key=lambda x: x["Score"])["LanguageCode"]
+    if SETTINGS.default_tts_language is None:
+        comprehend: ComprehendClient = get_client("comprehend")
+        response = await comprehend.detect_dominant_language(
+            Text=text
+            if len(text) <= _LANG_DETECT_SAMPLE_SIZE
+            else text[
+                : (
+                    pos
+                    if (pos := text.rfind(" ", 0, _LANG_DETECT_SAMPLE_SIZE)) != -1
+                    else _LANG_DETECT_SAMPLE_SIZE
+                )
+            ]
         )
-        if language in _VOICES_BY_LANGUAGE:
-            return language  # type: ignore[return-value]
-    return "en-US"
+        if response.get("Languages"):
+            language = format_language_code(
+                max(response["Languages"], key=lambda x: x["Score"])["LanguageCode"]
+            )
+            if language in _VOICES_BY_LANGUAGE:
+                return language  # type: ignore[return-value]
+        return "en-US"
+    return SETTINGS.default_tts_language  # type: ignore[return-value]
 
 
 def _prepare_text_for_speech(input_text: str, speed: float) -> tuple[str, TextTypeType]:

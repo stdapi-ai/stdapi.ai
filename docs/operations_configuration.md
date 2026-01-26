@@ -213,6 +213,7 @@ Choose **one** method (mutually exclusive):
 | [`TIMEZONE`](#validation-and-logging)                    | `UTC`                   | IANA timezone identifier for request timestamps                                            |
 | [`STRICT_INPUT_VALIDATION`](#validation-and-logging)     | `false`                 | Reject API requests with unknown/extra fields                                              |
 | [`DEFAULT_TTS_MODEL`](#default-tts-model)                | `amazon.polly-standard` | Default text-to-speech model: `standard`, `neural`, `long-form`, or `generative`           |
+| [`DEFAULT_TTS_LANGUAGE`](#default-tts-language)          | None                    | Default language for TTS (e.g., `en-US`); when set, skips AWS Comprehend auto-detection    |
 | [`TOKENS_ESTIMATION`](#tokens-estimation)                | `false`                 | Estimate token counts using tiktoken when model doesn't provide them                       |
 | [`TOKENS_ESTIMATION_DEFAULT_ENCODING`](#tokens-encoding) | `o200k_base`            | Tiktoken encoding algorithm: `o200k_base` (GPT-4o+), `cl100k_base` (GPT-4), or `p50k_base` |
 | [`DEFAULT_MODEL_PARAMS`](#default-model-params)          | `{}`                    | JSON object with per-model default inference parameters (temperature, max_tokens, etc.)    |
@@ -1156,9 +1157,12 @@ Required for storing generated images, audio files, and documents. See [Storage 
 
 ### Text-to-Speech (Optional)
 
-**Environment Variables**: [`AWS_POLLY_REGION`](#aws-polly-region), [`DEFAULT_TTS_MODEL`](#default-tts-model)
+**Environment Variables**: [`AWS_POLLY_REGION`](#aws-polly-region), [`DEFAULT_TTS_MODEL`](#default-tts-model), [`DEFAULT_TTS_LANGUAGE`](#default-tts-language)
 
 Required for generating speech from text using Amazon Polly. See [Audio and Text-to-Speech](#audio-and-text-to-speech) configuration section.
+
+!!! tip "Optimize Performance"
+    Set [`DEFAULT_TTS_LANGUAGE`](#default-tts-language) to skip language detection and avoid AWS Comprehend API calls, improving response times and reducing costs.
 
 ??? example "Polly Text-to-Speech IAM Policy Statement"
     ```json
@@ -2703,6 +2707,44 @@ curl -X POST https://api.example.com/v1/images/generations \
 ```bash
 export DEFAULT_TTS_MODEL=amazon.polly-neural
 ```
+
+#### `DEFAULT_TTS_LANGUAGE` { #default-tts-language }
+
+:octicons-package-24: **Purpose**
+:   Default language code for text-to-speech synthesis when using OpenAI voice names
+
+:octicons-gear-24: **Default**
+:   None (automatic language detection via AWS Comprehend)
+
+:octicons-check-circle-24: **Behavior**
+:   When specified, this language is used instead of automatic detection. When not set, AWS Comprehend detects the language automatically from the input text.
+
+**Valid Language Codes**: Any AWS Polly language code (e.g., `en-US`, `fr-FR`, `es-ES`, `de-DE`, `ja-JP`)
+
+```bash
+# Use English (US) for all TTS requests
+export DEFAULT_TTS_LANGUAGE=en-US
+
+# Use French for all TTS requests
+export DEFAULT_TTS_LANGUAGE=fr-FR
+```
+
+!!! tip "Performance Benefits"
+    Setting a default language improves performance by:
+
+    - **Faster responses**: Skips language detection API call to AWS Comprehend
+    - **Reduced costs**: No AWS Comprehend charges for language detection
+    - **Predictable voice selection**: Always uses voices from the specified language
+
+!!! info "When to Use"
+    Consider setting a default language when:
+
+    - Your application primarily serves content in a single language
+    - You want to optimize response times and reduce AWS service calls
+    - You prefer predictable voice selection over automatic language matching
+
+!!! note "Interaction with Voice Selection"
+    This setting only affects automatic language detection when using OpenAI voice names (like `alloy`, `echo`, `nova`). If you specify a Polly voice ID directly (like `Joanna`, `Matthew`), language detection is already skipped.
 
 ---
 

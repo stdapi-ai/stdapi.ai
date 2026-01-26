@@ -539,6 +539,17 @@ class _Settings(BaseSettings):
         ),
     )
 
+    default_tts_language: str | None = Field(
+        default=None,
+        description=(
+            "Default language code for text-to-speech synthesis. When specified, "
+            "this language will be used instead of automatic language detection via AWS Comprehend. "
+            "Must be a valid AWS Polly language code (e.g., 'en-US', 'fr-FR', 'es-ES'). "
+            "If not specified, the system will automatically detect the language using AWS Comprehend. "
+            "Setting a default language can improve performance by avoiding Comprehend API calls."
+        ),
+    )
+
     tokens_estimation: bool = Field(
         default=False,
         description=(
