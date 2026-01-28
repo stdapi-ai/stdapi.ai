@@ -3,7 +3,9 @@ name: Webpage & Documentation
 
 on:
   push:
-    branches: ["main"]
+    tags:
+      - "v*"
+  workflow_dispatch:
 permissions:
   contents: read
   pages: write
