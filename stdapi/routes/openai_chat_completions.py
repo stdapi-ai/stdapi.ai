@@ -941,9 +941,6 @@ def _resp_stream_delta_chunk(
         choice.finish_reason = _resp_map_bedrock_stop_reason(stop_block["stopReason"])
         end = True
 
-    elif "contentBlockStop" in event:
-        end = True
-
     return chunk, end
 
 
