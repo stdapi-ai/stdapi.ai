@@ -25,14 +25,14 @@ Select the category that matches your needs, or explore multiple integrations to
 Build ChatGPT-like experiences with enterprise models and full privacy control.
 
 !!! example "Featured Integrations"
-    **[OpenWebUI Integration](use_cases_openwebui.md)**
+    **[Open WebUI Integration](use_cases_openwebui.md)**
 
-    Transform OpenWebUI into your private ChatGPT alternative with Amazon Bedrock models. Perfect for teams wanting a familiar chat interface with enterprise security.
+    Transform Open WebUI into your private ChatGPT alternative with Amazon Bedrock models. Perfect for teams wanting a familiar chat interface with enterprise security.
 
-    - ✅ **40,000+ GitHub stars** — Most popular open-source AI web UI
+    - ✅ **120,000+ GitHub stars** — Popular open-source AI web UI
     - ✅ **Multi-modal** — Chat, voice, images, and document RAG
     - ✅ **Self-hosted** — Complete control over your AI assistant
-    - ✅ **Easy setup** — Configure with environment variables
+    - ✅ **Easy setup** — 🚀 Full AWS infrastructure Terraform sample available
 
     **[LibreChat Integration](use_cases_librechat.md)**
 
@@ -247,9 +247,9 @@ Different use cases benefit from different models. Here's a quick reference:
 Many users deploy multiple integrations together for a complete AI solution:
 
 !!! example "Team Productivity Suite"
-    **Combination:** OpenWebUI + Slack Bot + IDE Integration
+    **Combination:** Open WebUI + Slack Bot + IDE Integration
 
-    **Result:** Team members use OpenWebUI for research and writing, a Slack bot for quick questions, and Continue.dev for coding—all powered by the same Bedrock models.
+    **Result:** Team members use Open WebUI for research and writing, a Slack bot for quick questions, and Continue.dev for coding—all powered by the same Bedrock models.
 
 !!! example "Content Creation Pipeline"
     **Combination:** N8N + Note-Taking Apps + LangChain
@@ -323,7 +323,7 @@ Ready to unlock the power of Amazon Bedrock across all your AI tools?
 
 Browse the detailed guides for each integration using the navigation menu, or jump directly to:
 
-- [OpenWebUI](use_cases_openwebui.md) — Web chat interface
+- [Open WebUI](use_cases_openwebui.md) — Web chat interface
 - [N8N](use_cases_n8n.md) — Workflow automation
 - [Continue.dev](use_cases_continue.md) — IDE coding assistant
 - [LibreChat](use_cases_librechat.md) — Team chat platform
