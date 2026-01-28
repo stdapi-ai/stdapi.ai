@@ -124,6 +124,14 @@ The following features may be implemented in future releases based on community 
 
 ## ✨ Release History
 
+### v1.3.3 – Streaming Chat Fix
+
+Resolves a streaming stop condition issue.
+
+#### Fixes
+
+- Remove premature stop condition for `contentBlockStop` in streaming chat completions.
+
 ### v1.3.2 – Image Edits Enhancement & TTS Optimization
 
 Improves image editing API compatibility and adds TTS language configuration for better performance.
