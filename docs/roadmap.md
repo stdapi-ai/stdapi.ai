@@ -124,6 +124,18 @@ The following features may be implemented in future releases based on community 
 
 ## ✨ Release History
 
+### v1.3.4 – Tool Call Validation & Docs Refresh
+
+Hardens tool call parsing and improves documentation visuals.
+
+#### Fixes
+
+- More reliable tool call handling in edge cases, with clearer feedback when inputs are invalid.
+
+#### Maintenance
+
+- Add deprecation mapping from `amazon.titan-image-generator-v2:0` to `amazon.nova-canvas-v1:0`.
+
 ### v1.3.3 – Streaming Chat Fix
 
 Resolves a streaming stop condition issue.
