@@ -9,6 +9,7 @@ Reference: https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.
 DEPRECATED_MODELS: dict[str, str] = {
     "ai21.jamba-instruct-v1:0": "ai21.jamba-1-5-large-v1:0",
     "amazon.titan-image-generator-v1": "amazon.nova-canvas-v1:0",
+    "amazon.titan-image-generator-v2:0": "amazon.nova-canvas-v1:0",
     "amazon.titan-text-express-v1": "amazon.nova-lite-v1:0",
     "amazon.titan-text-lite-v1": "amazon.nova-micro-v1:0",
     "amazon.titan-text-premier-v1:0": "amazon.nova-pro-v1:0",
