@@ -167,24 +167,14 @@ response = client.chat.completions.create(
 
 ### Understanding the Architecture
 
-```
-┌─────────────────┐
-│  Your App       │
-│  (OpenAI SDK)   │
-└────────┬────────┘
-         │ HTTPS /v1/*
-         ▼
-┌─────────────────┐
-│  stdapi.ai      │
-│  API Gateway    │
-└────────┬────────┘
-         │ Translates to AWS APIs
-    ┌────┴─────┬──────────┬──────────┐
-    ▼          ▼          ▼          ▼
-┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐
-│AWS     │ │AWS     │ │AWS     │ │AWS     │
-│Bedrock │ │Polly   │ │Transcr.│ │S3      │
-└────────┘ └────────┘ └────────┘ └────────┘
+```mermaid
+%%{init: {'flowchart': {'htmlLabels': true}} }%%
+flowchart LR
+  app["<img src='../styles/logo_openai.svg' style='height:64px;width:auto;vertical-align:middle;' /> Your App<br/>(OpenAI SDK)"] -->|HTTPS /v1/*| stdapi["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai<br/>API Gateway"]
+  stdapi --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Bedrock"]
+  stdapi --> polly["<img src='../styles/logo_amazon_polly.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Polly"]
+  stdapi --> transcribe["<img src='../styles/logo_amazon_transcribe.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Transcribe"]
+  stdapi --> s3["<img src='../styles/logo_amazon_s3.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS S3"]
 ```
 
 **Request Flow:**

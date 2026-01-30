@@ -91,6 +91,18 @@ terraform apply
 - Interactive API documentation at `/docs`
 - IP-restricted access (your IP only)
 
+```mermaid
+%%{init: {'flowchart': {'htmlLabels': true}} }%%
+flowchart LR
+  app["<img src='../styles/logo_openai.svg' style='height:64px;width:auto;vertical-align:middle;' /> Your App<br/>(OpenAI SDK)"] -->|HTTPS| alb["<img src='../styles/logo_amazon_load_balancing.svg' style='height:64px;width:auto;vertical-align:middle;' /> ALB + WAF"]
+  alb --> ecs["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai<br/>ECS Fargate"]
+  ecs --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Bedrock"]
+  ecs --> polly["<img src='../styles/logo_amazon_polly.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Polly"]
+  ecs --> transcribe["<img src='../styles/logo_amazon_transcribe.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Transcribe"]
+  ecs --> s3["<img src='../styles/logo_amazon_s3.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS S3"]
+  ecs --> cloudwatch["<img src='../styles/logo_amazon_cloudwatch.svg' style='height:64px;width:auto;vertical-align:middle;' /> CloudWatch"]
+```
+
 **Get your credentials:**
 
 ```bash
@@ -533,6 +545,20 @@ Enterprise-ready deployment with HTTPS endpoints, WAF protection, auto-scaling, 
 - Enhanced Container Insights
 - Regional S3 buckets for Bedrock multimodal operations in 3 regions
 
+```mermaid
+%%{init: {'flowchart': {'htmlLabels': true}} }%%
+flowchart LR
+  app["<img src='../styles/logo_openai.svg' style='height:64px;width:auto;vertical-align:middle;' /> Your App<br/>(OpenAI SDK)"] --> alb["<img src='../styles/logo_amazon_load_balancing.svg' style='height:64px;width:auto;vertical-align:middle;' /> ALB + WAF"]
+  alb --> ecs["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai<br/>ECS Fargate"]
+  ecs --> bedrock_primary["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Bedrock<br/>Region 1"]
+  bedrock_primary -.-|multiple regions| bedrock_region_n["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Bedrock<br/>Region N"]
+  ecs --> s3_primary["<img src='../styles/logo_amazon_s3.svg' style='height:64px;width:auto;vertical-align:middle;' /> Regional S3 Bucket<br/>Region 1"]
+  s3_primary -.-|multiple regions| s3_region_n["<img src='../styles/logo_amazon_s3.svg' style='height:64px;width:auto;vertical-align:middle;' /> Regional S3 Bucket<br/>Region N"]
+  ecs --> polly["<img src='../styles/logo_amazon_polly.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Polly"]
+  ecs --> transcribe["<img src='../styles/logo_amazon_transcribe.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Transcribe"]
+  ecs --> cloudwatch["<img src='../styles/logo_amazon_cloudwatch.svg' style='height:64px;width:auto;vertical-align:middle;' /> CloudWatch + Alarms"]
+```
+
 **Estimated monthly cost (us-east-1):**
 
 - Fargate (0.25 vCPU ARM64, 512 MiB, 730 hours): $7.21
@@ -732,6 +758,18 @@ After subscribing, the container image is available from AWS Marketplace ECR:
 709825985650.dkr.ecr.us-east-1.amazonaws.com/j-goutin/stdapi.ai:<version>
 ```
 
+```mermaid
+%%{init: {'flowchart': {'htmlLabels': true}} }%%
+flowchart LR
+  app["<img src='../styles/logo_openai.svg' style='height:64px;width:auto;vertical-align:middle;' /> Your App<br/>(OpenAI SDK)"] --> alb["<img src='../styles/logo_amazon_load_balancing.svg' style='height:64px;width:auto;vertical-align:middle;' /> Your ALB/NLB"]
+  alb --> ecs["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai<br/>ECS (Fargate/EC2)"]
+  ecr["<img src='../styles/logo_amazon_marketplace.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Marketplace ECR"] --> ecs
+  ecs --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Bedrock"]
+  ecs --> polly["<img src='../styles/logo_amazon_polly.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Polly"]
+  ecs --> transcribe["<img src='../styles/logo_amazon_transcribe.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Transcribe"]
+  ecs --> s3["<img src='../styles/logo_amazon_s3.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS S3"]
+```
+
 #### ECS Task Definition Example
 
 ```json
@@ -896,6 +934,16 @@ The `:z` flag tells Podman to relabel the files with a private unshared label th
 - Access to AWS Bedrock models in the specified regions
 - Interactive API documentation at http://localhost:8000/docs
 - Perfect for local development and testing
+
+```mermaid
+%%{init: {'flowchart': {'htmlLabels': true}} }%%
+flowchart LR
+  app["<img src='../styles/logo_openai.svg' style='height:64px;width:auto;vertical-align:middle;' /> Your App<br/>(OpenAI SDK)"] --> local["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai (community)<br/>Docker/Podman"]
+  local --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Bedrock"]
+  local --> polly["<img src='../styles/logo_amazon_polly.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Polly"]
+  local --> transcribe["<img src='../styles/logo_amazon_transcribe.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Transcribe"]
+  local --> s3["<img src='../styles/logo_amazon_s3.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS S3"]
+```
 
 **Environment variables:**
 
