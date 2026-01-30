@@ -341,12 +341,18 @@ def _req_build_tool_use_block(
     Returns:
         A ContentBlockTypeDef representing a toolUse block.
     """
-    tool_use: ToolUseBlockTypeDef = {
-        "toolUseId": call_id,
-        "name": name,
-        "input": try_parse_json(arguments) if isinstance(arguments, str) else arguments,  # type: ignore[typeddict-item]
-    }
-    return {"toolUse": tool_use}
+    tool_input = (
+        try_parse_json(arguments) if isinstance(arguments, str) else arguments
+    ) or {}
+    if isinstance(tool_input, dict):
+        tool_use: ToolUseBlockTypeDef = {
+            "toolUseId": call_id,
+            "name": name,
+            "input": tool_input,
+        }
+        return {"toolUse": tool_use}
+    msg = f'Invalid arguments for tool call "{name}" with ID "{call_id}": {arguments}'
+    raise OpenaiError(msg)
 
 
 def _req_extract_assistant_blocks(
@@ -491,7 +497,11 @@ def _req_parse_tool_content(text_content: str) -> ToolResultContentBlockUnionTyp
     except ValueError:
         return {"text": text_content}
     else:
-        return {"json": json_content}
+        return (
+            {"json": json_content}
+            if isinstance(json_content, dict)
+            else {"text": text_content}
+        )
 
 
 def _req_extract_tool_blocks(
