@@ -124,6 +124,14 @@ The following features may be implemented in future releases based on community 
 
 ## ✨ Release History
 
+### v1.3.5 – Content Block Handling Improvements
+
+Improves robustness of assistant response processing.
+
+#### Fixes
+
+- Refactor content block handling to skip empty entries in assistant responses.
+
 ### v1.3.4 – Tool Call Validation & Docs Refresh
 
 Hardens tool call parsing and improves documentation visuals.

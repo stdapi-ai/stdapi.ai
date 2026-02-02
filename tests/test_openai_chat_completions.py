@@ -1067,7 +1067,7 @@ class TestChatCompletions:
                 {"role": "user", "content": "Process this"},
                 {
                     "role": "assistant",
-                    "content": "", # Explicit content field, but empty
+                    "content": "",  # Explicit content field, but empty
                     "tool_calls": [
                         {
                             "id": "call_1",
