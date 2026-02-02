@@ -414,6 +414,20 @@ def _req_extract_assistant_blocks(
     return content_blocks
 
 
+def _req_append_text_content_block(
+    content: str, content_blocks: list[ContentBlockTypeDef]
+) -> None:
+    """Adds a new content block to the list if content is provided.
+
+    Args:
+        content: The content string to be evaluated and added as a
+            content block if not empty.
+        content_blocks: The list of content blocks to which the new content block will be appended.
+    """
+    if content:
+        content_blocks.append({"text": content})
+
+
 def _req_map_assistant_content(
     content_blocks: list[ContentBlockTypeDef],
     message_param: ChatCompletionAssistantMessageParam,
@@ -431,13 +445,13 @@ def _req_map_assistant_content(
     content = message_param.content
     if content is not None:
         if isinstance(content, str):
-            content_blocks.append({"text": content})
+            _req_append_text_content_block(content, content_blocks)
         else:
             for part in content:
                 if isinstance(part, ChatCompletionContentPartTextParam):
-                    content_blocks.append({"text": part.text})
+                    _req_append_text_content_block(part.text, content_blocks)
                 elif isinstance(part, ChatCompletionContentPartRefusalParam):
-                    content_blocks.append({"text": part.refusal})
+                    _req_append_text_content_block(part.refusal, content_blocks)
                 else:  # pragma: no cover
                     raise HTTPException(
                         status_code=400, detail=f"Unsupported message type: {part}"
