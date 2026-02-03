@@ -3079,7 +3079,7 @@ When using ARN-based routing, ensure your IAM role/user has the appropriate perm
   "Effect": "Allow",
   "Action": [
     "bedrock:GetInferenceProfile",
-    "bedrock:GetPromptRouter",
+    "bedrock:GetPromptRouter"
   ],
   "Resource": "*"
 }

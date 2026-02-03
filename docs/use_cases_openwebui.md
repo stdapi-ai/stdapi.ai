@@ -6,9 +6,11 @@ Connect Open WebUI to stdapi.ai as an OpenAI-compatible backend. Access Amazon B
 
 **🔗 Links:** [Website](https://openwebui.com/) | [GitHub](https://github.com/open-webui/open-webui) | [Documentation](https://docs.openwebui.com/)
 
-Open WebUI is a feature-rich, self-hosted web UI for AI models:
+Open WebUI is an extensible, feature-rich, and user-friendly self-hosted web interface designed to operate entirely offline. It serves as a powerful frontend for large language models, offering a ChatGPT-like experience while maintaining complete control over your data and infrastructure. The platform supports multiple AI providers through a unified interface, making it an ideal choice for organizations and individuals who need enterprise-grade AI capabilities without compromising privacy or relying on external cloud services.
 
-- ⭐ 120,000+ GitHub stars - Popular open-source AI web interface
+**Key Features:**
+
+- ⭐ 100,000+ GitHub stars - Popular open-source AI web interface
 - Feature-complete chat interface
 - Multi-modal: chat, voice, images, and document RAG
 - Extensible: plugins, custom functions, and community tools
@@ -16,23 +18,28 @@ Open WebUI is a feature-rich, self-hosted web UI for AI models:
 
 ## Why Open WebUI + stdapi.ai?
 
-!!! success "Seamless Integration"
-    stdapi.ai acts as a drop-in replacement for OpenAI's API. Configure Open WebUI once, then use Amazon Bedrock models through a familiar interface.
+<div class="grid cards" markdown>
 
-**Key Benefits (via stdapi.ai):**
+- :material-swap-horizontal: __Drop-in Replacement__
+  <br>stdapi.ai acts as an OpenAI-compatible backend. Configure Open WebUI once, then use Amazon Bedrock models through a familiar interface.
 
-- Familiar Open WebUI experience with a Bedrock backend
-- Single entry point to multi-region Bedrock models and other AWS AI services
-- Multi-modal: text, voice, image, and documents
-- Privacy and control inside your AWS environment
-- Cost-efficient model access
+- :material-application-cog: __Multi-Modal Experience__
+  <br>Familiar chat interface with text, voice, images, and documents. RAG, embeddings, and visual content—all powered by Bedrock.
+
+- :material-server-network: __Single Entry Point__
+  <br>Access multi-region Bedrock models, AWS Translate, AWS Polly, and more through one unified API endpoint.
+
+- :material-lock: __Privacy & Control__
+  <br>All data stays in your AWS environment. Self-hosted deployment with complete infrastructure control and enterprise security.
+
+</div>
 
 ```mermaid
 %%{init: {'flowchart': {'htmlLabels': true}} }%%
 flowchart LR
   openwebui["<img src='../styles/logo_openwebui.svg' style='height:64px;width:auto;vertical-align:middle;' /> Open WebUI"] --> stdapi["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai"]
   stdapi --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Bedrock"]
-  stdapi --> translate["<img src='../styles/logo_amazon_translate.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Translate"]
+  stdapi --> transcribe["<img src='../styles/logo_amazon_transcribe.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Transcribe"]
   stdapi --> polly["<img src='../styles/logo_amazon_polly.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Polly"]
 ```
 
@@ -41,8 +48,7 @@ flowchart LR
 !!! info "What You'll Need"
     - ✓ A running Open WebUI instance
     - ✓ Your stdapi.ai server URL (e.g., `https://api.example.com`)
-    - ✓ An API key (if authentication is enabled on your stdapi.ai deployment)
-    - ✓ AWS access with the Bedrock models you want to use
+    - ✓ Your stdapi.ai server API key
 
 ---
 

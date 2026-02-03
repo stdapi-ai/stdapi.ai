@@ -192,7 +192,7 @@ response_text = chat.choices[0].message.content
   <br>Use Continue.dev, Cline, or Cursor with AWS models. Get intelligent code completions and chat in VS Code, JetBrains, and more.
 
 - :material-robot-outline: __Workflow automation__
-  <br>Connect N8N's 400+ integrations with AWS AI. Automate customer support, content creation, and data processing pipelines.
+  <br>Connect n8n's 400+ integrations with AWS AI. Automate customer support, content creation, and data processing pipelines.
 
 - :material-message-text: __Team chat bots__
   <br>Deploy AI assistants in Slack, Discord, or Teams. Answer questions, summarize threads, and automate responses with enterprise privacy.

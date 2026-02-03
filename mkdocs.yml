@@ -62,13 +62,8 @@ nav:
       - Use cases:
           - Overview: use_cases.md
           - OpenWebUI integration: use_cases_openwebui.md
-          - N8N integration: use_cases_n8n.md
-          - IDE integration (Continue.dev & others): use_cases_continue.md
-          - LibreChat integration: use_cases_librechat.md
-          - LangChain / LlamaIndex integration: use_cases_langchain.md
-          - Note-taking apps (Obsidian & Notion): use_cases_note_taking.md
-          - Chat bots (Slack, Discord & Teams): use_cases_chatbots.md
-          - Autonomous agents (AutoGPT & more): use_cases_agents.md
+          - n8n integration: use_cases_n8n.md
+          - AI Coding Assistants: use_cases_coding_assistants.md
       - Roadmap & Changelog: roadmap.md
   - API Reference: api_reference.md
 
