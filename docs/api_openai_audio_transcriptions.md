@@ -73,10 +73,18 @@ Convert spoken words into text. For voice assistants, meeting transcription, or 
 
 **Model & Features:**
 
-- Use `amazon.transcribe` (instead of `whisper-1`) with the same interface
+- Use `amazon.transcribe` with the same interface as OpenAI's Whisper API
+- **Or use OpenAI model name directly**: `whisper-1` works out of the box (maps to `amazon.transcribe`)
 - Auto-detect language or specify it for faster processing
 - Word-level or segment-level timestamps with `verbose_json`
 - **Native Subtitles** :material-file-video:{ .highlight }: SRT/VTT files generated directly by AWS Transcribe with precise timing
+
+!!! tip "OpenAI Model Compatibility"
+    stdapi.ai includes a built-in model alias that maps the OpenAI model name to AWS Transcribe:
+
+    - `whisper-1` → `amazon.transcribe`
+
+    This alias enables seamless compatibility with OpenAI-based tools and applications without any configuration changes. You can also [customize or override this alias](operations_configuration.md#model-aliases) to suit your needs.
 
 **Note:** The `prompt`, `temperature`, and `chunking_strategy` parameters are not supported to ensure consistent transcription accuracy.
 

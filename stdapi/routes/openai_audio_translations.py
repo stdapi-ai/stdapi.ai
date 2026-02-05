@@ -20,6 +20,7 @@ from fastapi import (
 from stdapi.auth import authenticate
 from stdapi.aws import get_client
 from stdapi.config import SETTINGS
+from stdapi.models import resolve_model_alias
 from stdapi.monitoring import REQUEST_LOG, log_request_params
 from stdapi.openai_exceptions import OpenaiUnsupportedModelError
 from stdapi.routes.openai_audio_transcriptions import (
@@ -443,6 +444,7 @@ async def create_translation(
         )
     log_request_params(request)
 
+    model = resolve_model_alias(model)
     if model != TRANSCRIBE_MODEL_ID:
         raise OpenaiUnsupportedModelError(model)
     log = REQUEST_LOG.get()

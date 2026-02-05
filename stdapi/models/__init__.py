@@ -122,6 +122,13 @@ _CACHE_POINT: dict[Literal["cachePoint"], CachePointBlockTypeDef] = {
 #: Cached application inference profiles & prompt routers
 _USER_PROFILES: dict[str, tuple[ModelDetails, AwareDatetime]] = {}
 
+#: Model aliases (merged at startup from defaults + user settings)
+MODEL_ALIASES: dict[str, str] = {
+    "tts-1": "amazon.polly-standard",
+    "tts-1-hd": "amazon.polly-neural",
+    "whisper-1": "amazon.transcribe",
+}
+
 
 class ModelDetails(BaseModel):
     """Model details and features."""
@@ -136,6 +143,7 @@ class ModelDetails(BaseModel):
     response_streaming: bool = False
     legacy: bool = False
     inference_profile: str | None = None
+    aliases: list[str] | None = None
 
     def get_id(self, *, inference_profile: bool = False) -> str:
         """Returns the identifier of the object based on the inference profile flag.
@@ -289,6 +297,18 @@ async def get_all_models_details_and_modalities() -> tuple[
         return _ALL_MODELS, _ALL_MODELS_OUTPUT_MODALITY, _ALL_MODELS_INPUT_MODALITY
 
 
+def resolve_model_alias(model_id: str) -> str:
+    """Resolve a model alias to its actual model ID.
+
+    Args:
+        model_id: The model ID or alias to resolve.
+
+    Returns:
+        The resolved model ID. If no alias is found, returns the original model_id.
+    """
+    return MODEL_ALIASES.get(model_id, model_id)
+
+
 def update_unified_models_collections() -> None:
     """Updates all model-related collections with additional model data.
 
@@ -317,6 +337,8 @@ def update_unified_models_collections() -> None:
         _ALL_MODELS_INPUT_MODALITY[key] = (
             _ALL_MODELS_INPUT_MODALITY.get(key, set()) | value
         )
+
+    _populate_model_aliases(_ALL_MODELS)
 
 
 async def _get_provisioned_models(bedrock_client: BedrockClient) -> set[str]:
@@ -535,6 +557,22 @@ def _apply_user_profiles(all_models: dict[str, ModelDetails]) -> dict[str, str]:
         ):
             model.region = arn_match.group("region")
     return invalid_arn_mappings
+
+
+def _populate_model_aliases(all_models: dict[str, ModelDetails]) -> None:
+    """Populates the aliases field for each model based on the MODEL_ALIASES mapping.
+
+    Args:
+        all_models: A dictionary where keys are model IDs and
+            values are `ModelDetails` objects representing the available models.
+    """
+    aliases_by_model: dict[str, list[str]] = {}
+    for alias, model_id in MODEL_ALIASES.items():
+        if model_id in all_models:
+            aliases_by_model.setdefault(model_id, []).append(alias)
+
+    for model_id, aliases in aliases_by_model.items():
+        all_models[model_id].aliases = sorted(aliases)
 
 
 async def _filter_model(
@@ -825,7 +863,7 @@ async def validate_model(
     """Validate and return the model details for a given model ID.
 
     Args:
-        model_id: Model ID to validate
+        model_id: Model ID or alias to validate
         output_modality: Expected output modality.
         input_modality: Expected input modality.
         bedrock_only: If True, only allow Bedrock models.
@@ -836,6 +874,7 @@ async def validate_model(
     Raises:
         HTTPException: If model is not found or not supported
     """
+    model_id = resolve_model_alias(model_id)
     if model_id.startswith("arn:"):
         model = await _validate_model_from_arn(model_id)
     else:

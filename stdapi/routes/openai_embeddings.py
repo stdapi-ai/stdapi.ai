@@ -84,7 +84,7 @@ async def create_embeddings(
             options or invalid values.
     """
     log_request_params(request, user_id=request.user)
-    await validate_model(request.model, "EMBEDDING")
+    model_id = (await validate_model(request.model, "EMBEDDING")).id
     if isinstance(request.input, str):
         input_texts: list[str] = [request.input]
     elif isinstance(request.input[0], str):
@@ -92,10 +92,10 @@ async def create_embeddings(
     else:  # pragma: no cover
         raise HTTPException(status_code=400, detail="Unsupported input type.")
 
-    response = await get_embedding_model(request.model).embed_text(
+    response = await get_embedding_model(model_id).embed_text(
         input_texts,
         dimensions=request.dimensions,
-        extra_params=get_extra_model_parameters(request.model, request),
+        extra_params=get_extra_model_parameters(model_id, request),
         background_tasks=background_tasks,
     )
     b64_embedding = request.encoding_format == "base64"
@@ -114,7 +114,7 @@ async def create_embeddings(
                 )
                 for index, vector in enumerate(response.embeddings)
             ],
-            model=request.model,
+            model=model_id,
             usage=Usage(
                 prompt_tokens=response.prompt_tokens,
                 total_tokens=response.total_tokens or response.prompt_tokens,

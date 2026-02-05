@@ -27,6 +27,7 @@ Filter examples:\n\n
   curl -G $BASE/available_models --data-urlencode 'output_modalities=IMAGE'\n"""
     ),
     response_description="A list of extended ModelDetails objects",
+    response_model_exclude_none=True,
     responses={
         200: {"description": "OK"},
         400: {"description": "Invalid modality filter."},

@@ -19,6 +19,7 @@ from stdapi.models import (
     EXTRA_MODELS_INPUT_MODALITY,
     EXTRA_MODELS_OUTPUT_MODALITY,
     ModelDetails,
+    resolve_model_alias,
 )
 from stdapi.monitoring import (
     REQUEST_LOG,
@@ -560,7 +561,7 @@ async def create_speech(
     """
     log_request_params(request)
     log = REQUEST_LOG.get()
-    log["model_id"] = model_id = request.model
+    log["model_id"] = model_id = resolve_model_alias(request.model)
 
     resp_format = request.response_format
     return await _create_speech_response(

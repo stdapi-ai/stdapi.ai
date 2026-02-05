@@ -130,8 +130,21 @@ Enables: Text-to-speech audio generation in workflows.
     **`OpenAI/Generate audio`**
 
     - Model ID can be entered as expression in the `Model` parameter
+    - **Or use OpenAI model names directly:** `tts-1` and `tts-1-hd` work by default thanks to built-in model aliases
 
     n8n calls `POST /v1/audio/speech` (see [Audio Speech API](api_openai_audio_speech.md)), so the model must match the text-to-speech modality and family.
+
+### 🎤 Audio transcription (STT)
+
+Enables: Speech-to-text transcription in workflows.
+
+!!! example "Supported Node"
+    **`OpenAI/Transcribe a recording`**
+
+    - Works out of the box with OpenAI's `whisper-1` model name
+    - The model alias automatically maps to `amazon.transcribe`
+
+    n8n calls `POST /v1/audio/transcriptions` (see [Audio Transcriptions API](api_openai_audio_transcriptions.md)), so the model must match the speech-to-text modality.
 
 ### ⚠️ Unsupported Nodes
 
@@ -140,4 +153,3 @@ The following nodes are not yet supported:
 !!! warning "Known Limitations"
     - **`OpenAI/Message a model`** — Requires Responses API (not supported yet by stdapi.ai). Use `OpenAI Chat Model` instead.
     - **`OpenAI/Analyze image`** — Requires Responses API (not supported yet by stdapi.ai). Use `OpenAI Chat Model` instead.
-    - **`OpenAI/Transcribe a recording`** — This node doesn't allow selecting the model

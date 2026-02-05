@@ -75,8 +75,17 @@ Generate audio from text for voiceovers, audiobooks, accessibility features, or 
 **Models & Voices:**
 
 - Use `amazon.polly-standard`, `amazon.polly-neural`, `amazon.polly-long-form`, or `amazon.polly-generative` (instead of `tts-1`/`tts-1-hd`)
+- **Or use OpenAI model names directly**: `tts-1` (maps to `amazon.polly-standard`) and `tts-1-hd` (maps to `amazon.polly-neural`) work out of the box
 - OpenAI voice names work with automatic language detection and intelligent voice selection
 - Or specify any [Polly voice ID](https://docs.aws.amazon.com/polly/latest/dg/voicelist.html) directly for 60+ voices across 30+ languages
+
+!!! tip "OpenAI Model Compatibility"
+    stdapi.ai includes built-in model aliases that map OpenAI model names to AWS Polly engines:
+
+    - `tts-1` → `amazon.polly-standard`
+    - `tts-1-hd` → `amazon.polly-neural`
+
+    These aliases enable seamless compatibility with OpenAI-based tools and applications without any configuration changes. You can also [customize or override these aliases](operations_configuration.md#model-aliases) to suit your needs.
 
 **Enhanced Features:**
 

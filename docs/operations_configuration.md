@@ -2937,8 +2937,6 @@ graph LR
     A[Default Parameters] --> B[Merged Config]
     C[Request Parameters] --> B
     B --> D[Final Configuration]
-    style C fill:#90EE90
-    style A fill:#ADD8E6
 ```
 
 1. :material-numeric-1-circle: **Default parameters** are applied first (from `DEFAULT_MODEL_PARAMS`)
@@ -2948,9 +2946,153 @@ graph LR
 
 ---
 
-## Using Inference Profile and Prompt Router ARNs
+## Model Aliases
+
+Configure custom aliases to map user-friendly model names to actual model IDs. This enables OpenAI API compatibility and simplifies model references.
+
+!!! success "What You Can Do"
+    - :material-label: Create custom aliases for frequently used models
+    - :material-api: Enable OpenAI-compatible model names by default
+    - :material-swap-horizontal: Simplify model ID references in API requests
+    - :material-transition: Seamlessly migrate between model versions
+
+!!! info "Default Aliases"
+    stdapi.ai includes default aliases for OpenAI compatibility:
+
+    - `tts-1` → `amazon.polly-standard`
+    - `tts-1-hd` → `amazon.polly-neural`
+    - `whisper-1` → `amazon.transcribe`
+
+#### `MODEL_ALIASES` { #model-aliases }
+
+:octicons-package-24: **Purpose**
+:   Map alias names to actual model IDs or ARNs
+
+:octicons-code-24: **Format**
+:   JSON object with alias names as keys and model IDs or ARNs as values
+
+:octicons-arrow-right-24: **Default**
+:   `{}` (empty, uses built-in defaults only)
+
+!!! tip "Advanced Routing with ARNs"
+    Model aliases can also reference ARNs for Application Inference Profiles or Prompt Routers, enabling advanced routing strategies through friendly alias names. See [Using Inference Profile and Prompt Router ARNs](#using-inference-profile-and-prompt-router-arns) for more details.
+
+### Configuration Examples
+
+**Basic Alias:**
+
+```bash
+export MODEL_ALIASES='{
+  "my-tts": "amazon.polly-neural",
+  "my-stt": "amazon.transcribe"
+}'
+```
+
+**Override Default Aliases:**
+
+```bash
+# Override the default tts-1 mapping
+export MODEL_ALIASES='{
+  "tts-1": "amazon.polly-generative"
+}'
+```
+
+**Multiple Custom Aliases:**
+
+```bash
+export MODEL_ALIASES='{
+  "fast-model": "amazon.nova-micro-v1:0",
+  "balanced-model": "amazon.nova-lite-v1:0",
+  "quality-model": "amazon.nova-pro-v1:0",
+  "claude": "anthropic.claude-sonnet-4-5-20250929-v1:0"
+}'
+```
+
+**Map OpenAI Models to Bedrock:**
+
+```bash
+# Make OpenAI model names work with AWS Bedrock models
+export MODEL_ALIASES='{
+  "gpt-5": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+  "gpt-4o": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+  "gpt-4o-mini": "anthropic.claude-3-5-haiku-20241022-v1:0",
+  "dall-e-3": "amazon.nova-canvas-v1:0",
+  "dall-e-2": "stability.stable-image-ultra-v1:0"
+}'
+```
+
+**Override Deprecated Models:**
+
+```bash
+# Redirect deprecated model IDs to their newer replacements
+export MODEL_ALIASES='{
+  "amazon.titan-image-generator-v1": "amazon.nova-canvas-v1:0",
+  "amazon.titan-text-express-v1": "amazon.nova-lite-v1:0",
+  "anthropic.claude-3-5-sonnet-20240620-v1:0": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+  "stability.stable-image-ultra-v1:0": "stability.stable-image-ultra-v1:1"
+}'
+```
+
+**Advanced Routing with ARNs:**
+
+```bash
+# Map friendly names to Application Inference Profiles or Prompt Routers
+export MODEL_ALIASES='{
+  "my-router": "arn:aws:bedrock:us-east-1:123456789012:default-prompt-router/cost-optimizer",
+  "my-profile": "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123xyz",
+}'
+```
+
+### Using Aliases in API Requests
+
+Once configured, aliases can be used anywhere a model ID is expected:
+
+```bash
+# Using the default tts-1 alias
+curl https://api.example.com/v1/audio/speech \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "tts-1",
+    "input": "Hello world",
+    "voice": "alloy"
+  }'
+
+# Using a custom alias
+curl https://api.example.com/v1/chat/completions \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "fast-model",
+    "messages": [{"role": "user", "content": "Hello"}]
+  }'
+```
+
+### Alias Resolution
+
+```mermaid
+graph LR
+    A[API Request] --> B{Alias Exists?}
+    B -->|Yes| C[Resolve to Model ID]
+    B -->|No| D[Use as Model ID]
+    C --> E[Model Validation]
+    D --> E
+    E --> F[Execute Request]
+```
+
+1. :material-numeric-1-circle: **User-configured aliases** override default aliases
+2. :material-numeric-2-circle: **Default aliases** apply if not overridden
+3. :material-numeric-3-circle: **Non-aliased names** pass through unchanged
+4. :material-numeric-4-circle: **Resolved model ID** is validated and used for the request
+
+---
+
+## Using Inference Profile and Prompt Router ARNs { #using-inference-profile-and-prompt-router-arns }
 
 stdapi.ai supports passing ARNs directly as model IDs in API requests, enabling advanced routing capabilities beyond standard model selection.
+
+!!! tip "Simplify ARNs with Model Aliases"
+    Instead of using long ARNs directly in API requests, you can create [Model Aliases](#model-aliases) that map friendly names to ARNs. This provides shorter, easier-to-use naming for your API users.
 
 ### Overview
 

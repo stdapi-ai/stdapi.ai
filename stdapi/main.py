@@ -24,7 +24,11 @@ from stdapi.aws_bedrock import (
 from stdapi.config import SETTINGS, LogLevel
 from stdapi.exceptions import ServerError
 from stdapi.metering import EDITION_TITLE, LICENCE_INFO, SERVER_FULL_VERSION, register
-from stdapi.models import initialize_bedrock_models, update_unified_models_collections
+from stdapi.models import (
+    MODEL_ALIASES,
+    initialize_bedrock_models,
+    update_unified_models_collections,
+)
 from stdapi.monitoring import (
     LOGGING_PATHS_IGNORE,
     EventLog,
@@ -79,6 +83,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                 "Application start", attributes={"server.id": SERVER_NAME}
             )
             with otel_manager.use_span(span_context):
+                MODEL_ALIASES.update(SETTINGS.model_aliases)
                 results = await gather(
                     initialize_authentication(),
                     initialize_bedrock_models(),

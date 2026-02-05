@@ -28,6 +28,7 @@ from stdapi.models import (
     EXTRA_MODELS_INPUT_MODALITY,
     EXTRA_MODELS_OUTPUT_MODALITY,
     ModelDetails,
+    resolve_model_alias,
 )
 from stdapi.monitoring import (
     REQUEST_ID,
@@ -778,6 +779,7 @@ async def create_transcription(
         )
     log_request_params(request)
 
+    model = resolve_model_alias(model)
     if model != TRANSCRIBE_MODEL_ID:
         raise OpenaiUnsupportedModelError(model)
     log = REQUEST_LOG.get()

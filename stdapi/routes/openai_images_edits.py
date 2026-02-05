@@ -293,15 +293,17 @@ async def edit_images(
         )
     log_request_params(request, user_id=request.user)
     try:
-        await validate_model(
-            request.model, input_modality="IMAGE", output_modality="IMAGE"
-        )
+        model = (
+            await validate_model(
+                request.model, input_modality="IMAGE", output_modality="IMAGE"
+            )
+        ).id
     except OpenaiUnsupportedModelError as Error:
         # This route does not return standard 404 error if invalid model.
         raise OpenaiError(Error.args[0]) from None
 
     width, height = map(int, request.size.split("x"))
-    job = get_image_model(request.model).get_image_edit_job(
+    job = get_image_model(model).get_image_edit_job(
         prompt=request.prompt,
         count=request.n,
         width=width,
@@ -309,7 +311,7 @@ async def edit_images(
         output_format=request.output_format,
         output_compression=request.output_compression,
         is_url=request.response_format == "url" and not request.stream,
-        extra_params=get_extra_model_parameters(request.model, request),
+        extra_params=get_extra_model_parameters(model, request),
     )
 
     # Read and encode image files in parallel

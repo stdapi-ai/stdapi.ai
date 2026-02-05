@@ -120,22 +120,24 @@ async def create_image_variations(
         )
     log_request_params(request, user_id=request.user)
     try:
-        await validate_model(
-            request.model, input_modality="IMAGE", output_modality="IMAGE"
-        )
+        model_id = (
+            await validate_model(
+                request.model, input_modality="IMAGE", output_modality="IMAGE"
+            )
+        ).id
     except OpenaiUnsupportedModelError as Error:
         # This route does not return standard 404 error if invalid model.
         raise OpenaiError(Error.args[0]) from None
 
     width, height = map(int, request.size.split("x"))
-    job = get_image_model(request.model).get_image_variation_job(
+    job = get_image_model(model_id).get_image_variation_job(
         count=request.n,
         width=width,
         height=height,
         output_format=None,
         output_compression=100,
         is_url=request.response_format == "url",
-        extra_params=get_extra_model_parameters(request.model, request),
+        extra_params=get_extra_model_parameters(model_id, request),
     )
 
     results = await job.create_variations(images=[await read_and_b64encode_file(image)])

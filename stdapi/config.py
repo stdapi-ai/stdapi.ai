@@ -666,6 +666,20 @@ class _Settings(BaseSettings):
         ),
     )
 
+    model_aliases: dict[str, str] = Field(
+        default={},
+        description=(
+            "Map of model aliases to actual model IDs. "
+            "Allows users to reference models using custom alias names. "
+            "This is merged with default system aliases at startup. "
+            "User-provided aliases take precedence over system defaults.\n\n"
+            "Example: {\n"
+            '  "my-tts": "amazon.polly-neural",\n'
+            '  "my-stt": "amazon.transcribe"\n'
+            "}"
+        ),
+    )
+
     @field_validator("aws_bedrock_regions", mode="before")
     @classmethod
     def _parse_bedrock_regions(cls, value: str | list[str]) -> list[str]:
