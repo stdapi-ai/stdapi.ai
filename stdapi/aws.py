@@ -143,7 +143,7 @@ async def initialize_aws_account_info() -> None:
                 AWS_ACCOUNT_INFO["account_id"] = parts[4]
                 AWS_ACCOUNT_INFO["task_id"] = parts[5].split("/")[-1]
                 return
-        except (OSError, ClientError):
+        except OSError, ClientError:
             pass
 
     async with AWS_SESSION.create_client(

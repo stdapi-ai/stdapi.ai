@@ -739,7 +739,7 @@ class _Settings(BaseSettings):
         if isinstance(value, str):
             try:
                 return ZoneInfo(value)
-            except (ZoneInfoNotFoundError, ValueError):
+            except ZoneInfoNotFoundError, ValueError:
                 msg = f'Invalid timezone "{value}", possible values: {", ".join(available_timezones())}.'
                 raise ValueError(msg) from None
         return value

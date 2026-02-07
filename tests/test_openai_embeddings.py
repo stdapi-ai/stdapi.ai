@@ -160,7 +160,7 @@ class TestEmbeddings:
             decoded_bytes = base64.b64decode(item.embedding)
             # Should be decodable without error
             assert len(decoded_bytes) > 0
-        except (ValueError, base64.binascii.Error):
+        except ValueError, base64.binascii.Error:
             pytest.fail("Base64 embedding string is not valid base64")
 
     def test_float_encoding_format(

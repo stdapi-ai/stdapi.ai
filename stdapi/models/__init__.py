@@ -1226,7 +1226,7 @@ async def put_to_s3(
             if content.startswith("data:")
             else content.encode()
         )
-    ext = f".{content_type.split('/')[-1]}" if content_type else ""
+    ext = f".{content_type.rsplit('/', maxsplit=1)[-1]}" if content_type else ""
     s3_key = f"{SETTINGS.aws_s3_tmp_prefix}{REQUEST_ID.get()}/{token_hex(4)}{ext}"
     s3_bucket, s3_client = get_model_s3_bucket(model)
     kwargs: PutObjectRequestTypeDef = {

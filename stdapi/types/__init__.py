@@ -158,7 +158,7 @@ class BaseModelRequestWithFormExtra(BaseModelRequestWithExtra):
                 result[key] = value
                 continue
 
-            parts = [p if p else "" for p in _BRACKET_PARSE_PATTERN.findall(key)]
+            parts = [p or "" for p in _BRACKET_PARSE_PATTERN.findall(key)]
             if not parts:
                 continue
 

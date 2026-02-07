@@ -1098,7 +1098,7 @@ def _resp_extract_citations_from_output_blocks(
             if annotation:
                 annotations.append(annotation)
 
-    return annotations if annotations else None
+    return annotations or None
 
 
 def _resp_extract_tool_calls_from_converse(
