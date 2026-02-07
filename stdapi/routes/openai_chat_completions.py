@@ -144,11 +144,14 @@ router = APIRouter(
     prefix=f"{SETTINGS.openai_routes_prefix}/v1/chat", tags=["chat", "openai"]
 )
 
-#: OpenAI finish reasons to Badrock mapping
+#: OpenAI finish reasons to Bedrock mapping
 _FINISH_REASONS: dict[StopReasonType | None, FinishReason] = {
     "max_tokens": "length",
+    "model_context_window_exceeded": "length",
     "content_filtered": "content_filter",
     "guardrail_intervened": "content_filter",
+    "malformed_model_output": "content_filter",
+    "malformed_tool_use": "content_filter",
     "tool_use": "tool_calls",
 }
 
