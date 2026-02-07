@@ -2,6 +2,7 @@
 
 from asyncio import to_thread
 from base64 import b32encode
+from binascii import Error as BinasciiError
 from contextlib import contextmanager
 from io import BytesIO
 from os.path import splitext
@@ -13,6 +14,7 @@ from uuid import uuid7 as uuid
 
 from fastapi.exceptions import RequestValidationError
 from langcodes import Language
+from magic import from_buffer
 from PIL import Image
 from pybase64 import b64decode as _b64decode
 from pybase64 import b64encode as _b64encode
@@ -109,7 +111,11 @@ async def b64decode(
     Returns:
         bytes: The decoded data in bytes.
     """
-    return await to_thread(_b64decode, value, altchars=altchars, validate=validate)
+    try:
+        return await to_thread(_b64decode, value, altchars=altchars, validate=validate)
+    except BinasciiError as error:
+        msg = f"Invalid base64 data: {error}"
+        raise ValueError(msg) from None
 
 
 async def b64decode_data_uri(
@@ -127,16 +133,45 @@ async def b64decode_data_uri(
     Returns:
         bytes: The decoded data in bytes.
     """
-    view = memoryview(value.encode())
+    view = memoryview(raise_if_empty(value).encode())
     try:
-        return await to_thread(
-            _b64decode,
-            view[view.tobytes().find(b",") + 1 :],
-            altchars=altchars,
-            validate=validate,
+        return await b64decode(
+            view[view.tobytes().find(b",") + 1 :], altchars=altchars, validate=validate
         )
     finally:
         view.release()
+
+
+async def b64decode_data_or_uri_with_mime(
+    value: str | None, *, altchars: str | Buffer | None = None, validate: bool = False
+) -> tuple[bytes, str]:
+    """Decodes a Base64 encoded string or a data URI with its MIME type.
+
+    This function handles decoding of standard Base64 encoded strings as well as
+    data URIs that include MIME type information. If the input is a data URI, the
+    MIME type is extracted and returned along with the decoded data. Otherwise,
+    the MIME type is derived from the decoded data.
+
+    Args:
+        value (str): The Base64 encoded string or data URI to decode.
+        altchars (str | Buffer | None, optional): A string or buffer containing the
+            alternative characters for '+' and '/' in the Base64 alphabet. Defaults
+            to None.
+        validate (bool, optional): If True, checks if the Base64 input is valid
+            before decoding. Defaults to False.
+
+    Returns:
+        tuple[bytes, str]: A tuple where the first element is the decoded data as
+        bytes, and the second element is the MIME type of the decoded data.
+    """
+    value = raise_if_empty(value)
+    match = _data_uri_matcher(value)
+    if match and match.group(1):
+        return await b64decode_data_uri(
+            value, altchars=altchars, validate=validate
+        ), match.group(1)
+    data = raise_if_empty(await b64decode(value, altchars=altchars, validate=validate))
+    return data, from_buffer(data, mime=True)
 
 
 async def b64encode(value: Buffer, altchars: str | Buffer | None = None) -> str:
@@ -347,6 +382,25 @@ def stdout_write(value: JsonValue) -> None:
         if "closed" in str(error):
             return
         raise
+
+
+def raise_if_empty[T](value: T | None) -> T:
+    """Raise if value is empty else return value.
+
+    Raises:
+        ValueError: If the provided `value` is None or evaluates to False.
+
+    Args:
+        value: The value to check for emptiness. Must not be None or an empty
+            value (e.g., empty list, string, etc.).
+
+    Returns:
+        The same `value` if it is not None or empty.
+    """
+    if not value:
+        msg = "Empty data"
+        raise ValueError(msg)
+    return value
 
 
 # data:[<mediatype>][;base64],<data>

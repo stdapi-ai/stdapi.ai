@@ -21,13 +21,12 @@ Functions:
 """
 
 from asyncio import create_task, gather
-from binascii import Error as BinasciiError
 from contextlib import suppress
 from contextvars import ContextVar
+from os.path import splitext
 from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
-from magic import from_buffer
 from pydantic_core import from_json, to_json
 from sse_starlette import EventSourceResponse, JSONServerSentEvent
 
@@ -96,7 +95,7 @@ from stdapi.types.openai_chat_completions import (
     PromptTokensDetails,
     ServiceTiers,
 )
-from stdapi.utils import b64decode, b64encode, try_parse_json
+from stdapi.utils import b64decode_data_or_uri_with_mime, b64encode, try_parse_json
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Iterable
@@ -243,22 +242,16 @@ async def _req_extract_file_content_block(file_part: File) -> ContentBlockTypeDe
     file_section = file_part.file
     b64_data = file_section.file_data
     try:
-        data = await b64decode(b64_data.encode(), validate=True)
-    except BinasciiError:
+        data, mime = await b64decode_data_or_uri_with_mime(b64_data, validate=True)
+    except ValueError as error:
         raise HTTPException(
-            status_code=400, detail=f"Invalid base64 data in file: {file_part}"
+            status_code=400, detail=f"Invalid {file_part}: {error.args[0]}"
         ) from None
-    if not data:
-        raise HTTPException(
-            status_code=400, detail=f"Empty file data in file: {file_part}"
-        ) from None
-
-    mime: str = from_buffer(data, mime=True)
-    file_format = mime.split("/", 1)[1]
 
     if mime.startswith("image/"):
         return image_block_from_bytes(data, mime)
 
+    file_format = mime.split("/", 1)[1]
     if mime.startswith("video/"):
         video_format: VideoFormatType = MIME_TYPES_TO_VIDEO_TYPE.get(
             file_format,
@@ -274,7 +267,8 @@ async def _req_extract_file_content_block(file_part: File) -> ContentBlockTypeDe
         # Default to 'txt' when the MIME subtype is unknown
         document_format = MIME_TYPES_TO_DOCUMENT_TYPE.get(file_format, "txt")
         name_value = (
-            file_section.filename
+            # Remove file extension, "." is not supported
+            splitext(file_section.filename)[0]  # noqa: PTH122
             if file_section.filename is not None
             else f"file-{document_format}"
         )

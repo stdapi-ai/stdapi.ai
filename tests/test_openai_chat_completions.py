@@ -1513,31 +1513,27 @@ class TestChatCompletions:
         assert isinstance(body, dict)
         assert body["type"] == "invalid_request_error"
 
-    def test_file_part_unsupported_audio_mime_error(
+    def test_file_part_unsupported_mime_error(
         self, openai_client: OpenAI, chat_model: str, use_openai_api: bool
     ) -> None:
-        """Unsupported audio MIME type in file part should yield 400.
+        """Unsupported MIME type in file part should yield 400.
 
-        We craft a minimal WAV header to trigger audio MIME detection and validate
-        the error path that rejects non-image/video/document MIME types.
+        We craft bytes with a MIME type that doesn't start with image/, video/,
+        audio/, text/, or application/ to trigger the unsupported MIME type error.
+        Uses a model/gltf-binary MIME type which starts with model/.
         Skipped against the official OpenAI API.
         """
         if use_openai_api:
             pytest.skip("File content part shape is implementation-specific here")
-        # Minimal WAV header bytes to be detected as audio/wav
-        wav_bytes = (
-            b"RIFF"
-            b"\x24\x80\x00\x00"
-            b"WAVEfmt "
-            b"\x10\x00\x00\x00"
-            b"\x01\x00\x01\x00"
-            b"@\x1f\x00\x00"
-            b"\x80>\x00\x00"
-            b"\x02\x00\x10\x00"
-            b"data"
-            b"\x00\x80\x00\x00"
+        # Create a minimal glTF binary header to trigger model/gltf-binary detection
+        # Magic: glTF (0x46546C67), version: 2, length: 20 bytes
+        gltf_bytes = (
+            b"glTF"  # Magic
+            b"\x02\x00\x00\x00"  # Version 2
+            b"\x14\x00\x00\x00"  # Total length: 20 bytes
+            b"\x00\x00\x00\x00"  # Chunk length: 0
         )
-        b64 = b64encode(wav_bytes).decode("utf-8")
+        b64 = b64encode(gltf_bytes).decode("utf-8")
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.chat.completions.create(
                 model=chat_model,
@@ -1547,11 +1543,7 @@ class TestChatCompletions:
                         "content": [
                             {
                                 "type": "file",
-                                "file": {
-                                    "file_id": "f2",
-                                    "file_data": b64,
-                                    "filename": "a.wav",
-                                },
+                                "file": {"file_data": b64, "filename": "model.glb"},
                             }
                         ],
                     }
@@ -1563,7 +1555,10 @@ class TestChatCompletions:
         body = error.body
         assert isinstance(body, dict)
         assert body["type"] == "invalid_request_error"
-        assert "mime" in body["message"].lower() or "audio" in body["message"].lower()
+        assert (
+            "mime" in body["message"].lower()
+            or "unsupported" in body["message"].lower()
+        )
 
     def test_validation_parallel_tool_calls_false_error(
         self, openai_client: OpenAI, chat_model: str, use_openai_api: bool
@@ -2214,16 +2209,16 @@ class TestChatCompletions:
         assert last_chunk is not None
         assert getattr(last_chunk, "usage", None) is not None
 
-    def test_file_part_text_plain_success(
-        self, openai_client: OpenAI, chat_vision_model: str, use_openai_api: bool
+    def test_file_part_pdf(
+        self,
+        openai_client: OpenAI,
+        chat_vision_model: str,
+        sample_pdf_file_data_uri: str,
     ) -> None:
-        """Valid text/plain file part should be accepted and yield a response.
+        """Valid PDF file part with data URI should be accepted and yield a response.
 
         Skipped on the official OpenAI API where this custom file part shape is not applicable.
         """
-        if use_openai_api:
-            pytest.skip("File content part is implementation-specific here")
-        data = b64encode(b"hello world").decode("utf-8")
         resp = openai_client.chat.completions.create(
             model=chat_vision_model,
             messages=[
@@ -2234,9 +2229,8 @@ class TestChatCompletions:
                         {
                             "type": "file",
                             "file": {
-                                "file_id": "x",
-                                "file_data": data,
-                                "filename": None,
+                                "file_data": sample_pdf_file_data_uri,
+                                "filename": "test.pdf",
                             },
                         },
                     ],

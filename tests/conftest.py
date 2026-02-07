@@ -397,6 +397,41 @@ def sample_video_file_base64(sample_video_file: bytes) -> str:
 
 
 @pytest.fixture(scope="session")
+def sample_pdf_file() -> bytes:
+    """Create a minimal PDF file for testing.
+
+    Returns:
+        bytes: A minimal valid PDF file containing "Hello World" text.
+    """
+    # Minimal PDF with "Hello World" text
+    return (
+        b"%PDF-1.4\n"
+        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
+        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n"
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /Resources 4 0 R "
+        b"/MediaBox [0 0 612 792] /Contents 5 0 R >>\nendobj\n"
+        b"4 0 obj\n<< /Font << /F1 << /Type /Font /Subtype /Type1 "
+        b"/BaseFont /Helvetica >> >> >>\nendobj\n"
+        b"5 0 obj\n<< /Length 44 >>\nstream\n"
+        b"BT /F1 12 Tf 100 700 Td (Hello World) Tj ET\nendstream\nendobj\n"
+        b"xref\n0 6\n0000000000 65535 f \n0000000009 00000 n \n"
+        b"0000000058 00000 n \n0000000115 00000 n \n0000000228 00000 n \n"
+        b"0000000327 00000 n \ntrailer\n<< /Size 6 /Root 1 0 R >>\n"
+        b"startxref\n420\n%%EOF\n"
+    )
+
+
+@pytest.fixture(scope="session")
+def sample_pdf_file_data_uri(sample_pdf_file: bytes) -> str:
+    """Generates a PDF data URI containing a base64-encoded PDF.
+
+    Returns:
+        str: A string representing the data URI of a PDF file in base64 encoding.
+    """
+    return f"data:application/pdf;base64,{b64encode(sample_pdf_file).decode('utf-8')}"
+
+
+@pytest.fixture(scope="session")
 async def aws_session_info() -> tuple[str, str]:
     """Get AWS region and account ID from STS client in a single call.
 

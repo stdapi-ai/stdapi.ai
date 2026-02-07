@@ -9,7 +9,6 @@ from stdapi.types import BaseModelRequest, BaseModelRequestWithExtra, BaseModelR
 from stdapi.types.bedrock import AmazonBedrockGuardrailConfigParams  # noqa: TC001
 from stdapi.types.openai import (
     AssistantRoleLiteral,
-    Base64Str,
     CustomLiteral,
     FunctionDefinition,
     FunctionLiteral,
@@ -98,14 +97,34 @@ class ChatCompletionContentPartImageParam(BaseModelRequest):
 class FileFile(BaseModelRequest):
     """File content descriptor."""
 
-    file_id: str = Field(description="The ID of an uploaded file to use as input.")
-    file_data: Base64Str = Field(
-        description="The base64 encoded file data, used when passing the file to the model as a string."
+    file_id: str | None = Field(
+        default=None, description="The ID of an uploaded file to use as input."
+    )
+    file_data: str | None = Field(
+        default=None,
+        description="The base64 encoded file data or data URI, used when passing the file to the model as a string.",
     )
     filename: str | None = Field(
         default=None,
         description="The name of the file, used when passing the file to the model as a string.",
     )
+
+    @model_validator(mode="after")
+    def _validate_file_source(self) -> Self:
+        """Validate that either file_id or file_data is present.
+
+        Returns:
+            Self: The validated instance.
+
+        Raises:
+            ValueError: If neither file_id nor file_data is provided.
+        """
+        if (self.file_id is None and self.file_data is None) or (
+            self.file_id is not None and self.file_data is not None
+        ):
+            msg = "Either 'file_id' or 'file_data' must be provided."
+            raise ValueError(msg)
+        return self
 
 
 # Ref: openai.types.chat.chat_completion_content_part_param.File

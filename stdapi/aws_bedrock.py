@@ -1,6 +1,5 @@
 """Common AWS Bedrock utilities."""
 
-from binascii import Error as BinasciiError
 from contextlib import contextmanager
 from contextvars import ContextVar
 from re import IGNORECASE
@@ -546,8 +545,9 @@ async def image_block_from_data_url(url: str) -> ContentBlockTypeDef | None:
         return None  # Not an image data
     try:
         data = await b64decode(match.group(2), validate=True)
-    except BinasciiError:
+    except ValueError as error:
         raise HTTPException(
-            status_code=400, detail=f"Invalid base64 in data URL: {url}"
+            status_code=400,
+            detail=f"Invalid base64 in data URL starting with {url[:16]}: {error.args[0]}",
         ) from None
     return image_block_from_bytes(data)
