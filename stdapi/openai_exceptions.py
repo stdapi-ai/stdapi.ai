@@ -57,3 +57,9 @@ class OpenaiUnsupportedParameterError(OpenaiError):
         super().__init__(
             f"Unsupported parameter: '{param}' is not supported with this model."
         )
+
+
+class OpenaiInvalidLanguageFormatError(OpenaiError):
+    """Exception raised when language format is invalid."""
+
+    code = "invalid_language_format"

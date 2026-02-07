@@ -108,3 +108,26 @@ async def put_upload_file_to_s3(
         await client.put_object(**kwargs)
     finally:
         await close_task
+
+
+async def get_text_from_s3(s3_client: S3Client, s3_bucket: str, s3_key: str) -> str:
+    """Retrieve and decode S3 object content as a string.
+
+    Downloads the specified object from S3 and decodes its binary content
+    to a UTF-8 string.
+
+    Args:
+        s3_client: Initialized AWS S3 client for performing operations
+        s3_bucket: Name of the S3 bucket containing the object
+        s3_key: Key (path) of the object within the S3 bucket
+
+    Returns:
+        Decoded string content of the S3 object
+
+    Raises:
+        ClientError: When S3 object retrieval fails or object doesn't exist
+        UnicodeDecodeError: When object content cannot be decoded as UTF-8
+    """
+    return (
+        await (await s3_client.get_object(Bucket=s3_bucket, Key=s3_key))["Body"].read()
+    ).decode()

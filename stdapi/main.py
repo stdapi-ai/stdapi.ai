@@ -29,6 +29,8 @@ from stdapi.models import (
     initialize_bedrock_models,
     update_unified_models_collections,
 )
+from stdapi.models.audio.amazon_polly import initialize_polly_models
+from stdapi.models.audio.amazon_transcribe import initialize_transcribe_models
 from stdapi.monitoring import (
     LOGGING_PATHS_IGNORE,
     EventLog,
@@ -40,8 +42,6 @@ from stdapi.monitoring import (
 from stdapi.openai import set_openai_headers
 from stdapi.openai_exceptions import OpenaiError
 from stdapi.routes import discover_routers
-from stdapi.routes.openai_audio_speech import initialize_polly_models
-from stdapi.routes.openai_audio_transcriptions import initialize_transcribe_models
 from stdapi.server import SERVER_NAME, SERVER_VERSION
 from stdapi.utils import hide_security_details
 

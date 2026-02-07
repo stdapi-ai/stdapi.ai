@@ -122,12 +122,8 @@ _CACHE_POINT: dict[Literal["cachePoint"], CachePointBlockTypeDef] = {
 #: Cached application inference profiles & prompt routers
 _USER_PROFILES: dict[str, tuple[ModelDetails, AwareDatetime]] = {}
 
-#: Model aliases (merged at startup from defaults + user settings)
-MODEL_ALIASES: dict[str, str] = {
-    "tts-1": "amazon.polly-standard",
-    "tts-1-hd": "amazon.polly-neural",
-    "whisper-1": "amazon.transcribe",
-}
+#: Model aliases (Populated by models implementation on import then merged at startup with user settings)
+MODEL_ALIASES: dict[str, str] = {}
 
 
 class ModelDetails(BaseModel):
@@ -191,7 +187,10 @@ class ModelBase[RequestT, ResponseT]:
         Raises:
             KeyError: If the model is not found in the registry.
         """
-        return _MODELS[self._model_id]
+        try:
+            return _MODELS[self._model_id]
+        except KeyError:
+            return EXTRA_MODELS[self._model_id]
 
     async def invoke(
         self, body: RequestT, *, inference_profile: bool = True
@@ -566,10 +565,10 @@ def _populate_model_aliases(all_models: dict[str, ModelDetails]) -> None:
         all_models: A dictionary where keys are model IDs and
             values are `ModelDetails` objects representing the available models.
     """
-    aliases_by_model: dict[str, list[str]] = {}
+    aliases_by_model: dict[str, set[str]] = {}
     for alias, model_id in MODEL_ALIASES.items():
         if model_id in all_models:
-            aliases_by_model.setdefault(model_id, []).append(alias)
+            aliases_by_model.setdefault(model_id, set()).add(alias)
 
     for model_id, aliases in aliases_by_model.items():
         all_models[model_id].aliases = sorted(aliases)

@@ -47,6 +47,7 @@ from stdapi.aws_bedrock import (
 )
 from stdapi.config import SETTINGS
 from stdapi.models import prepare_converse_request, validate_model
+from stdapi.models.audio import synthesize_speech
 from stdapi.monitoring import (
     REQUEST_ID,
     REQUEST_TIME,
@@ -55,7 +56,6 @@ from stdapi.monitoring import (
     log_response_params,
 )
 from stdapi.openai_exceptions import OpenaiError
-from stdapi.routes.openai_audio_speech import generate_audio
 from stdapi.tokenizer import estimate_token_count
 from stdapi.types.openai import FunctionDefinition
 from stdapi.types.openai_chat_completions import (
@@ -1308,8 +1308,8 @@ async def _resp_generate_audio(
             b"".join(
                 [
                     chunk
-                    async for chunk in await generate_audio(
-                        content,
+                    async for chunk in await synthesize_speech(
+                        text=content,
                         voice=audio_params.voice,
                         resp_format="pcm"
                         if audio_params.format == "pcm16"

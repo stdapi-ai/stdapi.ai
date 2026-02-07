@@ -11,6 +11,25 @@ from stdapi.types.openai import Auto
 # Ref: openai.types.audio_response_format.AudioResponseFormat
 AudioResponseFormat = Literal["json", "text", "srt", "verbose_json", "vtt"]
 
+#: Subtitle formats for transcription/translation responses
+AudioSubtitleFormat = Literal["srt", "vtt"]
+SUBTITLE_FORMATS: set[AudioSubtitleFormat] = {"srt", "vtt"}
+
+#: OpenAI voices and matching gender (True for Female, False elsewhere)
+OPENAI_VOICES_FEMALE: dict[str, bool] = {
+    "alloy": True,
+    "ash": False,
+    "ballad": True,
+    "coral": True,
+    "echo": False,
+    "fable": True,
+    "nova": True,
+    "onyx": False,
+    "sage": True,
+    "shimmer": True,
+    "verse": False,
+}
+
 # Ref: openai.types.audio.transcription_include.TranscriptionInclude
 TranscriptionInclude = Literal["logprobs"]
 
@@ -337,14 +356,7 @@ class SpeechCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=True):
 
     @model_validator(mode="after")
     def _unsupported(self) -> Self:
-        """Validate unsupported or incompatible transcription options.
-
-        Rules implemented:
-        - timestamp_granularities may only be used with response_format == 'verbose_json'.
-        - chunking_strategy other than 'auto' is unsupported.
-        - prompt is unsupported.
-        - temperature values other than 0.0 are unsupported.
-        """
+        """Validate unsupported or incompatible transcription options."""
         if self.input.startswith("<speak>") and "speed" in self.model_fields_set:
             msg = "speed is not supported for SSML input. In this case, set speed directly in SSML."
             raise ValueError(msg)

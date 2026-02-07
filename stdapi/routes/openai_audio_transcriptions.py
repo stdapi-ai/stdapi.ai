@@ -1,611 +1,58 @@
-"""OpenAI-compatible Audio Transcription API implementation using AWS Transcribe."""
+"""OpenAI-compatible Audio Transcription API implementation."""
 
-from asyncio import gather, sleep
-from contextlib import contextmanager
-from math import ceil
-from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Literal
+from typing import TYPE_CHECKING, Annotated
 
-from botocore.exceptions import ClientError
 from fastapi import (
     APIRouter,
     BackgroundTasks,
     Depends,
     File,
     Form,
-    HTTPException,
+    Response,
     UploadFile,
 )
-from fastapi.responses import Response
-from pydantic_core import from_json
 from sse_starlette import EventSourceResponse, JSONServerSentEvent
 
 from stdapi.auth import authenticate
-from stdapi.aws_s3 import put_upload_file_to_s3
 from stdapi.config import SETTINGS
-from stdapi.models import (
-    EXTRA_MODELS,
-    EXTRA_MODELS_INPUT_MODALITY,
-    EXTRA_MODELS_OUTPUT_MODALITY,
-    ModelDetails,
-    resolve_model_alias,
-)
-from stdapi.monitoring import (
-    REQUEST_ID,
-    REQUEST_LOG,
-    log_background_event,
-    log_error_details,
-    log_request_params,
-    log_request_stream_event,
-    log_response_params,
-)
-from stdapi.openai_exceptions import OpenaiError, OpenaiUnsupportedModelError
-from stdapi.tokenizer import estimate_token_count
+from stdapi.models import validate_model
+from stdapi.models.audio import get_audio_model
+from stdapi.models.audio.amazon_transcribe import AWS_TRANSCRIBE_MODEL_ID
+from stdapi.monitoring import log_request_params, log_request_stream_event
 from stdapi.types.openai_audio import (
     AudioResponseFormat,
-    AudioTimestampGranularities,
     ChunkingStrategy,
-    Transcription,
     TranscriptionCreateParams,
     TranscriptionCreateResponse,
-    TranscriptionSegment,
     TranscriptionTextDeltaEvent,
     TranscriptionTextDoneEvent,
-    TranscriptionVerbose,
-    TranscriptionWord,
-    UsageDuration,
-    UsageInputTokenDetails,
-    UsageTokens,
 )
-from stdapi.utils import (
-    format_language_code,
-    language_code_to_name,
-    validation_error_handler,
-)
+from stdapi.utils import validation_error_handler
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Generator
-    from typing import NotRequired
+    from collections.abc import AsyncGenerator
 
-    from types_aiobotocore_s3.client import S3Client
-    from types_aiobotocore_transcribe.client import TranscribeServiceClient
-    from types_aiobotocore_transcribe.type_defs import (
-        StartTranscriptionJobRequestTypeDef,
-    )
-    from typing_extensions import TypedDict
-
-    class TranscriptionJobItem(TypedDict):
-        """AWS Transcribe transcript item structure."""
-
-        type: str
-        alternatives: list[dict[str, str]]
-        start_time: str
-        end_time: str
-
-    class TranscriptionJobAudioSegment(TypedDict):
-        """AWS Transcribe audio segment structure."""
-
-        id: int
-        start_time: str
-        end_time: str
-        transcript: str
-
-    class TranscriptionJobTranscript(TypedDict):
-        """AWS Transcribe transcript result structure."""
-
-        transcript: str
-
-    class TranscriptionJobData(TypedDict, total=False):
-        """AWS Transcribe job result data structure."""
-
-        transcripts: list[TranscriptionJobTranscript]
-        audio_segments: list[TranscriptionJobAudioSegment]
-        items: list[TranscriptionJobItem]
-        language_code: str
-        subtitle_content: NotRequired[str]
-
-
-from stdapi.aws import get_client
 
 router = APIRouter(
     prefix=f"{SETTINGS.openai_routes_prefix}/v1/audio", tags=["audio", "openai"]
 )
 
-# Subtitles formats
-SUBTITLE_FORMATS: set[Literal["srt", "vtt"]] = {"srt", "vtt"}
-
-#: Transcribe model ID
-TRANSCRIBE_MODEL_ID = "amazon.transcribe"
-
-
-async def initialize_transcribe_models() -> None:
-    """Initialize extra models."""
-    transcribe: TranscribeServiceClient = get_client("transcribe")
-    EXTRA_MODELS_INPUT_MODALITY.setdefault("SPEECH", set()).add(TRANSCRIBE_MODEL_ID)
-    EXTRA_MODELS_OUTPUT_MODALITY.setdefault("TEXT", set()).add(TRANSCRIBE_MODEL_ID)
-    EXTRA_MODELS[TRANSCRIBE_MODEL_ID] = ModelDetails(
-        id=TRANSCRIBE_MODEL_ID,
-        name="Transcribe",
-        provider="Amazon",
-        region=transcribe.meta.region_name,
-        service="AWS Transcribe",
-        input_modalities=["SPEECH"],
-        output_modalities=["TEXT"],
-    )
-
-
-class InvalidLanguageFormatError(OpenaiError):
-    """Exception raised when language format is invalid."""
-
-    code = "invalid_language_format"
-
-
-class TranscriptionError(Exception):
-    """Exception raised when transcription fails."""
-
-
-def _build_transcription_job_params(
-    job_id: str,
-    s3_bucket: str,
-    language: str | None,
-    response_format: AudioResponseFormat,
-) -> StartTranscriptionJobRequestTypeDef:
-    """Build transcription job parameters.
-
-    Args:
-        job_id: Unique job identifier
-        s3_bucket: S3 bucket name
-        language: Optional language code
-        response_format: Response format for transcription
-
-    Returns:
-        Job parameters for AWS Transcribe
-    """
-    s3_prefix = SETTINGS.aws_s3_tmp_prefix
-    job_params: StartTranscriptionJobRequestTypeDef = {
-        "TranscriptionJobName": job_id,
-        "Media": {"MediaFileUri": f"s3://{s3_bucket}/{s3_prefix}{job_id}/input"},
-        "OutputBucketName": s3_bucket,
-        "OutputKey": f"{s3_prefix}{job_id}/output.json",
-    }
-
-    if language:
-        job_params["LanguageCode"] = format_language_code(language)  # type: ignore[typeddict-item]
-    else:
-        job_params["IdentifyLanguage"] = True
-
-    if response_format in SUBTITLE_FORMATS:
-        job_params["Subtitles"] = {
-            "Formats": [response_format],  # type: ignore[list-item]
-            "OutputStartIndex": 1,
-        }
-        # AWS Transcribe will create subtitle file at: {s3_prefix}{job_id}/output.{format}
-
-    return job_params
-
-
-@contextmanager
-def _handle_transcription_error(language: str | None) -> Generator[None]:
-    """Context manager to handle transcription job start errors.
-
-    Args:
-        language: Language code that may have caused the error
-
-    Raises:
-        HTTPException: With appropriate error message
-
-    Usage:
-        with _handle_transcription_error(language):
-            await transcribe.start_transcription_job(**job_params)
-    """
-    try:
-        yield
-    except ClientError as error:
-        if error.response["Error"]["Code"] == "BadRequestException":
-            error_message = error.response["Error"]["Message"]
-            if "languageCode" in error_message:
-                msg = (f"Language '{language}' is not supported by the model",)
-                raise InvalidLanguageFormatError(msg) from error
-            if "file" in error_message:
-                raise HTTPException(status_code=400, detail=error_message) from error
-        raise  # pragma: no cover
-
-
-async def _wait_for_transcription_completion(
-    transcribe: TranscribeServiceClient, job_id: str
-) -> None:
-    """Wait for transcription job to complete.
-
-    Args:
-        transcribe: Transcribe service client
-        job_id: Transcription job ID
-
-    Raises:
-        HTTPException: If transcription fails
-    """
-    while True:  # Timeout at FastAPI level
-        job = (await transcribe.get_transcription_job(TranscriptionJobName=job_id))[
-            "TranscriptionJob"
-        ]
-        if job["TranscriptionJobStatus"] == "COMPLETED":
-            break
-        if job["TranscriptionJobStatus"] == "FAILED":
-            raise HTTPException(status_code=400, detail=job["FailureReason"])
-        await sleep(0.5)
-
-
-async def _get_transcription_results(
-    s3_client: S3Client,
-    s3_bucket: str,
-    job_id: str,
-    response_format: AudioResponseFormat,
-) -> TranscriptionJobData:
-    """Get transcription results from S3.
-
-    Args:
-        s3_client: S3 client
-        s3_bucket: S3 bucket name
-        job_id: Job identifier
-        response_format: Response format
-
-    Returns:
-        Transcription data
-    """
-    s3_prefix = SETTINGS.aws_s3_tmp_prefix
-    s3_output_key = f"{s3_prefix}{job_id}/output.json"
-
-    if response_format in SUBTITLE_FORMATS:
-        data, subtitle = await gather(
-            _get_result_from_s3(s3_client, s3_bucket, s3_output_key),
-            _get_result_from_s3(
-                s3_client, s3_bucket, f"{s3_prefix}{job_id}/output.{response_format}"
-            ),
-        )
-        transcription_data: TranscriptionJobData = from_json(data)["results"]
-        transcription_data["subtitle_content"] = subtitle
-        return transcription_data
-
-    return from_json(await _get_result_from_s3(s3_client, s3_bucket, s3_output_key))[  # type: ignore[no-any-return]
-        "results"
-    ]
-
-
-async def _delete_transcription_job(
-    transcribe: TranscribeServiceClient, job_name: str
-) -> None:
-    """Deletes a transcription job with the specified job name.
-
-    Args:
-        transcribe: Transcribe client
-        job_name: The name of the transcription job to be deleted.
-    """
-    try:
-        await transcribe.delete_transcription_job(TranscriptionJobName=job_name)
-    except ClientError as error:
-        if (
-            error.response["Error"]["Code"] == "BadRequestException"
-            and "couldn't be deleted" in error.response["Error"]["Message"]
-        ):
-            return
-        raise
-
-
-async def _transcribe_cleanup(
-    s3_client: S3Client,
-    transcribe: TranscribeServiceClient,
-    s3_bucket: str,
-    s3_tmp_objects: set[str],
-    transcribe_tmp_jobs: set[str],
-    request_id: str,
-) -> None:
-    """Cleanup tasks for temporary resources.
-
-    Args:
-        s3_client: S3 client
-        transcribe: Transcribe client
-        s3_bucket: S3 bucket name
-        s3_tmp_objects: Set of S3 objects to delete
-        transcribe_tmp_jobs: Set of transcription jobs to delete
-        request_id: request id.
-    """
-    with log_background_event("aws_transcribe_cleanup", request_id):
-        await gather(
-            *(
-                s3_client.delete_object(Bucket=s3_bucket, Key=key)
-                for key in s3_tmp_objects
-            ),
-            *(
-                _delete_transcription_job(transcribe, job_name)
-                for job_name in transcribe_tmp_jobs
-            ),
-        )
-
-
-async def perform_transcription_task(
-    audio_content: UploadFile,
-    background_tasks: BackgroundTasks,
-    language: str | None = None,
-    response_format: AudioResponseFormat = "json",
-) -> TranscriptionJobData:
-    """Perform complete transcription task using AWS Transcribe with integrated cleanup.
-
-    This function handles the entire transcription workflow from audio upload
-    through AWS Transcribe processing to result retrieval, including AWS client
-    initialization and cleanup management. It supports both transcription
-    and translation workflows by automatically detecting or using specified languages.
-
-    Args:
-        audio_content: Audio file content file
-        background_tasks: FastAPI background tasks for cleanup
-        language: Optional language code for the input audio (ISO-639-1 format)
-        response_format: Format for the output response (json, text, srt, vtt, verbose_json)
-
-    Returns:
-        Transcript data dictionary with results, or dict with subtitle_content for subtitle formats
-
-    Raises:
-        HTTPException: When transcription fails, validation errors occur, or
-            unsupported file formats are provided
-    """
-    s3_bucket = SETTINGS.aws_transcribe_s3_bucket
-    if not s3_bucket:
-        log_error_details(
-            "No S3 bucket configured for AWS Transcribe. "
-            "AWS_S3_BUCKET and AWS_TRANSCRIBE_S3_BUCKET environment variable are not set."
-        )
-        raise HTTPException(
-            status_code=404,
-            detail="This endpoint is not available on the current server. "
-            "Please contact the administrator to enabled it.",
-        )
-    transcribe: TranscribeServiceClient = get_client("transcribe")
-    s3_client: S3Client = get_client("s3", transcribe.meta.region_name)
-    s3_tmp_objects: set[str] = set()
-    transcribe_tmp_jobs: set[str] = set()
-    request_id = REQUEST_ID.get()
-
-    try:
-        # Upload audio to S3
-        s3_prefix = SETTINGS.aws_s3_tmp_prefix
-        s3_input_key = f"{s3_prefix}{request_id}/input"
-        await put_upload_file_to_s3(audio_content, s3_client, s3_bucket, s3_input_key)
-        s3_tmp_objects.add(s3_input_key)
-
-        # Build job parameters and start transcription
-        job_params = _build_transcription_job_params(
-            request_id, s3_bucket, language, response_format
-        )
-
-        with _handle_transcription_error(language):
-            await transcribe.start_transcription_job(**job_params)
-
-        # Track resources for cleanup
-        transcribe_tmp_jobs.add(request_id)
-        s3_tmp_objects.add(f"{s3_prefix}{request_id}/output.json")
-        s3_tmp_objects.add(f"{s3_prefix}{request_id}/.write_access_check_file.temp")
-        if response_format in SUBTITLE_FORMATS:
-            s3_tmp_objects.add(f"{s3_prefix}{request_id}/output.{response_format}")
-
-        # Wait for completion and get results
-        await _wait_for_transcription_completion(transcribe, request_id)
-        return await _get_transcription_results(
-            s3_client, s3_bucket, request_id, response_format
-        )
-
-    finally:
-        if s3_tmp_objects or transcribe_tmp_jobs:
-            background_tasks.add_task(
-                _transcribe_cleanup,
-                s3_client,
-                transcribe,
-                s3_bucket,
-                s3_tmp_objects,
-                transcribe_tmp_jobs,
-                request_id,
-            )
-
-
-async def _get_result_from_s3(s3_client: S3Client, s3_bucket: str, s3_key: str) -> str:
-    """Retrieve and decode S3 object content as a string.
-
-    Downloads the specified object from S3 and decodes its binary content
-    to a UTF-8 string. Used primarily to fetch transcription results and
-    subtitle files generated by AWS Transcribe.
-
-    Args:
-        s3_client: Initialized AWS S3 client for performing operations
-        s3_bucket: Name of the S3 bucket containing the object
-        s3_key: Key (path) of the object within the S3 bucket
-
-    Returns:
-        Decoded string content of the S3 object
-
-    Raises:
-        ClientError: When S3 object retrieval fails or object doesn't exist
-        UnicodeDecodeError: When object content cannot be decoded as UTF-8
-    """
-    return (
-        await (await s3_client.get_object(Bucket=s3_bucket, Key=s3_key))["Body"].read()
-    ).decode()
-
 
 async def _transcript_audio_sse(
-    stream: Generator[str],
+    event_stream: AsyncGenerator[
+        TranscriptionTextDeltaEvent | TranscriptionTextDoneEvent
+    ],
 ) -> AsyncGenerator[JSONServerSentEvent]:
     """Generate Server-Sent Events for real-time audio transcription streaming.
 
-    Converts a text generator stream into OpenAI-compatible Server-Sent Events
-    for real-time transcription delivery. Emits delta events for incremental
-    text updates and a final done event with complete transcript and usage data.
-
     Args:
-        stream: Generator yielding transcript text chunks from AWS Transcribe
+        event_stream: Generator yielding TranscriptionTextDeltaEvent or TranscriptionTextDoneEvent objects
 
     Yields:
-        JSONServerSentEvent: SSE events with transcript.text.delta and
-            transcript.text.done event types following OpenAI streaming format
+        JSONServerSentEvent: SSE events with transcript.text.delta and transcript.text.done events
     """
-    deltas: list[str] = []
-    try:
-        for delta in stream:
-            if deltas:
-                delta = f" {delta}"
-            deltas.append(delta)
-            yield JSONServerSentEvent(
-                data=TranscriptionTextDeltaEvent(
-                    delta=delta, type="transcript.text.delta"
-                ).model_dump(mode="json", exclude_none=True)
-            )
-    finally:
-        full_text = "".join(deltas)
-        estimated_tokens = await estimate_token_count(full_text) or 0
-        yield JSONServerSentEvent(
-            data=TranscriptionTextDoneEvent(
-                text=full_text,
-                usage=UsageTokens(
-                    # Estimated token count for transcribed text
-                    input_tokens=0,
-                    output_tokens=estimated_tokens,
-                    total_tokens=estimated_tokens,
-                    type="tokens",
-                    input_token_details=UsageInputTokenDetails(
-                        text_tokens=0, audio_tokens=0
-                    ),
-                ),
-                type="transcript.text.done",
-            ).model_dump(mode="json", exclude_none=True)
-        )
-
-
-def get_transcript_text(transcript_data: TranscriptionJobData) -> str:
-    """Extract and concatenate transcript text from AWS Transcribe response data.
-
-    Args:
-        transcript_data: Parsed transcription results from AWS Transcribe
-
-    Returns:
-        Concatenated transcript text as a single string
-    """
-    return " ".join(
-        transcript["transcript"] for transcript in transcript_data["transcripts"]
-    ).strip()
-
-
-def format_text_or_json_response(
-    transcript_data: TranscriptionJobData,
-    text: str,
-    response_format: AudioResponseFormat,
-    timestamp_granularities: list[AudioTimestampGranularities] | None = None,
-) -> str | TranscriptionCreateResponse:
-    """Format transcription response based on requested output format.
-
-    Converts transcript data into the appropriate response format following
-    OpenAI API specification. Supports plain text, JSON, and verbose JSON
-    with optional timestamp granularity information.
-
-    Args:
-        transcript_data: Parsed transcription results from AWS Transcribe
-        text: Processed transcript text content
-        response_format: Desired output format (text, json, verbose_json)
-        timestamp_granularities: Optional list of timestamp types to include
-
-    Returns:
-        Formatted response as string for text format or OpenAI types for JSON formats
-    """
-    if response_format == "text":
-        return text
-
-    duration = get_audio_duration(transcript_data)
-    usage_duration = UsageDuration(
-        type="duration",
-        # Minimum AWS Transcribe billed duration is 15s
-        seconds=max(ceil(duration), 15),
-    )
-    if response_format == "verbose_json":
-        segments = None
-        words = None
-
-        if timestamp_granularities:
-            if "segment" in timestamp_granularities:
-                segments = [
-                    TranscriptionSegment(
-                        id=segment["id"],
-                        end=float(segment["end_time"]),
-                        start=float(segment["start_time"]),
-                        text=segment["transcript"],
-                        # Not supported
-                        no_speech_prob=0.0 if len(segment["transcript"]) else 1.0,
-                        avg_logprob=0.0,
-                        compression_ratio=0.0,
-                        seek=0,
-                        temperature=0.0,
-                        tokens=[],
-                    )
-                    for segment in transcript_data["audio_segments"]
-                ]
-            if "word" in timestamp_granularities:
-                words = [
-                    TranscriptionWord(
-                        word=item["alternatives"][0]["content"],
-                        end=float(item["end_time"]),
-                        start=float(item["start_time"]),
-                    )
-                    for item in transcript_data["items"]
-                    if item["type"] == "pronunciation"
-                ]
-
-        return log_response_params(
-            TranscriptionVerbose(
-                duration=duration,
-                language=language_code_to_name(transcript_data["language_code"]),
-                text=text,
-                segments=segments,
-                words=words,
-                usage=usage_duration,
-            )
-        )
-    return log_response_params(Transcription(text=text, usage=usage_duration))
-
-
-def get_audio_duration(transcript_data: TranscriptionJobData) -> float:
-    """Get audio duration from AWS Transcribe response data.
-
-    Args:
-        transcript_data: Parsed transcription results from AWS Transcribe
-
-    Returns:
-        Duration in seconds
-    """
-    try:
-        segment = transcript_data["audio_segments"][-1]
-    except IndexError:
-        return 0.0
-    return float(segment["end_time"])
-
-
-def format_subtitle_response(
-    response_format: AudioResponseFormat, subtitle_content: str, file: UploadFile
-) -> Response:
-    """Format subtitle response with proper content type and disposition headers.
-
-    Creates a FastAPI Response object for subtitle format downloads (SRT/VTT)
-    with appropriate MIME type and filename in Content-Disposition header.
-
-    Args:
-        response_format: The subtitle response format (SRT or VTT)
-        subtitle_content: The subtitle content as a string
-        file: The original uploaded file for filename extraction
-
-    Returns:
-        FastAPI Response object with subtitle content and proper headers
-    """
-    return Response(
-        content=subtitle_content.encode(),
-        media_type=f"text/{response_format}; charset=utf-8",
-        headers={
-            "Content-Disposition": f"attachment; filename={Path(file.filename or 'audio').stem}.{response_format}"
-        },
-    )
+    async for event in event_stream:
+        yield JSONServerSentEvent(data=event.model_dump(mode="json", exclude_none=True))
 
 
 @router.post(
@@ -667,7 +114,7 @@ async def create_transcription(
                 "The transcription model to use.\nAvailable models: amazon.transcribe"
             )
         ),
-    ] = TRANSCRIBE_MODEL_ID,
+    ] = AWS_TRANSCRIBE_MODEL_ID,
     language: Annotated[
         str | None,
         Form(
@@ -779,40 +226,33 @@ async def create_transcription(
         )
     log_request_params(request)
 
-    model = resolve_model_alias(model)
-    if model != TRANSCRIBE_MODEL_ID:
-        raise OpenaiUnsupportedModelError(model)
-    log = REQUEST_LOG.get()
-    log["model_id"] = model
-
-    transcript_data = await perform_transcription_task(
-        audio_content=file,
-        background_tasks=background_tasks,
-        language=request.language,
-        response_format=request.response_format,
-    )
-
-    # Handle subtitle formats (SRT/VTT)
-    if request.response_format in SUBTITLE_FORMATS:
-        return format_subtitle_response(
-            response_format, transcript_data["subtitle_content"], file
+    model = (
+        await validate_model(
+            request.model,
+            input_modality="SPEECH",
+            output_modality="TEXT",
+            bedrock_only=False,
         )
+    ).id
 
-    # Handle streaming
     if request.stream:
         return EventSourceResponse(
             await log_request_stream_event(
                 _transcript_audio_sse(
-                    transcript["transcript"]
-                    for transcript in transcript_data["transcripts"]
+                    get_audio_model(model).stt_stream(
+                        audio_content=file,
+                        background_tasks=background_tasks,
+                        response_format=request.response_format,
+                        language=request.language,
+                    )
                 )
             )
         )
 
-    # Handle text, json, and verbose_json formats
-    return format_text_or_json_response(
-        transcript_data,
-        get_transcript_text(transcript_data),
-        request.response_format,
-        request.timestamp_granularities,
+    return await get_audio_model(model).stt(
+        audio_content=file,
+        background_tasks=background_tasks,
+        response_format=request.response_format,
+        language=request.language,
+        timestamp_granularities=request.timestamp_granularities,
     )
