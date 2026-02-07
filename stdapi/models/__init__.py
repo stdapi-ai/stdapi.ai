@@ -49,6 +49,7 @@ if TYPE_CHECKING:
     )
     from types_aiobotocore_bedrock_runtime import BedrockRuntimeClient
     from types_aiobotocore_bedrock_runtime.literals import (
+        CacheTTLType,
         ServiceTierTypeType,
         TraceType,
     )
@@ -772,6 +773,7 @@ async def prepare_converse_request(
     additional_request_fields: Mapping[str, Any],
     service_tier: ServiceTierTypeType | None,
     prompt_caching: set[PromptCaching],
+    prompt_caching_ttl: CacheTTLType | None,
     *,
     inference_profile: bool = True,
 ) -> tuple[BedrockRuntimeClient, ConverseRequestBaseTypeDef]:
@@ -786,6 +788,7 @@ async def prepare_converse_request(
         additional_request_fields: Additional request fields.
         service_tier: Service tier configuration.
         prompt_caching: Prompt caching configuration.
+        prompt_caching_ttl: Prompt caching TTL configuration.
         inference_profile: If True, use the inference profile. Otherwise, use the model ID.
 
     Returns:
@@ -812,7 +815,12 @@ async def prepare_converse_request(
     with suppress(LookupError):
         request["guardrailConfig"] = GUARDTRAIL_CONFIG_VAR.get()
     _enable_converse_prompt_caching(
-        model, system_blocks, tool_config, bedrock_messages, prompt_caching
+        model,
+        system_blocks,
+        tool_config,
+        bedrock_messages,
+        prompt_caching,
+        prompt_caching_ttl,
     )
     return get_client("bedrock-runtime", model.region), request
 
@@ -823,6 +831,7 @@ def _enable_converse_prompt_caching(
     tool_config: ToolConfigurationTypeDef | None,
     bedrock_messages: list[MessageTypeDef],
     prompt_caching: set[PromptCaching],
+    prompt_caching_ttl: CacheTTLType | None,
 ) -> None:
     """Enables prompt caching for specified components including system blocks, tools, and messages.
 
@@ -837,19 +846,25 @@ def _enable_converse_prompt_caching(
             the cache point is appended to its tools attribute.
         prompt_caching: A set of PromptCaching values that specifies the components
             (e.g., "system", "tools", "messages") for which caching should be enabled.
+        prompt_caching_ttl: Prompt caching TTL configuration.
     """
+    cache_point = (
+        {"cachePoint": {"type": "default", "ttl": prompt_caching_ttl}}
+        if prompt_caching_ttl
+        else _CACHE_POINT
+    )
     if model.id.startswith(PROMPT_CACHING_SUPPORTED):
         if "system" in prompt_caching and system_blocks:
-            system_blocks.append(_CACHE_POINT)  # type: ignore[arg-type]
+            system_blocks.append(cache_point)  # type: ignore[arg-type]
         if "messages" in prompt_caching and bedrock_messages:
             for message in bedrock_messages:
-                message["content"].append(_CACHE_POINT)  # type: ignore[attr-defined]
+                message["content"].append(cache_point)  # type: ignore[attr-defined]
         if (
             "tools" in prompt_caching
             and tool_config
             and model.id.startswith(PROMPT_CACHING_TOOL_SUPPORTED)
         ):
-            tool_config["tools"].append(_CACHE_POINT)  # type: ignore[attr-defined]
+            tool_config["tools"].append(cache_point)  # type: ignore[attr-defined]
 
 
 async def validate_model(

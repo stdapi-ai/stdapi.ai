@@ -41,6 +41,15 @@ ServiceTiers = Literal[
     "reserved",
 ]
 
+#: Prompt cache retention
+PromptCacheRetention = Literal[
+    "in-memory",
+    "24h",
+    # Extra bedrock specific values
+    "1h",
+    "5m",
+]
+
 #: Tool choice literal values used in multiple request fields (OpenAI-compatible).
 ToolChoiceLiteral = Literal["none", "auto", "required"]
 
@@ -1240,6 +1249,13 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
         "- Set to a dot-separated list of 'system', 'messages', and/or 'tools' to enable caching only for specific prompt sections\n"
         "  Examples: 'system.tools' enables caching for system and tools sections; 'system.messages.tools' enables for all sections\n"
         "Note: Custom hash keys are UNSUPPORTED in this implementation",
+    )
+    prompt_cache_retention: PromptCacheRetention | None = Field(
+        default=None,
+        description="The retention policy for the prompt cache.\n"
+        "OpenAI values are currently mapped to AWS Bedrock possible values for increased compatibility:\n"
+        "- in-memory -> 5m\n"
+        "- 24h -> 1h.",
     )
     reasoning_effort: ReasoningEffort | None = Field(
         default=None,

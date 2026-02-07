@@ -169,6 +169,43 @@ Enable caching for specific prompt sections using dot-separated values:
 - **Lower Latency**: Cached prompts eliminate reprocessing time
 - **Automatic Management**: The API handles cache invalidation and updates
 
+**Cache Retention (TTL):**
+
+Control how long cached prompts persist using the `prompt_cache_retention` parameter:
+
+!!! info "Model Support"
+    Cache retention configuration is only available on select models. See [AWS Bedrock Prompt Caching - Supported Models](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html#prompt-caching-models) for details on which models support configurable TTL.
+
+```bash
+curl -X POST "$BASE/v1/chat/completions" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "prompt_cache_key": "default",
+    "prompt_cache_retention": "24h",
+    "messages": [
+      {
+        "role": "system",
+        "content": "You are a helpful assistant..."
+      },
+      {"role": "user", "content": "What is 2 + 2?"}
+    ]
+  }'
+```
+
+**Available Retention Values:**
+
+- `"in-memory"` - Short-term caching (mapped to 5 minutes on AWS Bedrock)
+- `"24h"` - Long-term caching (mapped to 1 hour on AWS Bedrock)
+- Additional AWS Bedrock values: `"1h"`, `"5m"` (provider-specific)
+
+!!! note "OpenAI to AWS Bedrock Mapping"
+    OpenAI retention values are mapped to AWS Bedrock equivalents for compatibility:
+
+    - `"in-memory"` → 5 minutes
+    - `"24h"` → 1 hour
+
 **Usage Tracking:**
 
 Cached token usage is reported in the response:

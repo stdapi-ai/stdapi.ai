@@ -94,6 +94,7 @@ from stdapi.types.openai_chat_completions import (
     FunctionCall,
     FunctionCallParam,
     OutputModalities,
+    PromptCacheRetention,
     PromptTokensDetails,
     ServiceTiers,
 )
@@ -106,6 +107,7 @@ if TYPE_CHECKING:
     from types_aiobotocore_bedrock_runtime.client import BedrockRuntimeClient
     from types_aiobotocore_bedrock_runtime.literals import (
         AudioFormatType,
+        CacheTTLType,
         ConversationRoleType,
         ServiceTierTypeType,
         StopReasonType,
@@ -153,6 +155,12 @@ _FINISH_REASONS: dict[StopReasonType | None, FinishReason] = {
     "malformed_model_output": "content_filter",
     "malformed_tool_use": "content_filter",
     "tool_use": "tool_calls",
+}
+
+#: OpenAI cache TTL to Bedrock mapping
+_CACHE_TTL: dict[PromptCacheRetention | None, CacheTTLType | None] = {
+    "in-memory": None,
+    "24h": "1h",
 }
 
 #: OpenAI "System" roles
@@ -1497,6 +1505,10 @@ async def create_chat_completion(
         additional_request_fields=additional_request_fields,
         service_tier=bedrock_service_tier,
         prompt_caching=_parse_prompt_cache_key(request.prompt_cache_key),
+        prompt_caching_ttl=_CACHE_TTL.get(
+            request.prompt_cache_retention,
+            request.prompt_cache_retention,  # type: ignore[arg-type]
+        ),
     )
 
     if request.stream:
