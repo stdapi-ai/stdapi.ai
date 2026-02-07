@@ -32,6 +32,7 @@ from sse_starlette import EventSourceResponse, JSONServerSentEvent
 
 from stdapi.auth import authenticate
 from stdapi.aws_bedrock import (
+    MIME_TYPES_TO_AUDIO_TYPE,
     MIME_TYPES_TO_DOCUMENT_TYPE,
     MIME_TYPES_TO_VIDEO_TYPE,
     PROMPT_CACHING,
@@ -66,6 +67,7 @@ from stdapi.types.openai_chat_completions import (
     ChatCompletionAudioParam,
     ChatCompletionChunk,
     ChatCompletionContentPartImageParam,
+    ChatCompletionContentPartInputAudioParam,
     ChatCompletionContentPartParam,
     ChatCompletionContentPartRefusalParam,
     ChatCompletionContentPartTextParam,
@@ -103,12 +105,14 @@ if TYPE_CHECKING:
     from pydantic import JsonValue
     from types_aiobotocore_bedrock_runtime.client import BedrockRuntimeClient
     from types_aiobotocore_bedrock_runtime.literals import (
+        AudioFormatType,
         ConversationRoleType,
         ServiceTierTypeType,
         StopReasonType,
         VideoFormatType,
     )
     from types_aiobotocore_bedrock_runtime.type_defs import (
+        AudioBlockTypeDef,
         CitationOutputTypeDef,
         ContentBlockDeltaEventTypeDef,
         ContentBlockOutputTypeDef,
@@ -218,6 +222,31 @@ async def _req_extract_image_content_block(
     raise HTTPException(status_code=400, detail=f"Invalid image URL: {url}")
 
 
+async def _req_extract_audio_content_block(
+    audio_part: ChatCompletionContentPartInputAudioParam,
+) -> ContentBlockTypeDef:
+    """Convert an OpenAI input_audio section to a Bedrock content block.
+
+    Args:
+        audio_part: Audio content part as provided by OpenAI Chat API.
+
+    Returns:
+        A Bedrock ContentBlockTypeDef for the referenced audio.
+
+    Raises:
+        HTTPException: If the URL is invalid or unsupported by this implementation.
+    """
+    try:
+        data = (await b64decode_data_or_uri_with_mime(audio_part.input_audio.data))[0]
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=error.args[0]) from None
+    audio_block_bytes: AudioBlockTypeDef = {
+        "source": {"bytes": data},
+        "format": audio_part.input_audio.format,
+    }
+    return {"audio": audio_block_bytes}
+
+
 async def _req_extract_file_content_block(file_part: File) -> ContentBlockTypeDef:
     """Convert an OpenAI file section to a Bedrock content block.
 
@@ -226,6 +255,7 @@ async def _req_extract_file_content_block(file_part: File) -> ContentBlockTypeDe
     Bedrock content block:
     - image/* ➜ image block with inferred format and bytes
     - video/* ➜ video block with inferred/normalized format and bytes
+    - audio/* ➜ audio block with inferred/normalized format and bytes
     - text/* or application/* ➜ document block with inferred/normalized format and bytes
 
     Args:
@@ -262,6 +292,17 @@ async def _req_extract_file_content_block(file_part: File) -> ContentBlockTypeDe
             "format": video_format,
         }
         return {"video": video_block_bytes}
+
+    if mime.startswith("audio/"):
+        audio_format: AudioFormatType = MIME_TYPES_TO_AUDIO_TYPE.get(
+            file_format,
+            file_format,  # type: ignore[arg-type]
+        )
+        audio_block_bytes: AudioBlockTypeDef = {
+            "source": {"bytes": data},
+            "format": audio_format,
+        }
+        return {"audio": audio_block_bytes}
 
     if mime.startswith(("text/", "application/")):
         # Default to 'txt' when the MIME subtype is unknown
@@ -311,6 +352,8 @@ async def _req_extract_content_blocks(
             blocks.append({"text": part.text})
         elif isinstance(part, ChatCompletionContentPartImageParam):
             blocks.append(await _req_extract_image_content_block(part))
+        elif isinstance(part, ChatCompletionContentPartInputAudioParam):
+            blocks.append(await _req_extract_audio_content_block(part))
         elif isinstance(part, File):
             blocks.append(await _req_extract_file_content_block(part))
         else:  # pragma: no cover
@@ -1229,8 +1272,8 @@ async def _non_streaming_completion(
             reasoning_contents.append(reasoning_content)
         if audio_params and content:
             tts_tasks[index] = create_task(
-                _resp_generate_audio(
-                    audio_params, completion_id, content, created, index
+                _resp_get_or_generate_audio(
+                    audio_params, message, completion_id, content, created, index
                 )
             )
         choices.append(
@@ -1275,43 +1318,61 @@ async def _non_streaming_completion(
     )
 
 
-async def _resp_generate_audio(
+async def _resp_get_or_generate_audio(
     audio_params: ChatCompletionAudioParam,
+    contents: list[ContentBlockOutputTypeDef],
     completion_id: str,
     content: str,
     created: int,
     index: int,
 ) -> ChatCompletionAudio:
-    """Generates audio response using text-to-speech (TTS) based on provided parameters.
+    """Generate or fetch audio content for a response block.
+
+    This method attempts to retrieve pre-existing audio data from the given content
+    blocks. If no such data is available, it synthesizes new audio based on the provided
+    content using the specified audio parameters. The resulting audio data is returned
+    as a `ChatCompletionAudio` object.
 
     Args:
-        audio_params: Configuration for the generated audio.
-        completion_id: Unique identifier for the audio completion process.
-        content: Text content to be converted into audio. If None, no audio will
-            be generated.
-        created: Timestamp of when the completion process was initiated.
-        index: Index value to uniquely identify this audio response.
+        audio_params (ChatCompletionAudioParam): Parameters for audio generation,
+            including voice and format configurations.
+        contents (list[ContentBlockOutputTypeDef]): A list of content blocks where each
+            block may contain pre-generated audio data.
+        completion_id (str): Unique identifier for the AI-generated response completion.
+        content (str): Text content to be converted to audio if the audio is not already
+            provided.
+        created (int): The creation timestamp for the response, used to determine the
+            expiration time of the audio data.
+        index (int): The sequential index of the current block in the list of generated
+            completions.
 
     Returns:
-        An instance of ChatCompletionAudio containing the generated audio data and
-        associated metadata.
+        ChatCompletionAudio: A response object containing the generated or retrieved
+        audio data, associated metadata, and a transcript of the input content.
     """
+    for block in contents:
+        with suppress(KeyError):
+            audio_content = block["audio"]["source"]["bytes"]
+            # Get only the first audio block,
+            # OpenAI API doesn't support multiple audio blocks
+            break
+    else:
+        # Fall back to synthesizing audio from text
+        audio_content = b"".join(
+            [
+                chunk
+                async for chunk in await synthesize_speech(
+                    text=content,
+                    voice=audio_params.voice,
+                    resp_format="pcm"
+                    if audio_params.format == "pcm16"
+                    else audio_params.format,
+                )
+            ]
+        )
     return ChatCompletionAudio(
         id=f"audio-{completion_id}-{index}",
-        data=await b64encode(
-            b"".join(
-                [
-                    chunk
-                    async for chunk in await synthesize_speech(
-                        text=content,
-                        voice=audio_params.voice,
-                        resp_format="pcm"
-                        if audio_params.format == "pcm16"
-                        else audio_params.format,
-                    )
-                ]
-            )
-        ),
+        data=await b64encode(audio_content),
         expires_at=created,  # Not stored on the server, so expire immediately
         transcript=content,
     )

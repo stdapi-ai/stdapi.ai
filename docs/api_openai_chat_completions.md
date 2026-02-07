@@ -37,7 +37,7 @@ This OpenAI-compatible endpoint provides access to AWS Bedrock foundation models
 | Image input (`image_url`)                |       :material-cog:{ .model-dep }       | HTTP, data URIs                                                 |
 | Image input from S3                      | :material-plus-circle:{ .extra-feature } | S3 URLs                                                         |
 | Video input                              |       :material-cog:{ .model-dep }       | Supported by select models                                      |
-| Audio input                              | :material-close-circle:{ .unsupported }  | Unsupported                                                     |
+| Audio input                              |       :material-cog:{ .model-dep }       | Supported by select models                                      |
 | Document input (`file`)                  |       :material-cog:{ .model-dep }       | PDF and document support varies by model                        |
 | System messages                          |       :material-cog:{ .model-dep }       | Includes `developer` role                                       |
 | **Tool Calling**                         |                                          |                                                                 |
@@ -72,7 +72,7 @@ This OpenAI-compatible endpoint provides access to AWS Bedrock foundation models
 | Text                                     |   :material-check-circle:{ .success }    | Text messages                                                   |
 | Streaming (`stream: true`)               |   :material-check-circle:{ .success }    | Server-Sent Events (SSE)                                        |
 | Streaming obfuscation                    | :material-close-circle:{ .unsupported }  | Unsupported                                                     |
-| Audio                                    |   :material-check-circle:{ .success }    | Synthesis from text output                                      |
+| Audio                                    |   :material-check-circle:{ .success }    | Model output or synthesis from text output                      |
 | `response_format` (JSON mode)            |       :material-cog:{ .model-dep }       | Model-specific JSON support                                     |
 | `reasoning_content` (From Deepseek API)  |       :material-cog:{ .model-dep }       | Text reasoning messages                                         |
 | `annotations` (URL citations)            |   :material-check-circle:{ .success }    | URL citations from system tools (non-streaming only)            |

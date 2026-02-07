@@ -1413,6 +1413,71 @@ class TestChatCompletions:
         assert isinstance(response.choices[0].message.content, str)
         assert len(response.choices[0].message.content) > 0
 
+    def test_file_part_audio(
+        self, openai_client: OpenAI, chat_audio_model: str, sample_audio_mp3_file: bytes
+    ) -> None:
+        """Audio file in audio part should be successfully handled.
+
+        Tests that audio MIME types are now supported by sending a MP3 file
+        and requesting transcription from the model.
+        """
+        b64 = b64encode(sample_audio_mp3_file).decode("utf-8")
+        response = openai_client.chat.completions.create(
+            model=chat_audio_model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_audio",
+                            "input_audio": {"data": b64, "format": "mp3"},
+                        },
+                        {"type": "text", "text": "What's in this file?"},
+                    ],
+                }
+            ],
+            max_completion_tokens=100,
+        )
+        assert response.choices
+        assert response.choices[0].message.content
+
+    def test_file_part_audio_as_file(
+        self,
+        openai_client: OpenAI,
+        chat_audio_model: str,
+        sample_audio_mp3_file_base64: str,
+        use_openai_api: bool,
+    ) -> None:
+        """Audio file in file part should be successfully handled.
+
+        Tests that audio MIME types are now supported by sending a MP3 file
+        and requesting transcription from the model.
+        """
+        if use_openai_api:
+            pytest.skip("Audio file handling as file not supported by OpenAI API")
+
+        response = openai_client.chat.completions.create(
+            model=chat_audio_model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "file",
+                            "file": {
+                                "file_data": sample_audio_mp3_file_base64,
+                                "filename": "audio.mp3",
+                            },
+                        },
+                        {"type": "text", "text": "What's in this file?"},
+                    ],
+                }
+            ],
+            max_completion_tokens=100,
+        )
+        assert response.choices
+        assert response.choices[0].message.content
+
     def test_multimodal_with_http_image_url_error(
         self, openai_client: OpenAI, chat_vision_model: str
     ) -> None:

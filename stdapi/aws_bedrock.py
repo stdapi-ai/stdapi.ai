@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 
     from starlette.datastructures import Headers
     from types_aiobotocore_bedrock_runtime.literals import (
+        AudioFormatType,
         DocumentFormatType,
         GuardrailTraceType,
         ImageFormatType,
@@ -89,6 +90,16 @@ MIME_TYPES_TO_VIDEO_TYPE: dict[str, VideoFormatType] = {
     "x-flv": "flv",
     "x-ms-wmv": "wmv",
     "3gpp": "three_gp",
+}
+
+#: Bedrock audio types with the matching MIME type
+MIME_TYPES_TO_AUDIO_TYPE: dict[str, AudioFormatType] = {
+    # Only list values that differ
+    "x-aac": "aac",
+    "x-flac": "flac",
+    "x-m4a": "mp4",
+    "mpeg": "mp3",
+    "x-wav": "wav",
 }
 
 #: Bedrock limit for sync body size (25MB), here with a little margin

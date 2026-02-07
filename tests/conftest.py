@@ -27,7 +27,7 @@ MODEL_MAPPINGS = {
         "chat_vision": "anthropic.claude-haiku-4-5-20251001-v1:0",
         "chat_legacy": "anthropic.claude-haiku-4-5-20251001-v1:0",
         "chat_reasoning": "anthropic.claude-sonnet-4-5-20250929-v1:0",
-        "chat_audio": "amazon.nova-micro-v1:0",
+        "chat_audio": "mistral.voxtral-mini-3b-2507",
         "embedding": "amazon.titan-embed-text-v2:0",
         "responses": "amazon.nova-micro-v1:0",
         "image_generation": "amazon.titan-image-generator-v2:0",
@@ -42,7 +42,7 @@ MODEL_MAPPINGS = {
         "chat_vision": "gpt-5-nano",
         "chat_legacy": "gpt-4o-mini",
         "chat_reasoning": "gpt-5-nano",
-        "chat_audio": "gpt-4o-audio-preview",
+        "chat_audio": "gpt-audio",
         "embedding": "text-embedding-3-small",
         "responses": "gpt-5-nano",
         "image_generation": "dall-e-2",  # Cheapest/default model
