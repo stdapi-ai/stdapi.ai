@@ -24,24 +24,24 @@ Upload audio in any language and get English transcriptions for international co
 
 <div class="feature-table" markdown>
 
-| Feature                 |                 Status                  | Notes                         |
-|-------------------------|:---------------------------------------:|-------------------------------|
-| **Input**               |                                         |                               |
-| Audio file upload       |   :material-check-circle:{ .success }   | Multipart file upload         |
-| Auto language detection |   :material-check-circle:{ .success }   | Automatic source detection    |
-| **Output Formats**      |                                         |                               |
-| `json`                  |   :material-check-circle:{ .success }   | Structured translation        |
-| `text`                  |   :material-check-circle:{ .success }   | Plain English text            |
-| `verbose_json`          |   :material-check-circle:{ .success }   | With timestamps               |
-| `srt`                   |   :material-check-circle:{ .success }   | English subtitles with timing |
-| `vtt`                   |   :material-check-circle:{ .success }   | English WebVTT subtitles      |
-| **Translation**         |                                         |                               |
-| Translation to English  |   :material-check-circle:{ .success }   | Using AWS Translate           |
-| **Advanced**            |                                         |                               |
-| `prompt`                | :material-close-circle:{ .unsupported } | Not available                 |
-| `temperature`           | :material-close-circle:{ .unsupported } | Not available                 |
-| **Usage tracking**      |                                         |                               |
-| Input audio duration    |   :material-check-circle:{ .success }   | Seconds (billing unit)        |
+| Feature                 |               Status                | Notes                         |
+|-------------------------|:-----------------------------------:|-------------------------------|
+| **Input**               |                                     |                               |
+| Audio file upload       | :material-check-circle:{ .success } | Multipart file upload         |
+| Auto language detection | :material-check-circle:{ .success } | Automatic source detection    |
+| **Output Formats**      |                                     |                               |
+| `json`                  | :material-check-circle:{ .success } | Structured translation        |
+| `text`                  | :material-check-circle:{ .success } | Plain English text            |
+| `verbose_json`          |    :material-cog:{ .model-dep }     | With timestamps               |
+| `srt`                   |    :material-cog:{ .model-dep }     | English subtitles with timing |
+| `vtt`                   |    :material-cog:{ .model-dep }     | English WebVTT subtitles      |
+| **Translation**         |                                     |                               |
+| Translation to English  | :material-check-circle:{ .success } | Using AWS Translate           |
+| **Advanced**            |                                     |                               |
+| `prompt`                |    :material-cog:{ .model-dep }     | Not available                 |
+| `temperature`           |    :material-cog:{ .model-dep }     | Not available                 |
+| **Usage tracking**      |                                     |                               |
+| Input audio duration    | :material-check-circle:{ .success } | Seconds (billing unit)        |
 
 </div>
 
@@ -55,9 +55,33 @@ Upload audio in any language and get English transcriptions for international co
 
 </div>
 
+## Model Support
+
+### ![AWS Transcribe](styles/logo_amazon_transcribe.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Models
+
+| Model             | Supported Languages | Notes                                                                                                      |
+|-------------------|---------------------|------------------------------------------------------------------------------------------------------------|
+| amazon.transcribe | 100+                | Full-featured transcription with speaker diarization and subtitle generation at the cost of higher latency |
+
+!!! warning "Configuration Required"
+    You must configure the `AWS_S3_BUCKET` or `AWS_TRANSCRIBE_S3_BUCKET` environment variable with a bucket in the main AWS region to use this model. This bucket is used for temporary storage during transcription processing.
+
+### ![Mistral](styles/logo_mistralai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Mistral Models
+
+| Model                           | Supported Languages | Notes                                              |
+|---------------------------------|---------------------|----------------------------------------------------|
+| mistral.voxtral-mini-3b-2507    | 100+                | Compact model for fast transcription               |
+| mistral.voxtral-small-24b-2507  | 100+                | Larger model for enhanced accuracy                 |
+
+!!! warning "Mistral Voxtral Limitations"
+    Mistral Voxtral models have the following restrictions when running on AWS Bedrock:
+
+    - **File size limit**: ~2MB maximum input file size
+    - **Audio channels**: Mono channel audio only (single channel)
+
 ## Advanced Features
 
-### ![AWS Translate](styles/logo_amazon_translate.svg){ style="height: 1.2em; vertical-align: text-bottom;" } OpenAI-Compatible with AWS Power
+### ![AWS Transcribe](styles/logo_amazon_transcribe.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Transcribe Features
 
 **Model & Features:**
 
@@ -78,11 +102,6 @@ Upload audio in any language and get English transcriptions for international co
 
 **Note:** The `prompt` and `temperature` parameters are not supported to ensure
 consistent translation accuracy.
-
-!!! warning "Configuration Required"
-You must configure the `AWS_S3_BUCKET` or `AWS_TRANSCRIBE_S3_BUCKET` environment
-variable with a bucket in the main AWS region to use this endpoint. This bucket is used
-for temporary storage during transcription processing.
 
 ## Try It Now
 

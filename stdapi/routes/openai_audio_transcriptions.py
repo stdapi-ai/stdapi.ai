@@ -25,6 +25,7 @@ from stdapi.types.openai_audio import (
     TranscriptionCreateParams,
     TranscriptionCreateResponse,
     TranscriptionDiarized,
+    TranscriptionInclude,
     TranscriptionTextDeltaEvent,
     TranscriptionTextDoneEvent,
 )
@@ -130,7 +131,7 @@ async def create_transcription(
         Form(
             description=(
                 "An optional text to guide the model's style or continue a previous audio segment.\n"
-                "The prompt should match the audio language.\nUNSUPPORTED on this implementation."
+                "The prompt should match the audio language."
             )
         ),
     ] = None,
@@ -164,17 +165,25 @@ async def create_transcription(
             )
         ),
     ] = "",
+    include: Annotated[
+        TranscriptionInclude | None,
+        Form(
+            description=(
+                "Additional information to include in the transcription response.\n"
+                "`logprobs` will return the log probabilities of the tokens in the response to understand the model's confidence in the transcription. "
+                "`logprobs` only works with response_format set to `json`."
+            )
+        ),
+    ] = None,
     temperature: Annotated[
-        float,
+        float | None,
         Form(
             description=(
                 "The sampling temperature, between `0` and `1`.\n"
-                "Higher values like `0.8` will make the output more random, while lower values like `0.2` will make it more focused and deterministic. "
-                "If set to `0`, the model will use log probability to automatically increase the temperature until certain thresholds are hit.\n"
-                "UNSUPPORTED on this implementation."
+                "Higher values like `0.8` will make the output more random, while lower values like `0.2` will make it more focused and deterministic."
             )
         ),
-    ] = 0.0,
+    ] = None,
     stream: Annotated[
         bool | None,
         Form(
@@ -232,6 +241,7 @@ async def create_transcription(
         chunking_strategy: Controls how the audio is cut into chunks. `auto` only is supported on this implementation.
         response_format: Output format: `json`, `text`, `srt`, `verbose_json`, `vtt`, or `diarized_json`.
         timestamp_granularities: For `verbose_json` only; comma-separated values among `word` and `segment` (e.g. `word,segment`).
+        include: Additional information to include in the transcription response. `logprobs` only works with response_format set to `json`.
         temperature: Sampling temperature. UNSUPPORTED on this implementation (must be 0.0).
         stream: Whether to stream partial results via Server-Sent Events.
         known_speaker_names: Optional list of known speaker names. UNSUPPORTED on this implementation.
@@ -254,6 +264,7 @@ async def create_transcription(
             timestamp_granularities=(
                 timestamp_granularities.split(",") if timestamp_granularities else []  # type: ignore[arg-type]
             ),
+            include=include,
             temperature=temperature,
             stream=stream,
             known_speaker_names=known_speaker_names,
@@ -279,6 +290,9 @@ async def create_transcription(
                         background_tasks=background_tasks,
                         response_format=request.response_format,
                         language=request.language,
+                        temperature=request.temperature,
+                        prompt=request.prompt,
+                        logprobs=request.include == "logprobs",
                     )
                 )
             )
@@ -290,4 +304,7 @@ async def create_transcription(
         response_format=request.response_format,
         language=request.language,
         timestamp_granularities=request.timestamp_granularities,
+        temperature=request.temperature,
+        prompt=request.prompt,
+        logprobs=request.include == "logprobs",
     )

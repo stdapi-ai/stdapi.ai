@@ -47,10 +47,7 @@ class TestAudioTranslations:
             - Core translation workflow functions end-to-end
         """
         response = openai_client.audio.translations.create(
-            file=("test.wav", io.BytesIO(sample_audio_file)),
-            model=transcription_model,
-            temperature=0.7,  # Test parameter handling
-            prompt="This audio contains content that should be translated to English.",
+            file=("test.wav", io.BytesIO(sample_audio_file)), model=transcription_model
         )
 
         # Validate core translation functionality

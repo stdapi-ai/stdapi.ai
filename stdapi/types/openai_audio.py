@@ -437,8 +437,7 @@ class TranscriptionCreateParams(BaseModelRequest, str_strip_whitespace=True):
         default=None,
         description="Additional information to include in the transcription response.\n"
         "`logprobs` will return the log probabilities of the tokens in the response to understand the model's confidence in the transcription. "
-        "`logprobs` only works with response_format set to `json`.\n"
-        "UNSUPPORTED on this implementation.",
+        "`logprobs` only works with response_format set to `json`.",
     )
     known_speaker_names: list[str] | None = Field(
         default=None,
@@ -470,23 +469,19 @@ class TranscriptionCreateParams(BaseModelRequest, str_strip_whitespace=True):
     prompt: str | None = Field(
         default=None,
         description="An optional text to guide the model's style or continue a previous audio segment.\n"
-        "The prompt should match the audio language.\n"
-        "UNSUPPORTED on this implementation.",
+        "The prompt should match the audio language.",
     )
     response_format: AudioResponseFormat = Field(
         default="json",
         description="The format of the transcript output.\n"
         "Supported formats: `json`, `text`, `srt`, `verbose_json`, `vtt` or `diarized_json`",
     )
-    temperature: float = Field(
-        default=0.0,
+    temperature: float | None = Field(
+        default=None,
         ge=0.0,
         description="The sampling temperature, between `0` and `1`.\n"
         "Higher values like `0.8` will make the output more random, while lower values like "
-        "`0.2` will make it more focused and deterministic. If set to `0`, the model will use "
-        "[log probability](https://en.wikipedia.org/wiki/Log_probability) to "
-        "automatically increase the temperature until certain thresholds are hit.\n"
-        "UNSUPPORTED on this implementation.",
+        "`0.2` will make it more focused and deterministic.",
     )
     timestamp_granularities: list[AudioTimestampGranularities] = Field(
         default=["segment"],
@@ -518,12 +513,6 @@ class TranscriptionCreateParams(BaseModelRequest, str_strip_whitespace=True):
             # Any explicit server_vad config or non-auto is unsupported
             param = "chunking_strategy"
             raise OpenaiUnsupportedParameterError(param)
-        if self.prompt is not None:
-            param = "prompt"
-            raise OpenaiUnsupportedParameterError(param)
-        if self.temperature != 0.0:
-            param = "temperature"
-            raise OpenaiUnsupportedParameterError(param)
         return self
 
 
@@ -543,22 +532,18 @@ class TranslationCreateParams(BaseModelRequest, str_strip_whitespace=True):
     prompt: str | None = Field(
         default=None,
         description="An optional text to guide the model's style or continue a previous audio segment.\n"
-        "The prompt should be in English.\n"
-        "UNSUPPORTED on this implementation.",
+        "The prompt should be in English.",
     )
     response_format: TranslateAudioResponseFormat = Field(
         default="json",
         description="The format of the transcript output.\n"
         "Supported formats: `json`, `text`, `srt`, `verbose_json`, `vtt`",
     )
-    temperature: float = Field(
-        default=0.0,
+    temperature: float | None = Field(
+        default=None,
         ge=0.0,
         le=1.0,
         description="The sampling temperature, between `0` and `1`.\n"
         "Higher values like `0.8` will make the output more random, while lower values like "
-        "`0.2` will make it more focused and deterministic. If set to `0`, the model will use "
-        "[log probability](https://en.wikipedia.org/wiki/Log_probability) to "
-        "automatically increase the temperature until certain thresholds are hit.\n"
-        "UNSUPPORTED on this implementation.",
+        "`0.2` will make it more focused and deterministic.",
     )

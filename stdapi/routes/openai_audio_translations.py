@@ -19,7 +19,7 @@ from stdapi.models.audio import get_audio_model
 from stdapi.models.audio.amazon_transcribe import AWS_TRANSCRIBE_MODEL_ID
 from stdapi.monitoring import log_request_params
 from stdapi.types.openai_audio import (
-    AudioResponseFormat,
+    TranslateAudioResponseFormat,
     TranslationCreateParams,
     TranslationCreateResponse,
 )
@@ -98,7 +98,7 @@ async def create_translation(
         ),
     ] = None,
     response_format: Annotated[
-        AudioResponseFormat,
+        TranslateAudioResponseFormat,
         Form(
             description=(
                 "The format of the transcript output.\n"
@@ -107,16 +107,14 @@ async def create_translation(
         ),
     ] = "json",
     temperature: Annotated[
-        float,
+        float | None,
         Form(
             description=(
                 "The sampling temperature, between `0` and `1`.\n"
-                "Higher values like `0.8` will make the output more random, while lower values like `0.2` will make it more focused and deterministic. "
-                "If set to `0`, the model will use log probability to automatically increase the temperature until certain thresholds are hit.\n"
-                "UNSUPPORTED on this implementation."
+                "Higher values like `0.8` will make the output more random, while lower values like `0.2` will make it more focused and deterministic."
             )
         ),
-    ] = 0.0,
+    ] = None,
     background_tasks: BackgroundTasks = BackgroundTasks(),
     _: Annotated[None, Depends(authenticate)] = None,
 ) -> str | TranslationCreateResponse | Response:
@@ -163,4 +161,6 @@ async def create_translation(
         audio_content=file,
         background_tasks=background_tasks,
         response_format=request.response_format,
+        temperature=request.temperature,
+        prompt=request.prompt,
     )

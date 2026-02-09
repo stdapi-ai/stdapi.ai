@@ -18,7 +18,8 @@ from fastapi import Response
 
 from stdapi.config import SETTINGS
 from stdapi.models import ModelBase, get_model, load_model_plugins
-from stdapi.openai_exceptions import OpenaiError
+from stdapi.openai_exceptions import OpenaiError, OpenaiUnsupportedParameterError
+from stdapi.utils import language_code_to_name
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -54,6 +55,20 @@ class TTSResponse(TypedDict):
 class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
     """Base class for provider-specific audio models supporting TTS and/or transcription."""
 
+    #: Set of supported response formats. Used with _validate_response_formats
+    SUPPORTED_RESPONSES_FORMATS: frozenset[AudioResponseFormat] = frozenset()
+
+    #: Set of supported timestamp granularities. Used with _validate_response_formats
+    SUPPORTED_TIMESTAMP_GRANULARITIES: frozenset[AudioTimestampGranularities] = (
+        frozenset()
+    )
+
+    #: Transcription prompt
+    TRANSCRIPTION_PROMPT = "Transcribe the audio."
+
+    #: Translation prompt
+    TRANSLATION_PROMPT = "Translate into english."
+
     async def tts(
         self,
         text: str,  # noqa: ARG002
@@ -87,6 +102,10 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
         response_format: AudioResponseFormat,  # noqa: ARG002
         language: str | None = None,  # noqa: ARG002
         timestamp_granularities: list[AudioTimestampGranularities] | None = None,  # noqa: ARG002
+        prompt: str | None = None,  # noqa: ARG002
+        temperature: float | None = None,  # noqa: ARG002
+        *,
+        logprobs: bool,  # noqa: ARG002
     ) -> str | TranscriptionCreateResponse | TranscriptionDiarized | Response:
         """Transcribe audio to text.
 
@@ -96,6 +115,9 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
             response_format: Format for output (json, text, srt, vtt, verbose_json, diarized_json).
             language: Optional language code.
             timestamp_granularities: Optional timestamp granularities for verbose_json.
+            prompt: Optional prompt for transcription.
+            temperature: Optional temperature for transcription.
+            logprobs: If true, return log probabilities.
 
         Returns:
             Formatted transcription response (str | TranscriptionCreateResponse | TranscriptionDiarized | Response).
@@ -112,6 +134,10 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
         background_tasks: BackgroundTasks,  # noqa: ARG002
         response_format: AudioResponseFormat,  # noqa: ARG002
         language: str | None = None,  # noqa: ARG002
+        prompt: str | None = None,  # noqa: ARG002
+        temperature: float | None = None,  # noqa: ARG002
+        *,
+        logprobs: bool,  # noqa: ARG002
     ) -> AsyncGenerator[TranscriptionTextDeltaEvent | TranscriptionTextDoneEvent]:
         """Transcribe audio to text with streaming response.
 
@@ -120,6 +146,9 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
             background_tasks: FastAPI background tasks for cleanup.
             response_format: Format for output.
             language: Optional language code.
+            prompt: Optional prompt for transcription.
+            temperature: Optional temperature for transcription.
+            logprobs: If true, return log probabilities.
 
         Yields:
             TranscriptionTextDeltaEvent or TranscriptionTextDoneEvent objects.
@@ -136,6 +165,8 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
         audio_content: UploadFile,  # noqa: ARG002
         background_tasks: BackgroundTasks,  # noqa: ARG002
         response_format: AudioResponseFormat,  # noqa: ARG002
+        prompt: str | None,  # noqa: ARG002
+        temperature: float | None = None,  # noqa: ARG002
     ) -> str | TranslationCreateResponse | Response:
         """Transcribe and translate audio to English.
 
@@ -143,6 +174,8 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
             audio_content: Audio file to transcribe and translate.
             background_tasks: FastAPI background tasks for cleanup.
             response_format: Format for output (json, text, srt, vtt, verbose_json).
+            prompt: Optional prompt for translation.
+            temperature: Optional temperature for transcription.
 
         Returns:
             Formatted translation response (str | TranslationCreateResponse | Response).
@@ -181,6 +214,122 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
             media_type=content_type,
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
+
+    @staticmethod
+    def _validate_no_temperature(value: float | None) -> None:
+        """Validate that temperature parameter is not provided.
+
+        Args:
+            value: The value to validate
+
+        Raises:
+            HTTPException: If a parameter is provided.
+        """
+        if value:
+            param = "temperature"
+            raise OpenaiUnsupportedParameterError(param)
+
+    @staticmethod
+    def _validate_no_prompt(value: str | None) -> None:
+        """Validate that prompt parameter is not provided.
+
+        Args:
+            value: The value to validate
+
+        Raises:
+            HTTPException: If a parameter is provided.
+        """
+        if value is not None:
+            param = "prompt"
+            raise OpenaiUnsupportedParameterError(param)
+
+    @staticmethod
+    def _validate_no_language(value: str | None) -> None:
+        """Validate that language parameter is not provided.
+
+        Args:
+            value: The value to validate
+
+        Raises:
+            HTTPException: If a parameter is provided.
+        """
+        if value is not None:
+            param = "language"
+            raise OpenaiUnsupportedParameterError(param)
+
+    @staticmethod
+    def _validate_no_logprobs(value: bool) -> None:  # noqa: FBT001
+        """Validate that logprobs parameter is not provided.
+
+        Args:
+            value: The value to validate
+
+        Raises:
+            HTTPException: If a parameter is provided.
+        """
+        if value:
+            param = "include.logprobs"
+            raise OpenaiUnsupportedParameterError(param)
+
+    @classmethod
+    def _validate_response_formats(
+        cls,
+        value: AudioResponseFormat,
+        timestamp_granularities: list[AudioTimestampGranularities] | None = None,
+    ) -> None:
+        """Validate that response_format parameter value.
+
+        Args:
+            value: The value to validate
+            timestamp_granularities: Timestamp granularities
+
+        Raises:
+            HTTPException: If a parameter is provided.
+        """
+        if value not in cls.SUPPORTED_RESPONSES_FORMATS:
+            msg = f"Response format '{value}' is not supported by this model."
+            raise OpenaiError(msg)
+
+        if value == "verbose_json" and timestamp_granularities:
+            for granularity in timestamp_granularities:
+                if granularity not in cls.SUPPORTED_TIMESTAMP_GRANULARITIES:
+                    msg = f"'verbose_json' with '{granularity}' timestamp granularity is not supported by this model."
+                    raise OpenaiError(msg)
+
+    @classmethod
+    def _built_prompt(
+        cls, prompt: str | None, language: str | None, *, translate: bool = False
+    ) -> str:
+        """Builds a comprehensive prompt string based on various optional parameters.
+
+        This class method constructs a detailed prompt to be used for transcription
+        and/or translation tasks. It combines static prompts with additional context
+        such as the expected language, translation requirement, and any user-provided
+        customization to produce a well-rounded string.
+
+        Args:
+            prompt: A custom prompt string provided by the user. If None,
+                this section of the string will be omitted.
+            language: Specifies the language of the audio by providing its
+                language code. If None, no language information will be appended to the
+                prompt.
+            translate: If set to True, the method will include a translation
+                directive in the prompt. Defaults to False.
+
+        Returns:
+            str: A concatenated string containing the full prompt with all the relevant
+                context.
+        """
+        prompt_items = [cls.TRANSCRIPTION_PROMPT]
+        if language:
+            prompt_items.append(
+                f"The audio is excepted to be {language_code_to_name(language)} language."
+            )
+        if translate:
+            prompt_items.append(cls.TRANSLATION_PROMPT)
+        if prompt:
+            prompt_items.append(prompt)
+        return "\n".join(prompt_items)
 
 
 # Audio Model Registry

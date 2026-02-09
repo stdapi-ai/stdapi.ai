@@ -6,7 +6,7 @@ from binascii import Error as BinasciiError
 from contextlib import contextmanager
 from io import BytesIO
 from os.path import splitext
-from re import ASCII
+from re import ASCII, Pattern
 from re import compile as compile_regex
 from sys import stdout
 from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict, TypeVar
@@ -21,6 +21,8 @@ from pybase64 import b64encode as _b64encode
 from pydantic import JsonValue, ValidationError
 from pydantic_core import from_json, to_json
 
+from stdapi.openai_exceptions import OpenaiError
+
 if TYPE_CHECKING:
     from collections.abc import Buffer, Generator
 
@@ -28,6 +30,8 @@ if TYPE_CHECKING:
 
 T = TypeVar("T")
 
+#: Audio MIME type regex pattern
+AUDIO_MIME_PATTERN = compile_regex(r"^audio/")
 
 #: Application inference profile ARN regex matcher
 match_bedrock_app_profile_arn = compile_regex(
@@ -573,3 +577,20 @@ def get_base64_decoded_size(value: str) -> int:
         else:
             break
     return (len(value) * 3) // 4 - padding - prefix_length
+
+
+def get_and_validate_mime(content: bytes, mime_pattern: Pattern[str]) -> str:
+    """Validate MIME type of content against a regex pattern.
+
+    Args:
+        content: Binary content to check.
+        mime_pattern: Compiled regex pattern (e.g., AUDIO_MIME_PATTERN).
+
+    Raises:
+        OpenaiError: If MIME type doesn't match the pattern.
+    """
+    mime = from_buffer(content, mime=True)
+    if not mime_pattern.match(mime):
+        msg = f"Unsupported input file format: {mime}"
+        raise OpenaiError(msg)
+    return mime

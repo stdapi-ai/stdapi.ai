@@ -461,12 +461,21 @@ class AudioModel(AudioModelBase[None, None]):
 
     MATCHER = AWS_TRANSCRIBE_MODEL_ID
 
-    @staticmethod
+    SUPPORTED_RESPONSES_FORMATS = frozenset(
+        {"json", "text", "srt", "verbose_json", "vtt", "diarized_json"}
+    )
+    SUPPORTED_TIMESTAMP_GRANULARITIES = frozenset({"word", "segment"})
+
     async def _transcribe(
+        self,
         audio_content: UploadFile,
         background_tasks: BackgroundTasks,
         response_format: AudioResponseFormat,
         language: str | None = None,
+        prompt: str | None = None,
+        temperature: float | None = None,
+        *,
+        logprobs: bool = False,
     ) -> TranscribeJobData:
         """Perform transcription task using AWS Transcribe and returns row result.
 
@@ -479,6 +488,9 @@ class AudioModel(AudioModelBase[None, None]):
             background_tasks: FastAPI background tasks for cleanup
             response_format: Format for the output response (json, text, srt, vtt, verbose_json, diarized_json)
             language: Optional language code for the input audio (ISO-639-1 format)
+            prompt: Optional prompt for transcription.
+            temperature: Optional temperature for transcription.
+            logprobs: If true, return log probabilities.
 
         Returns:
             Raw transcription response
@@ -487,6 +499,10 @@ class AudioModel(AudioModelBase[None, None]):
             HTTPException: When transcription fails, validation errors occur, or
                 unsupported file formats are provided
         """
+        self._validate_no_prompt(prompt)
+        self._validate_no_temperature(temperature)
+        self._validate_no_logprobs(logprobs)
+
         s3_bucket = SETTINGS.aws_transcribe_s3_bucket
         if not s3_bucket:
             log_error_details(
@@ -495,7 +511,7 @@ class AudioModel(AudioModelBase[None, None]):
             )
             raise HTTPException(
                 status_code=404,
-                detail="This endpoint is not available on the current server. "
+                detail="This model is not available on the current server. "
                 "Please contact the administrator to enabled it.",
             )
 
@@ -652,6 +668,10 @@ class AudioModel(AudioModelBase[None, None]):
         response_format: AudioResponseFormat,
         language: str | None = None,
         timestamp_granularities: list[AudioTimestampGranularities] | None = None,
+        prompt: str | None = None,
+        temperature: float | None = None,
+        *,
+        logprobs: bool,
     ) -> str | TranscriptionCreateResponse | TranscriptionDiarized | Response:
         """Perform transcription task using AWS Transcribe.
 
@@ -665,6 +685,9 @@ class AudioModel(AudioModelBase[None, None]):
             response_format: Format for the output response (json, text, srt, vtt, verbose_json, diarized_json)
             language: Optional language code for the input audio (ISO-639-1 format)
             timestamp_granularities: Optional timestamp granularities for verbose_json
+            prompt: Optional prompt for transcription.
+            temperature: Optional temperature for transcription.
+            logprobs: If true, return log probabilities.
 
         Returns:
             Formatted transcription response
@@ -673,9 +696,16 @@ class AudioModel(AudioModelBase[None, None]):
             HTTPException: When transcription fails, validation errors occur, or
                 unsupported file formats are provided
         """
+        self._validate_response_formats(response_format, timestamp_granularities)
         return self._format_transcription_response(
             await self._transcribe(
-                audio_content, background_tasks, response_format, language
+                audio_content,
+                background_tasks,
+                response_format,
+                language,
+                prompt,
+                temperature,
+                logprobs=logprobs,
             ),
             audio_content,
             response_format,
@@ -688,6 +718,10 @@ class AudioModel(AudioModelBase[None, None]):
         background_tasks: BackgroundTasks,
         response_format: AudioResponseFormat,
         language: str | None = None,
+        prompt: str | None = None,
+        temperature: float | None = None,
+        *,
+        logprobs: bool,  # noqa: ARG002
     ) -> AsyncGenerator[TranscriptionTextDeltaEvent | TranscriptionTextDoneEvent]:
         """Transcribe audio to text with streaming response.
 
@@ -696,6 +730,9 @@ class AudioModel(AudioModelBase[None, None]):
             background_tasks: FastAPI background tasks for cleanup
             response_format: Format for output
             language: Optional language code
+            prompt: Optional prompt for transcription.
+            temperature: Optional temperature for transcription.
+            logprobs: If true, return log probabilities.
 
         Yields:
             TranscriptionTextDeltaEvent or TranscriptionTextDoneEvent objects
@@ -704,7 +741,12 @@ class AudioModel(AudioModelBase[None, None]):
             HTTPException: When transcription fails
         """
         transcript_data = await self._transcribe(
-            audio_content, background_tasks, response_format, language
+            audio_content,
+            background_tasks,
+            response_format,
+            language,
+            prompt,
+            temperature,
         )
 
         full_text_parts: list[str] = []
@@ -737,6 +779,8 @@ class AudioModel(AudioModelBase[None, None]):
         audio_content: UploadFile,
         background_tasks: BackgroundTasks,
         response_format: AudioResponseFormat,
+        prompt: str | None,
+        temperature: float | None = None,
     ) -> str | TranslationCreateResponse | Response:
         """Transcribe and translate audio to English.
 
@@ -747,6 +791,8 @@ class AudioModel(AudioModelBase[None, None]):
             audio_content: Audio file to transcribe and translate
             background_tasks: FastAPI background tasks for cleanup
             response_format: Format for output (json, text, srt, vtt, verbose_json)
+            prompt: Optional prompt for translation.
+            temperature: Optional temperature for transcription.
 
         Returns:
             Formatted translation response with translated text in English
@@ -755,7 +801,11 @@ class AudioModel(AudioModelBase[None, None]):
             HTTPException: When transcription or translation fails
         """
         transcript_data = await self._transcribe(
-            audio_content, background_tasks, response_format
+            audio_content,
+            background_tasks,
+            response_format,
+            prompt=prompt,
+            temperature=temperature,
         )
 
         language = transcript_data["language_code"]

@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypedDict, TypeVar
 
 from botocore.exceptions import ClientError
 from fastapi import BackgroundTasks, HTTPException
-from pydantic import AwareDatetime, BaseModel
+from pydantic import AwareDatetime, BaseModel, JsonValue
 from pydantic_core import from_json, to_json
 
 from stdapi.aws import get_client
@@ -38,7 +38,7 @@ from stdapi.utils import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping, Sequence
+    from collections.abc import AsyncGenerator, Iterable, Mapping, Sequence
 
     from types_aiobotocore_bedrock.client import BedrockClient
     from types_aiobotocore_bedrock.type_defs import (
@@ -125,6 +125,16 @@ _USER_PROFILES: dict[str, tuple[ModelDetails, AwareDatetime]] = {}
 
 #: Model aliases (Populated by models implementation on import then merged at startup with user settings)
 MODEL_ALIASES: dict[str, str] = {}
+
+#: Bedrock Invoke stream errors
+_INVOKE_STREAM_ERRORS: dict[str, str] = {
+    "internalServerException": "InternalServerException",
+    "modelStreamErrorException": "ModelStreamErrorException",
+    "validationException": "ValidationException",
+    "throttlingException": "ThrottlingException",
+    "modelTimeoutException": "ModelTimeoutException",
+    "serviceUnavailableException": "ServiceUnavailableException",
+}
 
 
 class ModelDetails(BaseModel):
@@ -226,6 +236,25 @@ class ModelBase[RequestT, ResponseT]:
         return await gather(
             *(self.invoke(body, inference_profile=inference_profile) for body in bodies)
         )
+
+    async def invoke_stream(
+        self, body: RequestT, *, inference_profile: bool = True
+    ) -> AsyncGenerator[JsonValue]:
+        """Invoke the model through AWS Bedrock with streaming response.
+
+        Args:
+            body: The input data to invoke the operation.
+            inference_profile: If True, use the inference profile. Otherwise, use the model ID.
+
+        Yields:
+            Streaming chunks from the model response.
+        """
+        async for chunk in invoke_json_stream(
+            self._model_id,
+            body,  # type: ignore[arg-type]
+            inference_profile=inference_profile,
+        ):
+            yield chunk
 
     async def invoke_async(
         self,
@@ -762,6 +791,54 @@ async def invoke_json(
     with handle_bedrock_client_error():
         response = await bedrock_client.invoke_model(**kwargs)
     return from_json(await response["body"].read())  # type: ignore[no-any-return]
+
+
+async def invoke_json_stream(
+    model_id: str, body: Mapping[str, Any], *, inference_profile: bool = True
+) -> AsyncGenerator[JsonValue]:
+    """Invoke a Bedrock model with streaming response.
+
+    Args:
+        model_id: Model ID.
+        body: JSON payload.
+        inference_profile: If True, use the inference profile. Otherwise, use the model ID.
+
+    Yields:
+        JSON chunks from the streaming response.
+    """
+    bedrock_client, kwargs = await _prepare_bedrock_request(
+        model_id, body, inference_profile=inference_profile
+    )
+    with handle_bedrock_client_error():
+        response = await bedrock_client.invoke_model_with_response_stream(**kwargs)
+        async for event in response["body"]:
+            if "chunk" in event:
+                yield from_json(event["chunk"]["bytes"])
+                continue
+
+            for error_key, error_code in _INVOKE_STREAM_ERRORS.items():
+                if error_key in event:
+                    error_data = event[error_key]  # type: ignore[literal-required]
+                    error_response = {
+                        "Error": {
+                            "Code": error_code,
+                            "Message": error_data.get(
+                                "originalMessage", error_data["message"]
+                            ),
+                        }
+                    }
+                    if "originalStatusCode" in error_data:
+                        error_response["ResponseMetadata"] = {
+                            "HTTPStatusCode": error_data["originalStatusCode"]
+                        }
+                    raise ClientError(
+                        error_response,  # type: ignore[arg-type]
+                        "invoke_model_with_response_stream",
+                    )
+                    break
+            else:  # pragma: no cover
+                msg = f"Received unexpected streaming event type: {list(event.keys())}"
+                raise RuntimeError(msg)
 
 
 async def prepare_converse_request(
