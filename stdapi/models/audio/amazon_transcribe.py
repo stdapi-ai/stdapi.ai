@@ -37,6 +37,8 @@ from stdapi.types.openai_audio import (
     AudioTimestampGranularities,
     Transcription,
     TranscriptionCreateResponse,
+    TranscriptionDiarized,
+    TranscriptionDiarizedSegment,
     TranscriptionSegment,
     TranscriptionTextDeltaEvent,
     TranscriptionTextDoneEvent,
@@ -67,6 +69,9 @@ AWS_TRANSCRIBE_MODEL_ID = "amazon.transcribe"
 # Use AWS transcribe as the default STT engine
 MODEL_ALIASES["whisper-1"] = AWS_TRANSCRIBE_MODEL_ID
 
+#: Ordinal value of the "A" letter used as speaker label
+_A_ORDINAL_VALUE = ord("A")
+
 
 # AWS Transcribe-specific data structures
 class TranscribeJobItem(TypedDict, total=False):
@@ -85,12 +90,29 @@ class TranscribeJobAudioSegment(TypedDict):
     start_time: str
     end_time: str
     transcript: str
+    speaker_label: NotRequired[str]
 
 
 class TranscribeJobTranscript(TypedDict):
     """AWS Transcribe transcript result structure."""
 
     transcript: str
+
+
+class TranscribeJobSpeakerLabelItem(TypedDict):
+    """AWS Transcribe speaker label item structure."""
+
+    speaker_label: str
+    content: str
+
+
+class TranscribeJobSpeakerSegment(TypedDict):
+    """AWS Transcribe speaker segment structure."""
+
+    speaker_label: str
+    start_time: str
+    end_time: str
+    items: list[TranscribeJobSpeakerLabelItem]
 
 
 class TranscribeJobData(TypedDict, total=False):
@@ -182,6 +204,9 @@ def _build_transcription_job_params(
             "Formats": [response_format],  # type: ignore[list-item]
             "OutputStartIndex": 1,
         }
+
+    elif response_format == "diarized_json":
+        job_params["Settings"] = {"ShowSpeakerLabels": True, "MaxSpeakerLabels": 10}
 
     return job_params
 
@@ -320,6 +345,50 @@ async def _transcribe_cleanup(
         )
 
 
+def _format_diarized_json_response(
+    transcript_data: TranscribeJobData,
+    text: str,
+    duration: float,
+    usage_duration: UsageDuration,
+) -> TranscriptionDiarized:
+    """Format transcription response as diarized JSON with speaker segments.
+
+    Converts AWS Transcribe speaker-labeled results into OpenAI-compatible
+    diarized JSON format with speaker segments.
+
+    Args:
+        transcript_data: Parsed transcription results from AWS Transcribe
+        text: Processed transcript text content
+        duration: Audio duration in seconds
+        usage_duration: Usage duration for transcription
+
+    Returns:
+        Formatted diarized response with speaker segments
+    """
+    speakers: dict[str, str] = {}
+    return log_response_params(
+        TranscriptionDiarized(
+            duration=duration,
+            segments=[
+                TranscriptionDiarizedSegment(
+                    id=f"seg_{segment['id']}",
+                    start=float(segment["start_time"]),
+                    end=float(segment["end_time"]),
+                    speaker=speakers.setdefault(
+                        segment["speaker_label"], chr(_A_ORDINAL_VALUE + len(speakers))
+                    ),
+                    text=segment["transcript"],
+                    type="transcript.text.segment",
+                )
+                for segment in transcript_data["audio_segments"]
+            ],
+            task="transcribe",
+            text=text,
+            usage=usage_duration,
+        )
+    )
+
+
 def _format_json_response(
     transcript_data: TranscribeJobData,
     text: str,
@@ -408,7 +477,7 @@ class AudioModel(AudioModelBase[None, None]):
         Args:
             audio_content: Audio file content file
             background_tasks: FastAPI background tasks for cleanup
-            response_format: Format for the output response (json, text, srt, vtt, verbose_json)
+            response_format: Format for the output response (json, text, srt, vtt, verbose_json, diarized_json)
             language: Optional language code for the input audio (ISO-639-1 format)
 
         Returns:
@@ -485,7 +554,7 @@ class AudioModel(AudioModelBase[None, None]):
         file: FastAPIUploadFile,
         response_format: AudioResponseFormat,
         timestamp_granularities: list[AudioTimestampGranularities] | None = None,
-    ) -> str | TranscriptionCreateResponse | Response:
+    ) -> str | TranscriptionCreateResponse | TranscriptionDiarized | Response:
         """Format transcription response for the route.
 
         Args:
@@ -518,7 +587,10 @@ class AudioModel(AudioModelBase[None, None]):
             return _format_json_response(
                 transcript_data, text, duration, usage_duration, timestamp_granularities
             )
-
+        if response_format == "diarized_json":
+            return _format_diarized_json_response(
+                transcript_data, text, duration, usage_duration
+            )
         return log_response_params(Transcription(text=text, usage=usage_duration))
 
     @classmethod
@@ -580,7 +652,7 @@ class AudioModel(AudioModelBase[None, None]):
         response_format: AudioResponseFormat,
         language: str | None = None,
         timestamp_granularities: list[AudioTimestampGranularities] | None = None,
-    ) -> str | TranscriptionCreateResponse | Response:
+    ) -> str | TranscriptionCreateResponse | TranscriptionDiarized | Response:
         """Perform transcription task using AWS Transcribe.
 
         This function handles the entire transcription workflow from audio upload
@@ -590,7 +662,7 @@ class AudioModel(AudioModelBase[None, None]):
         Args:
             audio_content: Audio file content file
             background_tasks: FastAPI background tasks for cleanup
-            response_format: Format for the output response (json, text, srt, vtt, verbose_json)
+            response_format: Format for the output response (json, text, srt, vtt, verbose_json, diarized_json)
             language: Optional language code for the input audio (ISO-639-1 format)
             timestamp_granularities: Optional timestamp granularities for verbose_json
 

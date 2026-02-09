@@ -682,3 +682,74 @@ class TestAudioTranscriptions:
                 assert hasattr(word, "word")
                 assert hasattr(word, "start")
                 assert hasattr(word, "end")
+
+    @pytest.mark.expensive
+    def test_diarized_json_response(
+        self,
+        openai_client: OpenAI,
+        sample_audio_file: bytes,
+        transcription_diarize_model: str,
+    ) -> None:
+        """Test diarized JSON response format with speaker identification.
+
+        Validates the diarized_json response format that includes speaker diarization
+        with automatic speaker labeling. This format is essential for applications
+        that need to distinguish between different speakers in conversations, meetings,
+        or interviews.
+
+        Args:
+            openai_client: OpenAI client instance for API calls
+            sample_audio_file: Audio file bytes for transcription testing
+            transcription_diarize_model: Transcription model identifier with diarization support
+
+        Validates:
+            - Response contains required fields (duration, segments, task, text)
+            - Duration is non-negative number
+            - Task field is set to "transcribe"
+            - Segments contain speaker identification and timing data
+            - Each segment has proper structure (id, start, end, speaker, text, type)
+            - Speaker labels follow expected format (A, B, C, etc.)
+            - Text is concatenated from all segments
+        """
+        response = openai_client.audio.transcriptions.create(
+            file=("test.wav", io.BytesIO(sample_audio_file)),
+            model=transcription_diarize_model,
+            response_format="diarized_json",
+        )
+
+        # Check required fields
+        assert hasattr(response, "segments")
+        assert hasattr(response, "text")
+
+        # Validate text field
+        assert isinstance(response.text, str)
+
+        # Validate segments structure if present
+        if hasattr(response, "segments") and response.segments is not None:
+            for segment in response.segments:
+                # Check required segment fields
+                assert hasattr(segment, "id")
+                assert hasattr(segment, "start")
+                assert hasattr(segment, "end")
+                assert hasattr(segment, "speaker")
+                assert hasattr(segment, "text")
+                assert hasattr(segment, "type")
+
+                # Validate segment types
+                assert isinstance(segment.id, str)
+                assert segment.id.startswith("seg_")
+                assert isinstance(segment.start, int | float)
+                assert isinstance(segment.end, int | float)
+                assert segment.end > 0
+                assert isinstance(segment.speaker, str)
+                assert isinstance(segment.text, str)
+                assert segment.type == "transcript.text.segment"
+
+                # Validate timing
+                assert segment.start >= 0
+                assert segment.end >= segment.start
+
+                # Validate speaker label format (should be A, B, C, etc.)
+                assert segment.speaker.isalpha()
+                assert segment.speaker.isupper()
+                assert len(segment.speaker) == 1

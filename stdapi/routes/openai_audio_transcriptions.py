@@ -24,6 +24,7 @@ from stdapi.types.openai_audio import (
     ChunkingStrategy,
     TranscriptionCreateParams,
     TranscriptionCreateResponse,
+    TranscriptionDiarized,
     TranscriptionTextDeltaEvent,
     TranscriptionTextDoneEvent,
 )
@@ -183,9 +184,39 @@ async def create_transcription(
             )
         ),
     ] = False,
+    known_speaker_names: Annotated[
+        list[str] | None,
+        Form(
+            description=(
+                "Optional list of speaker names that correspond to the audio samples provided in "
+                "`known_speaker_references[]`. Each entry should be a short identifier (for "
+                "example `customer` or `agent`).\n"
+                "UNSUPPORTED on this implementation."
+            )
+        ),
+    ] = None,
+    known_speaker_references: Annotated[
+        list[str] | None,
+        Form(
+            description=(
+                "Optional list of audio samples (as "
+                "[data URLs](https://developer.mozilla.org/en-US/docs/Web/HTTP/Basics_of_HTTP/Data_URLs)) "
+                "that contain known speaker references matching `known_speaker_names[]`. Each "
+                "sample must be between 2 and 10 seconds, and can use any of the same input audio "
+                "formats supported by `file`.\n"
+                "UNSUPPORTED on this implementation."
+            )
+        ),
+    ] = None,
     background_tasks: BackgroundTasks = BackgroundTasks(),
     _: Annotated[None, Depends(authenticate)] = None,
-) -> str | TranscriptionCreateResponse | EventSourceResponse | Response:
+) -> (
+    str
+    | TranscriptionCreateResponse
+    | TranscriptionDiarized
+    | EventSourceResponse
+    | Response
+):
     """Transcribes audio into the input language.
 
     Converts audio to text in the same language as the source audio. The model will
@@ -199,10 +230,12 @@ async def create_transcription(
         language: The language of the input audio (ISO-639-1 code, e.g. `en`). Improves accuracy and latency when provided.
         prompt: Optional style guidance for the model. UNSUPPORTED on this implementation.
         chunking_strategy: Controls how the audio is cut into chunks. `auto` only is supported on this implementation.
-        response_format: Output format: `json`, `text`, `srt`, `verbose_json`, or `vtt`.
+        response_format: Output format: `json`, `text`, `srt`, `verbose_json`, `vtt`, or `diarized_json`.
         timestamp_granularities: For `verbose_json` only; comma-separated values among `word` and `segment` (e.g. `word,segment`).
         temperature: Sampling temperature. UNSUPPORTED on this implementation (must be 0.0).
         stream: Whether to stream partial results via Server-Sent Events.
+        known_speaker_names: Optional list of known speaker names. UNSUPPORTED on this implementation.
+        known_speaker_references: Optional list of audio references for known speakers. UNSUPPORTED on this implementation.
         background_tasks: FastAPI background tasks for cleanup.
 
     Returns:
@@ -223,6 +256,8 @@ async def create_transcription(
             ),
             temperature=temperature,
             stream=stream,
+            known_speaker_names=known_speaker_names,
+            known_speaker_references=known_speaker_references,
         )
     log_request_params(request)
 

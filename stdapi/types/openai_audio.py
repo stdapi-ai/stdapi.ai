@@ -9,7 +9,10 @@ from stdapi.types import BaseModelRequest, BaseModelRequestWithExtra, BaseModelR
 from stdapi.types.openai import Auto
 
 # Ref: openai.types.audio_response_format.AudioResponseFormat
-AudioResponseFormat = Literal["json", "text", "srt", "verbose_json", "vtt"]
+AudioResponseFormat = Literal[
+    "json", "text", "srt", "verbose_json", "vtt", "diarized_json"
+]
+TranslateAudioResponseFormat = Literal["json", "text", "srt", "verbose_json", "vtt"]
 
 #: Subtitle formats for transcription/translation responses
 AudioSubtitleFormat = Literal["srt", "vtt"]
@@ -87,6 +90,7 @@ class UsageInputTokenDetails(BaseModelResponse):
 
 # Ref: openai.types.audio.transcription.UsageTokens
 # Ref: openai.types.audio.transcription_text_done_event.Usage
+# Ref: openai.types.audio.transcription_diarized.UsageTokens
 class UsageTokens(BaseModelResponse):
     """Usage statistics for models billed by token usage."""
 
@@ -128,6 +132,7 @@ class TranscriptionTextDoneEvent(BaseModelResponse):
 
 # Ref: openai.types.audio.transcription.UsageDuration
 # Ref: openai.types.audio.transcription_verbose.Usage
+# Ref: openai.types.audio.transcription_diarized.UsageDuration
 class UsageDuration(BaseModelResponse):
     """Duration usage for models billed by audio duration."""
 
@@ -137,6 +142,11 @@ class UsageDuration(BaseModelResponse):
     type: Literal["duration"] = Field(
         description="The type of the usage object. Always `duration` for this variant."
     )
+
+
+# Ref: openai.types.audio.transcription.Usage
+# Ref: openai.types.audio.transcription_diarized.Usage
+Usage = Annotated[UsageTokens | UsageDuration, Field(discriminator="type")]
 
 
 # Ref: openai.types.audio.transcription.Transcription
@@ -150,9 +160,7 @@ class Transcription(BaseModelResponse):
             "The log probabilities of the tokens in the transcription. Only returned with specific models when requested."
         ),
     )
-    usage: (
-        Annotated[UsageTokens | UsageDuration, Field(discriminator="type")] | None
-    ) = Field(
+    usage: Usage | None = Field(
         default=None, description="Token or duration usage statistics for the request."
     )
 
@@ -215,6 +223,47 @@ class TranscriptionVerbose(BaseModelResponse):
     )
     words: list[TranscriptionWord] | None = Field(
         default=None, description="Extracted words and their corresponding timestamps."
+    )
+
+
+# REF: openai.types.audio.transcription_diarized_segment.TranscriptionDiarizedSegment
+class TranscriptionDiarizedSegment(BaseModelResponse):
+    """A segment of diarized transcript text with speaker metadata."""
+
+    id: str = Field(description="Unique identifier for the segment.")
+    end: float = Field(ge=0, description="End timestamp of the segment in seconds.")
+    speaker: str = Field(
+        description=(
+            "Speaker label for this segment. "
+            "When known speakers are provided, the label matches `known_speaker_names[]`. "
+            "Otherwise speakers are labeled sequentially using capital letters (`A`, `B`, ...)."
+        )
+    )
+    start: float = Field(ge=0, description="Start timestamp of the segment in seconds.")
+    text: str = Field(description="Transcript text for this segment.")
+    type: Literal["transcript.text.segment"] = Field(
+        default="transcript.text.segment",
+        description="The type of the segment. Always `transcript.text.segment`.",
+    )
+
+
+# REF: openai.types.audio.transcription_diarized.TranscriptionDiarized
+class TranscriptionDiarized(BaseModelResponse):
+    """Represents a diarized transcription response returned by the model, including the combined transcript and speaker-segment annotations."""
+
+    duration: float = Field(ge=0, description="Duration of the input audio in seconds.")
+    segments: list[TranscriptionDiarizedSegment] = Field(
+        description="Segments of the transcript annotated with timestamps and speaker labels."
+    )
+    task: Literal["transcribe"] = Field(
+        default="transcribe",
+        description="The type of task that was run. Always `transcribe`.",
+    )
+    text: str = Field(
+        description="The concatenated transcript text for the entire audio input."
+    )
+    usage: Usage | None = Field(
+        default=None, description="Token or duration usage statistics for the request."
     )
 
 
@@ -391,6 +440,26 @@ class TranscriptionCreateParams(BaseModelRequest, str_strip_whitespace=True):
         "`logprobs` only works with response_format set to `json`.\n"
         "UNSUPPORTED on this implementation.",
     )
+    known_speaker_names: list[str] | None = Field(
+        default=None,
+        description=(
+            "Optional list of speaker names that correspond to the audio samples provided in "
+            "`known_speaker_references[]`. Each entry should be a short identifier (for "
+            "example `customer` or `agent`).\n"
+            "UNSUPPORTED on this implementation."
+        ),
+    )
+    known_speaker_references: list[str] | None = Field(
+        default=None,
+        description=(
+            "Optional list of audio samples (as "
+            "[data URLs](https://developer.mozilla.org/en-US/docs/Web/HTTP/Basics_of_HTTP/Data_URLs)) "
+            "that contain known speaker references matching `known_speaker_names[]`. Each "
+            "sample must be between 2 and 10 seconds, and can use any of the same input audio "
+            "formats supported by `file`.\n"
+            "UNSUPPORTED on this implementation."
+        ),
+    )
     language: str | None = Field(
         default=None,
         description="The language of the input audio.\n"
@@ -407,7 +476,7 @@ class TranscriptionCreateParams(BaseModelRequest, str_strip_whitespace=True):
     response_format: AudioResponseFormat = Field(
         default="json",
         description="The format of the transcript output.\n"
-        "Supported formats: `json`, `text`, `srt`, `verbose_json`, `vtt`",
+        "Supported formats: `json`, `text`, `srt`, `verbose_json`, `vtt` or `diarized_json`",
     )
     temperature: float = Field(
         default=0.0,
@@ -477,7 +546,7 @@ class TranslationCreateParams(BaseModelRequest, str_strip_whitespace=True):
         "The prompt should be in English.\n"
         "UNSUPPORTED on this implementation.",
     )
-    response_format: AudioResponseFormat = Field(
+    response_format: TranslateAudioResponseFormat = Field(
         default="json",
         description="The format of the transcript output.\n"
         "Supported formats: `json`, `text`, `srt`, `verbose_json`, `vtt`",

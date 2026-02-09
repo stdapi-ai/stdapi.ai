@@ -87,18 +87,18 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
         response_format: AudioResponseFormat,  # noqa: ARG002
         language: str | None = None,  # noqa: ARG002
         timestamp_granularities: list[AudioTimestampGranularities] | None = None,  # noqa: ARG002
-    ) -> str | TranscriptionCreateResponse | Response:
+    ) -> str | TranscriptionCreateResponse | TranscriptionDiarized | Response:
         """Transcribe audio to text.
 
         Args:
             audio_content: Audio file to transcribe.
             background_tasks: FastAPI background tasks for cleanup.
-            response_format: Format for output (json, text, srt, vtt, verbose_json).
+            response_format: Format for output (json, text, srt, vtt, verbose_json, diarized_json).
             language: Optional language code.
             timestamp_granularities: Optional timestamp granularities for verbose_json.
 
         Returns:
-            Formatted transcription response (str | TranscriptionCreateResponse | Response).
+            Formatted transcription response (str | TranscriptionCreateResponse | TranscriptionDiarized | Response).
 
         Raises:
             OpenaiError: If transcription is not supported by this model.

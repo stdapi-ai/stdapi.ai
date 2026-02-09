@@ -22,6 +22,7 @@ MODEL_MAPPINGS = {
     "local": {
         "transcription": "amazon.transcribe",
         "transcription_stream": "amazon.transcribe",
+        "transcription_diarize": "amazon.transcribe",
         "speech_standard": "amazon.polly-standard",
         "chat": "amazon.nova-micro-v1:0",
         "chat_vision": "anthropic.claude-haiku-4-5-20251001-v1:0",
@@ -37,6 +38,7 @@ MODEL_MAPPINGS = {
     "openai": {
         "transcription": "whisper-1",
         "transcription_stream": "gpt-4o-mini-transcribe",
+        "transcription_diarize": "gpt-4o-transcribe-diarize",
         "speech_standard": "tts-1",
         "chat": "gpt-5-nano",
         "chat_vision": "gpt-5-nano",
@@ -121,6 +123,12 @@ def transcription_model(models: dict[str, str]) -> str:
 def transcription_stream_model(models: dict[str, str]) -> str:
     """Provide the appropriate transcription model."""
     return models["transcription_stream"]
+
+
+@pytest.fixture(scope="session")
+def transcription_diarize_model(models: dict[str, str]) -> str:
+    """Provide the appropriate transcription model with diarization support."""
+    return models["transcription_diarize"]
 
 
 @pytest.fixture(scope="session")
