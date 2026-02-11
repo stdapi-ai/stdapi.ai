@@ -265,48 +265,6 @@ Simply reference your S3 images using the `s3://` URI scheme in `image_url` fiel
 - Performance - Optimized data transfer within AWS infrastructure
 - Large images - No size limitations of data URIs or base64 encoding
 
-## Available Request Headers
-
-This endpoint supports standard Bedrock headers for enhanced control over your requests. All headers are optional and can be combined as needed.
-
-### Content Safety (Guardrails)
-
-| Header                               | Purpose                            | Valid Values                          |
-|--------------------------------------|------------------------------------|---------------------------------------|
-| `X-Amzn-Bedrock-GuardrailIdentifier` | Guardrail ID for content filtering | Your guardrail identifier             |
-| `X-Amzn-Bedrock-GuardrailVersion`    | Guardrail version                  | Version number (e.g., `1`)            |
-| `X-Amzn-Bedrock-Trace`               | Guardrail trace level              | `disabled`, `enabled`, `enabled_full` |
-
-### Performance Optimization
-
-| Header                                     | Purpose                | Valid Values                  |
-|--------------------------------------------|------------------------|-------------------------------|
-| `X-Amzn-Bedrock-Service-Tier`              | Service tier selection | `priority`, `default`, `flex` |
-| `X-Amzn-Bedrock-PerformanceConfig-Latency` | Latency optimization   | `standard`, `optimized`       |
-
-**Example with all headers:**
-
-```bash
-curl -X POST "$BASE/v1/chat/completions" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: application/json" \
-  -H "X-Amzn-Bedrock-GuardrailIdentifier: your-guardrail-id" \
-  -H "X-Amzn-Bedrock-GuardrailVersion: 1" \
-  -H "X-Amzn-Bedrock-Trace: enabled" \
-  -H "X-Amzn-Bedrock-Service-Tier: priority" \
-  -H "X-Amzn-Bedrock-PerformanceConfig-Latency: optimized" \
-  -d '{
-    "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
-    "messages": [{"role": "user", "content": "Hello!"}]
-  }'
-```
-
-!!! info "Detailed Documentation"
-    For complete information about these headers, configuration options, and use cases, see:
-
-    - [Bedrock Guardrails Configuration](operations_configuration.md#bedrock-guardrails)
-    - [Service Tier and Performance Configuration](operations_configuration.md#bedrock-service-tier-and-performance-configuration)
-
 ### AWS Bedrock System Tools
 
 AWS Bedrock system tools are built-in capabilities that foundation models can use directly without requiring you to implement backend integrations. Access any AWS Bedrock system tool by adding the `systemTool_` prefix to its name—this works for current tools and any future system tools AWS releases.
@@ -580,6 +538,48 @@ DeepSeek models with reasoning capabilities are automatically handled—their ch
 - When using DeepSeek reasoning models, the API automatically surfaces their chain-of-thought
 - Non-reasoning models simply omit the `reasoning_content` field
 - No special parameters needed—just use the model and reasoning appears automatically
+
+## Available Request Headers
+
+This endpoint supports standard Bedrock headers for enhanced control over your requests. All headers are optional and can be combined as needed.
+
+### Content Safety (Guardrails)
+
+| Header                               | Purpose                            | Valid Values                          |
+|--------------------------------------|------------------------------------|---------------------------------------|
+| `X-Amzn-Bedrock-GuardrailIdentifier` | Guardrail ID for content filtering | Your guardrail identifier             |
+| `X-Amzn-Bedrock-GuardrailVersion`    | Guardrail version                  | Version number (e.g., `1`)            |
+| `X-Amzn-Bedrock-Trace`               | Guardrail trace level              | `disabled`, `enabled`, `enabled_full` |
+
+### Performance Optimization
+
+| Header                                     | Purpose                | Valid Values                  |
+|--------------------------------------------|------------------------|-------------------------------|
+| `X-Amzn-Bedrock-Service-Tier`              | Service tier selection | `priority`, `default`, `flex` |
+| `X-Amzn-Bedrock-PerformanceConfig-Latency` | Latency optimization   | `standard`, `optimized`       |
+
+**Example with all headers:**
+
+```bash
+curl -X POST "$BASE/v1/chat/completions" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "X-Amzn-Bedrock-GuardrailIdentifier: your-guardrail-id" \
+  -H "X-Amzn-Bedrock-GuardrailVersion: 1" \
+  -H "X-Amzn-Bedrock-Trace: enabled" \
+  -H "X-Amzn-Bedrock-Service-Tier: priority" \
+  -H "X-Amzn-Bedrock-PerformanceConfig-Latency: optimized" \
+  -d '{
+    "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
+```
+
+!!! info "Detailed Documentation"
+    For complete information about these headers, configuration options, and use cases, see:
+
+    - [Bedrock Guardrails Configuration](operations_configuration.md#bedrock-guardrails)
+    - [Service Tier and Performance Configuration](operations_configuration.md#bedrock-service-tier-and-performance-configuration)
 
 ## Try It Now
 
