@@ -55,7 +55,6 @@ The following features may be implemented in future releases based on community 
 |                                                                                | Translations with Nova Sonic          | ![Amazon Nova Sonic](styles/logo_amazon_nova.svg){: style="height:20px;width:20px"} Amazon Nova Sonic                      |
 |                                                                                | Long-form speech (async)              | ![Amazon Polly](styles/logo_amazon_polly.svg){: style="height:20px;width:20px"} Amazon Polly - async tasks                 |
 |                                                                                | Streaming transcription               | ![Amazon Transcribe](styles/logo_amazon_transcribe.svg){: style="height:20px;width:20px"} Amazon Transcribe - streaming    |
-|                                                                                | Speaker diarization                   | ![Amazon Transcribe](styles/logo_amazon_transcribe.svg){: style="height:20px;width:20px"} Amazon Transcribe - diarization  |
 |                                                                                | Custom vocabularies                   | ![Amazon Transcribe](styles/logo_amazon_transcribe.svg){: style="height:20px;width:20px"} Amazon Transcribe - custom vocab |
 
 ### 🎨 Image Generation
@@ -124,66 +123,40 @@ The following features may be implemented in future releases based on community 
 
 ## ✨ Release History
 
-### v1.3.5 – Content Block Handling Improvements
+### v1.4.0 – Audio Enhancements & Model Compatibility
 
-Improves robustness of assistant response processing.
+Expands audio capabilities with Mistral Voxtral support, speaker diarization, audio formats for chat completions, and introduces prompt caching TTL and model aliasing for better OpenAI compatibility.
 
-#### Fixes
+#### 💬 Chat Completions
 
-- Refactor content block handling to skip empty entries in assistant responses.
-
-### v1.3.4 – Tool Call Validation & Docs Refresh
-
-Hardens tool call parsing and improves documentation visuals.
-
-#### Fixes
-
-- More reliable tool call handling in edge cases, with clearer feedback when inputs are invalid.
-
-#### Maintenance
-
-- Add deprecation mapping from `amazon.titan-image-generator-v2:0` to `amazon.nova-canvas-v1:0`.
-
-### v1.3.3 – Streaming Chat Fix
-
-Resolves a streaming stop condition issue.
-
-#### Fixes
-
-- Remove premature stop condition for `contentBlockStop` in streaming chat completions.
-
-### v1.3.2 – Image Edits Enhancement & TTS Optimization
-
-Improves image editing API compatibility and adds TTS language configuration for better performance.
+| Provider                                                                       | Endpoint/Feature                                                     | AWS Backend                                                                                                            |
+|--------------------------------------------------------------------------------|----------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------|
+| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/chat/completions` audio format support                          | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
+| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/chat/completions` extended Bedrock finish reasons mapping       | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock                     |
+| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | Prompt caching TTL support                                           | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - prompt caching    |
 
 #### 🎙️ Speech & Audio
 
-| Feature                        | Description                                                   |
-|--------------------------------|---------------------------------------------------------------|
-| `DEFAULT_TTS_LANGUAGE` setting | Configurable default language for TTS to optimize performance |
+| Provider                                                                            | Endpoint/Feature                                  | AWS Backend                                                                                                            |
+|-------------------------------------------------------------------------------------|---------------------------------------------------|------------------------------------------------------------------------------------------------------------------------|
+| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**      | `/v1/audio/transcriptions` `diarized_json` format | ![Amazon Transcribe](styles/logo_amazon_transcribe.svg){: style="height:20px;width:20px"} Amazon Transcribe            |
+| ![Mistral](styles/logo_mistralai.svg){: style="height:20px;width:20px"} **Mistral** | Voxtral audio model                               | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
+
+#### Platform Features
+
+| Feature                          | Description                                                  |
+|----------------------------------|--------------------------------------------------------------|
+| Model alias support              | Seamless OpenAI compatibility via model name aliasing        |
 
 #### Fixes
 
-- Support `image[]` array-style notation for OpenAI image edits.
-- Handle empty audio segments in transcription duration calculation.
-- Fix Ruff linters on tests.
+- Fix chat completion file input handling and refactor base64 decoding and MIME handling for file processing.
 
 ---
 
-### v1.3.1 – Bug Fixes & Documentation
+### v1.3.0 – Image Editing & Variation Support (with v1.3.1–v1.3.5 maintenance updates)
 
-Addresses JSON parsing issues and corrects OpenAPI documentation.
-
-#### Fixes
-
-- Improve JSON parsing and handling for tool arguments and results.
-- Correct `example` field to `examples` in OpenAPI model path parameter.
-
----
-
-### v1.3.0 – Image Editing & Variation Support
-
-Adds support for OpenAI's image editing and variation endpoints, enabling image manipulation capabilities backed by Amazon Bedrock.
+Adds support for OpenAI's image editing and variation endpoints, enabling image manipulation capabilities backed by Amazon Bedrock. Includes maintenance updates for content block handling, tool call validation, streaming fixes, and TTS optimization.
 
 #### 🎨 Image Generation
 
@@ -191,6 +164,37 @@ Adds support for OpenAI's image editing and variation endpoints, enabling image 
 |--------------------------------------------------------------------------------|-------------------------|-------------------------------------------------------------------------------------------------------------------|
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/images/edits`      | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - image models |
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/images/variations` | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - image models |
+
+#### 🎙️ Speech & Audio (v1.3.2)
+
+| Feature                        | Description                                                   |
+|--------------------------------|---------------------------------------------------------------|
+| `DEFAULT_TTS_LANGUAGE` setting | Configurable default language for TTS to optimize performance |
+
+#### Fixes & Maintenance (v1.3.1–v1.3.5)
+
+**v1.3.5**
+
+- Refactor content block handling to skip empty entries in assistant responses
+
+**v1.3.4**
+
+- Handle invalid tool call arguments with robust JSON content validation
+- Add deprecation mapping for `amazon.titan-image-generator-v2:0` → `amazon.nova-canvas-v1:0`
+
+**v1.3.3**
+
+- Remove premature stop condition for `contentBlockStop` in streaming chat completions
+
+**v1.3.2**
+
+- Support `image[]` array-style notation for OpenAI image edits
+- Handle empty audio segments in transcription duration calculation
+
+**v1.3.1**
+
+- Improve JSON parsing for tool arguments and results
+- Correct `example` → `examples` in OpenAPI model path parameter
 
 ---
 
