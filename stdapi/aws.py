@@ -1,6 +1,7 @@
 """AWS client management and connection pooling."""
 
 from contextlib import AsyncExitStack
+from logging import getLogger
 from os import environ
 from typing import TYPE_CHECKING, Any, Self, TypeVar
 
@@ -28,6 +29,8 @@ CONFIG = AioConfig(
     max_pool_connections=_MAX_POOL_CONNECTIONS,
     parameter_validation=False,
 )
+
+getLogger("aiobotocore").setLevel("CRITICAL")
 
 
 class AWSConnectionManager:

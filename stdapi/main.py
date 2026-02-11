@@ -141,7 +141,8 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                 error_detail=[f"{type(exception).__name__}: {exception}"],
             )
         )
-    except Exception as exception:  # noqa: BLE001
+        raise
+    except Exception as exception:
         write_log_event(
             EventLog(
                 type="start",
@@ -152,6 +153,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                 error_detail=["\n".join(format_exception(exception))],
             )
         )
+        raise
     finally:
         write_log_event(
             EventLog(
