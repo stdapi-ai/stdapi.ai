@@ -126,7 +126,7 @@ curl -X POST "$BASE/v1/chat/completions" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "model": "anthropic.claude-opus-4-6-v1",
     "prompt_cache_key": "default",
     "messages": [
       {
@@ -156,7 +156,7 @@ Enable caching for specific prompt sections using dot-separated values:
 
 ```json
 {
-  "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+  "model": "anthropic.claude-opus-4-6-v1",
   "prompt_cache_key": "system.tools",
   "messages": [...],
   "tools": [...]
@@ -181,7 +181,7 @@ curl -X POST "$BASE/v1/chat/completions" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "model": "anthropic.claude-opus-4-6-v1",
     "prompt_cache_key": "default",
     "prompt_cache_retention": "24h",
     "messages": [
@@ -239,7 +239,7 @@ Simply reference your S3 images using the `s3://` URI scheme in `image_url` fiel
 
 ```json
 {
-  "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+  "model": "anthropic.claude-opus-4-6-v1",
   "messages": [
     {
       "role": "user",
@@ -370,7 +370,7 @@ Add provider-specific fields at the top level of your request body alongside sta
 **Top K Sampling:**
 ```json
 {
-  "model": "anthropic.claude-sonnet-4-5-20250929-v1:0"",
+  "model": "anthropic.claude-opus-4-6-v1",
   "messages": [{"role": "user", "content": "Write a poem"}],
   "top_k": 50,
   "temperature": 0.7
@@ -440,6 +440,7 @@ This API supports two different approaches to control [AWS Bedrock reasoning](ht
     Not all reasoning-capable models support configurable reasoning control. Support varies by model:
 
     - **Anthropic Claude 3.7 - 4.5**: Both `reasoning_effort` and `thinking_budget` parameters supported (token budget-based reasoning)
+    - **Anthropic Claude Opus 4.6+**: `reasoning_effort` parameter only (adaptive reasoning)
     - **DeepSeek V3 models**: `reasoning_effort` parameter only
 
 #### ![OpenAI](styles/logo_openai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } OpenAI-Style reasoning parameters
@@ -461,7 +462,7 @@ curl -X POST "$BASE/v1/chat/completions" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "model": "anthropic.claude-opus-4-6-v1",
     "reasoning_effort": "high",
     "messages": [{"role": "user", "content": "Solve this complex problem..."}]
   }'
@@ -507,7 +508,7 @@ client = OpenAI(
 
 # OpenAI-style reasoning (predefined effort levels)
 response = client.chat.completions.create(
-    model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+    model="anthropic.claude-opus-4-6-v1",
     reasoning_effort="high",
     messages=[{"role": "user", "content": "Complex problem..."}]
 )
@@ -577,7 +578,7 @@ curl -X POST "$BASE/v1/chat/completions" \
   -H "X-Amzn-Bedrock-Service-Tier: priority" \
   -H "X-Amzn-Bedrock-PerformanceConfig-Latency: optimized" \
   -d '{
-    "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "model": "anthropic.claude-opus-4-6-v1",
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```
