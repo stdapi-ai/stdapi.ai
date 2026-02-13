@@ -351,7 +351,7 @@ def get_audio_model(model_id: str) -> AudioModelBase[Any, Any]:
     Raises:
         LookupError: If no registered audio model matches ``model_id``.
     """
-    return get_model(model_id, _AUDIO_MODEL_CACHE, _AUDIO_MODEL_REGISTRY)
+    return get_model(model_id, _AUDIO_MODEL_CACHE, _AUDIO_MODEL_REGISTRY, __name__)
 
 
 load_model_plugins(

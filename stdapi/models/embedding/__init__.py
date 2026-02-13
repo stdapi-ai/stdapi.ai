@@ -81,7 +81,7 @@ def get_embedding_model(model_id: str) -> EmbeddingModelBase[Any, Any]:
     Raises:
         LookupError: If no registered embedding model matches ``model_id``.
     """
-    return get_model(model_id, _MODEL_CACHE, _MODEL_REGISTRY)
+    return get_model(model_id, _MODEL_CACHE, _MODEL_REGISTRY, __name__)
 
 
 load_model_plugins(

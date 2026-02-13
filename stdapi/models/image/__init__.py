@@ -626,7 +626,7 @@ def get_image_model(model_id: str) -> ImageModelBase[Any, Any, Any]:
     Raises:
         LookupError: If no registered image model matches ``model_id``.
     """
-    return get_model(model_id, _MODEL_CACHE, _MODEL_REGISTRY)
+    return get_model(model_id, _MODEL_CACHE, _MODEL_REGISTRY, __name__)
 
 
 load_model_plugins(

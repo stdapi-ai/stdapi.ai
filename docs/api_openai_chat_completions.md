@@ -403,11 +403,11 @@ export DEFAULT_MODEL_PARAMS='{
 - ✅ **Compatible parameters**: Forwarded to the model and applied
 - ⚠️ **Unsupported parameters**: Return HTTP 400 with an error message
 
-### ![Claude](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Anthropic Claude Features
+#### ![Claude](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Anthropic Claude Features
 
 Enable cutting-edge Claude capabilities including extended thinking and reasoning.
 
-#### Beta Feature Flags
+##### Beta Feature Flags
 
 Enable experimental Claude features like extended thinking by adding the `anthropic_beta` array to your request:
 
@@ -432,20 +432,27 @@ curl -X POST "$BASE/v1/chat/completions" \
     See [Using Claude on AWS Bedrock](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-request-response.html) for more details on Claude-specific parameters.
 
 
-#### Reasoning Control
+### Reasoning Control
 
 This API supports two different approaches to control [AWS Bedrock reasoning](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-reasoning.html) behavior. Reasoning enables foundation models to break down complex tasks into smaller steps ("chain of thought"), improving accuracy for multi-step analysis, math problems, and complex reasoning tasks. Both approaches work with all AWS Bedrock models that support reasoning capabilities.
 
-**Option 1: ![OpenAI](styles/logo_openai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } OpenAI-Style Reasoning (`reasoning_effort`)**
+!!! info "Model Support for Configurable Reasoning"
+    Not all reasoning-capable models support configurable reasoning control. Support varies by model:
+
+    - **Anthropic Claude 3.7 - 4.5**: Both `reasoning_effort` and `thinking_budget` parameters supported (token budget-based reasoning)
+    - **DeepSeek V3 models**: `reasoning_effort` parameter only
+
+#### ![OpenAI](styles/logo_openai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } OpenAI-Style reasoning parameters
 
 Use the `reasoning_effort` parameter with predefined effort levels. This approach works with all AWS Bedrock models that support reasoning, providing a simple way to control reasoning depth.
 
 **Available Levels:**
 
-- `minimal` - Quick responses with minimal reasoning (25% of max tokens)
-- `low` - Light reasoning for straightforward tasks (50% of max tokens)
-- `medium` - Balanced reasoning for most use cases (75% of max tokens)
-- `high` - Deep reasoning for complex problems (100% of max tokens)
+- `minimal` - Quick responses with minimal reasoning
+- `low` - Light reasoning for straightforward tasks
+- `medium` - Balanced reasoning for most use cases
+- `high` - Deep reasoning for complex problems
+- `xhigh` - Maximum reasoning for complex problems
 
 **Example:**
 
@@ -460,9 +467,9 @@ curl -X POST "$BASE/v1/chat/completions" \
   }'
 ```
 
-**Option 2: ![Qwen](styles/logo_qwen.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Qwen-Style Reasoning (`enable_thinking` + `thinking_budget`)**
+#### ![Qwen](styles/logo_qwen.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Qwen-Style reasoning parameters
 
-Use explicit parameters for fine-grained control over thinking mode. This approach works with all AWS Bedrock models that support reasoning, offering precise control over reasoning behavior and token budgets.
+Use explicit `enable_thinking` & `thinking_budget` parameters for fine-grained control over thinking mode. This approach works with all AWS Bedrock models that support reasoning, offering precise control over reasoning behavior and token budgets.
 
 **Parameters:**
 
@@ -519,7 +526,7 @@ response = client.chat.completions.create(
 !!! note "Reasoning Output"
     Models that support reasoning will include their thinking process in `reasoning_content` fields in the response.
 
-### ![DeepSeek](styles/logo_deepSeek.svg){ style="height: 1.2em; vertical-align: text-bottom;" } DeepSeek Reasoning Support
+#### ![DeepSeek](styles/logo_deepSeek.svg){ style="height: 1.2em; vertical-align: text-bottom;" } DeepSeek reasoning responses
 
 DeepSeek models with reasoning capabilities are automatically handled—their chain-of-thought reasoning appears in `reasoning_content` fields without any special configuration, just like DeepSeek's native chat completions endpoint.
 

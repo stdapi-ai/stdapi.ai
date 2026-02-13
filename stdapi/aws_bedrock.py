@@ -14,7 +14,6 @@ from magic import from_buffer
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, JsonValue
 
 from stdapi.config import DOWNLOAD_TIMEOUT, SETTINGS
-from stdapi.openai_exceptions import OpenaiError
 from stdapi.security import validate_url_ssrf
 from stdapi.server import HTTP_CLIENT_HEADERS
 from stdapi.utils import b64decode, validation_error_handler
@@ -33,6 +32,7 @@ if TYPE_CHECKING:
         VideoFormatType,
     )
     from types_aiobotocore_bedrock_runtime.type_defs import (
+        CachePointBlockTypeDef,
         ContentBlockTypeDef,
         GuardrailStreamConfigurationTypeDef,
         ImageBlockTypeDef,
@@ -46,7 +46,6 @@ if TYPE_CHECKING:
     )
 
     from stdapi.types import BaseModelRequestWithExtra
-    from stdapi.types.openai_chat_completions import ReasoningEffort
 
     class ConverseRequestBaseTypeDef(TypedDict):
         """Converse request base type definition.
@@ -136,26 +135,16 @@ PERFORMANCE_CONFIG_VAR: ContextVar[
 _PERFORMANCE_CONFIG_LATENCY_HEADER = "X-Amzn-Bedrock-PerformanceConfig-Latency"
 _SERVICE_TIER_HEADER = "X-Amzn-Bedrock-Service-Tier"
 
-#: Reasoning models: Budget factor over the token max count
-_REASONING_EFFORT_BUDGET_FACTOR: dict[ReasoningEffort, float] = {
-    "minimal": 0.25,
-    "low": 0.5,
-    "medium": 0.75,
-    "high": 1.0,
-    "xhigh": 1.0,
-}
-
 #: Prompt caching type
 PromptCaching = Literal["system", "messages", "tools"]
 
 #: Available prompt caching
 PROMPT_CACHING: frozenset[PromptCaching] = frozenset(("system", "messages", "tools"))
 
-#: Models supporting prompt caching
-PROMPT_CACHING_SUPPORTED = ("anthropic.claude-", "amazon.nova-")
-
-#: Models supporting tools prompt caching
-PROMPT_CACHING_TOOL_SUPPORTED = ("anthropic.claude-",)
+# Default prompt caching configuration
+PROMPT_CACHING_DEFAULT: dict[Literal["cachePoint"], CachePointBlockTypeDef] = {
+    "cachePoint": {"type": "default"}
+}
 
 
 class _DefaultModelParameters(BaseModel):
@@ -371,55 +360,6 @@ def get_extra_model_parameters(
         params = {}
     params.update(request.model_extra or {})
     return params
-
-
-def set_reasoning_configuration(
-    model_id: str,
-    reasoning_effort: ReasoningEffort | None,
-    budget_tokens: int | None,
-    max_tokens: int | None,
-    additional_request_fields: dict[str, Any],
-) -> None:
-    """Configures reasoning parameters.
-
-    If a budget_tokens value is provided, the reasoning configuration enables
-    reasoning with the specified token budget. Otherwise, no reasoning
-    configuration is applied.
-
-    Args:
-        model_id: Model identifier.
-        budget_tokens: Optional. An integer specifying the maximum number
-            of tokens allowed for reasoning. If None, reasoning is not
-            enabled.
-        max_tokens: Maximum number of tokens allowed for the model.
-        reasoning_effort: string, optional. The type of budget to use for reasoning.
-        additional_request_fields: A mapping that represents the request's
-            fields. This will be modified to include reasoning configuration
-            if a budget is provided.
-    """
-    if model_id.startswith("deepseek"):
-        # reasoning_config string, DeepSeek case (At least for "deepseek.v3-v1:0")
-        if reasoning_effort is None:
-            msg = f"{model_id} only support 'reasoning_effort' to configure reasoning."
-            raise OpenaiError(msg)
-        additional_request_fields["reasoning_config"] = (
-            "low" if reasoning_effort == "minimal" else reasoning_effort
-        )
-    else:
-        # Default to the budget case (at least used by Anthropic Claude)
-        additional_request_fields["reasoning_config"] = {
-            "type": "enabled",
-            "budget_tokens": budget_tokens
-            # Convert effort to budget
-            # Default to Anthropic Claude minimal reasoning model context size
-            or max(
-                1024,
-                int(
-                    ((max_tokens or 32768) - 1)
-                    * _REASONING_EFFORT_BUDGET_FACTOR[reasoning_effort or "high"]
-                ),
-            ),
-        }
 
 
 @contextmanager
