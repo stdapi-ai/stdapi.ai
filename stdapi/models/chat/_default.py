@@ -31,6 +31,7 @@ from stdapi.aws_bedrock import (
     image_block_from_s3_url,
     set_inference_configuration,
 )
+from stdapi.config import SETTINGS
 from stdapi.models.audio import synthesize_speech
 from stdapi.models.chat import ChatModelBase
 from stdapi.monitoring import log_request_stream_event, log_response_params
@@ -173,6 +174,9 @@ class ChatModel(ChatModelBase[Any, Any]):
 
     #: Whether this model supports tools prompt caching
     PROMPT_CACHING_TOOL_SUPPORTED: ClassVar[bool] = False
+
+    #: Whether this model supports system prompt
+    SYSTEM_PROMPT_SUPPORTED: ClassVar[bool] = True
 
     async def create_completion(
         self,
@@ -471,8 +475,8 @@ class ChatModel(ChatModelBase[Any, Any]):
                 data=chunk.model_dump(mode="json", exclude_none=True)
             )
 
-    @staticmethod
     async def _prepare_converse_request(
+        self,
         model: ModelDetails,
         bedrock_messages: list[MessageTypeDef],
         inference_cfg: InferenceConfigurationTypeDef,
@@ -502,7 +506,9 @@ class ChatModel(ChatModelBase[Any, Any]):
             "messages": bedrock_messages,
             "inferenceConfig": inference_cfg,
         }
-        if system_blocks:
+        if system_blocks and (
+            self.SYSTEM_PROMPT_SUPPORTED or not SETTINGS.drop_unsupported_system_prompt
+        ):
             request["system"] = system_blocks
         if tool_config:
             request["toolConfig"] = tool_config

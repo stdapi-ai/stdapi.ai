@@ -218,6 +218,7 @@ Choose **one** method (mutually exclusive):
 | [`TOKENS_ESTIMATION_DEFAULT_ENCODING`](#tokens-encoding) | `o200k_base`            | Tiktoken encoding algorithm: `o200k_base` (GPT-4o+), `cl100k_base` (GPT-4), or `p50k_base` |
 | [`DEFAULT_MODEL_PARAMS`](#default-model-params)          | `{}`                    | JSON object with per-model default inference parameters (temperature, max_tokens, etc.)    |
 | [`MODEL_CACHE_SECONDS`](#model-cache-seconds)            | `900`                   | Model list cache lifetime in seconds before lazy refresh (default: 15 minutes)             |
+| [`DROP_UNSUPPORTED_SYSTEM_PROMPT`](#drop-unsupported-system-prompt) | `true`      | Drop system prompts for unsupported models; when `false`, return error instead             |
 
 ### :material-file-document: API Documentation
 
@@ -3084,6 +3085,52 @@ graph LR
 2. :material-numeric-2-circle: **Default aliases** apply if not overridden
 3. :material-numeric-3-circle: **Non-aliased names** pass through unchanged
 4. :material-numeric-4-circle: **Resolved model ID** is validated and used for the request
+
+---
+
+## System Prompt Handling
+
+Control how system prompts are handled for models that don't support them.
+
+#### `DROP_UNSUPPORTED_SYSTEM_PROMPT` { #drop-unsupported-system-prompt }
+
+:octicons-package-24: **Purpose**
+:   Control system prompt behavior for models that don't support system prompts
+
+:octicons-database-24: **Type**
+:   Boolean
+
+:octicons-gear-24: **Default**
+:   `true`
+
+```bash
+# Default: silently drop system prompts for unsupported models
+export DROP_UNSUPPORTED_SYSTEM_PROMPT=true
+
+# Strict mode: return error when system prompt is used with unsupported model
+export DROP_UNSUPPORTED_SYSTEM_PROMPT=false
+```
+
+!!! info "Models Without System Prompt Support"
+    Some Bedrock models don't support system prompts, including:
+
+    - `mistral.mistral-7b-instruct-v0:2`
+    - `mistral.mixtral-8x7b-instruct-v0:1`
+    - Other older or specialized models
+
+!!! success "Use Cases"
+    **Enable (true, default)** for:
+
+    - :material-check: **Backward compatibility** - Existing applications continue working
+    - :material-swap-horizontal: **Model flexibility** - Switch between models without code changes
+    - :material-shield-check: **Graceful degradation** - System prompts are ignored instead of failing
+    - :material-application: **Global system prompts** - Applications that set system prompts globally for all models work seamlessly
+
+    **Disable (false)** for:
+
+    - :material-alert: **Strict validation** - Catch configuration errors early
+    - :material-bug: **Debugging** - Identify when system prompts aren't being used
+    - :material-shield-alert: **Security requirements** - Ensure system prompts are always applied
 
 ---
 

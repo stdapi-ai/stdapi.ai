@@ -680,6 +680,16 @@ class _Settings(BaseSettings):
         ),
     )
 
+    drop_unsupported_system_prompt: bool = Field(
+        default=True,
+        description=(
+            "If True, system prompts are silently dropped when models don't support them. "
+            "If False, an error is returned when a system prompt is passed to a model "
+            "that doesn't support system prompts (e.g., mistral.mistral-7b models). "
+            "Default: True for backward compatibility."
+        ),
+    )
+
     @field_validator("aws_bedrock_regions", mode="before")
     @classmethod
     def _parse_bedrock_regions(cls, value: str | list[str]) -> list[str]:

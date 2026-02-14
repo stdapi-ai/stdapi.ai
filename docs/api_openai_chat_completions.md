@@ -225,6 +225,13 @@ Cached token usage is reported in the response:
 
 In this example, 1,200 tokens were retrieved from cache, with only 300 tokens requiring processing.
 
+### System Prompt
+
+System prompts define the AI assistant's behavior, personality, and instructions (e.g., "You are a helpful assistant"). Most models support system prompts.
+
+!!! warning "Unsupported Models"
+    Some models don't support system prompts (`mistral.mistral-7b-instruct-v0:2`, `mistral.mistral-8x7b-instruct-v0:1`). By default, **stdapi.ai silently drops system messages** for these models, allowing cross-model compatibility. To receive errors instead, configure [`DROP_UNSUPPORTED_SYSTEM_PROMPT=false`](operations_configuration.md#drop-unsupported-system-prompt).
+
 ### ![AWS S3](styles/logo_amazon_s3.svg){ style="height: 1.2em; vertical-align: text-bottom;" } S3 Image Support
 
 Access images directly from your S3 buckets without generating pre-signed URLs or downloading files locally.
