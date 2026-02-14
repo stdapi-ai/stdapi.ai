@@ -441,6 +441,7 @@ This API supports two different approaches to control [AWS Bedrock reasoning](ht
 
     - **Anthropic Claude 3.7 - 4.5**: Both `reasoning_effort` and `thinking_budget` parameters supported (token budget-based reasoning)
     - **Anthropic Claude Opus 4.6+**: `reasoning_effort` parameter only (adaptive reasoning)
+    - **Amazon Nova 2 models**: `reasoning_effort` parameter only
     - **DeepSeek V3 models**: `reasoning_effort` parameter only
 
 #### ![OpenAI](styles/logo_openai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } OpenAI-Style reasoning parameters
