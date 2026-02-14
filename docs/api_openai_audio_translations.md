@@ -1,24 +1,36 @@
+---
+title: Speech to English API - AWS Audio Translation
+description: Translate audio from any language to English text using AWS Transcribe + Translate or AWS Bedrock audio models. OpenAI-compatible API with automatic language detection.
+keywords: audio translation API, speech translation, AWS Translate API, multilingual transcription, audio to English, OpenAI translation, language detection API
+---
+
 # Speech to English API
 
-Upload audio in any language and get English transcriptions for international content, customer support, or multilingual applications.
+Translate audio from any language to English text with AWS Transcribe + Translate or AWS Bedrock audio-capable models through an OpenAI-compatible interface.
 
 ## Why Choose Speech to English?
 
 <div class="grid cards" markdown>
 
 - :material-earth-arrow-right: __Automatic Language Detection__
-  <br>Upload audio in any language. AWS automatically detects and translates to English.
+  <br>Upload audio in any language. AWS automatically detects the source language and translates to English text.
+
+- :material-account-network: __Multiple Translation Options__
+  <br>Choose AWS Transcribe + Translate for traditional pipeline, or use Bedrock audio models with built-in translation capabilities.
 
 - :material-file-multiple: __Multiple Output Formats__
   <br>Choose from text, JSON, verbose JSON with timestamps, or translated subtitle files (SRT/VTT).
+
+- :material-subtitles: __Subtitle Translation__
+  <br>Generate translated SRT and VTT subtitle files directly with precise timing for international video content.
 
 </div>
 
 ## Quick Start: Available Endpoint
 
-| Endpoint                 | Method | What It Does                                     | Powered By                     |
-|--------------------------|--------|--------------------------------------------------|--------------------------------|
-| `/v1/audio/translations` | POST   | Transcribe any language and translate to English | AWS Transcribe + AWS Translate |
+| Endpoint                 | Method | What It Does                                     | Powered By                                             |
+|--------------------------|--------|--------------------------------------------------|--------------------------------------------------------|
+| `/v1/audio/translations` | POST   | Transcribe any language and translate to English | AWS Transcribe + Translate or AWS Bedrock Audio Models |
 
 ## Feature Compatibility
 

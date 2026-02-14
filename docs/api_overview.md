@@ -1,6 +1,19 @@
+---
+title: API Overview - OpenAI-Compatible AWS Bedrock API
+description: Complete API documentation for stdapi.ai OpenAI-compatible gateway. Access AWS Bedrock models, chat completions, embeddings, image generation, and audio APIs with OpenAI SDK compatibility.
+keywords: OpenAI API documentation, AWS Bedrock API reference, OpenAI SDK compatibility, chat completions API, embeddings API, image generation API, audio API AWS, OpenAI compatible endpoints
+---
+
 # API Overview
 
 stdapi.ai provides the OpenAI API interface backed by AWS Bedrock foundation models and AWS AI services. Use your existing OpenAI SDKs by simply changing the base URL.
+
+**Why this matters:**
+
+- **No code rewrites** - Your existing OpenAI code works immediately
+- **Access 80+ models** - Claude, Nova, Llama, DeepSeek, Stable Diffusion, and more through one API
+- **Multi-modal AI** - Chat, images, audio, embeddings—all OpenAI-compatible
+- **AWS-native features** - Prompt caching, reasoning modes, guardrails accessible through standard API
 
 ## Interactive Documentation
 
@@ -25,20 +38,36 @@ stdapi.ai provides multiple interfaces for exploring and testing the API—choos
 
 Access AWS-powered AI services through the OpenAI API interface. Use official OpenAI SDKs by simply changing the base URL—no custom clients needed.
 
+**What you can build:**
+
+- **Conversational AI** - Chatbots, assistants, customer support with multi-modal understanding
+- **Content generation** - Images, articles, summaries, translations
+- **Voice applications** - Speech-to-text transcription, text-to-speech synthesis
+- **Semantic search** - RAG, document Q&A, knowledge bases with embeddings
+- **Multi-modal apps** - Process text, images, audio, video, and documents together
+
 **Supported Endpoints:**
 
-| Category | Endpoint | Capability | Documentation |
-|----------|----------|------------|---------------|
-| **💬 Chat** | `POST /v1/chat/completions` | Multi-modal conversations with text, images, video, documents | [Chat Completions →](api_openai_chat_completions.md) |
-| **🎨 Images** | `POST /v1/images/generations` | Text-to-image generation | [Images →](api_openai_images_generations.md) |
-| **🔊 Audio** | `POST /v1/audio/speech` | Text-to-speech synthesis | [Text to Speech →](api_openai_audio_speech.md) |
-| | `POST /v1/audio/transcriptions` | Speech-to-text transcription | [Speech to Text →](api_openai_audio_transcriptions.md) |
-| | `POST /v1/audio/translations` | Speech-to-English translation | [Speech to English →](api_openai_audio_translations.md) |
-| **🧠 Embeddings** | `POST /v1/embeddings` | Vector embeddings for semantic search | [Embeddings →](api_openai_embeddings.md) |
-| **📋 Models** | `GET /v1/models` | List available models | [Models →](api_openai_models.md) |
+| Category          | Endpoint                        | Capability                                                    | Documentation                                          |
+|-------------------|---------------------------------|---------------------------------------------------------------|--------------------------------------------------------|
+| **💬 Chat**       | `POST /v1/chat/completions`     | Multi-modal conversations with text, images, video, documents | [Chat Completions →](api_openai_chat_completions.md)   |
+| **🎨 Images**     | `POST /v1/images/generations`   | Text-to-image generation                                      | [Generations →](api_openai_images_generations.md)      |
+|                   | `POST /v1/images/edits`         | Image editing and transformations                             | [Edits →](api_openai_images_edits.md)                  |
+|                   | `POST /v1/images/variations`    | Generate image variations                                     | [Variations →](api_openai_images_variations.md)        |
+| **🔊 Audio**      | `POST /v1/audio/speech`         | Text-to-speech synthesis                                      | [Text to Speech →](api_openai_audio_speech.md)         |
+|                   | `POST /v1/audio/transcriptions` | Speech-to-text transcription                                  | [Transcriptions →](api_openai_audio_transcriptions.md) |
+|                   | `POST /v1/audio/translations`   | Speech-to-English translation                                 | [Translations →](api_openai_audio_translations.md)     |
+| **🧠 Embeddings** | `POST /v1/embeddings`           | Vector embeddings for semantic search                         | [Embeddings →](api_openai_embeddings.md)               |
+| **📋 Models**     | `GET /v1/models`                | List available models                                         | [Models →](api_openai_models.md)                       |
 
-* **Backend:** AWS Bedrock, AWS Polly, AWS Transcribe, AWS Translate
-* **SDKs:** Official OpenAI SDKs (Python, Node.js, Go, Ruby, etc.)
+**Backend Services:**
+
+- **AWS Bedrock** - 80+ foundation models (Claude, Nova, Llama, DeepSeek, Stable Diffusion, etc.)
+- **AWS Polly** - Neural text-to-speech in 60+ languages
+- **AWS Transcribe** - Speech-to-text with speaker diarization
+- **AWS Translate** - Neural machine translation
+
+**Compatible SDKs:** Official OpenAI SDKs (Python, Node.js, Go, Ruby, .NET, Java, etc.)
 
 ### Quick Start Guide
 
@@ -178,6 +207,7 @@ flowchart LR
 ```
 
 **Request Flow:**
+
 1. Your application uses the standard OpenAI SDK
 2. Requests go to stdapi.ai's `/v1/*` endpoints instead of OpenAI
 3. stdapi.ai translates OpenAI-format requests to AWS service APIs
@@ -187,4 +217,52 @@ flowchart LR
 
 ---
 
-**Ready to build intelligent applications?** Start with the [Chat Completions API](api_openai_chat_completions.md) or explore [available models](api_openai_models.md)!
+## Discovering Available Models
+
+To see all models available in your deployment:
+
+**Using the API:**
+```bash
+curl https://your-deployment-url/v1/models \
+  -H "Authorization: Bearer your-api-key"
+```
+
+**Using OpenAI SDK:**
+```python
+client = OpenAI(base_url="https://your-deployment-url/v1")
+models = client.models.list()
+for model in models:
+    print(f"{model.id} - {model.owned_by}")
+```
+
+This returns all AWS Bedrock models available in your configured regions, including model IDs, providers, and capabilities.
+
+See [Models API documentation](api_openai_models.md) for details.
+
+---
+
+## Next Steps
+
+**Start building:**
+
+- **[Chat Completions API](api_openai_chat_completions.md)** - Conversational AI with multi-modal support (text, images, video, documents)
+- **[Images API](api_openai_images_generations.md)** - Text-to-image generation, editing, and variations
+    - [Generations](api_openai_images_generations.md) - Create images from text
+    - [Edits](api_openai_images_edits.md) - Modify existing images
+    - [Variations](api_openai_images_variations.md) - Generate variations of images
+- **[Audio APIs](api_openai_audio_speech.md)** - Text-to-speech, transcription, translation
+    - [Speech](api_openai_audio_speech.md) - Text-to-speech synthesis
+    - [Transcriptions](api_openai_audio_transcriptions.md) - Speech-to-text
+    - [Translations](api_openai_audio_translations.md) - Speech-to-English translation
+- **[Embeddings API](api_openai_embeddings.md)** - Vector embeddings for semantic search and RAG
+- **[Models API](api_openai_models.md)** - List and discover available models
+
+**Configure your deployment:**
+
+- **[Configuration Guide](operations_configuration.md)** - Environment variables, AWS regions, security settings
+- **[Monitoring & Logging](operations_logging_monitoring.md)** - Observability, debugging, CloudWatch integration
+
+**Explore integrations:**
+
+- **[Use Cases](use_cases.md)** - Open WebUI, n8n, Continue.dev, and more
+- **[Getting Started](operations_getting_started.md)** - Deploy to AWS with Terraform

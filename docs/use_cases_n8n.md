@@ -1,36 +1,46 @@
+---
+title: n8n Integration - AWS Bedrock Workflow Automation
+description: Connect n8n workflows to AWS Bedrock using stdapi.ai. Automate business processes with AI using 400+ integrations, no-code interface, and OpenAI-compatible nodes.
+keywords: n8n AI integration, workflow automation AI, no-code AI automation, AWS Bedrock workflows, business process automation, AI workflow tools, n8n AWS Bedrock, OpenAI n8n
+---
+
 # n8n Integration
 
-Connect n8n automation workflows to Amazon Bedrock models through stdapi.ai's OpenAI-compatible interface. Use any existing OpenAI template from the n8n marketplace without modification—simply point it to your stdapi.ai instance.
+Connect n8n automation workflows to AWS Bedrock models through stdapi.ai's OpenAI-compatible interface. Use any existing OpenAI template from the n8n marketplace without modification—simply point it to your stdapi.ai instance and access AWS Bedrock models.
 
 ## About n8n
 
 **🔗 Links:** [Website](https://n8n.io/) | [GitHub](https://github.com/n8n-io/n8n) | [Documentation](https://docs.n8n.io/)
 
-n8n is a fair-code licensed workflow automation platform that enables you to connect any app with an API to build powerful automations. With its intuitive visual interface, you can create complex workflows without writing code by connecting pre-built nodes for popular services or extending functionality with custom JavaScript. Whether you're automating customer support, data processing, content creation, or business operations, n8n provides the flexibility to self-host or use their cloud platform, making it a popular choice for teams that need control over their automation infrastructure while maintaining the ability to integrate AI capabilities into their workflows.
+n8n is a powerful workflow automation platform that enables you to connect any app with an API to build intelligent automations. With its intuitive visual interface, you can create complex AI-powered workflows without writing code, connecting AWS Bedrock models to 400+ services including Slack, Google Sheets, Salesforce, and more.
 
 **Key Features:**
 
-- ⭐ 100,000+ GitHub stars - Open-source workflow automation tool
-- 400+ integrations - Connect with services and APIs
-- Visual workflow builder - No-code interface with customization
-- Self-hosted or cloud - Deploy anywhere
-- AI-native - Built-in nodes for OpenAI and other AI providers
+- ⭐ **50,000+ GitHub stars** - Leading open-source workflow automation platform
+- **400+ integrations** - Pre-built nodes for popular services and APIs
+- **Visual no-code builder** - Drag-and-drop interface with JavaScript customization
+- **Self-hosted or cloud** - Deploy on your infrastructure or use n8n Cloud
+- **AI-native platform** - Built-in OpenAI nodes work instantly with AWS Bedrock via stdapi.ai
+- **Template marketplace** - Thousands of pre-built workflows ready to use
 
 ## Why n8n + stdapi.ai?
 
 <div class="grid cards" markdown>
 
-- :material-puzzle: __OpenAI Node Compatible__
-  <br>stdapi.ai is fully compatible with n8n's OpenAI nodes. Most workflows, templates, and automations designed for OpenAI work with Bedrock—no code changes required.
+- :material-puzzle: __Use Existing OpenAI Templates__
+  <br>stdapi.ai works with n8n's OpenAI nodes. Thousands of marketplace templates and workflows designed for OpenAI run on AWS Bedrock—zero modifications needed.
 
-- :material-graph-outline: __Visual Workflow Builder__
-  <br>Build AI-powered automation with n8n's no-code interface. Connect Bedrock models to 400+ services and APIs through drag-and-drop workflows.
+- :material-aws: __Access AWS Bedrock Models__
+  <br>Claude 4.6+, Nova 2, Llama 4, DeepSeek v3.2, Stable Diffusion, and 80+ models available in n8n workflows. Switch models without changing automation logic.
 
-- :material-server-network: __Single Entry Point__
-  <br>Access multi-region Bedrock models, AWS Translate, AWS Polly, and more through one unified API endpoint for all your workflows.
+- :material-graph-outline: __Automate Business Processes__
+  <br>Connect AWS Bedrock AI to Slack, Salesforce, Google Workspace, databases, and 400+ services. Build intelligent automation with no-code drag-and-drop.
 
-- :material-lock: __Privacy & Control__
-  <br>All data stays in your AWS environment. Self-hosted workflows with complete infrastructure control and enterprise security.
+- :material-lock: __Enterprise Data Control__
+  <br>All AI processing stays in your AWS account. Self-host n8n and stdapi.ai for complete data sovereignty and compliance.
+
+- :material-currency-usd-off: __Pay-Per-Use Pricing__
+  <br>No OpenAI subscriptions or per-automation fees. Pay only AWS Bedrock rates for actual AI usage in your workflows.
 
 </div>
 
@@ -46,9 +56,10 @@ flowchart LR
 ## ✅ Prerequisites
 
 !!! info "What You'll Need"
-    - ✓ A running n8n instance (cloud or self-hosted)
-    - ✓ Your stdapi.ai server URL (e.g., `https://api.example.com`)
-    - ✓ Your stdapi.ai server API key
+    - ✓ **stdapi.ai deployed** - [See deployment guide](operations_getting_started.md)
+    - ✓ **Your stdapi.ai URL** - e.g., `https://api.example.com`
+    - ✓ **Your API key** - From Terraform output or configuration
+    - ✓ **n8n instance** - Self-hosted or [n8n Cloud](https://n8n.io/cloud/)
 
 ---
 

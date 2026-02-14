@@ -1,8 +1,26 @@
-# Roadmap & Changelog
+---
+title: Releases & Roadmap - Active Development
+description: stdapi.ai release history and upcoming features. Track regular updates, new AWS Bedrock capabilities, and active development progress.
+keywords: stdapi.ai releases, AI gateway updates, AWS Bedrock features, API gateway roadmap, software changelog, active development, new AI features, product updates
+---
 
-## What's Next
+# Releases & Roadmap
 
-The following features may be implemented in future releases based on community demand and feedback. Implementation priority is determined by user requests, use case requirements, and alignment with the project's goals. All features can be implemented using AWS services as backends. If you need a specific feature, submit feedback or contribute to discussions.
+**stdapi.ai is under active development** with regular feature releases. Four major releases delivered since launch (v1.0-v1.4) with continuous improvements.
+
+## ✨ Recent Releases
+
+See [Release History below](#release-history) for the full changelog of v1.4, v1.3, v1.2, v1.1, and v1.0 releases.
+
+**Latest: v1.4.0** – Audio Enhancements & Model Compatibility (Mistral Voxtral, speaker diarization, prompt caching TTL)
+
+---
+
+## 🚀 Planned Features
+
+The following features may be implemented in future releases based on community demand and feedback. Implementation priority is determined by user requests and use case requirements.
+
+**Want a feature?** Submit feedback on [GitHub Issues](https://github.com/stdapi-ai/stdapi.ai/issues).
 
 ### 💬 Chat Completions
 
@@ -121,7 +139,7 @@ The following features may be implemented in future releases based on community 
 
 ---
 
-## ✨ Release History
+## 📋 Release History
 
 ### v1.4.0 – Audio Enhancements & Model Compatibility
 

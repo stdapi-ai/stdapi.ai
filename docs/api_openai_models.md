@@ -1,16 +1,28 @@
+---
+title: Models API - List AWS Bedrock Available Models
+description: Discover and list available AWS Bedrock models through OpenAI-compatible API. Browse 80+ models including Claude, Nova, Llama, and more across all configured regions.
+keywords: AWS Bedrock models, available AI models, list models API, Claude models, OpenAI models API, AI model catalog, foundation models AWS, model discovery
+---
+
 # Models API
 
-Explore available AI models across AWS Bedrock regions through an OpenAI-compatible interface.
+Discover and list available AWS Bedrock models across all configured regions through an OpenAI-compatible interface.
 
 ## Why Use the Models API?
 
 <div class="grid cards" markdown>
 
 - :material-view-grid: __Complete Catalog__
-  <br>Browse all available models across AWS Bedrock regions. Chat, embeddings, images, and specialized models.
+  <br>Browse all available models across AWS Bedrock regions. Chat, embeddings, images, and specialized AI services.
 
 - :material-sync: __Always Up-to-Date__
-  <br>Dynamic model discovery provides access to new models as they become available in AWS Bedrock.
+  <br>Dynamic model discovery automatically shows new models as they become available in AWS Bedrock.
+
+- :material-map-marker-multiple: __Multi-Region Aggregation__
+  <br>Combines models from all configured AWS regions in one list. See which models are available in each region.
+
+- :material-aws: __Comprehensive Coverage__
+  <br>Includes Bedrock foundation models plus AWS AI services (Polly, Transcribe, Translate) in one unified API.
 
 </div>
 

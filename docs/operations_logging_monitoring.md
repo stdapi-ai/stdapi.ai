@@ -1,23 +1,42 @@
+---
+title: Logging & Monitoring - AWS Bedrock API Observability
+description: Production-grade observability for stdapi.ai with CloudWatch, Prometheus, OpenTelemetry. Track API performance, monitor costs, debug issues, and ensure compliance.
+keywords: AWS CloudWatch logs, API monitoring, Prometheus metrics, OpenTelemetry, API observability, cost monitoring AWS, performance tracking, compliance logging
+---
+
 # Logging and Monitoring
 
-stdapi.ai provides production observability. It emits structured JSON logs for every request, stream, and background task, and integrates with OpenTelemetry (OTel) for traces and metrics. This guide shows how to enable observability, read the logs, and correlate signals across systems.
+stdapi.ai provides production-grade observability out of the box. Track request performance, debug issues, monitor costs, and ensure compliance with structured JSON logging and OpenTelemetry integration.
+
+**Why this matters:**
+
+- **Troubleshoot issues fast** - Structured logs with request IDs, timings, and error details
+- **Monitor costs** - Track model usage, request volume, and performance by endpoint
+- **Ensure compliance** - Full audit trail with client IPs, user IDs, and request/response logging
+- **Performance optimization** - Identify slow requests, high-latency endpoints, bottlenecks
+- **AWS integration** - Native CloudWatch Logs, X-Ray, and service-level metrics
+
+stdapi.ai emits structured JSON logs for every request, stream, and background task, and integrates with OpenTelemetry (OTel) for traces and metrics. This guide shows how to enable observability, read the logs, and correlate signals across systems.
 
 <div class="grid cards" markdown>
 
-- :material-clipboard-text-outline: __At a glance__
-  <br>JSON logs to STDOUT (perfect for AWS CloudWatch Logs). One event per line.
+- :material-clipboard-text-outline: __Structured JSON Logging__
+  <br>JSON logs to STDOUT—perfect for AWS CloudWatch Logs. One event per line with all request context.
 
-- :material-identifier: __Correlation__
-  <br>All events for a request share the same `id` and are returned as `x-request-id`.
+- :material-identifier: __Request Correlation__
+  <br>All events for a request share the same `id` (returned as `x-request-id`). Track full request lifecycle across logs and traces.
 
-- :material-aws: __ECS friendly__
-  <br>ECS forwards container STDOUT to CloudWatch Logs automatically.
+- :material-aws: __AWS-Native Integration__
+  <br>Works seamlessly with CloudWatch Logs, X-Ray, and service metrics. ECS auto-forwards STDOUT to CloudWatch.
 
-- :material-graphql: __Traces (optional)__
-  <br>Enable `OTEL_ENABLED=true` to export spans to X‑Ray, Jaeger, Tempo, etc.
+- :material-graphql: __OpenTelemetry Tracing__
+  <br>Enable `OTEL_ENABLED=true` to export spans to AWS X-Ray, Jaeger, Tempo, or any OTLP-compatible backend.
 
-- :material-alert-decagram-outline: __Payload logging (optional)__
-  <br>Enable `LOG_REQUEST_PARAMS=true` only for targeted debugging.
+- :material-chart-line: __Performance Insights__
+  <br>Track execution times, model usage, endpoint latency. Includes ready-to-use CloudWatch Logs Insights queries.
+
+- :material-alert-decagram-outline: __Debug Mode__
+  <br>Enable `LOG_REQUEST_PARAMS=true` for full request/response logging when troubleshooting issues.
 
 </div>
 

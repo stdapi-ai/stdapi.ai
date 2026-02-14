@@ -1,33 +1,36 @@
+---
+title: Speech to Text API - AWS Transcribe & Bedrock Audio Models
+description: Transcribe audio to text with AWS Transcribe or AWS Bedrock audio-capable models. OpenAI-compatible STT API supporting 100+ languages, speaker diarization, and multiple output formats.
+keywords: speech to text API, audio transcription API, AWS Transcribe API, STT API, OpenAI Whisper alternative, audio to text, transcription service, speaker diarization
+---
+
 # Speech to Text API
 
-Convert spoken words into text. For voice assistants, meeting transcription, or accessibility features using AWS Transcribe.
+Transcribe audio to text with AWS Transcribe or AWS Bedrock audio-capable models through an OpenAI-compatible interface.
 
 ## Why Choose Speech to Text?
 
 <div class="grid cards" markdown>
 
-- :material-translate: __100+ Languages__
-  <br>Transcribe audio in any language with automatic detection or manual specification for global applications and multilingual content.
+- :material-translate: __Multiple Transcription Options__
+  <br>Choose AWS Transcribe for 100+ languages with speaker diarization, or use Bedrock audio models for advanced capabilities.
 
 - :material-clock-fast: __Real-Time or Batch__
-  <br>Stream transcriptions in real-time via SSE or process files efficiently.
+  <br>Stream transcriptions in real-time via SSE or process files efficiently with either service.
 
 - :material-subtitles: __Subtitle Generation__
-  <br>Generate SRT and VTT subtitle files directly from AWS Transcribe with precise timing.
+  <br>Generate SRT and VTT subtitle files directly with precise timing for video content.
 
-- :material-target: __Word-Level Timestamps__
-  <br>Get word-level or segment-level timestamps with verbose_json for video editing, searchable transcripts, and accessibility features.
-
-- :material-account-multiple: __Speaker Diarization__
-  <br>Identify and separate different speakers in conversations with automatic speaker labeling using diarized_json format.
+- :material-account-multiple: __Advanced Features__
+  <br>Speaker diarization, word-level timestamps, and automatic language detection. Feature availability varies by model choice.
 
 </div>
 
 ## Quick Start: Available Endpoint
 
-| Endpoint                    | Method | What It Does                             | Powered By     |
-|-----------------------------|--------|------------------------------------------|----------------|
-| `/v1/audio/transcriptions`  | POST   | Convert spoken audio to written text     | AWS Transcribe |
+| Endpoint                    | Method | What It Does                             | Powered By                                |
+|-----------------------------|--------|------------------------------------------|-------------------------------------------|
+| `/v1/audio/transcriptions`  | POST   | Convert spoken audio to written text     | AWS Transcribe or AWS Bedrock Audio Models |
 
 ## Feature Compatibility
 

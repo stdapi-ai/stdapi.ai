@@ -1,40 +1,48 @@
+---
+title: AI Coding Assistants - AWS Bedrock for IDEs
+description: Connect Continue.dev, Cursor, Cline, and other AI coding assistants to AWS Bedrock via stdapi.ai. Use Claude, Kimi K2 thinking, and Qwen Coder in VS Code and JetBrains IDEs.
+keywords: AI coding assistant AWS, Continue.dev AWS Bedrock, Cursor AWS integration, VS Code AI AWS, AI pair programming, coding copilot AWS, IDE AI integration, private Copilot
+---
+
 # AI Coding Assistants Integration
 
-Connect your favorite AI coding assistants to Amazon Bedrock models through stdapi.ai's OpenAI-compatible interface. Get intelligent code completions, chat assistance, and codebase understanding with powerful AWS models—no vendor lock-in required.
+Connect your favorite AI coding assistants to AWS Bedrock models through stdapi.ai's OpenAI-compatible interface. Get intelligent code completions, chat assistance, and codebase understanding with powerful AWS models like Claude, Kimi K2 thinking, and Qwen Coder Next—no vendor lock-in required.
 
 ## About AI Coding Assistants
 
 **Popular Tools:** [Cline](https://github.com/cline/cline) | [JetBrains AI Assistant](https://www.jetbrains.com/ai/) | [Continue.dev](https://continue.dev/) | [Cursor](https://cursor.com/) | [Windsurf](https://codeium.com/windsurf)
 
-AI coding assistants are integrated development environment (IDE) tools that leverage large language models to enhance developer productivity. These assistants provide real-time code completions, intelligent suggestions, natural language code generation, and interactive chat capabilities directly within your coding environment. Whether you're working in VS Code, JetBrains IDEs, or other popular editors, AI coding assistants act as pair programmers that understand your codebase context, help debug issues, explain complex code, and accelerate development workflows while you maintain full control over your development environment.
+AI coding assistants are IDE extensions that leverage large language models to enhance developer productivity. These tools provide real-time code completions, intelligent suggestions, natural language code generation, and interactive chat capabilities directly within your coding environment—acting as AI pair programmers that understand your codebase context.
 
-**Key Features:**
+**What AI coding assistants can do:**
 
-- Real-time code completions and suggestions
-- Interactive chat with codebase context
-- Code explanation and documentation generation
-- Refactoring and optimization suggestions
-- Automated git commit message generation
-- Unit test creation and debugging assistance
-- Code review and security analysis
-- Multi-language support across popular programming languages
-- IDE integration for seamless workflow
+- **Real-time completions** - Autocomplete code as you type with context awareness
+- **Interactive chat** - Ask questions about your codebase, get explanations
+- **Code generation** - Natural language to code conversion
+- **Refactoring** - Intelligent code improvements and optimization suggestions
+- **Documentation** - Auto-generate comments, docstrings, and READMEs
+- **Testing** - Create unit tests, debug issues, suggest fixes
+- **Git integration** - Generate commit messages, review diffs
+- **Multi-language** - Support for Python, JavaScript, TypeScript, Go, Rust, Java, and more
 
 ## Why AI Coding Assistants + stdapi.ai?
 
 <div class="grid cards" markdown>
 
-- :material-puzzle: __Universal Compatibility__
-  <br>Almost any coding assistant that supports OpenAI-compatible APIs works with stdapi.ai. Use your preferred IDE and tools with Amazon Bedrock models—no vendor lock-in.
+- :material-puzzle: __Works with Your IDE__
+  <br>Almost any coding assistant that supports OpenAI-compatible APIs works with stdapi.ai. Continue.dev, Cursor, Cline, Windsurf, Aider—all compatible with AWS Bedrock models.
 
-- :material-brain: __Superior Models__
-  <br>Access Claude for advanced reasoning and coding, Nova for fast completions, and other specialized models. Switch between models based on your task without changing tools.
+- :material-brain: __Best-in-Class Coding Models__
+  <br>Claude 4.6+ for reasoning and architecture, Kimi K2 thinking for complex problem-solving, Qwen Coder Next for specialized coding tasks. Choose the right model for each task.
 
-- :material-server-network: __Flexible Deployment__
-  <br>Run stdapi.ai in AWS or locally with Docker. Perfect for development environments where you need local testing or air-gapped setups.
+- :material-lock: __Code Privacy Guaranteed__
+  <br>Your code never leaves your AWS account. Perfect for proprietary codebases, enterprise security requirements, or compliance-sensitive projects.
 
-- :material-lock: __Privacy & Control__
-  <br>Keep your code private in your AWS environment or local machine. No third-party cloud services, no data leaving your infrastructure.
+- :material-server-network: __Flexible Deployment Options__
+  <br>Run stdapi.ai in AWS for production or locally with Docker for development. Test locally, deploy to cloud—same API, same experience.
+
+- :material-currency-usd-off: __Pay-Per-Use, No Subscriptions__
+  <br>No per-developer licenses or monthly subscriptions. Pay only AWS Bedrock rates for actual usage. Use powerful models without per-seat costs.
 
 </div>
 
@@ -48,9 +56,10 @@ flowchart LR
 ## ✅ Prerequisites
 
 !!! info "What You'll Need"
-    - ✓ An IDE with AI assistant support (VS Code, JetBrains, Cursor, etc.)
-    - ✓ Your stdapi.ai server URL (e.g., `https://api.example.com`)
-    - ✓ Your stdapi.ai server API key
+    - ✓ **stdapi.ai deployed** - [See deployment guide](operations_getting_started.md) or [run locally with Docker](operations_getting_started.md#option-c-local-development-with-dockerpodman)
+    - ✓ **Your stdapi.ai URL** - e.g., `https://api.example.com` or `http://localhost:8000` for local
+    - ✓ **Your API key** - From Terraform output or configuration (optional for local development)
+    - ✓ **IDE with AI assistant** - VS Code, JetBrains, Cursor, or your preferred editor with an AI coding extension
 
 ---
 
@@ -77,11 +86,19 @@ Most AI coding assistants follow a similar configuration pattern. The exact menu
         (or select from detected models if available)
         ```
 
-!!! tip "Model Selection"
-    - **Auto-detect models**: Some assistants can query the `/v1/models` endpoint and show you a list of available models. Simply select your preferred model from the dropdown.
-    - **Manual entry**: Other assistants require you to type the exact model ID. Use the full Bedrock model ID like `anthropic.claude-sonnet-4-5-20250929-v1:0`.
-    - **Multiple model configuration**: Some agents allow configuring different models for different tasks (e.g., one for chat, another for completions). In this case, consider using fast and cheap models for secondary tasks instead of powerful ones to optimize costs and latency.
-    - **Available models**: Many code-efficient models are available including Claude Sonnet, Claude Opus, Qwen Coder, and more.
+!!! tip "Model Selection for Coding"
+    **Recommended models for different tasks:**
+
+    - **Advanced reasoning & architecture**: `anthropic.claude-sonnet-4-5-20250929-v1:0` or Claude Opus
+    - **Complex problem-solving**: Kimi K2 thinking models
+    - **Specialized coding tasks**: `qwen2-coder-next-1-5-instruct-v1:0` (Qwen Coder Next)
+    - **Fast completions**: Amazon Nova Micro or Nova Lite
+
+    **Configuration tips:**
+
+    - **Auto-detect**: Some assistants query `/v1/models` and show a dropdown
+    - **Manual entry**: Use full Bedrock model ID (e.g., `anthropic.claude-sonnet-4-5-20250929-v1:0`)
+    - **Multi-model setup**: Use fast, cheap models for secondary tasks (autocomplete, summaries) and powerful models for complex generation
 
 ### 💬 Chat Completions
 

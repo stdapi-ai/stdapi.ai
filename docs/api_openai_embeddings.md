@@ -1,6 +1,12 @@
+---
+title: Embeddings API - AWS Bedrock Vector Embeddings
+description: Generate vector embeddings with AWS Bedrock using OpenAI-compatible API. Support for semantic search, RAG, multimodal embeddings with text, images, audio, and documents.
+keywords: embeddings API, vector embeddings AWS, semantic search API, RAG embeddings, text embeddings, multimodal embeddings, AWS Bedrock embeddings, OpenAI embeddings
+---
+
 # Embeddings API
 
-Transform text into semantic vectors. Power your search, recommendations, and similarity features with AWS Bedrock embedding models through an OpenAI-compatible interface.
+Generate vector embeddings for semantic search and RAG applications with AWS Bedrock embedding models through an OpenAI-compatible interface.
 
 ## Why Choose Embeddings?
 

@@ -1,6 +1,12 @@
+---
+title: Text to Speech API - AWS Polly with OpenAI Compatibility
+description: Generate natural-sounding speech from text using AWS Polly. OpenAI-compatible TTS API with 60+ voices, 30+ languages, and SSML support.
+keywords: text to speech API, TTS API AWS, AWS Polly API, voice synthesis API, OpenAI TTS, neural voices, speech generation, audio synthesis
+---
+
 # Text to Speech API
 
-Generate audio from text for voiceovers, audiobooks, accessibility features, or interactive voice experiences.
+Generate natural-sounding speech from text with AWS Polly through an OpenAI-compatible interface.
 
 ## Why Choose Text to Speech?
 

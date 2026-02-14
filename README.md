@@ -3,9 +3,9 @@
 
 # stdapi.ai
 
-**The OpenAI-compatible API for AWS AI**
+**OpenAI-Compatible API Gateway for AWS Bedrock and AI Services**
 
-Access 80+ Bedrock models (Claude, Llama, Nova) and AWS AI services (Polly, Transcribe, Translate) with your existing OpenAI clients—no code changes required.
+Deploy any OpenAI-compatible application on AWS Bedrock—no code changes required. Access 80+ models from Claude, Llama, Nova, and more with enterprise-grade privacy, compliance controls, and AWS direct pricing.
 
 [![AWS Marketplace](https://img.shields.io/badge/AWS-Marketplace-FF9900?logo=amazon-aws&logoColor=white)](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo)
 [![Documentation](https://img.shields.io/badge/docs-stdapi.ai-blue)](https://stdapi.ai)
@@ -16,74 +16,172 @@ Access 80+ Bedrock models (Claude, Llama, Nova) and AWS AI services (Polly, Tran
 
 ## 🚀 What is stdapi.ai?
 
-**stdapi.ai** provides AWS AI infrastructure through an OpenAI-compatible interface. Connect your existing applications to over 40 Amazon Bedrock models and AWS AI services without changing code.
+**stdapi.ai** is an OpenAI-compatible API gateway for AWS Bedrock and AI services. Drop-in replacement for OpenAI SDK—works with LangChain, Continue.dev, Open WebUI, n8n, and 1000+ tools. Deploy your existing OpenAI applications to AWS without code changes.
 
 ### Why Choose stdapi.ai?
 
-- **🔌 OpenAI Compatible** – Applications designed for OpenAI's API work with stdapi.ai. Just change the endpoint.
-- **🔒 Your Data, Your AWS Account** – All conversations and data remain within your AWS environment. For HIPAA, GDPR, and regulatory compliance.
-- **🌍 Multi-Region Architecture** – Access models across multiple AWS Bedrock regions through one unified endpoint.
-- **💰 Cost Optimized** – Pay standard AWS rates with zero markup.
-- **⚡ Enterprise Ready** – CloudWatch integration, native guardrails, hardened container images, and production-ready infrastructure.
+- **🔌 Production-Ready OpenAI API Compatibility** – Full support for chat, embeddings, images, audio (speech/transcription/translation), and more. Applications designed for OpenAI's API work instantly.
+- **🔒 Enterprise Compliance & Data Sovereignty** – Configure allowed AWS regions to meet your compliance requirements. All inference stays in your AWS account—data never shared with model providers or used for training.
+- **🌍 Multi-Region Bedrock Access** – Automatic cross-region inference profile selection for optimal availability and pricing. Access models across multiple AWS regions through one unified endpoint.
+- **💰 AWS Direct Pricing, No Markup** – Pay-per-use pricing with no subscriptions. Pay only AWS Bedrock rates for exactly what you use—no monthly minimums or capacity commitments.
+- **⚡ Advanced Model Capabilities** – Reasoning modes (Claude 4.6+, Nova 2), prompt caching, guardrails, prompt routers, application inference profiles, and service tiers built-in.
 
 ---
 
 ## 🎯 Key Features
 
-### 80+ AI Models
-Access models from:
-- **Anthropic** (Claude for reasoning and coding)
-- **Amazon** (Nova family for cost-effective performance)
-- **OpenAI**, **Meta** (Llama), **Mistral AI**, **Google**, **Cohere**, **Stability AI**, **DeepSeek**, **Qwen**, and more
+### 🧠 Access to 80+ Leading Models
+- **Anthropic** – Claude 4.6+ with extended reasoning capabilities
+- **Amazon** – Nova 2 family for cost-effective performance
+- **Meta** – Llama 4 for open-source flexibility
+- **DeepSeek** – v3.2 for advanced code generation
+- **OpenAI**, **Mistral AI**, **Google**, **Cohere**, **Stability AI**, **Qwen**, **Moonshot**, **Nvidia**, and more
+- **Switch models instantly** without code changes—no vendor lock-in
 
-### Comprehensive AWS AI Services
-Beyond Bedrock language models:
+### 🎙️ Comprehensive AWS AI Services
+Unified under OpenAI API:
 - **Amazon Polly** – Natural text-to-speech synthesis
-- **Amazon Transcribe** – Accurate speech recognition
-- **Amazon Translate** – Multi-language support
+- **Amazon Transcribe** – Accurate speech recognition with speaker diarization
+- **Amazon Translate** – Multi-language translation support
 
-### Multi-Modal Capabilities
-- Text conversations
-- Image generation
-- Audio processing
-- Embeddings for semantic search
-- Complete AI workflows
+### 🎨 Multi-Modal Capabilities
+- Chat completions with reasoning modes
+- Image generation and editing (Stable Diffusion)
+- Audio speech, transcription, and translation
+- Embeddings for semantic search and RAG
+- Complete AI workflows in one API
 
 ---
 
-## 💼 Popular Use Cases
+## 💼 Who Uses stdapi.ai & Popular Use Cases
 
-| Use Case                 | Description                                                                       |
-|--------------------------|-----------------------------------------------------------------------------------|
-| **Chat Interfaces**      | Connect OpenWebUI or LibreChat to Bedrock models for private ChatGPT alternatives |
-| **Workflow Automation**  | Connect AI to 400+ services using N8N's visual automation platform                |
-| **Developer Tools**      | AI assistance in VS Code, JetBrains IDEs, Cursor with LangChain and LlamaIndex    |
-| **Knowledge Management** | Add AI-powered writing and semantic search to Obsidian and Notion                 |
-| **Communication Bots**   | Deploy bots to Slack, Discord, Teams, and Telegram                                |
+### 💬 Chat Interfaces - Private ChatGPT Alternative
+Build ChatGPT-like experiences with AWS Bedrock models and complete privacy control.
+
+**What you can build:**
+- Private team chat with Open WebUI or LibreChat
+- Customer support assistant with RAG-enabled document search
+- Internal knowledge base with multi-modal capabilities (text, voice, images)
+
+**Tools:** Open WebUI, LibreChat, Chatbot UI
+
+---
+
+### 🔄 Workflow Automation - AI-Powered Business Processes
+Integrate AWS Bedrock into business processes through visual workflow builders.
+
+**What you can automate:**
+- Customer support ticket classification and response generation
+- Automated content creation for blogs, social media, email campaigns
+- Document workflows with AI summarization, translation, and classification
+- Data extraction, transformation, and analysis
+
+**Tools:** n8n, Make (Integromat), Zapier
+
+---
+
+### 💻 Developer Tools - AI Coding Assistants
+Enhance development with AI-powered coding assistants in your IDE.
+
+**What you can do:**
+- Real-time code completion in VS Code, JetBrains IDEs, Cursor, Windsurf
+- Natural language to code generation with Claude and specialized coding models
+- Chat with your codebase, explain functions, refactor code
+- Build with LangChain, LlamaIndex, Haystack using AWS Bedrock
+
+**Tools:** Continue.dev, Cline, Cursor, Windsurf, Aider, LangChain, LlamaIndex
+
+---
+
+### 📝 Knowledge Management - AI-Enhanced Notes & Research
+Transform knowledge bases with AI-powered insights and semantic search.
+
+**What you can do:**
+- AI writing assistance to generate, edit, and improve content
+- Semantic search to find notes by meaning, not just keywords
+- Auto-summarization to extract key points from long documents
+- Smart organization with automatic tagging and linking
+
+**Tools:** Obsidian, Notion AI integrations, Logseq, Roam Research
+
+---
+
+### 🤖 Team Chatbots & Assistants
+Deploy intelligent AI assistants to Slack, Discord, Teams, and Telegram.
+
+**What you can build:**
+- Team Q&A bot for instant answers to common questions
+- Documentation assistant that searches and cites internal docs
+- Task automation via chat (create tickets, schedule meetings)
+- Custom workflows with company-specific commands
+
+**Tools:** Slack Bot, Discord Bot, Microsoft Teams Apps, Botpress
+
+---
+
+### 🧠 Autonomous Agents - Research & Task Automation
+Build self-directed AI agents for complex multi-step tasks.
+
+**What you can build:**
+- Research agents for autonomous web research and analysis
+- Multi-agent systems for collaborative problem-solving
+- Self-improving workflows that adapt to results
+- Autonomous development and testing systems
+
+**Tools:** AutoGPT, BabyAGI, LangGraph, CrewAI, Semantic Kernel
+
+---
+
+## 🎯 Why Use stdapi.ai for Integrations?
+
+- ✅ **No code changes required** – Just update the API endpoint in your application settings
+- ✅ **Access 80+ models** – Claude 4.6+, Nova 2, Llama 4, DeepSeek v3.2, Stable Diffusion, and more
+- ✅ **Enterprise data control** – All processing stays in your AWS account
+- ✅ **Pay-per-use pricing** – No subscriptions, pay only AWS Bedrock rates for actual usage
+- ✅ **AWS-native features** – Leverage prompt caching, reasoning modes, and guardrails through standard OpenAI API
+
+**📚 [View Complete Use Cases & Integration Guides →](https://stdapi.ai/use_cases/)**
 
 ---
 
 ## 🛒 AWS Marketplace
 
-### Enterprise Deployment Made Easy
+### Production-Ready Deployment
 
-**stdapi.ai is available on AWS Marketplace** with commercial licensing and production-ready deployment options.
+**stdapi.ai is available on AWS Marketplace** with commercial licensing, hardened containers, and streamlined deployment.
 
-#### Advantages of AWS Marketplace Version:
-- ✅ **Commercial License** – Use in proprietary applications without AGPL obligations
-- ✅ **Hardened Container Images** – Security-optimized for production workloads
-- ✅ **Regular Security Updates** – Timely patches and vulnerability fixes
-- ✅ **Streamlined Deployment** – Quick deployment with Terraform/OpenTofu modules
-- ✅ **AWS Best Practices** – Following AWS Well-Architected Framework guidelines
-- ✅ **Enterprise Support** – Professional support for deployment and configuration
+#### What's Included:
+- ✅ **Commercial License** – Use in proprietary applications without AGPL obligations or source disclosure requirements
+- ✅ **Hardened Container Images** – Security-optimized, regularly scanned for production workloads
+- ✅ **Regular Security Updates** – Timely patches and vulnerability fixes to keep your deployment secure
+- ✅ **Terraform Deployment Module** – Production-ready infrastructure following AWS Well-Architected Framework
+- ✅ **Enterprise Support** – Professional support for deployment, configuration, and troubleshooting
+- ✅ **OpenTelemetry & Observability** – Built-in monitoring and debugging capabilities
 
 **[Deploy from AWS Marketplace →](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo)**
+
+**Community Edition:** Free Docker image available for local development and testing.
 
 ---
 
 ## 📖 Quick Start
 
-### For Production Use
+### How It Works
+
+**1. Deploy to AWS in minutes**
+Launch via Terraform module on ECS, or run the Docker image locally for development.
+
+**2. Point your application to stdapi.ai**
+Change only the `base_url` in your OpenAI client. All existing code, prompts, and workflows continue working.
+
+**3. Access AWS Bedrock models immediately**
+Use Claude, Nova, Llama, or any Bedrock model. Switch between models, regions, and providers without changing application code.
+
+**Zero lock-in:** Standard OpenAI API means you can switch back or to another provider anytime.
+
+---
+
+### Production Deployment
 
 Deploy stdapi.ai to your AWS account in minutes using our Terraform module:
 
@@ -120,7 +218,7 @@ print(response.choices[0].message.content)
 
 ### Prerequisites
 
-- Python 3.13 or higher
+- Python 3.14 or higher
 - [uv](https://github.com/astral-sh/uv) package manager
 - AWS credentials configured
 
@@ -134,7 +232,7 @@ print(response.choices[0].message.content)
 
 2. **Install dependencies**
    ```bash
-   uv sync
+   uv sync --frozen --extra uvicorn
    ```
 
 3. **Login to AWS**
@@ -154,21 +252,16 @@ print(response.choices[0].message.content)
    # S3 Storage (required for certain features like image generation, audio)
    export AWS_S3_BUCKET=my-dev-bucket  # Create bucket in same region as AWS_BEDROCK_REGIONS
 
-   # API Authentication (optional for local dev)
-   export API_KEY=sk-dev-your-secret-key-here
-
    # Enable API documentation (helpful for development)
    export ENABLE_DOCS=true
-   export ENABLE_REDOC=true
 
    # Logging Configuration
-   export LOG_LEVEL=info  # Options: info, warning, error, critical, disabled
    export LOG_REQUEST_PARAMS=true  # Enable detailed request/response logging for debugging
    ```
 
 5. **Run locally**
    ```bash
-   uv run stdapi
+   uv run uvicorn stdapi.main:app --host 0.0.0.0 --port 8000
    ```
 
 6. **Test the API**
@@ -230,11 +323,14 @@ Sponsorship benefits include priority support, feature prioritization, dedicated
 
 ---
 
-## 🌟 Why stdapi.ai?
+## 🌟 Enterprise-Grade Features
 
-| For Developers                                                                                                                   | For Enterprises                                                                                                           |
-|----------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------|
-| • Zero code changes required<br>• Works with existing OpenAI SDKs<br>• Simple endpoint swap<br>• Comprehensive API compatibility | • Data sovereignty & compliance<br>• Cost transparency & savings<br>• No vendor lock-in<br>• Enterprise-grade reliability |
+- **🌍 Multi-region Bedrock access** – Automatic cross-region inference profile selection for optimal availability and pricing
+- **⭐ Advanced model capabilities** – Reasoning modes (Claude 4.6+, Nova 2), prompt caching, guardrails, service tiers
+- **🔌 Complete API coverage** – Chat, embeddings, image generation/editing, audio speech/transcription/translation
+- **🎯 AWS AI services integration** – Amazon Polly (TTS), Transcribe (STT with diarization), Translate—unified under OpenAI API
+- **📊 Observability & debugging** – OpenTelemetry, request/response logging, Swagger/ReDoc interfaces
+- **🔒 Secure by default** – API keys in Systems Manager, CORS controls, SSRF protection, hardened containers
 
 ---
 

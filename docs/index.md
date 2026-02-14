@@ -1,41 +1,43 @@
 ---
-title: stdapi.ai - AI API platform
+title: stdapi.ai - OpenAI-Compatible API Gateway for AWS Bedrock
+description: Deploy OpenAI-compatible applications on AWS Bedrock with no code changes. Access 80+ models including Claude, Nova, Llama with enterprise compliance and pay-per-use pricing.
+keywords: OpenAI API gateway, AWS Bedrock API, OpenAI compatible API, AWS AI gateway, OpenAI AWS integration, enterprise AI API, AWS Bedrock integration, OpenAI alternative, private AI deployment, HIPAA compliant AI
 hide:
   - toc
   - navigation
 ---
 
 <div class="hero hero--home" markdown>
-# Run Any OpenAI App on AWS AI
-Use your favorite AI applications with powerful AWS models like Claude, Llama, and Nova. No code changes needed—just point your app to stdapi.ai and instantly access 80+ models with better privacy and lower costs.
+# OpenAI-Compatible API Gateway for AWS Bedrock and AI services
+
+Deploy any OpenAI-compatible application on AWS Bedrock—no code changes required. Access 80+ models from Claude, Llama, Nova, and more with enterprise-grade privacy, compliance controls, and AWS pricing.
 
 <div class="buttons" markdown>
 [Get started](operations_getting_started.md){ .md-button .md-button--primary }
-[Explore the API](api_overview.md){ .md-button }
-[View on GitHub](https://github.com/stdapi-ai/stdapi.ai){ .md-button }
-[AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo){ .md-button }
+[View documentation](api_overview.md){ .md-button }
+[GitHub](https://github.com/stdapi-ai/stdapi.ai){ .md-button }
 </div>
 </div>
 
 <div class="grid cards" markdown>
 
-- :material-puzzle: __Works with your favorite apps__
-  <br>Use Open WebUI, LibreChat, Continue.dev, LangChain, or any ChatGPT-compatible tool. Just update the API endpoint—no code changes needed.
+- :material-api: __Production-ready OpenAI API compatibility__
+  <br>Full support for chat, embeddings, images, audio (speech/transcription/translation), and more. Drop-in replacement for OpenAI SDK—works with LangChain, Continue.dev, Open WebUI, n8n, and 1000+ tools.
 
-- :material-brain: __Access superior models__
-  <br>Get Claude for reasoning and coding, Nova for cost-effective tasks, plus Llama, OpenAI, Mistral, Google, and 80+ more models. Switch anytime.
+- :material-aws: __Purpose-built for AWS Bedrock__
+  <br>Advanced features like prompt caching, reasoning modes, guardrails, prompt routers, and application inference profiles. Automatic region optimization and S3 integration included.
 
-- :material-microphone: __Beyond chat__
-  <br>Generate images, transcribe audio, translate text, and more. One platform for all your AI needs.
+- :material-shield-lock: __Enterprise compliance & data sovereignty__
+  <br>Configure allowed AWS regions to meet your compliance requirements. All inference stays in your AWS account—data never shared with model providers or used for training.
 
-- :material-shield-check: __Your data stays private__
-  <br>All AI processing happens in your AWS account. Perfect for anyone with privacy concerns or strict data requirements.
+- :material-currency-usd-off: __AWS direct pricing, no markup__
+  <br>Pay-per-use pricing with no subscriptions. Pay only AWS Bedrock rates for exactly what you use—no monthly minimums or capacity commitments.
 
-- :material-currency-usd-off: __Pay less for AI__
-  <br>Use AWS's competitive rates with no markups. Significantly lower costs compared to OpenAI or other SaaS AI providers.
+- :material-brain: __Access to 80+ leading models__
+  <br>Claude 4.6+ (reasoning), Nova 2, Llama 4, DeepSeek v3.2, Stable Diffusion, Mistral, Gemini, and more. Switch models instantly without code changes—no vendor lock-in.
 
-- :material-rocket-launch-outline: __Quick setup__
-  <br>Deploy from AWS Marketplace in minutes. Simple configuration gets you up and running fast.
+- :material-monitor-dashboard: __Built-in observability & security__
+  <br>OpenTelemetry integration, detailed request logging, API keys in AWS Systems Manager. CORS, proxy headers, SSRF protection, and hardened container images.
 
 </div>
 
@@ -114,6 +116,10 @@ Use your favorite AI applications with powerful AWS models like Claude, Llama, a
       <img src="styles/logo_anthropic.svg" alt="Anthropic logo" />
       <span>Anthropic</span>
     </a>
+    <a class="logo-item" href="https://z.ai" target="_blank" rel="noopener" title="Z.ai" aria-label="Z.ai">
+      <img src="styles/logo_zai.svg" alt="Z.ai logo" />
+      <span>Z.ai</span>
+    </a>
     <a class="logo-item" href="https://aws.amazon.com/bedrock/nova/" target="_blank" rel="noopener" title="Amazon Nova" aria-label="Amazon Nova">
       <img src="styles/logo_amazon_nova.svg" alt="Amazon Nova logo" />
       <span>AWS Nova</span>
@@ -154,62 +160,77 @@ Use your favorite AI applications with powerful AWS models like Claude, Llama, a
 
 ## How It Works
 
-1. **Deploy stdapi.ai** to your AWS account in minutes
-2. **Configure your app** by changing the API endpoint to stdapi.ai
-3. **Start using AWS AI** with all your existing tools and workflows
+**1. Deploy to AWS in minutes**
+Launch via Terraform module on ECS, or run the Docker image locally for development. Production-ready infrastructure included.
 
-That's it! Your application now runs on AWS AI models with better privacy and lower costs.
+**2. Point your application to stdapi.ai**
+Change only the `base_url` in your OpenAI client. All existing code, prompts, and workflows continue working.
 
-<div class="code-callout" markdown>
-<div class="code-callout__label">Simple configuration example</div>
+**3. Access AWS Bedrock models immediately**
+Use Claude, Nova, Llama, or any Bedrock model. Switch between models, regions, and providers without changing application code.
 
-```python
-from openai import OpenAI
-
-# Just change the base_url and the model, everything else stays the same
-client = OpenAI(base_url="https://api.example.com/v1")
-
-chat = client.chat.completions.create(
-    model="anthropic.claude-sonnet-4-5-20250929-v1:0",
-    messages=[{"role": "user", "content": "Summarize this in one sentence."}],
-    stream=False,
-)
-response_text = chat.choices[0].message.content
-```
+**Zero lock-in:** Standard OpenAI API means you can switch back or to another provider anytime.
 
 </div>
 
-</div>
-
-## Popular Use Cases
+## Enterprise-Grade Features
 
 <div class="grid cards" markdown>
 
-- :material-forum: __Private ChatGPT alternative__
-  <br>Run Open WebUI or LibreChat for your team. Get a familiar chat interface with Claude and other top models—on your own infrastructure.
+- :material-earth: __Multi-region Bedrock access__
+  <br>Automatic cross-region inference profile selection for optimal availability and pricing
 
-- :material-code-braces: __AI coding assistant__
-  <br>Use Continue.dev, Cline, or Cursor with AWS models. Get intelligent code completions and chat in VS Code, JetBrains, and more.
+- :material-star-settings: __Advanced model capabilities__
+  <br>Reasoning modes (Claude 4.6+, Nova 2), prompt caching, guardrails, service tiers
 
-- :material-robot-outline: __Workflow automation__
-  <br>Connect n8n's 400+ integrations with AWS AI. Automate customer support, content creation, and data processing pipelines.
+- :material-api: __Complete API coverage__
+  <br>Chat, embeddings, image generation/editing, audio speech/transcription/translation
 
-- :material-message-text: __Team chat bots__
-  <br>Deploy AI assistants in Slack, Discord, or Teams. Answer questions, summarize threads, and automate responses with enterprise privacy.
+- :material-aws: __AWS AI services integration__
+  <br>Amazon Polly (TTS), Transcribe (STT with diarization), Translate—unified under OpenAI API
 
-- :material-puzzle: __Switch from OpenAI__
-  <br>Migrate any OpenAI app to AWS in minutes. LangChain, LlamaIndex, and thousands of compatible tools work instantly.
+- :material-chart-line: __Observability & debugging__
+  <br>OpenTelemetry, request/response logging, Swagger/ReDoc interfaces
 
-- :material-image-multiple-outline: __Generate images & audio__
-  <br>Create visuals with Stable Diffusion, generate voices with Polly, and transcribe audio—all through one unified API.
+- :material-security: __Secure by default__
+  <br>API keys in Systems Manager, CORS controls, SSRF protection, hardened containers
+
+</div>
+
+## Who Uses stdapi.ai
+
+<div class="grid cards" markdown>
+
+- :material-server-network: __DevOps & Platform Teams__
+  <br>Deploy Open WebUI, LibreChat, or custom chat interfaces for your organization. Unified API gateway for all AI services—no per-application AWS integration needed.
+
+- :material-code-braces: __Developers & AI Engineers__
+  <br>Use Claude, Kimi K2 thinking, and Qwen Coder Next in VS Code (Continue.dev, Cline, Cursor), JetBrains IDEs, or any OpenAI-compatible tool. Test locally with Docker, deploy to production with Terraform.
+
+- :material-robot: __Workflow Automation Teams__
+  <br>Connect n8n, Make, Zapier, or custom automation to AWS Bedrock. Access 400+ integrations with enterprise-grade AI—all through one API endpoint.
+
+- :material-domain: __Enterprises with Compliance Needs__
+  <br>Meet data sovereignty requirements with region controls. GDPR, HIPAA, FedRAMP workloads supported through AWS Bedrock's compliance certifications.
+
+- :material-cash-multiple: __Cost-conscious Organizations__
+  <br>Switch from subscription-based AI services to pay-per-use AWS Bedrock pricing. Pay only for actual usage with no monthly commitments while accessing leading models (Claude, Stable Diffusion, Llama).
+
+- :material-application-brackets: __Teams Migrating from OpenAI__
+  <br>LangChain, LlamaIndex, Haystack, or custom apps work immediately. Gradual migration supported—run both APIs in parallel during transition.
 
 </div>
 
 <div class="cta-banner" markdown>
 <strong>Ready to get started?</strong>
 <div class="buttons" markdown>
-[Get started now](operations_getting_started.md){ .md-button .md-button--primary }
-[View pricing & setup](api_overview.md){ .md-button }
+[Start with Terraform](operations_getting_started.md){ .md-button .md-button--primary }
+[Try Docker locally](operations_getting_started.md){ .md-button }
+[AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo){ .md-button }
 </div>
+
+**Community edition:** Free Docker image for local development<br>
+**Production:** Terraform module with ECS + hardened container (via AWS Marketplace)
+
 </div>
 

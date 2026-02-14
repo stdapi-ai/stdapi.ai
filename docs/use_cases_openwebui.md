@@ -1,36 +1,46 @@
+---
+title: Open WebUI Integration - AWS Bedrock ChatGPT Alternative
+description: Deploy Open WebUI with AWS Bedrock using stdapi.ai. Complete setup guide for private ChatGPT alternative with RAG, voice, images, and multi-modal AI capabilities.
+keywords: Open WebUI AWS, private ChatGPT, ChatGPT alternative, self-hosted ChatGPT, AWS Bedrock ChatGPT, enterprise chat interface, RAG chatbot AWS, multi-modal chat
+---
+
 # Open WebUI Integration
 
-Connect Open WebUI to stdapi.ai as an OpenAI-compatible backend. Access Amazon Bedrock models through Open WebUI's chat interface with no code changes required.
+Connect Open WebUI to stdapi.ai as an OpenAI-compatible backend. Access AWS Bedrock models through Open WebUI's chat interface with no code changes required—get a private ChatGPT alternative running on your AWS infrastructure.
 
 ## About Open WebUI
 
 **🔗 Links:** [Website](https://openwebui.com/) | [GitHub](https://github.com/open-webui/open-webui) | [Documentation](https://docs.openwebui.com/)
 
-Open WebUI is an extensible, feature-rich, and user-friendly self-hosted web interface designed to operate entirely offline. It serves as a powerful frontend for large language models, offering a ChatGPT-like experience while maintaining complete control over your data and infrastructure. The platform supports multiple AI providers through a unified interface, making it an ideal choice for organizations and individuals who need enterprise-grade AI capabilities without compromising privacy or relying on external cloud services.
+Open WebUI is the leading open-source ChatGPT alternative. It provides a feature-rich, self-hosted web interface that operates entirely under your control, offering a ChatGPT-like experience while maintaining complete data privacy.
 
 **Key Features:**
 
-- ⭐ 100,000+ GitHub stars - Popular open-source AI web interface
-- Feature-complete chat interface
-- Multi-modal: chat, voice, images, and document RAG
-- Extensible: plugins, custom functions, and community tools
-- Privacy-focused: self-hosted with no external dependencies
+- ⭐ **100,000+ GitHub stars** - Most popular open-source AI chat interface
+- **ChatGPT-like UI** - Familiar interface your team already knows
+- **Multi-modal capabilities** - Text, voice, images, and document processing
+- **RAG & embeddings** - Upload documents, search with semantic understanding
+- **Extensible platform** - Plugins, custom functions, and community tools
+- **Complete privacy** - Self-hosted, all data stays in your infrastructure
 
 ## Why Open WebUI + stdapi.ai?
 
 <div class="grid cards" markdown>
 
-- :material-swap-horizontal: __Drop-in Replacement__
-  <br>stdapi.ai acts as an OpenAI-compatible backend. Configure Open WebUI once, then use Amazon Bedrock models through a familiar interface.
+- :material-swap-horizontal: __Zero Configuration Changes__
+  <br>stdapi.ai provides OpenAI-compatible API. Just update the endpoint URL—Open WebUI works immediately with AWS Bedrock models.
 
-- :material-application-cog: __Multi-Modal Experience__
-  <br>Familiar chat interface with text, voice, images, and documents. RAG, embeddings, and visual content—all powered by Bedrock.
+- :material-aws: __Access AWS Bedrock Models__
+  <br>Claude 4.6+ with reasoning, Nova 2, Llama 4, DeepSeek v3.2, Stable Diffusion, and 80+ models through Open WebUI's familiar chat interface.
 
-- :material-server-network: __Single Entry Point__
-  <br>Access multi-region Bedrock models, AWS Translate, AWS Polly, and more through one unified API endpoint.
+- :material-application-cog: __Full Multi-Modal Support__
+  <br>Text chat, voice input/output, image generation/editing, document RAG—all AWS AI services unified through one interface.
 
-- :material-lock: __Privacy & Control__
-  <br>All data stays in your AWS environment. Self-hosted deployment with complete infrastructure control and enterprise security.
+- :material-lock: __Enterprise Data Privacy__
+  <br>All processing stays in your AWS account. Complete infrastructure control with AWS security, compliance, and data sovereignty.
+
+- :material-currency-usd-off: __Pay-Per-Use Pricing__
+  <br>No ChatGPT subscriptions. Pay only AWS Bedrock rates for actual usage—no monthly minimums or per-user fees.
 
 </div>
 
@@ -46,9 +56,10 @@ flowchart LR
 ## ✅ Prerequisites
 
 !!! info "What You'll Need"
-    - ✓ A running Open WebUI instance
-    - ✓ Your stdapi.ai server URL (e.g., `https://api.example.com`)
-    - ✓ Your stdapi.ai server API key
+    - ✓ **stdapi.ai deployed** - [See deployment guide](operations_getting_started.md)
+    - ✓ **Your stdapi.ai URL** - e.g., `https://api.example.com`
+    - ✓ **Your API key** - From Terraform output or configuration
+    - ✓ **Open WebUI instance** - Running or ready to deploy (see Deployment section below)
 
 ---
 
@@ -149,11 +160,44 @@ Choose any TTS model you prefer. Open WebUI calls `POST /v1/audio/speech` (see [
 
 ## 🚀 Deployment
 
-We recommend using the Terraform sample for deployment:
+### Option 1: Terraform (Recommended)
 
-- [stdapi-ai/samples/getting_started_openwebui](https://github.com/stdapi-ai/samples/tree/main/getting_started_openwebui)
+Deploy Open WebUI + stdapi.ai together with production infrastructure:
 
-This sample provisions Open WebUI on ECS Fargate, wires all environment variables above, connects it to stdapi.ai, and includes Elasticache Valkey, Aurora PostgreSQL with vector extension, web search with SearXNG, plus web scraping with Playwright.
+**📦 [stdapi-ai/samples/getting_started_openwebui](https://github.com/stdapi-ai/samples/tree/main/getting_started_openwebui)**
+
+**What's included:**
+
+- Open WebUI on ECS Fargate with auto-scaling
+- stdapi.ai gateway connected to AWS Bedrock
+- ElastiCache Valkey for caching
+- Aurora PostgreSQL with pgvector extension for RAG
+- SearXNG for web search integration
+- Playwright for web scraping
+- HTTPS with ALB and optional WAF
+- All environment variables pre-configured
+
+**Deploy:**
+
+```bash
+git clone https://github.com/stdapi-ai/samples.git
+cd samples/getting_started_openwebui/terraform
+terraform init
+terraform apply
+```
+
+### Option 2: Docker Compose (Local/Development)
+
+For local testing or development:
+
+```bash
+# Clone and run
+git clone https://github.com/stdapi-ai/samples.git
+cd samples/getting_started_openwebui/docker-compose
+docker-compose up
+```
+
+Access Open WebUI at `http://localhost:3000` with stdapi.ai on `http://localhost:8000`
 
 ---
 

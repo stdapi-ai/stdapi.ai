@@ -1,95 +1,115 @@
+---
+title: Use Cases - AWS Bedrock Integration Examples
+description: Integrate AWS Bedrock with Open WebUI, n8n, Continue.dev, and other OpenAI-compatible tools. Step-by-step guides for chat interfaces, coding assistants, and workflow automation.
+keywords: AWS Bedrock integration, Open WebUI AWS, ChatGPT alternative, AI coding assistant AWS, n8n AI workflow, private ChatGPT, AI automation tools, OpenAI integration examples
+---
+
 # Use Cases
 
-Discover how to integrate stdapi.ai with popular AI applications and tools. stdapi.ai's OpenAI-compatible API makes it a drop-in replacement for OpenAI in hundreds of applications, giving you access to Amazon Bedrock models with zero code changes.
+Discover how to integrate stdapi.ai with popular AI applications and tools. stdapi.ai's OpenAI-compatible API makes it a drop-in replacement for OpenAI in hundreds of applications, giving you access to AWS Bedrock models with zero code changes.
+
+**Why use stdapi.ai for integrations?**
+
+- **No code changes required** - Just update the API endpoint in your application settings
+- **Access 80+ models** - Claude 4.6+, Nova 2, Llama 4, DeepSeek v3.2, Stable Diffusion, and more
+- **Enterprise data control** - All processing stays in your AWS account
+- **Pay-per-use pricing** - No subscriptions, pay only AWS Bedrock rates for actual usage
+- **AWS-native features** - Leverage prompt caching, reasoning modes, and guardrails through standard OpenAI API
 
 ## Choose Your Integration
 
 Select the category that matches your needs, or explore multiple integrations to use Amazon Bedrock across your workflow.
 
-### 💬 Chat Interfaces
+### 💬 Chat Interfaces - Private ChatGPT Alternative
 
-Build ChatGPT-like experiences with enterprise models and full privacy control. Deploy feature-rich web interfaces that provide familiar chat experiences while keeping all data within your AWS environment.
+Build ChatGPT-like experiences with AWS Bedrock models and complete privacy control. Deploy feature-rich web interfaces that provide familiar chat experiences while keeping all data within your AWS environment.
 
-**Common Benefits:**
+**What you can build:**
 
-- Familiar chat interface with enterprise security
-- Multi-modal capabilities: text, voice, images, and documents
-- Self-hosted with complete data control
-- RAG and document search integration
-- Team collaboration and sharing
+- **Private team chat** - ChatGPT-style interface for your organization
+- **Customer support assistant** - AI-powered help desk with your data
+- **Internal knowledge base** - RAG-enabled chat with document search
+- **Multi-modal applications** - Process text, voice, images, and documents
 
-👉 **[Open WebUI Integration](use_cases_openwebui.md)** — Full integration guide with Terraform deployment samples
+**Popular tools:** Open WebUI, LibreChat, Chatbot UI
 
----
-
-### 🔄 Workflow Automation
-
-Integrate AI into your business processes and automation workflows. Connect Amazon Bedrock models to hundreds of services and APIs through visual workflow builders, enabling sophisticated AI-powered automation without writing code.
-
-**Common Benefits:**
-
-- Visual workflow creation with no-code interfaces
-- Connect AI to existing business tools and services
-- Automate repetitive tasks with intelligent processing
-- Build complex multi-step AI pipelines
-- Use existing templates and nodes designed for OpenAI
-
-👉 **[n8n Integration](use_cases_n8n.md)** — Complete setup guide for workflow automation
+👉 **[Open WebUI Integration Guide](use_cases_openwebui.md)** — Complete setup with Terraform deployment examples
 
 ---
 
-### 💻 Developer Tools
+### 🔄 Workflow Automation - AI-Powered Business Processes
 
-Enhance your development workflow with AI-powered coding assistants and frameworks. stdapi.ai integrates seamlessly with popular IDEs and AI development frameworks, allowing you to leverage Amazon Bedrock models for code completion, generation, and intelligent assistance directly in your development environment.
+Integrate AWS Bedrock AI into your business processes and automation workflows. Connect models to hundreds of services and APIs through visual workflow builders, enabling sophisticated AI-powered automation without writing code.
 
-**Common Benefits:**
+**What you can automate:**
 
-- Real-time code completions and suggestions
-- Codebase understanding and contextual assistance
-- Support for multiple IDEs and editors
-- Zero code changes for framework integrations
-- Build production AI applications with standard tools
+- **Customer support** - Auto-classify tickets, generate responses, route intelligently
+- **Content creation** - Automated blog posts, social media, email campaigns
+- **Data processing** - Extract, transform, and analyze data with AI
+- **Document workflows** - Automated summarization, translation, and classification
 
-👉 **[AI Coding Assistants Integration](use_cases_coding_assistants.md)** — Universal setup guide for IDEs and coding agents
+**Popular tools:** n8n, Make (Integromat), Zapier
+
+👉 **[n8n Integration Guide](use_cases_n8n.md)** — Complete setup for AI workflow automation
 
 ---
 
-### 📝 Knowledge Management
+### 💻 Developer Tools - AI Coding Assistants
+
+Enhance your development workflow with AI-powered coding assistants. stdapi.ai integrates seamlessly with popular IDEs and AI development frameworks, allowing you to leverage AWS Bedrock models (Claude, Kimi K2 thinking, Qwen Coder Next) for code completion, generation, and intelligent assistance.
+
+**What you can do:**
+
+- **Code completion** - Real-time suggestions as you type in VS Code, JetBrains IDEs
+- **Code generation** - Natural language to code with Claude and specialized coding models
+- **Codebase understanding** - Chat with your codebase, explain functions, refactor code
+- **Framework development** - Use LangChain, LlamaIndex, Haystack with AWS Bedrock
+
+**Popular tools:** Continue.dev, Cline, Cursor, Windsurf, Aider, LangChain, LlamaIndex
+
+👉 **[AI Coding Assistants Guide](use_cases_coding_assistants.md)** — Universal setup for IDEs and development frameworks
+
+---
+
+### 📝 Knowledge Management - AI-Enhanced Notes & Research
 
 Transform your knowledge base with AI-powered insights and generation. Integrate stdapi.ai with note-taking applications to add semantic search, writing assistance, and intelligent content organization to your personal or team knowledge systems.
 
-**Common Benefits:**
+**What you can do:**
 
-- AI writing assistance and editing
-- Semantic search across your notes
-- Automatic summarization and extraction
-- Intelligent linking and organization
-- Enhanced productivity for researchers and writers
+- **AI writing assistance** - Generate, edit, and improve your writing
+- **Semantic search** - Find notes by meaning, not just keywords
+- **Auto-summarization** - Extract key points from long documents
+- **Smart organization** - Automatic tagging, linking, and categorization
 
----
-
-### 🤖 Chatbots & Assistants
-
-Deploy intelligent AI assistants to your team's communication platforms. Connect stdapi.ai to chat platforms like Slack, Discord, or Microsoft Teams to create context-aware bots powered by Amazon Bedrock models that can answer questions, automate workflows, and assist your team.
-
-**Common Benefits:**
-
-- Context-aware conversations with team members
-- Custom commands and integrations
-- Multi-platform support
-- Full conversation history and memory
-- Enterprise-grade privacy and security
+**Popular tools:** Obsidian, Notion AI integrations, Logseq, Roam Research
 
 ---
 
-### 🧠 Autonomous Agents
+### 🤖 Team Chatbots & Assistants - Slack, Discord, Teams Integration
 
-Build self-directed AI agents that can plan, execute, and refine complex tasks autonomously. Integrate stdapi.ai with agent frameworks to create intelligent systems powered by Amazon Bedrock that can conduct research, automate workflows, and solve multi-step problems.
+Deploy intelligent AI assistants to your team's communication platforms. Connect stdapi.ai to chat platforms like Slack, Discord, or Microsoft Teams to create context-aware bots powered by AWS Bedrock models that can answer questions, automate workflows, and assist your team.
 
-**Common Benefits:**
+**What you can build:**
 
-- Autonomous task planning and execution
-- Multi-agent collaboration systems
-- Complex problem-solving capabilities
-- Research and analysis automation
-- Self-improving workflows
+- **Team Q&A bot** - Answer common questions instantly in Slack or Teams
+- **Documentation assistant** - Search and cite internal docs in real-time
+- **Task automation** - Create tickets, schedule meetings, update databases via chat
+- **Custom workflows** - Build company-specific commands and integrations
+
+**Popular tools:** Slack Bot, Discord Bot, Microsoft Teams Apps, Botpress
+
+---
+
+### 🧠 Autonomous Agents - Research & Task Automation
+
+Build self-directed AI agents that can plan, execute, and refine complex tasks autonomously. Integrate stdapi.ai with agent frameworks to create intelligent systems powered by AWS Bedrock that can conduct research, automate workflows, and solve multi-step problems.
+
+**What you can build:**
+
+- **Research agents** - Autonomous web research, data gathering, and analysis
+- **Multi-agent systems** - Collaborative agents for complex problem-solving
+- **Task automation** - Self-improving workflows that adapt to results
+- **Code agents** - Autonomous development and testing systems
+
+**Popular tools:** AutoGPT, BabyAGI, LangGraph, CrewAI, Semantic Kernel

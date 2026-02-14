@@ -1,6 +1,12 @@
+---
+title: Chat Completions API - AWS Bedrock with OpenAI Compatibility
+description: OpenAI-compatible chat completions API for AWS Bedrock models including Claude, Nova, Llama. Supports streaming, reasoning modes, prompt caching, and multi-modal inputs.
+keywords: chat completions API, OpenAI chat API, AWS Bedrock chat, streaming chat API, AI chatbot API, Claude API, function calling API, multi-modal chat
+---
+
 # Chat Completions API
 
-This OpenAI-compatible endpoint provides access to AWS Bedrock foundation models—including Claude, Nova, and more—through a familiar interface.
+Generate conversational AI responses with AWS Bedrock foundation models—including Claude, Nova, Llama, and more—through an OpenAI-compatible interface.
 
 ## Why Choose Chat Completions?
 

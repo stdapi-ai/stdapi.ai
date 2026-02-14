@@ -1,3 +1,9 @@
+---
+title: Images Generation API - AWS Bedrock Text-to-Image
+description: Generate images with AWS Bedrock using Stability AI and Amazon Nova Canvas. OpenAI-compatible text-to-image API with streaming support and multiple output formats.
+keywords: text to image API, image generation API, AWS Bedrock image, Stable Diffusion API, AI image generation, OpenAI images API, DALL-E alternative, Nova Canvas
+---
+
 # Images API
 
 Generate images with AWS Bedrock image models like Stability AI and Amazon Nova Canvas through an OpenAI-compatible interface.

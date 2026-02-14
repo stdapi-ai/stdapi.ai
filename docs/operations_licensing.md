@@ -1,3 +1,9 @@
+---
+title: Licensing - AGPL vs Commercial License Options
+description: stdapi.ai dual licensing explained. Choose AGPL-3.0 for open-source projects or commercial license via AWS Marketplace for proprietary applications with production support.
+keywords: AGPL license, commercial AI license, open source AI gateway, AWS Marketplace software, dual licensing, proprietary AI software, enterprise AI license, production AI support
+---
+
 # Licensing
 
 ## Choose the License That Fits Your Business
@@ -6,48 +12,65 @@ stdapi.ai is available under a dual-license model designed to support both open-
 
 <div class="grid cards" markdown>
 
--   :material-scale-balance:{ .lg .middle } __AGPL-3.0-or-later__
+-   :material-scale-balance:{ .lg .middle } __AGPL-3.0-or-later (Free & Open Source)__
 
     ---
 
-    Free and open source for those who share alike
+    Free forever for those who share their code
 
-    Perfect for open-source projects, research, and non-commercial use
+    **Best for:**
+
+    - Open-source projects
+    - Research and education
+    - Development and testing
+    - Projects that can comply with AGPL
+
+    **Includes:** Community Docker image, full source code access
 
     [:octicons-link-external-16: View License](https://spdx.org/licenses/AGPL-3.0-or-later.html)
 
--   :material-briefcase:{ .lg .middle } __Commercial License__
+-   :material-briefcase:{ .lg .middle } __Commercial License (AWS Marketplace)__
 
     ---
 
-    Freedom to build proprietary solutions
+    Production-ready for proprietary applications
 
-    Seamlessly integrate into your commercial products without restrictions
+    **Best for:**
 
-    [:octicons-arrow-right-24: Get Started](#why-go-commercial)
+    - Internal company tools
+    - SaaS products
+    - Proprietary applications
+    - Commercial integrations
+
+    **Includes:** Hardened container, security updates, production support
+
+    [:octicons-arrow-right-24: Get Started on AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo)
 
 </div>
 
 ---
 
-## Why Go Commercial?
+## Why Choose the Commercial License?
 
-A commercial license through AWS Marketplace provides:
+A commercial license through AWS Marketplace provides everything you need for production deployments:
 
 ### :fontawesome-solid-lock: **Keep Your Code Private**
-Build proprietary applications without source code disclosure requirements. Your intellectual property stays yours.
+Build proprietary applications without AGPL's source code disclosure requirements. Your intellectual property and modifications stay private.
 
 ### :fontawesome-solid-rocket: **Deploy with Confidence**
-No copyleft obligations - integrate stdapi.ai into your products and services without legal complexity.
+No copyleft obligations - integrate stdapi.ai into your products and internal tools without AGPL network use restrictions.
+
+### :fontawesome-solid-shield-halved: **Production-Grade Security**
+Access hardened and optimized container images with regular security updates, vulnerability patches, and AWS security best practices.
 
 ### :fontawesome-solid-arrows-turn-to-dots: **Modify & Distribute Freely**
-Customize stdapi.ai to fit your needs and distribute it as part of your commercial offerings.
+Customize stdapi.ai to fit your needs and distribute it as part of your commercial offerings without restrictions.
 
 ### :fontawesome-solid-handshake: **Enterprise-Ready Terms**
-Licensed under the [AWS Marketplace Standard Contract (SCMP)](https://aws.amazon.com/marketplace/management/terms).
+Licensed under the [AWS Marketplace Standard Contract (SCMP)](https://aws.amazon.com/marketplace/management/terms) - straightforward, trusted terms used by thousands of enterprise products.
 
-### :fontawesome-solid-shield-halved: **Production-Grade Infrastructure**
-Access to hardened and optimized container images, regular security updates, and streamlined deployment options.
+### :fontawesome-solid-credit-card: **Streamlined AWS Billing**
+Purchase and pay through AWS Marketplace. Consolidated billing with your existing AWS infrastructure costs.
 
 ---
 
@@ -107,16 +130,26 @@ Access to hardened and optimized container images, regular security updates, and
 
 ---
 
-## Getting Your Commercial License
+## Getting Started with Commercial License
 
-To obtain a commercial license:
+### Quick Start (3 Steps)
 
-1. Visit [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo) and subscribe
-2. Accept the Standard Contract during checkout
-3. Receive your product code automatically upon purchase
-4. Deploy immediately with commercial rights activated
+1. **Subscribe** - Visit [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo) and subscribe to stdapi.ai
+2. **Accept Contract** - Accept the AWS Marketplace Standard Contract during checkout
+3. **Deploy** - Use our Terraform module to deploy immediately with commercial rights activated
 
-Straightforward enterprise licensing through AWS Marketplace.
+**Free trial:** 14-day trial included. Test in your production environment risk-free.
+
+**Pricing:** Pay-per-use through AWS Marketplace. Consolidated with your AWS bill.
+
+### After Subscribing
+
+Once subscribed, access the hardened container image from AWS Marketplace ECR and deploy using:
+
+- **Terraform module** (recommended) - [See deployment guide](operations_getting_started.md#option-a-terraform-module-recommended)
+- **Manual ECS deployment** - [See manual setup](operations_getting_started.md#option-b-manual-ecs-deployment)
+
+Your commercial license activates automatically upon deployment.
 
 ---
 
@@ -124,29 +157,46 @@ Straightforward enterprise licensing through AWS Marketplace.
 
 ??? question "Can I try before I buy?"
 
-    Yes. Start with the AGPL-3.0 version for evaluation and development. When ready for production deployment in proprietary applications, upgrade to the commercial license through AWS Marketplace.
+    Yes, two ways:
 
-    The commercial license also includes a 14-day free trial, allowing you to test the full capabilities in your production environment risk-free.
+    1. **Free AGPL version** - Use the community Docker image (AGPL-3.0) for evaluation, development, and testing. No cost, full features.
 
-    This allows you to validate stdapi.ai's capabilities before committing to a commercial license.
+    2. **14-day free trial** - AWS Marketplace commercial license includes a 14-day trial. Test the hardened production container in your environment risk-free.
 
-??? question "Do I need a commercial license for internal tools?"
+    Both options give you full access to validate stdapi.ai before committing.
 
-    Most likely, yes. The AGPL-3.0 license requires source code disclosure even for software accessed over a network (like internal APIs and tools).
+??? question "Do I need a commercial license for internal company tools?"
 
-    If you're building internal applications that your team or organization accesses over a network, a commercial license removes these obligations and lets you keep your code private.
+    **Yes, in most cases.** The AGPL-3.0 license requires source code disclosure even for software accessed over a network (the "network use" clause).
 
-??? question "What if my project is already AGPL-compliant?"
+    **Examples requiring commercial license:**
+    - Internal API gateway for your team
+    - Company-wide AI chatbot
+    - Department-specific automation tools
+    - Private SaaS offering to customers
 
-    If you're comfortable open-sourcing your entire application under AGPL-3.0, the free version is all you need.
+    The commercial license removes these obligations and lets you keep your code and deployments private.
 
-    The commercial license is for organizations that need to keep their code proprietary or integrate stdapi.ai into commercial products.
+??? question "What if I'm okay with open-sourcing my application?"
+
+    If you're comfortable open-sourcing your entire application under AGPL-3.0 (including making source available to network users), the free community version works perfectly.
+
+    **AGPL-3.0 is fine for:**
+    - Open-source projects that share all code
+    - Research and academic projects
+    - Personal experiments and learning
+
+    The commercial license is for organizations that need proprietary code or can't meet AGPL's network disclosure requirements.
 
 ??? question "Can I switch from AGPL to commercial later?"
 
-    Yes. Many customers start with the AGPL version during development and testing, then switch to the commercial license when deploying to production.
+    **Yes, absolutely.** This is a common path:
 
-    Your product code activates commercial licensing automatically - no migration or technical changes required.
+    1. **Develop & test** with free AGPL community Docker image
+    2. **Subscribe** to AWS Marketplace when ready for production
+    3. **Deploy** with commercial container image - automatic license activation
+
+    No migration required. Just swap container images and deploy. Your Terraform configuration remains the same.
 
 ??? question "What's included in the AWS Marketplace Standard Contract?"
 

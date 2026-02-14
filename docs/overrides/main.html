@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+
+{% block extrahead %}
+  {{ super() }}
+
+  {# Open Graph Meta Tags #}
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="stdapi.ai">
+  <meta property="og:url" content="{{ page.canonical_url }}">
+  <meta property="og:title" content="{% if page.meta and page.meta.title %}{{ page.meta.title }}{% elif page.title and not page.is_homepage %}{{ page.title }} - {{ config.site_name }}{% else %}{{ config.site_name }}{% endif %}">
+  <meta property="og:description" content="{% if page.meta and page.meta.description %}{{ page.meta.description }}{% else %}{{ config.site_description }}{% endif %}">
+  <meta property="og:image" content="{{ config.site_url }}styles/logo.svg">
+  <meta property="og:locale" content="en_US">
+
+  {# Twitter Card Meta Tags #}
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:site" content="@stdapi_ai">
+  <meta name="twitter:title" content="{% if page.meta and page.meta.title %}{{ page.meta.title }}{% elif page.title and not page.is_homepage %}{{ page.title }} - {{ config.site_name }}{% else %}{{ config.site_name }}{% endif %}">
+  <meta name="twitter:description" content="{% if page.meta and page.meta.description %}{{ page.meta.description }}{% else %}{{ config.site_description }}{% endif %}">
+  <meta name="twitter:image" content="{{ config.site_url }}styles/logo.svg">
+
+  {# Meta Keywords - Optional but included for legacy SEO tools #}
+  {% if page.meta and page.meta.keywords %}
+  <meta name="keywords" content="{{ page.meta.keywords }}">
+  {% endif %}
+
+  {# Schema.org JSON-LD Structured Data #}
+  {% if page.is_homepage %}
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "Organization",
+        "name": "stdapi.ai",
+        "url": "{{ config.site_url }}",
+        "logo": "{{ config.site_url }}styles/logo.svg",
+        "sameAs": [
+          "{{ config.repo_url }}",
+          "https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo"
+        ],
+        "description": "{{ config.site_description }}"
+      },
+      {
+        "@type": "WebSite",
+        "name": "{{ config.site_name }}",
+        "url": "{{ config.site_url }}",
+        "description": "{{ config.site_description }}",
+        "potentialAction": {
+          "@type": "SearchAction",
+          "target": "{{ config.site_url }}?q={search_term_string}",
+          "query-input": "required name=search_term_string"
+        }
+      },
+      {
+        "@type": "SoftwareApplication",
+        "name": "stdapi.ai",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "AWS",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD",
+          "description": "Open source (AGPL) with commercial licensing available"
+        },
+        "softwareVersion": "1.4.0",
+        "description": "OpenAI-compatible API gateway for AWS Bedrock. Deploy any OpenAI app on AWS with no code changes.",
+        "url": "{{ config.site_url }}",
+        "downloadUrl": "{{ config.repo_url }}",
+        "featureList": [
+          "OpenAI-compatible API",
+          "AWS Bedrock integration",
+          "80+ AI models support",
+          "Enterprise compliance",
+          "Pay-per-use pricing",
+          "Multi-region support",
+          "Prompt caching",
+          "Function calling",
+          "Multi-modal support"
+        ],
+        "screenshot": "{{ config.site_url }}styles/logo.svg"
+      }
+    ]
+  }
+  </script>
+  {% else %}
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "{% if page.meta and page.meta.title %}{{ page.meta.title }}{% else %}{{ page.title }}{% endif %}",
+    "description": "{% if page.meta and page.meta.description %}{{ page.meta.description }}{% else %}{{ config.site_description }}{% endif %}",
+    "url": "{{ page.canonical_url }}",
+    "author": {
+      "@type": "Organization",
+      "name": "{{ config.site_author }}"
+    },
+    "publisher": {
+      "@type": "Organization",
+      "name": "stdapi.ai",
+      "logo": {
+        "@type": "ImageObject",
+        "url": "{{ config.site_url }}styles/logo.svg"
+      }
+    }
+  }
+  </script>
+  {% endif %}
+{% endblock %}

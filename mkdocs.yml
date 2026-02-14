@@ -1,13 +1,15 @@
 ---
 site_name: stdapi.ai
-site_description: "stdapi.ai - AI API platform"
+site_description: "Deploy OpenAI-compatible applications on AWS Bedrock with no code changes. Access 80+ models including Claude, Nova, Llama with enterprise compliance, pay-per-use pricing, and AWS data sovereignty."
 site_url: https://stdapi.ai
+site_author: JGoutin-dev
 
 theme:
   name: material
   language: en
   logo: styles/logo.svg
   favicon: styles/logo.svg
+  custom_dir: docs/overrides
   features:
     - navigation.tabs
     - navigation.sections
@@ -72,8 +74,11 @@ repo_name: stdapi-ai/stdapi.ai
 edit_uri: ''
 
 plugins:
-  - search
+  - search:
+      lang: en
+      separator: '[\s\-,:!=\[\]()"/]+|(?!\b)(?=[A-Z][a-z])|\.(?!\d)|&[lg]t;'
   - redoc-tag
+  - meta
 
 hooks:
   - docs_hooks/fastapi_openapi.py
@@ -108,6 +113,18 @@ extra:
     - icon: fontawesome/brands/aws
       link: https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo
       name: AWS Marketplace
+  analytics:
+    feedback:
+      title: Was this page helpful?
+      ratings:
+        - icon: material/emoticon-happy-outline
+          name: This page was helpful
+          data: 1
+          note: Thanks for your feedback!
+        - icon: material/emoticon-sad-outline
+          name: This page could be improved
+          data: 0
+          note: Thanks for your feedback!
   homepage_buttons:
     - label: Get started
       link: getting_started.md

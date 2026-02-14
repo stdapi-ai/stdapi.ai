@@ -1,3 +1,8 @@
+---
+title: Getting Started - Deploy AWS Bedrock OpenAI API Gateway
+description: Step-by-step guide to deploy stdapi.ai on AWS using Terraform or Docker. Set up OpenAI-compatible API access to AWS Bedrock models in minutes with enterprise security.
+keywords: deploy OpenAI gateway AWS, AWS Bedrock deployment, Terraform AWS AI, Docker OpenAI gateway, AWS API gateway setup, enterprise AI deployment, AWS Bedrock setup, OpenAI API hosting
+---
 
 # Getting Started with stdapi.ai
 
@@ -5,15 +10,16 @@ This guide will help you deploy stdapi.ai on AWS and make your first API call.
 
 ## Why stdapi.ai?
 
-stdapi.ai provides OpenAI-compatible access to AWS Bedrock and other AI services with infrastructure costs starting at $7/month.
+stdapi.ai provides OpenAI-compatible access to AWS Bedrock and AWS AI services. Deploy your own AI API gateway on AWS infrastructure with complete data control and pay-per-use pricing.
 
 **Key benefits:**
 
-- Deploy in minutes with pre-built Terraform modules
-- Enterprise security with zero vendor lock-in—your data stays in your AWS account
-- Production-ready monitoring, auto-scaling, and high availability
-- Transparent pricing with fixed infrastructure costs
-- Pre-configured best practices for AWS deployments
+- **Drop-in OpenAI compatibility** - Works with existing OpenAI SDK code, LangChain, Continue.dev, Open WebUI, and 1000+ tools
+- **Deploy in minutes** - Pre-built Terraform modules with production-ready infrastructure
+- **Enterprise security** - Your data stays in your AWS account, zero vendor lock-in
+- **AWS-native features** - Prompt caching, reasoning modes, guardrails, cross-region inference profiles
+- **Pay only for usage** - No subscriptions. Pay AWS Bedrock rates directly for what you use
+- **Complete observability** - OpenTelemetry, CloudWatch alarms, detailed logging included
 
 ## What You'll Accomplish
 
@@ -63,7 +69,7 @@ The Terraform module provides production-ready infrastructure with minimal confi
 
 #### Prerequisites
 
-1. **Subscribe to stdapi.ai** on [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo) (required for container access)
+1. **Subscribe to stdapi.ai** on [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo) (Free trial available)
 2. Install [Terraform](https://www.terraform.io/downloads) or [OpenTofu](https://opentofu.org/docs/intro/install/) >= 1.5
 3. Configure [AWS credentials](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html)
 
@@ -111,17 +117,15 @@ terraform output api_endpoint
 terraform output docs_url
 ```
 
-**Monthly cost:** ~$68 (Fargate ~$7 + NAT ~$37 + ALB ~$17 + WAF ~$5 + KMS $1 + Certificate $1) + AI model usage + license
-
 **First deployment?** This example provides a complete, secure setup ready for testing and production use.
 
-For lower costs, see Example 2 (~$8/month with existing infrastructure) or Example 4 (~$2.50/month for development).
+**Cost optimization:** Deploy into existing VPC/ALB infrastructure to significantly reduce costs. See Example 2 for cost-efficient deployment.
 
 ---
 
 #### Example 2: Integration with Existing Infrastructure
 
-Deploy stdapi.ai into your existing VPC and network infrastructure for maximum cost efficiency (~$8/month).
+Deploy stdapi.ai into your existing VPC and network infrastructure for maximum cost efficiency.
 
 ```hcl
 module "stdapi_ai" {
@@ -164,11 +168,7 @@ resource "aws_lb_target_group" "stdapi" {
 
 See the full integration example in the collapsed section below for complete ALB configuration.
 
-**Monthly cost:** ~$8 (Fargate ~$7 + KMS $1) + AI model usage + license
-
-*This cost assumes you're reusing existing VPC, subnets, and load balancer infrastructure.*
-
-**Best value:** 94% cost reduction vs standalone deployment by reusing existing infrastructure.
+**Best value:** Significant cost reduction by reusing existing VPC, subnets, and load balancer infrastructure.
 
 ??? example "📋 Full integration example with ALB, IAM policies, and advanced configuration"
 
@@ -559,18 +559,6 @@ flowchart LR
   ecs --> cloudwatch["<img src='../styles/logo_amazon_cloudwatch.svg' style='height:64px;width:auto;vertical-align:middle;' /> CloudWatch + Alarms"]
 ```
 
-**Estimated monthly cost (us-east-1):**
-
-- Fargate (0.25 vCPU ARM64, 512 MiB, 730 hours): $7.21
-- NAT Gateway + EIP: $36.50
-- ALB (fixed + LCU charges): $16.43
-- ACM Certificate: $1.00
-- KMS key: $1.00
-- WAF: ~$5.00
-- **Total:** ~$67/month (single AZ) + AI model usage + license
-
-*Multi-AZ deployments incur additional Fargate and NAT Gateway costs per AZ.*
-
 **Included features:**
 
 - HTTPS with automatic SSL certificates via ACM
@@ -580,7 +568,7 @@ flowchart LR
 - Multi-region support for AWS Bedrock operations
 - Pre-configured AWS best practices
 
-**Cost optimization:** Deploy into an existing VPC with existing ALB to reduce costs to ~$8/month. See Example 2.
+**Cost optimization:** Deploy into an existing VPC with existing ALB to significantly reduce infrastructure costs. See Example 2.
 
 **Deployment time:** ~5-10 minutes
 
@@ -625,8 +613,6 @@ terraform apply
 terraform output -raw api_key  # Copy this for API calls
 ```
 
-**Monthly cost:** ~$68 (Fargate ~$7 + NAT ~$37 + ALB ~$17 + WAF ~$5 + KMS $1 + Certificate $1) + AI model usage + license
-
 Production-grade infrastructure with HTTPS, WAF protection, and monitoring without multi-region complexity.
 
 > **Ready-to-use examples on GitHub:**
@@ -638,7 +624,7 @@ Production-grade infrastructure with HTTPS, WAF protection, and monitoring witho
 
 #### Example 4: Cost-Optimized Deployment
 
-Low-cost deployment for development and non-critical workloads (~$2.50/month). Suitable for side projects and development environments.
+Cost-optimized deployment for development and non-critical workloads. Suitable for side projects and development environments.
 
 
 ??? example "📋 Low cost deployment"
@@ -678,20 +664,14 @@ Low-cost deployment for development and non-critical workloads (~$2.50/month). S
 
 **What you get:**
 
-- Fargate Spot for 70% cost reduction
-- Default minimal resources (0.25 vCPU ARM64, 512 MiB)
+- Fargate Spot for significant cost reduction
+- Minimal resources (0.25 vCPU ARM64, 512 MiB)
 - Reuse existing VPC infrastructure
 - Automated scheduling (runs 8 AM-7 PM weekdays only in UTC)
 - Minimal logging (7-day retention, no Container Insights, no VPC Flow Logs)
 - S3 Intelligent-Tiering for storage optimization
 
-**Estimated monthly cost (us-east-1):**
-
-- Fargate Spot (0.25 vCPU ARM64, 512 MiB, ~55 hours/week): ~$1.50
-- KMS key: $1
-- **Total:** ~$2.50/month (scales to ~$4/month with 3 tasks during peak) + AI model usage + license
-
-**Trade-offs:** Spot interruptions possible, minimal observability (7-day logs, no Container Insights or VPC Flow Logs)
+**Trade-offs:** Spot interruptions possible, minimal observability, scheduled availability only
 
 ---
 
@@ -745,7 +725,7 @@ If you prefer not to use Terraform or need a custom deployment, you can deploy t
 
 #### Prerequisites
 
-1. **Subscribe to stdapi.ai** on [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo) (required for container access)
+1. **Subscribe to stdapi.ai** on [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo) (Free trial available)
 2. Set up an ECS cluster (Fargate or EC2)
 3. Configure networking (VPC, subnets, security groups)
 4. Set up IAM roles with appropriate permissions

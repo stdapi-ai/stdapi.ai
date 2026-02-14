@@ -1,3 +1,9 @@
+---
+title: Images Edits API - AWS Bedrock Image Editing
+description: Edit and transform images with AWS Bedrock image models. OpenAI-compatible API for image modifications, inpainting, and transformations.
+keywords: image editing API, AI image editor, inpainting API, image modification API, AWS image editing, OpenAI image edit, image transformation API
+---
+
 # Images API - Image Editing
 
 Edit images using inpainting with AWS Bedrock image models through an OpenAI-compatible interface.

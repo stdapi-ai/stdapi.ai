@@ -1,3 +1,9 @@
+---
+title: Images Variations API - AWS Bedrock Image Variations
+description: Generate variations of existing images with AWS Bedrock. OpenAI-compatible API for creating alternative versions while maintaining style and composition.
+keywords: image variations API, AI image variations, image style transfer, similar images API, AWS image processing, OpenAI variations, image alternatives
+---
+
 # Images API - Image Variations
 
 Create variations of existing images using AWS Bedrock image models through an OpenAI-compatible interface.

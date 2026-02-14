@@ -1,6 +1,22 @@
+---
+title: Configuration Guide - AWS Bedrock API Gateway Setup
+description: Complete configuration reference for stdapi.ai environment variables, AWS credentials, IAM permissions, regions, compliance settings, and S3 integration.
+keywords: AWS API gateway configuration, environment variables AWS, IAM permissions Bedrock, AWS regions setup, API authentication, compliance configuration, AWS credentials setup, S3 integration
+---
+
 # Configuration Guide
 
 stdapi.ai is configured entirely through environment variables, which are read once at startup and cannot be changed without restarting the service. This guide explains each setting category with practical examples to help you configure the service correctly.
+
+**What you can configure:**
+
+- **AWS regions** - Access models across multiple regions for availability and model selection
+- **Data sovereignty** - Control which AWS regions are used for compliance (GDPR, HIPAA, etc.)
+- **Storage** - S3 buckets for file operations, regional buckets for multi-region deployments
+- **Authentication** - API keys via SSM or Secrets Manager for secure access control
+- **Observability** - Logging levels, OpenTelemetry, request/response debugging
+- **Security** - CORS, proxy headers, trusted hosts for production deployments
+- **Performance** - Caching, model overrides, S3 acceleration
 
 !!! tip "Zero Configuration Startup"
     stdapi.ai works out of the box with zero configuration. The service automatically detects your current AWS region and discovers available Bedrock models.
