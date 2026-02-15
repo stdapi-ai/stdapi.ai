@@ -6,13 +6,13 @@ keywords: stdapi.ai releases, AI gateway updates, AWS Bedrock features, API gate
 
 # Releases & Roadmap
 
-**stdapi.ai is under active development** with regular feature releases. Four major releases delivered since launch (v1.0-v1.4) with continuous improvements.
+**stdapi.ai is under active development** with regular feature releases. Five major releases delivered since launch (v1.0-v1.5) with continuous improvements.
 
 ## ✨ Recent Releases
 
-See [Release History below](#release-history) for the full changelog of v1.4, v1.3, v1.2, v1.1, and v1.0 releases.
+See [Release History below](#release-history) for the full changelog of v1.5, v1.4, v1.3, v1.2, v1.1, and v1.0 releases.
 
-**Latest: v1.4.0** – Audio Enhancements & Model Compatibility (Mistral Voxtral, speaker diarization, prompt caching TTL)
+**Latest: v1.5.0** – Advanced Reasoning & Model Compatibility (Amazon Nova 2, Claude 4.6+ adaptive reasoning, system prompt handling)
 
 ---
 
@@ -29,7 +29,6 @@ The following features may be implemented in future releases based on community 
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**           | `/v1/completions`                            | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**           | `/v1/responses`                              | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
 | ![Claude](styles/logo_anthropic_claude.svg){: style="height:20px;width:20px"} **Claude** | `/v1/messages`                               | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
-| ![Claude](styles/logo_anthropic_claude.svg){: style="height:20px;width:20px"} **Claude** | Extended thinking mode                       | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - Claude thinking   |
 | ![Ollama](styles/logo_ollama.svg){: style="height:20px;width:20px"} **Ollama**           | `/api/generate`                              | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
 | ![Ollama](styles/logo_ollama.svg){: style="height:20px;width:20px"} **Ollama**           | `/api/chat`                                  | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
 | ![Cohere](styles/logo_cohere.svg){: style="height:20px;width:20px"} **Cohere**           | `/v1/chat`                                   | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
@@ -141,6 +140,20 @@ The following features may be implemented in future releases based on community 
 
 ## 📋 Release History
 
+### v1.5.0 – Advanced Reasoning & Model Compatibility
+
+Introduces advanced reasoning capabilities with Amazon Nova 2 and Anthropic Claude 4.6+ adaptive reasoning, enhanced system prompt handling for broader model compatibility.
+
+#### 💬 Chat Completions
+
+| Provider                                                                                      | Endpoint/Feature                              | AWS Backend                                                                                                            |
+|-----------------------------------------------------------------------------------------------|-----------------------------------------------|------------------------------------------------------------------------------------------------------------------------|
+| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**                | System prompt handling for unsupported models | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
+| ![Amazon Nova](styles/logo_amazon_nova.svg){: style="height:20px;width:20px"} **Amazon Nova** | Nova 2 chat model reasoning implementation    | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
+| ![Claude](styles/logo_anthropic_claude.svg){: style="height:20px;width:20px"} **Claude**      | Claude 4.6+ adaptive reasoning configuration  | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - Claude models     |
+
+---
+
 ### v1.4.0 – Audio Enhancements & Model Compatibility
 
 Expands audio capabilities with Mistral Voxtral support, speaker diarization, audio formats for chat completions, and introduces prompt caching TTL and model aliasing for better OpenAI compatibility.
@@ -169,6 +182,7 @@ Expands audio capabilities with Mistral Voxtral support, speaker diarization, au
 #### Fixes
 
 - Fix chat completion file input handling and refactor base64 decoding and MIME handling for file processing.
+- Re-raise startup exceptions and disable botocore logging to improve error visibility
 
 ---
 

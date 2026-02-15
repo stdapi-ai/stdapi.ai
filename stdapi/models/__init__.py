@@ -641,7 +641,7 @@ async def _filter_model(
 _DEFAULT: dict[str, type[ModelBase[Any, Any]]] = {}
 
 
-def load_model_plugins(
+def load_model_plugins[ModelT: ModelBase[Any, Any]](
     package_name: str,
     class_type: type[ModelT],
     registry: list[tuple[str | Pattern[str], type[ModelT]]],
@@ -686,7 +686,7 @@ def load_model_plugins(
     )
 
 
-def get_model(
+def get_model[ModelT: ModelBase[Any, Any]](
     model_id: str,
     cache: dict[str, ModelT],
     registry: list[tuple[str | Pattern[str], type[ModelT]]],

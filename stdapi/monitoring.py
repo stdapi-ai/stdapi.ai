@@ -327,7 +327,7 @@ def log_background_event(event: str, request_id: str) -> Generator[EventLog]:
         write_log_event(log)
 
 
-async def _rebuild_and_log_stream(
+async def _rebuild_and_log_stream[T](
     first_chunk: T, stream: AsyncGenerator[T]
 ) -> AsyncGenerator[T]:
     """Rebuilds a given asynchronous generator stream while logging its execution details.
