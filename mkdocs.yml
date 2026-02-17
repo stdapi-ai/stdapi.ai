@@ -43,6 +43,7 @@ theme:
     accent: custom
 nav:
   - Home: index.md
+  - Features: features.md
   - Documentation:
       - API:
           - Overview: api_overview.md

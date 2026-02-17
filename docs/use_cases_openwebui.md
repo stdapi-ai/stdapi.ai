@@ -6,7 +6,7 @@ keywords: Open WebUI AWS, private ChatGPT, ChatGPT alternative, self-hosted Chat
 
 # Open WebUI Integration
 
-Connect Open WebUI to stdapi.ai as an OpenAI-compatible backend. Access AWS Bedrock models through Open WebUI's chat interface with no code changes required—get a private ChatGPT alternative running on your AWS infrastructure.
+Connect Open WebUI to stdapi.ai as an OpenAI-compatible backend. Access AWS Bedrock models through Open WebUI's chat interface—it works out of the box as a private ChatGPT alternative running on your AWS infrastructure.
 
 ## About Open WebUI
 

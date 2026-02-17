@@ -253,3 +253,9 @@
 .feature-table .extra-feature {
   color: #2196f3;
 }
+
+
+/* Green check icon for feature summary */
+.green-check {
+  color: #4caf50;
+}

@@ -1,6 +1,6 @@
 ---
 title: stdapi.ai - OpenAI-Compatible API Gateway for AWS Bedrock
-description: Deploy OpenAI-compatible applications on AWS Bedrock with no code changes. Access 80+ models including Claude, Nova, Llama with enterprise compliance and pay-per-use pricing.
+description: Run your favorite OpenAI-compatible apps on AWS Bedrock. Access 80+ models including Claude, Nova, Llama with enterprise compliance and pay-per-use pricing.
 keywords: OpenAI API gateway, AWS Bedrock API, OpenAI compatible API, AWS AI gateway, OpenAI AWS integration, enterprise AI API, AWS Bedrock integration, OpenAI alternative, private AI deployment, HIPAA compliant AI
 hide:
   - toc
@@ -10,7 +10,7 @@ hide:
 <div class="hero hero--home" markdown>
 # OpenAI-Compatible API Gateway for AWS Bedrock and AI services
 
-Deploy any OpenAI-compatible application on AWS Bedrock—no code changes required. Access 80+ models from Claude, Llama, Nova, and more with enterprise-grade privacy, compliance controls, and AWS pricing.
+Run your favorite OpenAI-compatible applications on AWS Bedrock—works out of the box with any app or tool that supports the OpenAI API. Access 80+ models from Claude, Llama, Nova, and more with enterprise-grade privacy, compliance controls, and AWS pricing.
 
 <div class="buttons" markdown>
 [Get started](operations_getting_started.md){ .md-button .md-button--primary }
@@ -34,7 +34,7 @@ Deploy any OpenAI-compatible application on AWS Bedrock—no code changes requir
   <br>Pay-per-use pricing with no subscriptions. Pay only AWS Bedrock rates for exactly what you use—no monthly minimums or capacity commitments.
 
 - :material-brain: __Access to 80+ leading models__
-  <br>Claude 4.6+ (reasoning), Nova 2, Llama 4, DeepSeek v3.2, Stable Diffusion, Mistral, Gemini, and more. Switch models instantly without code changes—no vendor lock-in.
+  <br>Claude 4.6+ (reasoning), Nova 2, Llama 4, DeepSeek v3.2, Stable Diffusion, Mistral, Gemini, and more. Switch models instantly from any compatible app—no vendor lock-in.
 
 - :material-monitor-dashboard: __Built-in observability & security__
   <br>OpenTelemetry integration, detailed request logging, API keys in AWS Systems Manager. CORS, proxy headers, SSRF protection, and hardened container images.
