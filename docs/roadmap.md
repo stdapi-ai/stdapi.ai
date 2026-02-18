@@ -140,7 +140,7 @@ The following features may be implemented in future releases based on community 
 
 ## 📋 Release History
 
-### v1.5.0 – Advanced Reasoning & Model Compatibility (with v1.5.1 maintenance update)
+### v1.5.0 – Advanced Reasoning & Model Compatibility (with v1.5.1–v1.5.2 maintenance updates)
 
 Introduces advanced reasoning capabilities with Amazon Nova 2 and Anthropic Claude 4.6+ adaptive reasoning, enhanced system prompt handling for broader model compatibility.
 
@@ -152,7 +152,12 @@ Introduces advanced reasoning capabilities with Amazon Nova 2 and Anthropic Clau
 | ![Amazon Nova](styles/logo_amazon_nova.svg){: style="height:20px;width:20px"} **Amazon Nova** | Nova 2 chat model reasoning implementation    | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
 | ![Claude](styles/logo_anthropic_claude.svg){: style="height:20px;width:20px"} **Claude**      | Claude 4.6+ adaptive reasoning configuration  | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - Claude models     |
 
-#### Fixes & Maintenance (v1.5.1)
+#### Fixes & Maintenance (v1.5.1–v1.5.2)
+
+**v1.5.2**
+
+- Add "/" route to avoid 404 errors on root endpoint
+- Fix empty system content block handling (improves AWS Bedrock Converse API compatibility)
 
 **v1.5.1**
 
