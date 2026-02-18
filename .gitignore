@@ -4,6 +4,7 @@
 .pytest_cache/
 .venv/
 tests/output/
+.output.txt
 
 # Build generated files
 build/
