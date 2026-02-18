@@ -12,7 +12,7 @@ keywords: stdapi.ai releases, AI gateway updates, AWS Bedrock features, API gate
 
 See [Release History below](#release-history) for the full changelog of v1.5, v1.4, v1.3, v1.2, v1.1, and v1.0 releases.
 
-**Latest: v1.5.0** – Advanced Reasoning & Model Compatibility (Amazon Nova 2, Claude 4.6+ adaptive reasoning, system prompt handling)
+**Latest: v1.5** – Advanced Reasoning & Model Compatibility (Amazon Nova 2, Claude 4.6+ adaptive reasoning, system prompt handling)
 
 ---
 
@@ -140,7 +140,7 @@ The following features may be implemented in future releases based on community 
 
 ## 📋 Release History
 
-### v1.5.0 – Advanced Reasoning & Model Compatibility
+### v1.5.0 – Advanced Reasoning & Model Compatibility (with v1.5.1 maintenance update)
 
 Introduces advanced reasoning capabilities with Amazon Nova 2 and Anthropic Claude 4.6+ adaptive reasoning, enhanced system prompt handling for broader model compatibility.
 
@@ -151,6 +151,12 @@ Introduces advanced reasoning capabilities with Amazon Nova 2 and Anthropic Clau
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**                | System prompt handling for unsupported models | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
 | ![Amazon Nova](styles/logo_amazon_nova.svg){: style="height:20px;width:20px"} **Amazon Nova** | Nova 2 chat model reasoning implementation    | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
 | ![Claude](styles/logo_anthropic_claude.svg){: style="height:20px;width:20px"} **Claude**      | Claude 4.6+ adaptive reasoning configuration  | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - Claude models     |
+
+#### Fixes & Maintenance (v1.5.1)
+
+**v1.5.1**
+
+- Fix Amazon Nova Canvas image editing to fall back to TEXT_IMAGE task type when no mask is provided
 
 ---
 
