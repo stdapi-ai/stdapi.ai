@@ -316,8 +316,12 @@ class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
         )
 
         image = self._get_one_image_from_list(images)
-        task_type: str = self._extra_params.get("taskType", "INPAINTING")  # type: ignore[assignment]
-        if task_type == "INPAINTING":
+        task_type: str = self._extra_params.get(
+            "taskType", "INPAINTING" if mask else "TEXT_IMAGE"
+        )  # type: ignore[assignment]
+        if task_type == "TEXT_IMAGE":
+            request = self._get_request_text_image(image_generation_config, [image])
+        elif task_type == "INPAINTING":
             request = self._get_request_inpainting(image_generation_config, image, mask)
         elif task_type == "OUTPAINTING":
             request = self._get_request_outpainting(
@@ -332,7 +336,7 @@ class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
                 image_generation_config, image, mask
             )
         else:
-            msg = '"taskType" value must be "INPAINTING", "OUTPAINTING", "BACKGROUND_REMOVAL" or "VIRTUAL_TRY_ON".'
+            msg = '"taskType" value must be "TEXT_IMAGE", "INPAINTING", "OUTPAINTING", "BACKGROUND_REMOVAL" or "VIRTUAL_TRY_ON".'
             raise OpenaiError(msg)
 
         return await self._invoke_and_process_response(request)

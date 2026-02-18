@@ -99,6 +99,43 @@ class TestAmazonNovaCanvasEditing:
         assert response.usage.output_tokens == 1
 
     @pytest.mark.expensive
+    @pytest.mark.parametrize("model_id", NOVA_CANVAS_ALL)
+    def test_edit_b64_single_without_mask(
+        self,
+        openai_client: OpenAI,
+        use_openai_api: bool,
+        sample_image_file: bytes,
+        model_id: str,
+    ) -> None:
+        """Test basic editing with base64 response format."""
+        if use_openai_api:
+            pytest.skip(
+                "Amazon Nova Canvas is not available on the official OpenAI API"
+            )
+
+        response = openai_client.images.edit(
+            image=sample_image_file,
+            prompt="A green square",
+            model=model_id,
+            size="512x512",
+            response_format="b64_json",
+        )
+
+        assert response.created > 0
+        assert response.size is not None
+        assert response.data is not None
+        assert len(response.data) == 1
+        img = response.data[0]
+        assert img.b64_json is not None
+        assert img.url is None
+
+        assert response.usage is not None
+        assert response.usage.input_tokens > 0
+        assert response.usage.input_tokens_details.image_tokens > 0
+        assert response.usage.input_tokens_details.text_tokens >= 0
+        assert response.usage.output_tokens == 1
+
+    @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_SAMPLE)
     def test_edit_with_outpainting_task_type(
         self,

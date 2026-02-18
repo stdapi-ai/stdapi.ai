@@ -103,11 +103,17 @@ Edit images using inpainting with AWS Bedrock image models through an OpenAI-com
 
 ### ![Amazon](styles/logo_amazon.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Models
 
-| Model                             | Supported Task Types                                                | Mask Support                                                                    | Notes                                                                               |
-|-----------------------------------|---------------------------------------------------------------------|---------------------------------------------------------------------------------|-------------------------------------------------------------------------------------|
-| amazon.nova-canvas-v1:0           | `INPAINTING`, `OUTPAINTING`, `BACKGROUND_REMOVAL`, `VIRTUAL_TRY_ON` | ✅ Required for inpainting/outpainting<br>✅ Used as reference for virtual try-on | Supports multiple editing modes including advanced virtual try-on with 3 mask types |
-| amazon.titan-image-generator-v1   | `INPAINTING`, `OUTPAINTING`                                         | ✅ Required for inpainting/outpainting                                           | Supports text-based mask prompts as alternative to mask images                      |
-| amazon.titan-image-generator-v2:0 | `INPAINTING`, `OUTPAINTING`, `BACKGROUND_REMOVAL`                   | ✅ Required for inpainting/outpainting<br>❌ Not used for background removal      | Enhanced features including background removal without mask                         |
+| Model                             | Supported Task Types                                                              | Mask Support                                                                    | Notes                                                                               |
+|-----------------------------------|-----------------------------------------------------------------------------------|---------------------------------------------------------------------------------|-------------------------------------------------------------------------------------|
+| amazon.nova-canvas-v1:0           | `TEXT_IMAGE`, `INPAINTING`, `OUTPAINTING`, `BACKGROUND_REMOVAL`, `VIRTUAL_TRY_ON` | ✅ Required for inpainting/outpainting<br>✅ Used as reference for virtual try-on | Supports multiple editing modes including advanced virtual try-on with 3 mask types |
+| amazon.titan-image-generator-v1   | `INPAINTING`, `OUTPAINTING`                                                       | ✅ Required for inpainting/outpainting                                           | Supports text-based mask prompts as alternative to mask images                      |
+| amazon.titan-image-generator-v2:0 | `INPAINTING`, `OUTPAINTING`, `BACKGROUND_REMOVAL`                                 | ✅ Required for inpainting/outpainting<br>❌ Not used for background removal      | Enhanced features including background removal without mask                         |
+
+!!! info "Amazon Nova Canvas Default Behavior"
+    **`amazon.nova-canvas-v1:0`** automatically selects the task type based on the presence of a mask when no `taskType` is explicitly provided:
+
+    - **No mask provided** → Uses `TEXT_IMAGE` by default
+    - **Mask provided** → Uses `INPAINTING` by default
 
 ### ![Stability AI](styles/logo_stabilityai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Stability AI Models
 
