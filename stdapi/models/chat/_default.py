@@ -937,9 +937,10 @@ class ChatModel(ChatModelBase[Any, Any]):
         """
         results: list[SystemContentBlockTypeDef] = []
         if isinstance(content, str):
-            results.append({"text": content})
+            if content:
+                results.append({"text": content})
         else:
-            results.extend({"text": part.text} for part in content)
+            results.extend({"text": part.text} for part in content if part.text)
         return results
 
     async def _req_extract_image_content_block(
