@@ -97,7 +97,14 @@ REQUEST_TIME: ContextVar[AwareDatetime] = ContextVar("request_time")
 REQUEST_LOG: ContextVar[EventLog] = ContextVar("request_log")
 
 #: Paths to ignore in logging
-LOGGING_PATHS_IGNORE = {"/docs", "/favicon.ico", "/health", "/openapi.json", "/redoc"}
+LOGGING_PATHS_IGNORE = {
+    "/",
+    "/docs",
+    "/favicon.ico",
+    "/health",
+    "/openapi.json",
+    "/redoc",
+}
 
 #: Sorted log levels
 _SORTED_LOG_LEVELS: tuple[LogLevel, ...] = ("info", "warning", "error", "critical")
