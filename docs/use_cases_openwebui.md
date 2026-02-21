@@ -158,9 +158,7 @@ Choose any TTS model you prefer. Open WebUI calls `POST /v1/audio/speech` (see [
     Open WebUI generates audio in small chunks, which makes language auto-detection inconsistent. Disable auto-detection by setting the stdapi.ai environment variable `DEFAULT_TTS_LANGUAGE` to a fixed language (for example, `en-US`).
 ---
 
-## 🚀 Deployment
-
-### Option 1: Terraform (Recommended)
+## 🚀 Terraform deployment
 
 Deploy Open WebUI + stdapi.ai together with production infrastructure:
 
@@ -185,19 +183,6 @@ cd samples/getting_started_openwebui/terraform
 terraform init
 terraform apply
 ```
-
-### Option 2: Docker Compose (Local/Development)
-
-For local testing or development:
-
-```bash
-# Clone and run
-git clone https://github.com/stdapi-ai/samples.git
-cd samples/getting_started_openwebui/docker-compose
-docker-compose up
-```
-
-Access Open WebUI at `http://localhost:3000` with stdapi.ai on `http://localhost:8000`
 
 ---
 

@@ -145,11 +145,10 @@ async def stream_generator(
     response_model=ImagesResponse,
     summary="OpenAI - /v1/images/generations",
     description="Creates an image given a prompt.",
-    response_description="Image generation response in OpenAI format",
+    response_description="The response from the image generation endpoint.",
     responses={
         200: {"description": "Images successfully generated."},
         400: {"description": "Invalid request or unsupported parameters."},
-        404: {"description": "Model not found."},
     },
     openapi_extra={
         "requestBody": {

@@ -47,6 +47,7 @@ nav:
   - Documentation:
       - API:
           - Overview: api_overview.md
+          - API Reference: api_reference.md
           - OpenAI Compatible:
             - Chat Completions: api_openai_chat_completions.md
             - Images Generations: api_openai_images_generations.md
@@ -68,7 +69,6 @@ nav:
           - n8n integration: use_cases_n8n.md
           - AI Coding Assistants: use_cases_coding_assistants.md
       - Roadmap & Changelog: roadmap.md
-  - API Reference: api_reference.md
 
 repo_url: https://github.com/stdapi-ai/stdapi.ai
 repo_name: stdapi-ai/stdapi.ai

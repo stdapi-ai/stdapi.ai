@@ -420,11 +420,7 @@ class TranscriptionCreateParams(BaseModelRequest, str_strip_whitespace=True):
     """
 
     # file: handled in route
-    model: str = Field(
-        ...,
-        description="The transcription model to use.\n"
-        "Available models: amazon.transcribe",
-    )
+    model: str = Field(..., description="The transcription model to use.")
     chunking_strategy: ChunkingStrategy = Field(
         default="auto",
         description="Controls how the audio is cut into chunks.\n"
@@ -524,11 +520,7 @@ class TranslationCreateParams(BaseModelRequest, str_strip_whitespace=True):
     """
 
     # file: handled in route
-    model: str = Field(
-        ...,
-        description="The transcription model to use.\n"
-        "Available models: amazon.transcribe",
-    )
+    model: str = Field(..., description="The transcription model to use.")
     prompt: str | None = Field(
         default=None,
         description="An optional text to guide the model's style or continue a previous audio segment.\n"

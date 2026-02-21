@@ -33,7 +33,7 @@ router = APIRouter(
     "/embeddings",
     summary="OpenAI - /v1/embeddings",
     description="Creates an embedding vector representing the input text.",
-    response_description="Embedding list response in OpenAI format",
+    response_description="Embedding response.",
     responses={
         200: {"description": "Embeddings successfully created."},
         400: {"description": "Invalid request or unsupported parameters."},

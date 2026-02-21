@@ -57,7 +57,14 @@ _FINISH_REASONS: dict[StopReasonType | None, FinishReason] = {
 
 @router.post(
     "/completions",
-    summary="Create chat completion",
+    summary="OpenAI - /v1/chat/completions",
+    description=(
+        "Creates a model response for the given chat conversation. Learn more in the text generation, vision, and audio guides.\n"
+        "Parameter support can differ depending on the model used to generate the response, particularly for newer reasoning models. "
+        "Parameters that are only supported for reasoning models are noted below.\n"
+        "Returns a chat completion object, or a streamed sequence of chat completion chunk objects if the request is streamed."
+    ),
+    response_description="Represents a chat completion response returned by model, based on the provided input.",
     status_code=200,
     response_model=ChatCompletion,
     responses={
@@ -72,13 +79,13 @@ _FINISH_REASONS: dict[StopReasonType | None, FinishReason] = {
                                 "finish_reason": "stop",
                                 "index": 0,
                                 "message": {
-                                    "content": "I'm Claude, an AI assistant created by Anthropic.",
+                                    "content": "I'm an AI assistant.",
                                     "role": "assistant",
                                 },
                             }
                         ],
                         "created": 1740134957,
-                        "model": "anthropic.claude-3-sonnet-20240229-v1:0",
+                        "model": "amazon.nova-micro-v1:0",
                         "object": "chat.completion",
                         "usage": {
                             "completion_tokens": 16,
@@ -88,6 +95,55 @@ _FINISH_REASONS: dict[StopReasonType | None, FinishReason] = {
                     }
                 }
             },
+        },
+        400: {"description": "Invalid request or unsupported parameters."},
+        404: {"description": "Model not found."},
+    },
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "basic": {
+                            "summary": "Basic chat completion",
+                            "value": {
+                                "model": "amazon.nova-micro-v1:0",
+                                "messages": [
+                                    {"role": "user", "content": "Hello, how are you?"}
+                                ],
+                            },
+                        },
+                        "streaming": {
+                            "summary": "Streaming response",
+                            "value": {
+                                "model": "amazon.nova-micro-v1:0",
+                                "messages": [
+                                    {"role": "user", "content": "Tell me a story"}
+                                ],
+                                "stream": True,
+                            },
+                        },
+                        "with_params": {
+                            "summary": "With parameters",
+                            "value": {
+                                "model": "amazon.nova-micro-v1:0",
+                                "messages": [
+                                    {
+                                        "role": "system",
+                                        "content": "You are a helpful assistant.",
+                                    },
+                                    {
+                                        "role": "user",
+                                        "content": "Explain quantum computing",
+                                    },
+                                ],
+                                "temperature": 0.7,
+                                "max_tokens": 1000,
+                            },
+                        },
+                    }
+                }
+            }
         }
     },
     response_model_exclude_none=True,

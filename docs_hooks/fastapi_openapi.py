@@ -26,4 +26,6 @@ def on_pre_build(config: Any) -> None:  # noqa: ARG001,ANN401
 
         openapi_schema = app.openapi()
     with Path("docs/openapi.yml").open("w") as f:
-        dump(openapi_schema, f, sort_keys=False, allow_unicode=True)
+        content = dump(openapi_schema, stream=None, sort_keys=False, allow_unicode=True)
+        content = content.replace(" (Community Edition)", "")
+        f.write(content)

@@ -107,12 +107,50 @@ def _merge_image_parameters(
     "/images/edits",
     response_model=None,
     summary="OpenAI - /v1/images/edits",
-    description="Creates an edited or extended image given an original image and a prompt.",
-    response_description="Image edit response in OpenAI format",
+    description="Creates an edited or extended image given one or more source images and a prompt.",
+    response_description="The response from the image generation endpoint.",
     responses={
         200: {"description": "Images successfully edited."},
         400: {"description": "Invalid request or unsupported parameters."},
-        404: {"description": "Model not found."},
+    },
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "multipart/form-data": {
+                    "examples": {
+                        "inpaint": {
+                            "summary": "Inpaint with mask",
+                            "value": {
+                                "model": "amazon.nova-canvas-v1:0",
+                                "prompt": "A red apple on a wooden table",
+                                "response_format": "url",
+                                "n": 1,
+                                "size": "1024x1024",
+                            },
+                        },
+                        "stream": {
+                            "summary": "Streaming response",
+                            "value": {
+                                "model": "amazon.nova-canvas-v1:0",
+                                "prompt": "A sunset over mountains",
+                                "stream": True,
+                                "partial_images": 2,
+                            },
+                        },
+                        "multiple": {
+                            "summary": "Multiple edits",
+                            "value": {
+                                "model": "amazon.nova-canvas-v1:0",
+                                "prompt": "A modern living room",
+                                "response_format": "b64_json",
+                                "n": 3,
+                                "size": "512x512",
+                            },
+                        },
+                    }
+                }
+            }
+        }
     },
     response_model_exclude_none=True,
 )

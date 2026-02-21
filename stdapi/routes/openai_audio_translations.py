@@ -34,12 +34,8 @@ router = APIRouter(
     "/translations",
     response_model=None,
     summary="OpenAI - /v1/audio/translations",
-    description=(
-        "Translates audio from any supported language into English text.\n"
-        "The model will automatically detect the source language and convert the audio to English text."
-        "Supports multiple output formats including plain text, JSON, verbose JSON, and subtitle formats (SRT/VTT)."
-    ),
-    response_description="Returns translation in the specified format (always English text)",
+    description="Translates audio into English.",
+    response_description="Returns translation in the specified format",
     responses={
         200: {"description": "Translation completed."},
         400: {"description": "Invalid request or unsupported parameters."},

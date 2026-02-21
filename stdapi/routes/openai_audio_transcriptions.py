@@ -62,10 +62,8 @@ async def _transcript_audio_sse(
     response_model=None,
     summary="OpenAI - /v1/audio/transcriptions",
     description=(
-        "Transcribes audio files into text.\n"
-        "The model uses the specified language or automatically detects it when not provided."
-        "Supports multiple output formats including plain text, "
-        "JSON, verbose JSON with segments/words, and subtitle formats (SRT/VTT)."
+        "Transcribes audio into the input language.\n\n"
+        "Returns a transcription object in json, diarized_json, or verbose_json format, or a stream of transcript events."
     ),
     response_description="Returns transcription in the specified format",
     responses={

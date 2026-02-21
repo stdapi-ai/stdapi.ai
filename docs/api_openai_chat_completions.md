@@ -106,6 +106,10 @@ Generate conversational AI responses with AWS Bedrock foundation models—includ
 
 </div>
 
+## Model Support
+
+All models supported by AWS Bedrock Converse and Converse Stream API are supported.
+
 ## Advanced Features
 
 ### Prompt Caching

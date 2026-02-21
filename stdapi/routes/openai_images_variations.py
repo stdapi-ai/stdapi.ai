@@ -32,11 +32,38 @@ _KNOWN_PARAMS = set(ImageVariationParams.model_fields.keys()) | {"image"}
     "/images/variations",
     summary="OpenAI - /v1/images/variations",
     description="Creates a variation of a given image.",
-    response_description="Image variation response in OpenAI format",
+    response_description="The response from the image generation endpoint.",
     responses={
         200: {"description": "Image variations successfully created."},
         400: {"description": "Invalid request or unsupported parameters."},
-        404: {"description": "Model not found."},
+    },
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "multipart/form-data": {
+                    "examples": {
+                        "url": {
+                            "summary": "Return image URL",
+                            "value": {
+                                "model": "amazon.nova-canvas-v1:0",
+                                "response_format": "url",
+                                "n": 1,
+                                "size": "1024x1024",
+                            },
+                        },
+                        "b64": {
+                            "summary": "Return base64 data",
+                            "value": {
+                                "model": "amazon.nova-canvas-v1:0",
+                                "response_format": "b64_json",
+                                "n": 2,
+                                "size": "512x512",
+                            },
+                        },
+                    }
+                }
+            }
+        }
     },
     response_model_exclude_none=True,
 )

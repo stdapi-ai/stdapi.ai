@@ -98,8 +98,8 @@ async def _speech_audio_sse(
     "/speech",
     summary="OpenAI - /v1/audio/speech",
     description=(
-        "Generates audio from the input text using advanced text-to-speech models.\n"
-        "Supports multiple voices, output formats, and playback speeds. Can stream using SSE."
+        "Generates audio from the input text.\n\n"
+        "Returns the audio file content, or a stream of audio events."
     ),
     response_description="Returns audio file in the specified format",
     responses={

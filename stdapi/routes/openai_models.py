@@ -60,8 +60,9 @@ def format_bedrock_model_to_openai(model: ModelDetails) -> Model:
 @router.get(
     "/models",
     summary="OpenAI - /v1/models",
-    description="Lists the currently available models",
-    response_description="A list of model objects",
+    description="Lists the currently available models, and provides basic information about each one such as the owner and availability.",
+    response_description="Describes model offerings that can be used with the API",
+    response_model_exclude_none=True,
     responses={
         200: {
             "description": "List of available models.",
@@ -122,8 +123,8 @@ async def list_models(_: Annotated[None, Depends(authenticate)]) -> ModelsRespon
 @router.get(
     "/models/{model}",
     summary="OpenAI - /v1/models/{model}",
-    description="Retrieves a model instance",
-    response_description="The model object matching the specified ID",
+    description="Retrieves a model instance, providing basic information about the model such as the owner.",
+    response_description="Describes a model offering that can be used with the API.",
     responses={
         200: {
             "description": "Model retrieved successfully",
