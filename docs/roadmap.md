@@ -101,10 +101,10 @@ The following features may be implemented in future releases based on community 
 
 ### 📦 Batch & Async Processing
 
-| Provider                                                                                 | Endpoint/Feature       | AWS Backend                                                                                                          |
-|------------------------------------------------------------------------------------------|------------------------|----------------------------------------------------------------------------------------------------------------------|
-| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**           | `/v1/batches`          | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - batch inference |
-| ![Claude](styles/logo_anthropic_claude.svg){: style="height:20px;width:20px"} **Claude** | `/v1/messages/batches` | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - batch inference |
+| Provider                                                                                | Endpoint/Feature                              | AWS Backend                                                                                                          |
+|-----------------------------------------------------------------------------------------|-----------------------------------------------|----------------------------------------------------------------------------------------------------------------------|
+| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**          | `/v1/batches`                                 | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - batch inference |
+| ![Anthropic](styles/logo_anthropic.svg){: style="height:20px;width:20px"} **Anthropic** | `/v1/messages/batches`                        | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - batch inference |
 
 ### 🛡️ Content Safety & Moderation
 
@@ -114,9 +114,10 @@ The following features may be implemented in future releases based on community 
 
 ### 📁 Files & Storage
 
-| Provider                                                                       | Endpoint/Feature | AWS Backend                                                                         |
-|--------------------------------------------------------------------------------|------------------|-------------------------------------------------------------------------------------|
-| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/files`      | ![Amazon S3](styles/logo_amazon_s3.svg){: style="height:20px;width:20px"} Amazon S3 |
+| Provider                                                                                | Endpoint/Feature | AWS Backend                                                                         |
+|-----------------------------------------------------------------------------------------|------------------|-------------------------------------------------------------------------------------|
+| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**          | `/v1/files`      | ![Amazon S3](styles/logo_amazon_s3.svg){: style="height:20px;width:20px"} Amazon S3 |
+| ![Anthropic](styles/logo_anthropic.svg){: style="height:20px;width:20px"} **Anthropic** | `/v1/files`      | ![Amazon S3](styles/logo_amazon_s3.svg){: style="height:20px;width:20px"} Amazon S3 |
 
 ### 📊 Usage & Analytics
 

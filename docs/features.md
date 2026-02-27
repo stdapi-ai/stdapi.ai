@@ -25,7 +25,7 @@ Born from deep AWS Solutions Architecture and software engineering expertise—a
 
 ## :material-sitemap: How It Works
 
-stdapi.ai sits between your applications and AWS AI services, translating OpenAI API calls into native AWS requests. Any tool or SDK that speaks the OpenAI protocol connects instantly—no plugins, no custom integrations.
+stdapi.ai sits between your applications and AWS AI services, translating OpenAI and Anthropic API calls into native AWS requests. Any tool or SDK that speaks the OpenAI or Anthropic protocol connects instantly—no plugins, no custom integrations.
 
 ```mermaid
 %%{init: {'flowchart': {'htmlLabels': true}} }%%
@@ -33,7 +33,8 @@ flowchart LR
   openwebui["<img src='../styles/logo_openwebui.svg' style='height:48px;width:auto;vertical-align:middle;' /> Open WebUI"] --> stdapi["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai"]
   n8n["<img src='../styles/logo_n8n.svg' style='height:48px;width:auto;vertical-align:middle;' /> n8n"] --> stdapi
   ide["<img src='../styles/logo_vscode.svg' style='height:48px;width:auto;vertical-align:middle;' /> IDE + AI Assistant"] --> stdapi
-  app["<img src='../styles/logo_openai.svg' style='height:48px;width:auto;vertical-align:middle;' /> Any OpenAI App"] --> stdapi
+  openai_app["<img src='../styles/logo_openai.svg' style='height:48px;width:auto;vertical-align:middle;' /> Any OpenAI App"] --> stdapi
+  anthropic_app["<img src='../styles/logo_anthropic.svg' style='height:48px;width:auto;vertical-align:middle;' /> Any Anthropic App"] --> stdapi
   stdapi --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:48px;width:auto;vertical-align:middle;' /> AWS Bedrock"]
   bedrock --> claude["<img src='../styles/logo_anthropic_claude.svg' style='height:36px;width:auto;vertical-align:middle;' /> Claude"]
   bedrock --> qwen["<img src='../styles/logo_qwen.svg' style='height:36px;width:auto;vertical-align:middle;' /> Qwen"]
@@ -55,23 +56,26 @@ stdapi.ai provides **broad OpenAI and Anthropic API compatibility**, covering ro
 
 **OpenAI-Compatible:**
 
-| Endpoint | Capability | AWS Backend |
-|---|---|---|
-| `/v1/chat/completions` | Conversational AI, tool calling, multi-modal | AWS Bedrock Converse API |
-| `/v1/embeddings` | Vector embeddings for search & RAG | AWS Bedrock Embedding Models |
-| `/v1/images/generations` | Image generation | AWS Bedrock Image Models |
-| `/v1/images/edits` | Image editing & inpainting | AWS Bedrock Image Models |
-| `/v1/images/variations` | Image variations | AWS Bedrock Image Models |
-| `/v1/audio/speech` | Text-to-speech | Amazon Polly |
-| `/v1/audio/transcriptions` | Speech-to-text with diarization | Amazon Transcribe |
-| `/v1/audio/translations` | Speech-to-English translation | Amazon Transcribe + Amazon Translate |
-| `/v1/models` | Model discovery & listing | AWS Bedrock |
+| Endpoint                   | Capability                                   | AWS Backend                          |
+|----------------------------|----------------------------------------------|--------------------------------------|
+| `/v1/chat/completions`     | Conversational AI, tool calling, multi-modal | AWS Bedrock Converse API             |
+| `/v1/embeddings`           | Vector embeddings for search & RAG           | AWS Bedrock Embedding Models         |
+| `/v1/images/generations`   | Image generation                             | AWS Bedrock Image Models             |
+| `/v1/images/edits`         | Image editing & inpainting                   | AWS Bedrock Image Models             |
+| `/v1/images/variations`    | Image variations                             | AWS Bedrock Image Models             |
+| `/v1/audio/speech`         | Text-to-speech                               | Amazon Polly                         |
+| `/v1/audio/transcriptions` | Speech-to-text with diarization              | Amazon Transcribe                    |
+| `/v1/audio/translations`   | Speech-to-English translation                | Amazon Transcribe + Amazon Translate |
+| `/v1/models`               | Model discovery & listing                    | AWS Bedrock                          |
 
 **Anthropic-Compatible:**
 
-| Endpoint | Capability | AWS Backend |
-|---|---|---|
-| `/anthropic/v1/messages` | Conversational AI, tool calling, multi-modal | AWS Bedrock Converse API |
+| Endpoint                    | Capability                                   | AWS Backend                 |
+|-----------------------------|----------------------------------------------|-----------------------------|
+| `/v1/messages`              | Conversational AI, tool calling, multi-modal | AWS Bedrock Converse API    |
+| `/v1/messages/count_tokens` | Count tokens without sending a message       | AWS Bedrock CountTokens API |
+| `/v1/models`                | Model discovery & listing                    | AWS Bedrock                 |
+| `/v1/models/{model_id}`     | Model details                                | AWS Bedrock                 |
 
 ### Unified Multi-Modal API
 
@@ -113,16 +117,17 @@ stdapi.ai is **engineered specifically for AWS**, unlocking advanced Bedrock fea
 
 stdapi.ai exposes Bedrock-specific capabilities through the familiar OpenAI API:
 
-| Feature | Description |
-|---|---|
-| **Prompt Caching** | Cache prompts to reduce latency and cost on supported models |
-| **Reasoning Modes** | Extended thinking with configurable effort (Claude, Nova 2) |
-| **Guardrails** | AWS Bedrock Guardrails for content filtering and safety policies |
-| **Service Tiers** | Optimized latency tiers for different workload priorities |
-| **Application Inference Profiles** | Use custom inference profiles for workload isolation |
-| **Prompt Routers** | Bedrock prompt routers for intelligent model selection |
-| **System Tools** | AWS Bedrock system tools (e.g., web grounding with citations) |
-| **Extra Model Parameters** | Pass model-specific parameters not covered by the OpenAI API |
+| Feature                            | Description                                                         |
+|------------------------------------|---------------------------------------------------------------------|
+| **Prompt Caching**                 | Cache prompts to reduce latency and cost on supported models        |
+| **Reasoning Modes**                | Extended thinking with configurable effort (Claude, Nova 2)         |
+| **Guardrails**                     | AWS Bedrock Guardrails for content filtering and safety policies    |
+| **Service Tiers**                  | Optimized latency tiers for different workload priorities           |
+| **Application Inference Profiles** | Use custom inference profiles for workload isolation                |
+| **Prompt Routers**                 | Bedrock prompt routers for intelligent model selection              |
+| **System Tools**                   | AWS Bedrock system tools (e.g., web grounding with citations)       |
+| **Claude Server Tools**            | Bash, text editor, computer use, and memory tools for Claude models |
+| **Extra Model Parameters**         | Pass model-specific parameters not covered by the OpenAI API        |
 
 ### AWS AI Services Integration
 
@@ -188,6 +193,7 @@ Monitor, debug, and audit your AI gateway with built-in tooling:
 Features that make day-to-day operations smoother:
 
 - **Model aliases & overrides** — Map custom model names to specific Bedrock model IDs for simplified client configuration
+- **Claude model name aliases** — Use official Anthropic model names (e.g., `claude-opus-4-6`) that automatically resolve to the correct Bedrock model identifiers
 - **Model auto-detection** — Automatically discovers available Bedrock models in your configured regions
 - **Model list caching** — Cached model listings for fast responses without repeated AWS API calls
 - **Token usage reporting** — Consistent usage statistics across all endpoints
@@ -199,11 +205,11 @@ Features that make day-to-day operations smoother:
 
 stdapi.ai offers flexible deployment options for every stage:
 
-| Option | Best For | Details |
-|---|---|---|
-| **Community Docker Image** | Local development & testing | Free, open-source, quick to start |
-| **Terraform Module (ECS)** | Production on AWS | Ready-to-use infrastructure-as-code via [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo), includes hardened container |
-| **Use Case Examples** | Guided integration | Pre-built deployment configurations for Open WebUI, n8n, coding assistants |
+| Option                     | Best For                    | Details                                                                                                                                              |
+|----------------------------|-----------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Community Docker Image** | Local development & testing | Free, open-source, quick to start                                                                                                                    |
+| **Terraform Module (ECS)** | Production on AWS           | Ready-to-use infrastructure-as-code via [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo), includes hardened container |
+| **Use Case Examples**      | Guided integration          | Pre-built deployment configurations for Open WebUI, n8n, coding assistants                                                                           |
 
 - **Comprehensive documentation** — Detailed [Getting Started](operations_getting_started.md) guide, [Configuration Reference](operations_configuration.md), and [Use Case](use_cases.md) walkthroughs
 - **High-performance runtime** — Powered by [Granian](https://github.com/emmett-framework/granian), a fast Python ASGI server, with configurable workers and threads
@@ -221,7 +227,9 @@ A quick-reference checklist to find what you need at a glance:
 - :material-check-circle:{ .green-check } OpenAI Images API (generations, edits, variations)
 - :material-check-circle:{ .green-check } OpenAI Audio API (speech, transcriptions, translations)
 - :material-check-circle:{ .green-check } OpenAI Models API (`/v1/models`)
-- :material-check-circle:{ .green-check } Anthropic Messages API (`/anthropic/v1/messages`)
+- :material-check-circle:{ .green-check } Anthropic Messages API (`/v1/messages`)
+- :material-check-circle:{ .green-check } Anthropic Token Counting API (`/v1/messages/count_tokens`)
+- :material-check-circle:{ .green-check } Anthropic Models API (`/v1/models`, `/v1/models/{model_id}`)
 - :material-check-circle:{ .green-check } Streaming (Server-Sent Events)
 - :material-check-circle:{ .green-check } Tool / function calling
 - :material-check-circle:{ .green-check } Multi-modal inputs (text, image, audio, video, documents)
@@ -238,6 +246,7 @@ A quick-reference checklist to find what you need at a glance:
 - :material-check-circle:{ .green-check } Service tiers
 - :material-check-circle:{ .green-check } Application inference profiles
 - :material-check-circle:{ .green-check } Prompt routers
+- :material-check-circle:{ .green-check } Claude server tools (bash, text editor, computer use, memory)
 - :material-check-circle:{ .green-check } Amazon Polly (text-to-speech)
 - :material-check-circle:{ .green-check } Amazon Transcribe (speech-to-text with diarization)
 - :material-check-circle:{ .green-check } Amazon Translate
@@ -258,6 +267,7 @@ A quick-reference checklist to find what you need at a glance:
 - :material-check-circle:{ .green-check } Request/response detail logging
 - :material-check-circle:{ .green-check } Swagger & ReDoc API docs
 - :material-check-circle:{ .green-check } Model aliases & overrides
+- :material-check-circle:{ .green-check } Claude model name aliases (e.g., `claude-opus-4-6` → Bedrock ID)
 - :material-check-circle:{ .green-check } Model auto-detection & caching
 - :material-check-circle:{ .green-check } Token usage tracking
 - :material-check-circle:{ .green-check } Zero-configuration startup
