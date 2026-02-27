@@ -15,10 +15,10 @@ class TestTwelveLabsMarengoEmbeddings:
 
     @pytest.mark.parametrize("model_id", MARANGO_ALL)
     def test_text_single(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+        self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
         """Text input returns a valid embedding vector."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "TwelveLabs models are not available on the official OpenAI API"
             )
@@ -37,12 +37,12 @@ class TestTwelveLabsMarengoEmbeddings:
     def test_image_single(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_image_file_base64: str,
         model_id: str,
     ) -> None:
         """Image data URI returns a valid embedding vector."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "TwelveLabs models are not available on the official OpenAI API"
             )
@@ -61,12 +61,12 @@ class TestTwelveLabsMarengoEmbeddings:
     def test_video_single(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_video_file_base64: str,
         model_id: str,
     ) -> None:
         """Video data URI returns a valid embedding vector."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "TwelveLabs models are not available on the official OpenAI API"
             )
@@ -86,13 +86,13 @@ class TestTwelveLabsMarengoEmbeddings:
 
     @pytest.mark.parametrize("model_id", [MARANGO_V2])
     def test_text_extra_params_text_truncate(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+        self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
         """Extra body parameter textTruncate is forwarded to provider.
 
         Not part of the OpenAI Embeddings API; this project forwards it via body.
         """
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "TwelveLabs models are not available on the official OpenAI API"
             )
@@ -110,10 +110,10 @@ class TestTwelveLabsMarengoEmbeddings:
 
     @pytest.mark.parametrize("model_id", MARANGO_SAMPLE)
     def test_dimensions_unsupported_error(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+        self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
         """Requesting dimensions must fail (model does not support this option)."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "TwelveLabs models are not available on the official OpenAI API"
             )
@@ -127,7 +127,7 @@ class TestTwelveLabsMarengoEmbeddings:
     def test_force_s3_data_with_small_image(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_image_file_base64: str,
         model_id: str,
     ) -> None:
@@ -136,7 +136,7 @@ class TestTwelveLabsMarengoEmbeddings:
         This tests that small files (under 6MB) can be forced to use S3 and
         async invocation via the force_s3_data extra parameter.
         """
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "TwelveLabs models are not available on the official OpenAI API"
             )
@@ -158,12 +158,12 @@ class TestTwelveLabsMarengoEmbeddings:
     def test_force_s3_data_with_video(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_video_file_base64: str,
         model_id: str,
     ) -> None:
         """Force S3 upload for video using force_s3_data parameter."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "TwelveLabs models are not available on the official OpenAI API"
             )
@@ -189,12 +189,12 @@ class TestTwelveLabsMarengoEmbeddings:
     def test_force_s3_data_with_audio(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_audio_mp3_file_base64: str,
         model_id: str,
     ) -> None:
         """Force S3 upload for audio using force_s3_data parameter."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "TwelveLabs models are not available on the official OpenAI API"
             )
@@ -216,7 +216,7 @@ class TestTwelveLabsMarengoEmbeddings:
     def test_force_s3_data_with_mixed_batch(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_image_file_base64: str,
         sample_video_file_base64: str,
         model_id: str,
@@ -226,7 +226,7 @@ class TestTwelveLabsMarengoEmbeddings:
         This tests that the force_s3_data parameter works correctly with
         mixed input types (text, image, video) in a single batch.
         """
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "TwelveLabs models are not available on the official OpenAI API"
             )
@@ -256,7 +256,7 @@ class TestTwelveLabsMarengoEmbeddings:
     def test_text_image_pair_v3(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_image_file_base64: str,
         model_id: str,
     ) -> None:
@@ -265,7 +265,7 @@ class TestTwelveLabsMarengoEmbeddings:
         When exactly 2 inputs are provided where one is text and one is image,
         v3 models automatically combine them into a single text_image embedding.
         """
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "TwelveLabs models are not available on the official OpenAI API"
             )
@@ -286,7 +286,7 @@ class TestTwelveLabsMarengoEmbeddings:
     def test_text_image_pair_not_combined_v2(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_image_file_base64: str,
         model_id: str,
     ) -> None:
@@ -295,7 +295,7 @@ class TestTwelveLabsMarengoEmbeddings:
         v2 models do not support text_image mode, so text and image
         are embedded independently, returning 2 separate embeddings.
         """
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "TwelveLabs models are not available on the official OpenAI API"
             )

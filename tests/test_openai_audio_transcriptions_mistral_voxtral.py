@@ -22,12 +22,12 @@ class TestMistralVoxtralTranscriptions:
     def test_basic_transcription_json(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_audio_mp3_file: bytes,
         model_id: str,
     ) -> None:
         """Basic transcription returns JSON with text and usage tokens."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Mistral Voxtral models are not available on the official OpenAI API"
             )
@@ -69,12 +69,12 @@ class TestMistralVoxtralTranscriptions:
     def test_transcription_text_format(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_audio_mp3_file: bytes,
         model_id: str,
     ) -> None:
         """Text format returns plain string without usage metadata."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Mistral Voxtral models are not available on the official OpenAI API"
             )
@@ -93,12 +93,12 @@ class TestMistralVoxtralTranscriptions:
     def test_transcription_with_temperature(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_audio_mp3_file: bytes,
         model_id: str,
     ) -> None:
         """Temperature parameter is accepted and processed correctly."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Mistral Voxtral models are not available on the official OpenAI API"
             )
@@ -119,12 +119,12 @@ class TestMistralVoxtralTranscriptions:
     def test_transcription_with_prompt(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_audio_mp3_file: bytes,
         model_id: str,
     ) -> None:
         """Prompt parameter guides transcription style."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Mistral Voxtral models are not available on the official OpenAI API"
             )
@@ -145,12 +145,12 @@ class TestMistralVoxtralTranscriptions:
     def test_transcription_with_language(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_audio_mp3_file: bytes,
         model_id: str,
     ) -> None:
         """Language parameter specifies input audio language."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Mistral Voxtral models are not available on the official OpenAI API"
             )
@@ -171,12 +171,12 @@ class TestMistralVoxtralTranscriptions:
     def test_transcription_all_parameters(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_audio_mp3_file: bytes,
         model_id: str,
     ) -> None:
         """All supported parameters work together correctly."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Mistral Voxtral models are not available on the official OpenAI API"
             )
@@ -201,12 +201,12 @@ class TestMistralVoxtralTranscriptions:
     def test_streaming_transcription(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_audio_mp3_file: bytes,
         model_id: str,
     ) -> None:
         """Streaming produces delta and done events with usage tokens."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Mistral Voxtral models are not available on the official OpenAI API"
             )
@@ -252,10 +252,10 @@ class TestMistralVoxtralTranscriptions:
 
     @pytest.mark.parametrize("model_id", VOXTRAL_SAMPLE)
     def test_invalid_audio_file(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+        self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
         """Non-audio file format raises BadRequestError."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Mistral Voxtral models are not available on the official OpenAI API"
             )
@@ -269,12 +269,12 @@ class TestMistralVoxtralTranscriptions:
     def test_verbose_json_unsupported(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_audio_mp3_file: bytes,
         model_id: str,
     ) -> None:
         """Verbose JSON format is not supported by Voxtral models."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Mistral Voxtral models are not available on the official OpenAI API"
             )
@@ -290,12 +290,12 @@ class TestMistralVoxtralTranscriptions:
     def test_srt_format_unsupported(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_audio_mp3_file: bytes,
         model_id: str,
     ) -> None:
         """SRT subtitle format is not supported by Voxtral models."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Mistral Voxtral models are not available on the official OpenAI API"
             )

@@ -7,13 +7,13 @@
 from secrets import randbelow
 from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
 
+from stdapi.api_errors import ApiError
 from stdapi.models.image import (
     DEFAULT_VARIATION_PROMPT,
     ImageGenerationJobBase,
     ImageGenerationResponse,
     ImageModelBase,
 )
-from stdapi.openai_exceptions import OpenaiError
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Iterable
@@ -239,7 +239,7 @@ class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
             request = self._get_request_color_guided_generation(image_generation_config)
         else:
             msg = '"taskType" value must be "TEXT_IMAGE" or "COLOR_GUIDED_GENERATION".'
-            raise OpenaiError(msg)
+            raise ApiError(msg)
         return await self._invoke_and_process_response(request)
 
     async def _edit_image(
@@ -274,7 +274,7 @@ class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
             )
         else:
             msg = '"taskType" value must be "INPAINTING", "OUTPAINTING" or "BACKGROUND_REMOVAL".'
-            raise OpenaiError(msg)
+            raise ApiError(msg)
         return await self._invoke_and_process_response(request)
 
     async def _create_image_variations(
@@ -305,10 +305,8 @@ class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
                 image_generation_config, images
             )
         else:
-            msg = (
-                '"taskType" value must be "IMAGE_VARIATION", "TEXT_IMAGE" or "COLOR_GUIDED_GENERATION".',
-            )
-            raise OpenaiError(msg)
+            msg = '"taskType" value must be "IMAGE_VARIATION", "TEXT_IMAGE" or "COLOR_GUIDED_GENERATION".'
+            raise ApiError(msg)
         return await self._invoke_and_process_response(request)
 
     def _get_request_text_image(
@@ -373,7 +371,7 @@ class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
             ]
         except (KeyError, TypeError, IndexError) as exc:
             msg = "Required parameter for COLOR_GUIDED_GENERATION: colorGuidedGenerationParams.colors"
-            raise OpenaiError(msg) from exc
+            raise ApiError(msg) from exc
         request = _Request(
             taskType="COLOR_GUIDED_GENERATION",
             colorGuidedGenerationParams=_ColorGuidedGenerationParams(
@@ -502,7 +500,7 @@ class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
                 by the underlying model.
 
         Raises:
-            OpenaiError: If the mask parameter is provided, as this model
+            ApiError: If the mask parameter is provided, as this model
                 does not support mask-based operations.
 
         Returns:

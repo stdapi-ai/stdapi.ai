@@ -3,10 +3,10 @@
 from asyncio import gather
 from typing import TYPE_CHECKING
 
+from stdapi.api_errors import ApiError
 from stdapi.aws import get_client
 from stdapi.config import SETTINGS
 from stdapi.monitoring import log_background_event, log_error_details
-from stdapi.openai_exceptions import OpenaiError
 
 if TYPE_CHECKING:
     from fastapi import UploadFile
@@ -61,7 +61,7 @@ async def put_object_and_get_url(body: bytes, content_type: str, filename: str) 
             "The url response format is not enabled on this server. "
             "Please contact the administrator to enabled it."
         )
-        raise OpenaiError(msg)
+        raise ApiError(msg)
 
     s3_client: S3Client = get_client("s3")
     s3_accelerate_client: S3Client = get_client("s3.accelerate")

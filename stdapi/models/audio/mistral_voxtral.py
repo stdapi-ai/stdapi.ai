@@ -175,8 +175,8 @@ class AudioModel(AudioModelBase[_Request, _Response]):
             Formatted transcription response with text and token usage
 
         Raises:
-            OpenaiError: When unsupported format is requested
-            HTTPException: When transcription fails
+            ApiError: When unsupported format is requested
+            ApiError: When transcription fails
         """
         self._validate_response_formats(response_format, timestamp_granularities)
 
@@ -232,7 +232,7 @@ class AudioModel(AudioModelBase[_Request, _Response]):
             TranscriptionTextDeltaEvent or TranscriptionTextDoneEvent objects
 
         Raises:
-            OpenaiError: When unsupported format is requested
+            ApiError: When unsupported format is requested
         """
         full_text_parts: list[str] = []
         metrics: _BedrockInvocationMetrics | None = None
@@ -300,7 +300,7 @@ class AudioModel(AudioModelBase[_Request, _Response]):
             Formatted translation response with translated text in English
 
         Raises:
-            HTTPException: When transcription or translation fails
+            ApiError: When transcription or translation fails
         """
         self._validate_response_formats(response_format)
         response: _Response = await self.invoke(
@@ -345,7 +345,7 @@ class AudioModel(AudioModelBase[_Request, _Response]):
                 and related instructions.
 
         Raises:
-            OpenaiError: If the provided file is not in a supported audio format.
+            ApiError: If the provided file is not in a supported audio format.
         """
         audio = await audio_content.read()
         file_format = get_and_validate_mime(audio, AUDIO_MIME_PATTERN).split("/", 1)[1]

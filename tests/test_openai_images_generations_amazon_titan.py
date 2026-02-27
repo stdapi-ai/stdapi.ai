@@ -19,10 +19,10 @@ class TestAmazonTitanImageGenerator:
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", TITAN_ALL)
     def test_generate_b64_single(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+        self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
         """Simple prompt returns one base64 image when response_format=b64_json."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Titan models are not available on the official OpenAI API"
             )
@@ -46,14 +46,14 @@ class TestAmazonTitanImageGenerator:
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
     def test_extra_params_cfg_scale(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+        self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
         """Extra body parameter imageGenerationConfig.cfgScale is forwarded.
 
         Not part of OpenAI Images API; this project forwards provider-specific
         fields through the request body.
         """
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Titan models are not available on the official OpenAI API"
             )
@@ -71,10 +71,10 @@ class TestAmazonTitanImageGenerator:
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
     def test_multiple_images(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+        self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
         """Requesting n>1 returns the requested number of images."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Titan models are not available on the official OpenAI API"
             )
@@ -94,10 +94,10 @@ class TestAmazonTitanImageGenerator:
 
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
     def test_style_unsupported(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+        self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
         """Passing style is not supported by Titan model (backend raises 400)."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Titan models are not available on the official OpenAI API"
             )
@@ -113,10 +113,10 @@ class TestAmazonTitanImageGenerator:
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
     def test_generate_with_color_guided_task_type(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+        self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
         """Test generation with COLOR_GUIDED_GENERATION taskType."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Titan models are not available on the official OpenAI API"
             )
@@ -143,10 +143,10 @@ class TestAmazonTitanImageGenerator:
 
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
     def test_generate_with_invalid_task_type(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+        self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
         """Test that invalid taskType raises BadRequestError."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Titan models are not available on the official OpenAI API"
             )
@@ -168,10 +168,10 @@ class TestAmazonTitanImageGenerator:
 
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
     def test_generate_color_guided_missing_colors(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+        self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
         """Test that COLOR_GUIDED_GENERATION without colors raises BadRequestError."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Titan models are not available on the official OpenAI API"
             )

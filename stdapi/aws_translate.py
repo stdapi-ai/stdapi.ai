@@ -6,8 +6,8 @@ from re import DOTALL, IGNORECASE, search
 from typing import TYPE_CHECKING
 
 from botocore.exceptions import ClientError
-from fastapi import HTTPException
 
+from stdapi.api_errors import ApiError
 from stdapi.aws import get_client
 from stdapi.utils import language_code_to_name
 
@@ -33,7 +33,7 @@ async def translate(
         Translated text in English
 
     Raises:
-        HTTPException: When translation fails
+        ApiError: When translation fails
     """
     source_language_code = source_language_code.split("-", 1)[0]
     if not text.strip() or source_language_code == "en":
@@ -51,11 +51,11 @@ async def translate(
 
     except ClientError as error:
         if error.response["Error"]["Code"] == "UnsupportedLanguagePairException":
-            raise HTTPException(
-                status_code=400,
-                detail=f"Translation from {language_code_to_name(source_language_code).capitalize()} "
-                f"is not supported: {error.response['Error']['Message']}",
-            ) from None
+            msg = (
+                f"Translation from {language_code_to_name(source_language_code).capitalize()} "
+                f"is not supported: {error.response['Error']['Message']}"
+            )
+            raise ApiError(msg) from None
         raise
 
 
@@ -77,7 +77,7 @@ async def translate_subtitle(
         Translated subtitle content in the same format as input
 
     Raises:
-        HTTPException: When AWS Translate service fails or returns an error
+        ApiError: When AWS Translate service fails or returns an error
     """
     text_segments = _subtitle_extract_text_segments(subtitle_content)
     if not text_segments:

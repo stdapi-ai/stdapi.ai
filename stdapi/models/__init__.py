@@ -7,13 +7,14 @@ from importlib import import_module
 from pkgutil import iter_modules
 from re import Pattern
 from secrets import token_hex
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, TypeVar
 
 from botocore.exceptions import ClientError
-from fastapi import BackgroundTasks, HTTPException
 from pydantic import AwareDatetime, BaseModel, JsonValue
 from pydantic_core import from_json, to_json
 
+from stdapi.api_errors import ApiError, UnsupportedModelError
 from stdapi.aws import get_client
 from stdapi.aws_bedrock import (
     GUARDTRAIL_CONFIG_VAR,
@@ -24,7 +25,6 @@ from stdapi.aws_s3 import aws_s3_cleanup
 from stdapi.config import SETTINGS
 from stdapi.models.deprecation import DEPRECATED_MODELS
 from stdapi.monitoring import REQUEST_ID, REQUEST_LOG, log_error_details
-from stdapi.openai_exceptions import OpenaiError, OpenaiUnsupportedModelError
 from stdapi.utils import (
     b64decode_data_uri,
     get_base64_decoded_size,
@@ -34,8 +34,9 @@ from stdapi.utils import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Iterable, Mapping, Sequence
+    from collections.abc import AsyncGenerator, Callable, Iterable, Mapping, Sequence
 
+    from fastapi import BackgroundTasks
     from types_aiobotocore_bedrock.client import BedrockClient
     from types_aiobotocore_bedrock.type_defs import (
         InferenceProfileModelTypeDef,
@@ -114,6 +115,9 @@ _INVOKE_STREAM_ERRORS: dict[str, str] = {
     "serviceUnavailableException": "ServiceUnavailableException",
 }
 
+#: All model class registry
+_GLOBAL_MODEL_REGISTRY: set[type[ModelBase[Any, Any]]] = set()
+
 
 class ModelDetails(BaseModel):
     """Model details and features."""
@@ -156,7 +160,17 @@ class ModelBase[RequestT, ResponseT]:
 
     __slots__ = ("_model_id",)
 
+    #: Model ID matcher, regex pattern or string prefix
     MATCHER: ClassVar[str | Pattern[str]] = ""
+
+    #: Maps HTTP header name (lowercase) to a (field_key, transform) tuple.
+    #: The transform callable converts the raw header string to the expected value type.
+    PASSTHROUGH_HEADERS: ClassVar[
+        MappingProxyType[str, tuple[str, Callable[[str], Any]]]
+    ] = MappingProxyType({})
+
+    #: Regex to extract model alias from model ID
+    ALIAS_MATCHER: ClassVar[Pattern[str] | None] = None
 
     def __init__(self, model_id: str) -> None:
         """Initialize the model with a specific model identifier.
@@ -165,6 +179,26 @@ class ModelBase[RequestT, ResponseT]:
             model_id: The AWS Bedrock model identifier.
         """
         self._model_id = model_id
+
+    @classmethod
+    def get_aliases(cls, all_models: dict[str, ModelDetails]) -> dict[str, str]:
+        """Return API model name aliases mapped to model IDs.
+
+        Args:
+            all_models: All available models keyed by Bedrock model ID.
+
+        Returns:
+            A dict mapping model alias to model ID.
+        """
+        return (
+            {
+                match.group(1): model_id
+                for model_id in all_models
+                if (match := cls.ALIAS_MATCHER.match(model_id))
+            }
+            if cls.ALIAS_MATCHER
+            else {}
+        )
 
     @cached_property
     def model(self) -> ModelDetails:
@@ -569,10 +603,18 @@ def _apply_user_profiles(all_models: dict[str, ModelDetails]) -> dict[str, str]:
 def _populate_model_aliases(all_models: dict[str, ModelDetails]) -> None:
     """Populates the aliases field for each model based on the MODEL_ALIASES mapping.
 
+    Collects dynamic aliases from all registered model classes and merges them
+    with the existing MODEL_ALIASES. Then populates the aliases field on each model.
+
     Args:
         all_models: A dictionary where keys are model IDs and
             values are `ModelDetails` objects representing the available models.
     """
+    MODEL_ALIASES.clear()
+    for cls in _GLOBAL_MODEL_REGISTRY:
+        MODEL_ALIASES.update(cls.get_aliases(all_models))
+    MODEL_ALIASES.update(SETTINGS.model_aliases)
+
     aliases_by_model: dict[str, set[str]] = {}
     for alias, model_id in MODEL_ALIASES.items():
         if model_id in all_models:
@@ -677,6 +719,7 @@ def load_model_plugins[ModelT: ModelBase[Any, Any]](
             raise ImportError(msg) from None
 
         registry.append((matcher, cls))
+        _GLOBAL_MODEL_REGISTRY.add(cls)
 
     registry.sort(
         key=lambda item: (
@@ -724,7 +767,7 @@ def get_model[ModelT: ModelBase[Any, Any]](
     try:
         cls: type[ModelT] = _DEFAULT[package_name]  # type: ignore[assignment]
     except KeyError:
-        raise OpenaiUnsupportedModelError(model_id) from None
+        raise UnsupportedModelError(model_id) from None
     else:
         cache[model_id] = cls(model_id)
         return cache[model_id]
@@ -849,20 +892,32 @@ async def validate_model(
     input_modality: str | None = None,
     *,
     bedrock_only: bool = True,
+    error_status: int | None = None,
 ) -> ModelDetails:
     """Validate and return the model details for a given model ID.
 
+    Looks up the model in the cache (refreshing if needed), checks that it
+    supports the requested input/output modalities, and returns its details.
+
     Args:
-        model_id: Model ID or alias to validate
-        output_modality: Expected output modality.
-        input_modality: Expected input modality.
-        bedrock_only: If True, only allow Bedrock models.
+        model_id: Model ID, alias, or ARN to validate.
+        output_modality: Required output modality (e.g. ``"TEXT"``, ``"IMAGE"``).
+            When provided, the model must list this modality in its outputs.
+        input_modality: Required input modality (e.g. ``"TEXT"``, ``"IMAGE"``).
+            When provided, the model must list this modality in its inputs.
+        bedrock_only: If ``True`` (default), restrict lookup to Bedrock models.
+            Set to ``False`` to include extra (non-Bedrock) models.
+        error_status: Optional HTTP status code override for the error raised
+            when the model is not found.  Defaults to ``None`` which keeps the
+            standard 404 status from :class:`UnsupportedModelError`.
 
     Returns:
-        Returns the model details.
+        The :class:`ModelDetails` for the validated model.
 
     Raises:
-        HTTPException: If model is not found or not supported
+        UnsupportedModelError: If the model cannot be found (with *error_status*
+            applied when provided).
+        ApiError: If the model does not support the requested modality.
     """
     model_id = resolve_model_alias(model_id)
     if model_id.startswith("arn:"):
@@ -904,21 +959,17 @@ async def validate_model(
                         if bedrock_only
                         else _ALL_MODELS_OUTPUT_MODALITY
                     )[output_modality]
-                raise OpenaiUnsupportedModelError(
-                    msg, available_models=model_ids
+                raise UnsupportedModelError(
+                    msg, available_models=model_ids, status=error_status
                 ) from None
 
     # Check model modalities
     if output_modality and output_modality not in model.output_modalities:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Model '{model_id}' does not support {output_modality.lower()} output modality.",
-        )
+        msg = f"Model '{model_id}' does not support {output_modality.lower()} output modality."
+        raise ApiError(msg)
     if input_modality and input_modality not in model.input_modalities:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Model '{model_id}' does not support {input_modality.lower()} input modality.",
-        )
+        msg = f"Model '{model_id}' does not support {input_modality.lower()} input modality."
+        raise ApiError(msg)
     log = REQUEST_LOG.get()
     log["model_id"] = model_id
     return model
@@ -939,9 +990,9 @@ async def _validate_model_from_arn(arn: str) -> ModelDetails | None:
         The details of the validated model if available.
 
     Raises:
-        OpenaiError: If the ARN does not correspond to a valid application inference profile
+        ApiError: If the ARN does not correspond to a valid application inference profile
         or prompt router, or if the model cannot be found for the provided ARN.
-        HTTPException: If the ARN type is not allowed by the server configuration.
+        ApiError: If the ARN type is not allowed by the server configuration.
     """
     models: (
         Sequence[InferenceProfileModelTypeDef]
@@ -973,7 +1024,7 @@ async def _validate_model_from_arn(arn: str) -> ModelDetails | None:
         while True:
             if not models or not region:
                 msg = f"ARN does not match a valid inference profile or prompt router: {model_arn or arn}"
-                raise OpenaiError(msg)
+                raise ApiError(msg)
 
             model_arn = models[0]["modelArn"]
             if "inference-profile" in model_arn:
@@ -992,7 +1043,7 @@ async def _validate_model_from_arn(arn: str) -> ModelDetails | None:
                 base_model = _MODELS[model_id].model_copy()
             except KeyError:
                 msg = f"model {model_id} not found for ARN: {arn}"
-                raise OpenaiError(msg) from None
+                raise ApiError(msg) from None
         model = base_model.model_copy()
         model.inference_profile = arn
         model.region = region
@@ -1016,7 +1067,7 @@ async def _get_prompt_router_models(
     if result := match_bedrock_prompt_router_arn(arn):
         if not SETTINGS.aws_bedrock_allow_prompt_router_arn:
             msg = "Prompt router are not allowed by server configuration."
-            raise OpenaiError(msg)
+            raise ApiError(msg)
         region = result.group("region")
         return (
             await get_client("bedrock", region).get_prompt_router(promptRouterArn=arn)
@@ -1040,10 +1091,10 @@ async def _get_application_inference_profile_models(
         if "application-inference-profile" in arn:
             if not SETTINGS.aws_bedrock_allow_application_inference_profile_arn:
                 msg = "Application inference profile are not allowed by server configuration."
-                raise OpenaiError(msg)
+                raise ApiError(msg)
         elif not SETTINGS.aws_bedrock_allow_cross_region_inference_profile_arn:
             msg = "Cross-region inference profile are not allowed by server configuration."
-            raise OpenaiError(msg)
+            raise ApiError(msg)
         region = result.group("region")
         return (
             await get_client("bedrock", region).get_inference_profile(
@@ -1066,7 +1117,7 @@ async def _wait_for_async_invocation_completion(
         S3 object key.
 
     Raises:
-        HTTPException: If invocation fails
+        ApiError: If invocation fails
     """
     while True:  # Timeout at FastAPI level
         response = await bedrock_client.get_async_invoke(invocationArn=invocation_arn)
@@ -1078,7 +1129,7 @@ async def _wait_for_async_invocation_completion(
                 .split("/", 1)[1]
             )
         if status == "Failed":
-            raise HTTPException(status_code=400, detail=response["failureMessage"])
+            raise ApiError(response["failureMessage"])
         await sleep(0.5)
 
 
@@ -1108,7 +1159,7 @@ async def invoke_json_async(
         JSON response from the output file.
 
     Raises:
-        HTTPException: When invocation configuration is missing, invocation fails,
+        ApiError: When invocation configuration is missing, invocation fails,
             or results cannot be retrieved.
     """
     model = await get_model_details(model_id)
@@ -1156,7 +1207,7 @@ def get_model_s3_bucket(model: ModelDetails) -> tuple[str, S3Client]:
     based on the model's associated region. If the region-specific bucket is
     not configured and the default region matches, it uses the globally configured
     S3 bucket. If no valid configuration exists, the function logs the error details
-    and raises an HTTPException indicating the unavailability of async invocation.
+    and raises an ApiError indicating the unavailability of async invocation.
 
     Args:
         model (ModelDetails): The model details containing a region attribute.
@@ -1166,8 +1217,8 @@ def get_model_s3_bucket(model: ModelDetails) -> tuple[str, S3Client]:
         S3 client for the given region.
 
     Raises:
-        HTTPException: If the required S3 bucket configurations for the region or
-        default context are missing, an HTTPException is raised with a relevant
+        ApiError: If the required S3 bucket configurations for the region or
+        default context are missing, an ApiError is raised with a relevant
         error message.
     """
     try:
@@ -1183,11 +1234,11 @@ def get_model_s3_bucket(model: ModelDetails) -> tuple[str, S3Client]:
             log_error_details(
                 f"S3 {model.region} regional bucket not configured (aws_s3_regional_buckets): some features are disabled"
             )
-        raise HTTPException(
-            status_code=400,
-            detail="Async invocation is not available on the current server. "
-            "Please contact the administrator to enable it.",
-        ) from error
+        msg = (
+            "Async invocation is not available on the current server. "
+            "Please contact the administrator to enable it."
+        )
+        raise ApiError(msg) from error
     return s3_bucket, get_client("s3", model.region)
 
 
@@ -1244,7 +1295,7 @@ async def get_s3_content_type_and_size(
         File size and content type.
 
     Raises:
-        HTTPException: If the required S3 bucket for the region is not configured.
+        ApiError: If the required S3 bucket for the region is not configured.
     """
     bucket, key = uri.removeprefix("s3://").split("/", 1)
     result = await get_client("s3", region_name=model.region).head_object(

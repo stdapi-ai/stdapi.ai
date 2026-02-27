@@ -16,13 +16,13 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 if TYPE_CHECKING:
     from starlette.datastructures import FormData
 
+from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
 from stdapi.aws_bedrock import get_extra_model_parameters
 from stdapi.config import SETTINGS
 from stdapi.models import validate_model
 from stdapi.models.image import get_image_model
 from stdapi.monitoring import REQUEST_TIME, log_request_params, log_request_stream_event
-from stdapi.openai_exceptions import OpenaiError, OpenaiUnsupportedModelError
 from stdapi.routes._images_common import build_images_response
 from stdapi.routes.openai_images_generations import stream_generator
 from stdapi.tokenizer import estimate_token_count
@@ -36,7 +36,7 @@ from stdapi.types.openai_images import (
 from stdapi.utils import read_and_b64encode_file, validation_error_handler
 
 router = APIRouter(
-    prefix=f"{SETTINGS.openai_routes_prefix}/v1", tags=["images", "openai"]
+    prefix=f"{SETTINGS.openai_routes_prefix}/v1", tags=["Images", TAG_OPENAI]
 )
 
 #: Includes model fields and file parameters handled separately in the route
@@ -304,7 +304,7 @@ async def edit_images(
         EventSourceResponse for streaming requests.
 
     Raises:
-        HTTPException: With 404 if the model does not exist; 400 on unsupported
+        ApiError: With 404 if the model does not exist; 400 on unsupported
             options or invalid values.
     """
     form_data = await http_request.form()
@@ -330,15 +330,14 @@ async def edit_images(
             },
         )
     log_request_params(request, user_id=request.user)
-    try:
-        model = (
-            await validate_model(
-                request.model, input_modality="IMAGE", output_modality="IMAGE"
-            )
-        ).id
-    except OpenaiUnsupportedModelError as Error:
-        # This route does not return standard 404 error if invalid model.
-        raise OpenaiError(Error.args[0]) from None
+    model = (
+        await validate_model(
+            request.model,
+            input_modality="IMAGE",
+            output_modality="IMAGE",
+            error_status=400,
+        )
+    ).id
 
     width, height = map(int, request.size.split("x"))
     job = get_image_model(model).get_image_edit_job(

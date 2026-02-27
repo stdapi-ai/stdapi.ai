@@ -15,13 +15,13 @@ class TestAmazonNovaCanvas:
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_SAMPLE)
     def test_extra_params_negative_text(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+        self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
         """Extra body parameter textToImageParams.negativeText is forwarded.
 
         Not part of OpenAI Images API; accepted here as provider-specific field.
         """
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Nova Canvas is not available on the official OpenAI API"
             )
@@ -42,10 +42,10 @@ class TestAmazonNovaCanvas:
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_ALL)
     def test_generate_b64_single(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+        self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
         """Simple prompt returns one base64 image when response_format=b64_json."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Nova Canvas is not available on the official OpenAI API"
             )
@@ -67,10 +67,10 @@ class TestAmazonNovaCanvas:
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_SAMPLE)
     def test_generate_url_multiple_images(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+        self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
         """Requesting multiple images with URL response works."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Nova Canvas is not available on the official OpenAI API"
             )
@@ -91,10 +91,10 @@ class TestAmazonNovaCanvas:
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_SAMPLE)
     def test_quality_is_accepted(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+        self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
         """Nova Canvas supports quality; request should succeed."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Nova Canvas is not available on the official OpenAI API"
             )
@@ -111,10 +111,10 @@ class TestAmazonNovaCanvas:
 
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_SAMPLE)
     def test_invalid_style_raises(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+        self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
         """Unknown style should result in a 400 from the backend."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Nova Canvas is not available on the official OpenAI API"
             )
@@ -131,10 +131,10 @@ class TestAmazonNovaCanvas:
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_SAMPLE)
     def test_generate_with_color_guided_task_type(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+        self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
         """Test generation with COLOR_GUIDED_GENERATION taskType."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Nova Canvas is not available on the official OpenAI API"
             )
@@ -161,10 +161,10 @@ class TestAmazonNovaCanvas:
 
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_SAMPLE)
     def test_generate_with_invalid_task_type(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+        self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
         """Test that invalid taskType raises BadRequestError."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Nova Canvas is not available on the official OpenAI API"
             )
@@ -186,10 +186,10 @@ class TestAmazonNovaCanvas:
 
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_SAMPLE)
     def test_generate_color_guided_missing_colors(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+        self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
         """Test that COLOR_GUIDED_GENERATION without colors raises BadRequestError."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Nova Canvas is not available on the official OpenAI API"
             )

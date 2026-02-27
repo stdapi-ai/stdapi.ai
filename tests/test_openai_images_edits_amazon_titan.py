@@ -25,13 +25,13 @@ class TestAmazonTitanEditing:
     def test_edit_with_extra_parameters(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_image_file: bytes,
         sample_mask_file: bytes,
         model_id: str,
     ) -> None:
         """Test editing with Titan-specific negativeText parameter."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Amazon Titan is not available on the official OpenAI API")
 
         response = openai_client.images.edit(
@@ -59,13 +59,13 @@ class TestAmazonTitanEditing:
     def test_edit_b64_single(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_image_file: bytes,
         sample_mask_file: bytes,
         model_id: str,
     ) -> None:
         """Test basic editing with base64 response format."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Amazon Titan is not available on the official OpenAI API")
 
         response = openai_client.images.edit(
@@ -96,13 +96,13 @@ class TestAmazonTitanEditing:
     def test_edit_with_outpainting_task_type(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_image_file: bytes,
         sample_mask_file: bytes,
         model_id: str,
     ) -> None:
         """Test editing with OUTPAINTING taskType."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Amazon Titan is not available on the official OpenAI API")
 
         response = openai_client.images.edit(
@@ -127,12 +127,12 @@ class TestAmazonTitanEditing:
     def test_edit_with_background_removal_task_type(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_image_file: bytes,
         model_id: str,
     ) -> None:
         """Test editing with BACKGROUND_REMOVAL taskType (no mask supported)."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Amazon Titan is not available on the official OpenAI API")
 
         response = openai_client.images.edit(
@@ -156,12 +156,12 @@ class TestAmazonTitanEditing:
     def test_edit_inpainting_without_mask(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_image_file: bytes,
         model_id: str,
     ) -> None:
         """Test INPAINTING without mask (mask is optional)."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Amazon Titan is not available on the official OpenAI API")
 
         response = openai_client.images.edit(
@@ -188,12 +188,12 @@ class TestAmazonTitanEditing:
     def test_edit_outpainting_without_mask(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_image_file: bytes,
         model_id: str,
     ) -> None:
         """Test OUTPAINTING without mask (mask is optional)."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Amazon Titan is not available on the official OpenAI API")
 
         response = openai_client.images.edit(
@@ -219,13 +219,13 @@ class TestAmazonTitanEditing:
     def test_edit_with_invalid_task_type(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_image_file: bytes,
         sample_mask_file: bytes,
         model_id: str,
     ) -> None:
         """Test that invalid taskType raises BadRequestError."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Amazon Titan is not available on the official OpenAI API")
 
         with pytest.raises(BadRequestError) as exc_info:

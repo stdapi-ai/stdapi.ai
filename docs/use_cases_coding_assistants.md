@@ -1,18 +1,16 @@
 ---
 title: AI Coding Assistants - AWS Bedrock for IDEs
-description: Connect Continue.dev, Cursor, Cline, and other AI coding assistants to AWS Bedrock via stdapi.ai. Use Claude, Kimi K2 thinking, and Qwen Coder in VS Code and JetBrains IDEs.
-keywords: AI coding assistant AWS, Continue.dev AWS Bedrock, Cursor AWS integration, VS Code AI AWS, AI pair programming, coding copilot AWS, IDE AI integration, private Copilot
+description: Connect Continue.dev, Cursor, Cline, Claude Code, and other AI coding assistants to AWS Bedrock via stdapi.ai. Use Claude, Kimi K2 thinking, and Qwen Coder in VS Code and JetBrains IDEs.
+keywords: AI coding assistant AWS, Continue.dev AWS Bedrock, Cursor AWS integration, VS Code AI AWS, AI pair programming, coding copilot AWS, IDE AI integration, private Copilot, Claude Code AWS Bedrock
 ---
 
 # AI Coding Assistants Integration
 
-Connect your favorite AI coding assistants to AWS Bedrock models through stdapi.ai's OpenAI-compatible interface. Get intelligent code completions, chat assistance, and codebase understanding with powerful AWS models like Claude, Kimi K2 thinking, and Qwen Coder Next—no vendor lock-in required.
+Connect your favorite AI coding assistants to AWS Bedrock models through stdapi.ai. Get intelligent code completions, chat assistance, and codebase understanding with powerful AWS models like Claude, Kimi K2 thinking, and Qwen Coder Next—no vendor lock-in required.
 
 ## About AI Coding Assistants
 
-**Popular Tools:** [Cline](https://github.com/cline/cline) | [JetBrains AI Assistant](https://www.jetbrains.com/ai/) | [Continue.dev](https://continue.dev/) | [Cursor](https://cursor.com/) | [Windsurf](https://codeium.com/windsurf)
-
-AI coding assistants are IDE extensions that leverage large language models to enhance developer productivity. These tools provide real-time code completions, intelligent suggestions, natural language code generation, and interactive chat capabilities directly within your coding environment—acting as AI pair programmers that understand your codebase context.
+AI coding assistants are IDE extensions and terminal tools that leverage large language models to enhance developer productivity. These tools provide real-time code completions, intelligent suggestions, natural language code generation, and interactive chat capabilities directly within your coding environment—acting as AI pair programmers that understand your codebase context.
 
 **What AI coding assistants can do:**
 
@@ -30,7 +28,7 @@ AI coding assistants are IDE extensions that leverage large language models to e
 <div class="grid cards" markdown>
 
 - :material-puzzle: __Works with Your IDE__
-  <br>Almost any coding assistant that supports OpenAI-compatible APIs works with stdapi.ai. Continue.dev, Cursor, Cline, Windsurf, Aider—all compatible with AWS Bedrock models.
+  <br>Almost any coding assistant that supports OpenAI or Anthropic compatible APIs works with stdapi.ai. Continue.dev, Cursor, Cline, Claude Code, Windsurf, Aider—all compatible with AWS Bedrock models.
 
 - :material-brain: __Best-in-Class Coding Models__
   <br>Claude 4.6+ for reasoning and architecture, Kimi K2 thinking for complex problem-solving, Qwen Coder Next for specialized coding tasks. Choose the right model for each task.
@@ -63,9 +61,13 @@ flowchart LR
 
 ---
 
-## ⚙️ Configuration
+## ![OpenAI](styles/logo_openai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } OpenAI-Compatible Coding Assistants
 
-### 🔑 Universal Setup Guide
+**Popular Tools:** [Cline](https://github.com/cline/cline) | [JetBrains AI Assistant](https://www.jetbrains.com/ai/) | [Continue.dev](https://continue.dev/) | [Cursor](https://cursor.com/) | [Windsurf](https://codeium.com/windsurf)
+
+Most IDE coding assistants use the OpenAI-compatible API. Configure them by pointing to stdapi.ai's `/v1` endpoint.
+
+### ⚙️ Configuration
 
 Most AI coding assistants follow a similar configuration pattern. The exact menu location and field names may vary, but the core settings remain consistent.
 
@@ -145,6 +147,46 @@ Some coding assistants support dedicated code completion endpoints for real-time
 
 ---
 
+## ![Anthropic](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Anthropic-Compatible Coding Assistants
+
+**Popular Tools:** [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview) | [Aider](https://aider.chat/) | [JetBrains AI Assistant (With Claude code ACP)](https://www.jetbrains.com/ai/)
+
+Tools that use the Anthropic messages API natively can be connected to stdapi.ai's `/anthropic` endpoint, enabling them to use Claude models via AWS Bedrock.
+
+### Claude Code
+
+Claude Code is Anthropic's agentic coding tool that runs in the terminal.
+
+#### ⚙️ Configuration
+
+Create or edit `~/.claude/claude.json`:
+
+```json
+{
+  "env": {
+    "ANTHROPIC_AUTH_TOKEN": "YOUR_API_KEY",
+    "ANTHROPIC_BASE_URL": "https://YOUR_STDAPI_URL/anthropic",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-6",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-4-6",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-4-5"
+  }
+}
+```
+
+- Replace `YOUR_STDAPI_URL` with your stdapi.ai deployment URL (e.g., `https://api.example.com` or `http://localhost:8000` for local)
+- Replace `YOUR_API_KEY` with your stdapi.ai API key
+- The `/anthropic` path prefix is configured via the [`ANTHROPIC_ROUTES_PREFIX`](operations_configuration.md#anthropic-routes-prefix) setting (default: `/anthropic`)
+- The `ANTHROPIC_DEFAULT_*_MODEL` variables are optional—they let you map Claude model tiers to specific Bedrock model IDs
+
+!!! tip "Beta Flag Compatibility"
+    stdapi.ai automatically filters unsupported `anthropic_beta` flags, so Claude Code works without needing `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`. Bedrock-supported flags (like `Interleaved-thinking-2025-05-14` and `token-efficient-tools-2025-02-19`) are preserved while unsupported ones are silently removed. See [`ANTHROPIC_BETA_FILTER`](operations_configuration.md#anthropic-beta-filter) and [`ANTHROPIC_BETA_ALLOWLIST`](operations_configuration.md#anthropic-beta-allowlist) for details.
+
+### Other Anthropic-Compatible Tools
+
+Any tool using the Anthropic SDK or messages API can be configured the same way—set the `ANTHROPIC_BASE_URL` to `https://YOUR_STDAPI_URL/anthropic` and `ANTHROPIC_API_KEY` (or equivalent) to your stdapi.ai API key.
+
+---
+
 ## 🐳 Running stdapi.ai Locally
 
 stdapi.ai works well when running locally with Docker, making it ideal for your development environment.
@@ -152,12 +194,16 @@ stdapi.ai works well when running locally with Docker, making it ideal for your 
 !!! tip "Running Locally"
     For complete local deployment instructions, see the [Getting Started Guide](operations_getting_started.md).
 
-    **Configure your coding assistant:**
+    **OpenAI-compatible tools:**
     ```
     API Base URL: http://localhost:8000/v1
     API Key: your_stdapi_key
     ```
 
-    The URL will likely be `http://localhost:8000/v1` depending on your Docker port configuration.
+    **Anthropic-compatible tools:**
+    ```
+    ANTHROPIC_BASE_URL: http://localhost:8000/anthropic
+    ANTHROPIC_AUTH_TOKEN: your_stdapi_key
+    ```
 
 ---

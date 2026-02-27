@@ -48,12 +48,12 @@ class TestStabilityEditing:
     def test_edit_b64_single(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_image_file: bytes,
         model_id: str,
     ) -> None:
         """Test basic image-to-image editing with base64 response format."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Stability AI is not available on the official OpenAI API")
 
         response = openai_client.images.edit(
@@ -82,10 +82,10 @@ class TestStabilityUpscaleModels:
 
     @pytest.mark.expensive
     def test_fast_upscale(
-        self, openai_client: OpenAI, use_openai_api: bool, sample_image_file: bytes
+        self, openai_client: OpenAI, use_official_api: bool, sample_image_file: bytes
     ) -> None:
         """Test fast upscale model (no prompt needed)."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Stability AI is not available on the official OpenAI API")
 
         response = openai_client.images.edit(
@@ -107,12 +107,12 @@ class TestStabilityUpscaleModels:
     def test_creative_upscale(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         chat_vision_model: str,
         model_id: str,
     ) -> None:
         """Test creative/conservative upscale models using AWS documentation example."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Stability AI is not available on the official OpenAI API")
 
         # Load the upscale example image from AWS documentation
@@ -187,10 +187,10 @@ class TestStabilityEditModels:
 
     @pytest.mark.expensive
     def test_search_recolor(
-        self, openai_client: OpenAI, use_openai_api: bool, chat_vision_model: str
+        self, openai_client: OpenAI, use_official_api: bool, chat_vision_model: str
     ) -> None:
         """Test search and recolor model using AWS documentation example."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Stability AI is not available on the official OpenAI API")
 
         # Load the search and recolor example image from AWS documentation
@@ -252,10 +252,10 @@ class TestStabilityEditModels:
         )
 
     def test_search_recolor_missing_select_prompt(
-        self, openai_client: OpenAI, use_openai_api: bool, sample_image_file: bytes
+        self, openai_client: OpenAI, use_official_api: bool, sample_image_file: bytes
     ) -> None:
         """Test that search-recolor without select_prompt raises BadRequestError."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Stability AI is not available on the official OpenAI API")
 
         with pytest.raises(BadRequestError) as exc_info:
@@ -270,10 +270,10 @@ class TestStabilityEditModels:
 
     @pytest.mark.expensive
     def test_search_replace(
-        self, openai_client: OpenAI, use_openai_api: bool, chat_vision_model: str
+        self, openai_client: OpenAI, use_official_api: bool, chat_vision_model: str
     ) -> None:
         """Test search and replace model using AWS documentation example."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Stability AI is not available on the official OpenAI API")
 
         # Load the search and replace example image from AWS documentation
@@ -335,10 +335,10 @@ class TestStabilityEditModels:
         )
 
     def test_search_replace_missing_search_prompt(
-        self, openai_client: OpenAI, use_openai_api: bool, sample_image_file: bytes
+        self, openai_client: OpenAI, use_official_api: bool, sample_image_file: bytes
     ) -> None:
         """Test that search-replace without search_prompt raises BadRequestError."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Stability AI is not available on the official OpenAI API")
 
         with pytest.raises(BadRequestError) as exc_info:
@@ -353,10 +353,10 @@ class TestStabilityEditModels:
 
     @pytest.mark.expensive
     def test_inpaint(
-        self, openai_client: OpenAI, use_openai_api: bool, chat_vision_model: str
+        self, openai_client: OpenAI, use_official_api: bool, chat_vision_model: str
     ) -> None:
         """Test inpaint model with mask using AWS documentation example."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Stability AI is not available on the official OpenAI API")
 
         # Load the inpaint example images from AWS documentation
@@ -420,10 +420,10 @@ class TestStabilityEditModels:
 
     @pytest.mark.expensive
     def test_inpaint_without_mask(
-        self, openai_client: OpenAI, use_openai_api: bool, sample_image_file: bytes
+        self, openai_client: OpenAI, use_official_api: bool, sample_image_file: bytes
     ) -> None:
         """Test inpaint model without mask (mask is optional)."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Stability AI is not available on the official OpenAI API")
 
         response = openai_client.images.edit(
@@ -439,10 +439,10 @@ class TestStabilityEditModels:
 
     @pytest.mark.expensive
     def test_erase(
-        self, openai_client: OpenAI, use_openai_api: bool, chat_vision_model: str
+        self, openai_client: OpenAI, use_official_api: bool, chat_vision_model: str
     ) -> None:
         """Test erase model with mask using AWS documentation example."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Stability AI is not available on the official OpenAI API")
 
         # Load the erase example images from AWS documentation
@@ -473,10 +473,10 @@ class TestStabilityEditModels:
 
     @pytest.mark.expensive
     def test_remove_background(
-        self, openai_client: OpenAI, use_openai_api: bool, chat_vision_model: str
+        self, openai_client: OpenAI, use_official_api: bool, chat_vision_model: str
     ) -> None:
         """Test background removal model using AWS documentation example."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Stability AI is not available on the official OpenAI API")
 
         # Load the remove background example image from AWS documentation
@@ -542,10 +542,10 @@ class TestStabilityControlModels:
 
     @pytest.mark.expensive
     def test_control_sketch(
-        self, openai_client: OpenAI, use_openai_api: bool, chat_vision_model: str
+        self, openai_client: OpenAI, use_official_api: bool, chat_vision_model: str
     ) -> None:
         """Test control sketch model using AWS documentation example."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Stability AI is not available on the official OpenAI API")
 
         # Load the control sketch example image from AWS documentation
@@ -607,10 +607,10 @@ class TestStabilityControlModels:
 
     @pytest.mark.expensive
     def test_control_structure(
-        self, openai_client: OpenAI, use_openai_api: bool, chat_vision_model: str
+        self, openai_client: OpenAI, use_official_api: bool, chat_vision_model: str
     ) -> None:
         """Test control structure model using AWS documentation example."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Stability AI is not available on the official OpenAI API")
 
         # Load the control structure example image from AWS documentation
@@ -678,10 +678,10 @@ class TestStabilityStyleModels:
 
     @pytest.mark.expensive
     def test_style_guide(
-        self, openai_client: OpenAI, use_openai_api: bool, sample_image_file: bytes
+        self, openai_client: OpenAI, use_official_api: bool, sample_image_file: bytes
     ) -> None:
         """Test style-guide model."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Stability AI is not available on the official OpenAI API")
 
         response = openai_client.images.edit(
@@ -697,10 +697,10 @@ class TestStabilityStyleModels:
 
     @pytest.mark.expensive
     def test_style_transfer_with_mask_as_style_image(
-        self, openai_client: OpenAI, use_openai_api: bool, chat_vision_model: str
+        self, openai_client: OpenAI, use_official_api: bool, chat_vision_model: str
     ) -> None:
         """Test style-transfer model with mask parameter used as style image."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Stability AI is not available on the official OpenAI API")
 
         # Load the style transfer example images from AWS documentation
@@ -764,10 +764,10 @@ class TestStabilityStyleModels:
 
     @pytest.mark.expensive
     def test_style_transfer_with_style_image_parameter(
-        self, openai_client: OpenAI, use_openai_api: bool, chat_vision_model: str
+        self, openai_client: OpenAI, use_official_api: bool, chat_vision_model: str
     ) -> None:
         """Test style-transfer model with style_image in extra_body."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Stability AI is not available on the official OpenAI API")
 
         # Load the style transfer example images from AWS documentation
@@ -835,10 +835,10 @@ class TestStabilityStyleModels:
         )
 
     def test_style_transfer_missing_style_image(
-        self, openai_client: OpenAI, use_openai_api: bool, sample_image_file: bytes
+        self, openai_client: OpenAI, use_official_api: bool, sample_image_file: bytes
     ) -> None:
         """Test that style-transfer without mask or style_image raises BadRequestError."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Stability AI is not available on the official OpenAI API")
 
         with pytest.raises(BadRequestError) as exc_info:

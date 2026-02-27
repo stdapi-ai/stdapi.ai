@@ -21,14 +21,14 @@ class TestAmazonTitanEmbeddings:
 
     @pytest.mark.parametrize("model_id", TITAN_TEXT_SAMPLE)
     def test_text_extra_params_normalize(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+        self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
         """Extra body parameters are passed to the backend (normalize for v2).
 
         OpenAI API does not support such extra parameters; this project forwards
         them to the underlying provider as extra body fields.
         """
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Titan models are not available on the official OpenAI API"
             )
@@ -46,10 +46,10 @@ class TestAmazonTitanEmbeddings:
 
     @pytest.mark.parametrize("model_id", TITAN_TEXT_ALL)
     def test_text_single(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+        self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
         """Basic text embedding works and returns non-empty vector."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Titan models are not available on the official OpenAI API"
             )
@@ -65,10 +65,10 @@ class TestAmazonTitanEmbeddings:
 
     @pytest.mark.parametrize("model_id", TITAN_TEXT_SAMPLE)
     def test_text_dimensions(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+        self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
         """Dimensions parameter is accepted on text-v2 when valid (400 otherwise)."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Titan models are not available on the official OpenAI API"
             )
@@ -88,12 +88,12 @@ class TestAmazonTitanEmbeddings:
     def test_image_single(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_image_file_base64: str,
         model_id: str,
     ) -> None:
         """Image data URI embeds successfully on the image model."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Titan models are not available on the official OpenAI API"
             )

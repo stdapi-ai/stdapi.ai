@@ -8,8 +8,7 @@ from asyncio import create_task, gather
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
 
-from fastapi import BackgroundTasks, HTTPException
-
+from stdapi.api_errors import ApiError
 from stdapi.aws import AWS_ACCOUNT_INFO, get_client
 from stdapi.aws_bedrock import BEDROCK_BODY_SIZE_LIMIT
 from stdapi.aws_s3 import aws_s3_cleanup
@@ -21,7 +20,10 @@ from stdapi.tokenizer import estimate_token_count
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
-    from pydantic import JsonValue
+    from fastapi import BackgroundTasks
+
+    from stdapi.types import JsonMapping
+
 
 _EmbeddingOption_V2 = Literal["visual-text", "visual-image", "audio"]
 _EmbeddingOption = Literal["visual", "audio", "transcription"]
@@ -212,7 +214,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         self,
         inputs: list[str],
         dimensions: int | None,
-        extra_params: dict[str, JsonValue],
+        extra_params: JsonMapping,
         background_tasks: BackgroundTasks,
     ) -> EmbeddingResponse:
         """Get embeddings for text.
@@ -227,10 +229,8 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             Embedding response.
         """
         if dimensions is not None:
-            raise HTTPException(
-                status_code=400,
-                detail="'dimensions' option is not supported by TwelveLabs Marengo embedding models.",
-            )
+            msg = "'dimensions' option is not supported by TwelveLabs Marengo embedding models."
+            raise ApiError(msg)
 
         force_s3_data = bool(extra_params.pop("force_s3_data", False))
         token_task = create_task(estimate_token_count(*inputs))
@@ -285,7 +285,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         self,
         media_type: _MediaTypes,
         value: str,
-        extra_params: dict[str, JsonValue],
+        extra_params: JsonMapping,
         *,
         s3_uri: bool = False,
         image_text: str = "",
@@ -344,7 +344,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         self,
         media_type: _MediaTypes,
         value: str,
-        extra_params: dict[str, JsonValue],
+        extra_params: JsonMapping,
         *,
         s3_uri: bool = False,
     ) -> _Request:
@@ -390,7 +390,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         value: str,
         content_type: str,
         size: int,
-        extra_params: dict[str, JsonValue],
+        extra_params: JsonMapping,
         background_tasks: BackgroundTasks,
         *,
         force_s3_data: bool = False,
@@ -433,7 +433,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         content_type: str,
         size: int,
         image_text: str,
-        extra_params: dict[str, JsonValue],
+        extra_params: JsonMapping,
         background_tasks: BackgroundTasks,
         *,
         force_s3_data: bool = False,

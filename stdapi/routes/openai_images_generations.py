@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Annotated, Any
 from fastapi import APIRouter, Depends
 from sse_starlette import EventSourceResponse, JSONServerSentEvent
 
+from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
 from stdapi.aws_bedrock import get_extra_model_parameters
 from stdapi.config import SETTINGS
@@ -26,7 +27,6 @@ from stdapi.monitoring import (
     log_request_stream_event,
     log_response_params,
 )
-from stdapi.openai_exceptions import OpenaiError, OpenaiUnsupportedModelError
 from stdapi.routes._images_common import build_images_response
 from stdapi.tokenizer import estimate_token_count
 from stdapi.types.openai_images import (
@@ -43,7 +43,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
 router = APIRouter(
-    prefix=f"{SETTINGS.openai_routes_prefix}/v1", tags=["images", "openai"]
+    prefix=f"{SETTINGS.openai_routes_prefix}/v1", tags=["Images", TAG_OPENAI]
 )
 
 #: Uniformize the OpenAI quality levels in only 3 levels
@@ -199,19 +199,18 @@ async def create_images(
         EventSourceResponse for streaming requests.
 
     Raises:
-        HTTPException: With 404 if the model does not exist; 400 on unsupported
+        ApiError: With 404 if the model does not exist; 400 on unsupported
             options or invalid values.
     """
     log_request_params(request, user_id=request.user)
-    try:
-        model_id = (
-            await validate_model(
-                request.model, input_modality="TEXT", output_modality="IMAGE"
-            )
-        ).id
-    except OpenaiUnsupportedModelError as Error:
-        # This route does not return standard 404 error if invalid model.
-        raise OpenaiError(Error.args[0]) from None
+    model_id = (
+        await validate_model(
+            request.model,
+            input_modality="TEXT",
+            output_modality="IMAGE",
+            error_status=400,
+        )
+    ).id
 
     width, height = map(int, request.size.split("x"))
     job = get_image_model(model_id).get_image_generation_job(

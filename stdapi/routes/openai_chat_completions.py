@@ -24,35 +24,20 @@ from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, Depends
 
+from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
 from stdapi.config import SETTINGS
 from stdapi.models import validate_model
 from stdapi.models.chat import get_chat_model
 from stdapi.monitoring import REQUEST_ID, REQUEST_TIME, log_request_params
-from stdapi.types.openai_chat_completions import (
-    ChatCompletion,
-    CompletionCreateParams,
-    FinishReason,
-)
+from stdapi.types.openai_chat_completions import ChatCompletion, CompletionCreateParams
 
 if TYPE_CHECKING:
     from sse_starlette import EventSourceResponse
-    from types_aiobotocore_bedrock_runtime.literals import StopReasonType
 
 router = APIRouter(
-    prefix=f"{SETTINGS.openai_routes_prefix}/v1/chat", tags=["chat", "openai"]
+    prefix=f"{SETTINGS.openai_routes_prefix}/v1/chat", tags=["Chat", TAG_OPENAI]
 )
-
-#: OpenAI finish reasons to Bedrock mapping
-_FINISH_REASONS: dict[StopReasonType | None, FinishReason] = {
-    "max_tokens": "length",
-    "model_context_window_exceeded": "length",
-    "content_filtered": "content_filter",
-    "guardrail_intervened": "content_filter",
-    "malformed_model_output": "content_filter",
-    "malformed_tool_use": "content_filter",
-    "tool_use": "tool_calls",
-}
 
 
 @router.post(
@@ -165,7 +150,7 @@ async def create_chat_completion(
         - EventSourceResponse streaming ChatCompletionChunk events when stream is True.
 
     Raises:
-        HTTPException: If model is invalid or does not support text output.
+        ApiError: If model is invalid or does not support text output.
     """
     log_request_params(request, user_id=request.safety_identifier or request.user)
     model = await validate_model(

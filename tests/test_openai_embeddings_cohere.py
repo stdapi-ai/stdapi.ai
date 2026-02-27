@@ -19,13 +19,13 @@ class TestCohereEmbeddings:
 
     @pytest.mark.parametrize("model_id", COHERE_SAMPLE)
     def test_text_extra_params_truncate(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+        self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
         """Extra body parameter "truncate" is forwarded to provider.
 
         Not part of OpenAI Embeddings API, but accepted here as an extra body field.
         """
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Cohere models are not available on the official OpenAI API")
 
         truncate_value = "START" if model_id.endswith("v3") else "LEFT"
@@ -43,10 +43,10 @@ class TestCohereEmbeddings:
 
     @pytest.mark.parametrize("model_id", COHERE_ALL)
     def test_text_single(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+        self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
         """Text input returns a valid embedding."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Cohere models are not available on the official OpenAI API")
 
         response = openai_client.embeddings.create(
@@ -64,12 +64,12 @@ class TestCohereEmbeddings:
     def test_image_single(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_image_file_base64: str,
         model_id: str,
     ) -> None:
         """Image input (data URI) returns a valid embedding."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Cohere models are not available on the official OpenAI API")
 
         response = openai_client.embeddings.create(
@@ -84,10 +84,10 @@ class TestCohereEmbeddings:
 
     @pytest.mark.parametrize("model_id", COHERE_ALL)
     def test_text_batch(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+        self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
         """Batch of text inputs returns one embedding per item."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Cohere models are not available on the official OpenAI API")
 
         inputs = [
@@ -109,12 +109,12 @@ class TestCohereEmbeddings:
     def test_image_batch(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_image_file_base64: str,
         model_id: str,
     ) -> None:
         """Batch of image data URIs returns embeddings for all items."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Cohere models are not available on the official OpenAI API")
 
         inputs = [
@@ -136,7 +136,7 @@ class TestCohereEmbeddings:
     def test_mixed_text_image_batch(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_image_file_base64: str,
         model_id: str,
     ) -> None:
@@ -145,7 +145,7 @@ class TestCohereEmbeddings:
         Some backends may not support mixed batches and can return 400. In that
         case, this is accepted behavior.
         """
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Cohere models are not available on the official OpenAI API")
 
         inputs = ["A sample image.", sample_image_file_base64]
@@ -160,14 +160,14 @@ class TestCohereEmbeddings:
 
     @pytest.mark.parametrize("model_id", COHERE_SAMPLE)
     def test_dimensions_supported_when_valid(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+        self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
         """Dimensions parameter is honored when supported; otherwise 400 is acceptable.
 
         The Cohere implementation supports output_dimension; for an unsupported
         value the server may raise 400, which aligns with OpenAI behavior.
         """
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Cohere models are not available on the official OpenAI API")
 
         dimensions = 512

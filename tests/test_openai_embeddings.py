@@ -64,10 +64,10 @@ class TestEmbeddings:
         assert response.usage.total_tokens >= 0
 
     def test_service_tier_headers(
-        self, openai_client: OpenAI, embedding_model: str, use_openai_api: bool
+        self, openai_client: OpenAI, embedding_model: str, use_official_api: bool
     ) -> None:
         """Validate service_tier headers."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Service tiers headers are not supported on the official API")
         response = openai_client.embeddings.create(
             model=embedding_model,

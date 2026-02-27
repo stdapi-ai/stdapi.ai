@@ -1,16 +1,16 @@
 ---
-title: stdapi.ai - OpenAI-Compatible API Gateway for AWS Bedrock
-description: Run your favorite OpenAI-compatible apps on AWS Bedrock. Access 80+ models including Claude, Nova, Llama with enterprise compliance and pay-per-use pricing.
-keywords: OpenAI API gateway, AWS Bedrock API, OpenAI compatible API, AWS AI gateway, OpenAI AWS integration, enterprise AI API, AWS Bedrock integration, OpenAI alternative, private AI deployment, HIPAA compliant AI
+title: stdapi.ai - OpenAI & Anthropic Compatible API Gateway for AWS Bedrock
+description: Run your favorite OpenAI and Anthropic-compatible apps on AWS Bedrock. Access 80+ models including Claude, Nova, Llama with enterprise compliance and pay-per-use pricing.
+keywords: OpenAI API gateway, Anthropic API gateway, AWS Bedrock API, OpenAI compatible API, Anthropic compatible API, AWS AI gateway, OpenAI AWS integration, Anthropic AWS integration, enterprise AI API, AWS Bedrock integration, OpenAI alternative, Anthropic alternative, private AI deployment, HIPAA compliant AI
 hide:
   - toc
   - navigation
 ---
 
 <div class="hero hero--home" markdown>
-# OpenAI-Compatible API Gateway for AWS Bedrock and AI services
+# OpenAI & Anthropic Compatible API Gateway for AWS Bedrock and AI services
 
-Run your favorite OpenAI-compatible applications on AWS Bedrock—works out of the box with any app or tool that supports the OpenAI API. Access 80+ models from Claude, Llama, Nova, and more with enterprise-grade privacy, compliance controls, and AWS pricing.
+Run your favorite OpenAI and Anthropic-compatible applications on AWS Bedrock—works out of the box with any app or tool that supports the OpenAI or Anthropic APIs. Access 80+ models from Claude, Llama, Nova, and more with enterprise-grade privacy, compliance controls, and AWS pricing.
 
 <div class="buttons" markdown>
 [Get started](operations_getting_started.md){ .md-button .md-button--primary }
@@ -21,8 +21,8 @@ Run your favorite OpenAI-compatible applications on AWS Bedrock—works out of t
 
 <div class="grid cards" markdown>
 
-- :material-api: __Production-ready OpenAI API compatibility__
-  <br>Full support for chat, embeddings, images, audio (speech/transcription/translation), and more. Drop-in replacement for OpenAI SDK—works with LangChain, Continue.dev, Open WebUI, n8n, and 1000+ tools.
+- :material-api: __Production-ready OpenAI & Anthropic API compatibility__
+  <br>Full support for chat, embeddings, images, audio (speech/transcription/translation), and more. Drop-in replacement for OpenAI and Anthropic SDKs—works with LangChain, Continue.dev, Open WebUI, n8n, Claude SDK, and 1000+ tools.
 
 - :material-aws: __Purpose-built for AWS Bedrock__
   <br>Advanced features like prompt caching, reasoning modes, guardrails, prompt routers, and application inference profiles. Automatic region optimization and S3 integration included.
@@ -216,8 +216,8 @@ Use Claude, Nova, Llama, or any Bedrock model. Switch between models, regions, a
 - :material-cash-multiple: __Cost-conscious Organizations__
   <br>Switch from subscription-based AI services to pay-per-use AWS Bedrock pricing. Pay only for actual usage with no monthly commitments while accessing leading models (Claude, Stable Diffusion, Llama).
 
-- :material-application-brackets: __Teams Migrating from OpenAI__
-  <br>LangChain, LlamaIndex, Haystack, or custom apps work immediately. Gradual migration supported—run both APIs in parallel during transition.
+- :material-application-brackets: __Teams Migrating from OpenAI or Anthropic__
+  <br>LangChain, LlamaIndex, Haystack, Claude SDK, or custom apps work immediately. Gradual migration supported—run both APIs in parallel during transition.
 
 </div>
 

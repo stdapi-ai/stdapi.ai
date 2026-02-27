@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 
     from sse_starlette import EventSourceResponse
 
+    from stdapi.types.anthropic_messages import Message, MessageCreateParams
     from stdapi.types.openai_chat_completions import (
         ChatCompletion,
         CompletionCreateParams,
@@ -49,6 +50,22 @@ class ChatModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
         Returns:
             - ChatCompletion when stream is False.
             - AsyncGenerator streaming ChatCompletionChunk events when stream is True.
+        """
+
+    @abstractmethod
+    async def create_message(
+        self, model: ModelDetails, request: MessageCreateParams, message_id: str
+    ) -> Message | EventSourceResponse:
+        """Create a message using Anthropic Messages API format.
+
+        Args:
+            model: Model details for the chat model.
+            request: Message creation request following Anthropic spec.
+            message_id: Stable identifier for the message.
+
+        Returns:
+            - Message when stream is False.
+            - EventSourceResponse streaming MessageStreamEvent events when stream is True.
         """
 
 

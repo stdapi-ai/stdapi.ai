@@ -1,22 +1,22 @@
 ---
-title: Features - OpenAI-Compatible AI Gateway for AWS Bedrock
-description: stdapi.ai features — OpenAI API compatibility for AWS Bedrock & AI services. Multi-region access, compliance controls, security, observability, and more.
-keywords: AI gateway features, AWS Bedrock gateway, OpenAI API compatible, OpenAI to Bedrock, AWS AI services, private AI gateway, prompt caching, guardrails, data sovereignty, enterprise AI, multi-region AI, S3 integration, OpenTelemetry AI, OpenAI alternative AWS
+title: Features - OpenAI & Anthropic Compatible AI Gateway for AWS Bedrock
+description: stdapi.ai features — OpenAI and Anthropic API compatibility for AWS Bedrock & AI services. Multi-region access, compliance controls, security, observability, and more.
+keywords: AI gateway features, AWS Bedrock gateway, OpenAI API compatible, Anthropic API compatible, OpenAI to Bedrock, Anthropic to Bedrock, AWS AI services, private AI gateway, prompt caching, guardrails, data sovereignty, enterprise AI, multi-region AI, S3 integration, OpenTelemetry AI, OpenAI alternative AWS, Anthropic alternative AWS
 hide:
   - navigation
 ---
 
 # Features — AI Gateway for AWS Bedrock
 
-stdapi.ai is an **AI gateway purpose-built for AWS**. It brings full OpenAI API compatibility to AWS Bedrock and AWS AI services, so your team can use their favorite OpenAI-powered applications—ChatGPT-compatible UIs, coding assistants, automation platforms—on AWS infrastructure with zero friction.
+stdapi.ai is an **AI gateway purpose-built for AWS**. It brings full OpenAI and Anthropic API compatibility to AWS Bedrock and AWS AI services, so your team can use their favorite OpenAI and Anthropic-powered applications—ChatGPT-compatible UIs, Claude-compatible tools, coding assistants, automation platforms—on AWS infrastructure with zero friction.
 
 Born from deep AWS Solutions Architecture and software engineering expertise—and a genuine passion for AI—stdapi.ai is designed to work seamlessly whether you're an end user, an ops engineer, or a developer: broad API parameter coverage, careful error handling, and deep AWS integration provide a smooth experience out of the box.
 
 <div class="grid cards" markdown>
 
-- :material-api: **Drop-in OpenAI replacement** — Change only the base URL
+- :material-api: **Drop-in OpenAI & Anthropic replacement** — Change only the base URL
 - :material-aws: **Optimized for AWS** — Built to leverage Bedrock, Polly, Transcribe, Translate
-- :material-shield-check: **Broad compatibility** — Works with your favorite OpenAI-powered apps and SDKs
+- :material-shield-check: **Broad compatibility** — Works with your favorite OpenAI and Anthropic-powered apps and SDKs
 - :material-rocket-launch: **Deploy anywhere on AWS** — ECS via Terraform, Docker for local dev
 
 </div>
@@ -47,11 +47,13 @@ flowchart LR
 
 ---
 
-## :material-api: OpenAI API Compatibility
+## :material-api: OpenAI & Anthropic API Compatibility
 
-stdapi.ai provides **broad OpenAI API compatibility**, covering routes and parameters far beyond basic chat. Your existing applications, SDKs, and tools—from Open WebUI to n8n to coding assistants—work immediately.
+stdapi.ai provides **broad OpenAI and Anthropic API compatibility**, covering routes and parameters far beyond basic chat. Your existing applications, SDKs, and tools—from Open WebUI to Claude SDK to coding assistants—work immediately.
 
 ### Supported API Routes
+
+**OpenAI-Compatible:**
 
 | Endpoint | Capability | AWS Backend |
 |---|---|---|
@@ -64,6 +66,12 @@ stdapi.ai provides **broad OpenAI API compatibility**, covering routes and param
 | `/v1/audio/transcriptions` | Speech-to-text with diarization | Amazon Transcribe |
 | `/v1/audio/translations` | Speech-to-English translation | Amazon Transcribe + Amazon Translate |
 | `/v1/models` | Model discovery & listing | AWS Bedrock |
+
+**Anthropic-Compatible:**
+
+| Endpoint | Capability | AWS Backend |
+|---|---|---|
+| `/anthropic/v1/messages` | Conversational AI, tool calling, multi-modal | AWS Bedrock Converse API |
 
 ### Unified Multi-Modal API
 
@@ -213,6 +221,7 @@ A quick-reference checklist to find what you need at a glance:
 - :material-check-circle:{ .green-check } OpenAI Images API (generations, edits, variations)
 - :material-check-circle:{ .green-check } OpenAI Audio API (speech, transcriptions, translations)
 - :material-check-circle:{ .green-check } OpenAI Models API (`/v1/models`)
+- :material-check-circle:{ .green-check } Anthropic Messages API (`/anthropic/v1/messages`)
 - :material-check-circle:{ .green-check } Streaming (Server-Sent Events)
 - :material-check-circle:{ .green-check } Tool / function calling
 - :material-check-circle:{ .green-check } Multi-modal inputs (text, image, audio, video, documents)

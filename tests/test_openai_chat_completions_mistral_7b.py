@@ -23,10 +23,10 @@ class TestMistral7bChatCompletions:
     @pytest.mark.expensive
     @pytest.mark.parametrize("model", MISTRAL_7B_MODELS)
     def test_system_prompt_silently_dropped_when_enabled(
-        self, openai_client: OpenAI, use_openai_api: bool, model: str
+        self, openai_client: OpenAI, use_official_api: bool, model: str
     ) -> None:
         """System prompt is silently dropped when DROP_UNSUPPORTED_SYSTEM_PROMPT=true."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Mistral 7b models are not supported on the official OpenAI API"
             )

@@ -16,12 +16,21 @@ from stdapi.config import SETTINGS
 #: Regex pattern for parsing form bracket notation
 _BRACKET_PARSE_PATTERN = regex_compile(r"([^\[\]]+)|\[\]")
 
+#: JSON mapping type for structured data
+JsonMapping = dict[str, JsonValue]
+
+#: JSON list type for structured data
+JsonList = list[JsonValue]
+
+#: JSON list or mapping
+JsonMappingOrList = JsonMapping | JsonList
+
 
 class BaseModelRequest(BaseModel):
     """Pydantic Basemodel request."""
 
     model_config = ConfigDict(
-        extra="forbid" if SETTINGS.strict_input_validation else "allow", frozen=True
+        extra="forbid" if SETTINGS.strict_input_validation else "ignore", frozen=True
     )
 
 
@@ -29,10 +38,10 @@ class BaseModelRequestWithExtra(BaseModel):
     """Pydantic Basemodel request storing extra JSON fields."""
 
     model_config = ConfigDict(extra="allow", frozen=True)
-    __pydantic_extra__: dict[str, JsonValue] = {}
+    __pydantic_extra__: JsonMapping = {}
 
 
-def _ensure_list_size(lst: list[JsonValue], idx: int) -> None:
+def _ensure_list_size(lst: JsonList, idx: int) -> None:
     """Extend list to accommodate a specific index.
 
     Pads the list with None values up to the required index if needed.
@@ -46,8 +55,8 @@ def _ensure_list_size(lst: list[JsonValue], idx: int) -> None:
 
 
 def _navigate_bracket_part(
-    current: dict[str, JsonValue] | list[JsonValue], part: str, next_key: str
-) -> dict[str, JsonValue] | list[JsonValue]:
+    current: JsonMappingOrList, part: str, next_key: str
+) -> JsonMappingOrList:
     """Navigate one level deeper in form bracket notation structure.
 
     Processes a single bracket notation segment and returns the next level
@@ -82,9 +91,7 @@ def _navigate_bracket_part(
     return current
 
 
-def _set_bracket_leaf(
-    current: dict[str, JsonValue] | list[JsonValue], leaf: str, value: JsonValue
-) -> None:
+def _set_bracket_leaf(current: JsonMappingOrList, leaf: str, value: JsonValue) -> None:
     """Set the final value at the leaf position of bracket notation.
 
     Handles three types of leaf assignments:
@@ -152,7 +159,7 @@ class BaseModelRequestWithFormExtra(BaseModelRequestWithExtra):
         if not isinstance(data, dict):
             return data
 
-        result: dict[str, JsonValue] = {}
+        result: JsonMapping = {}
         for key, value in data.items():
             if "[" not in key:
                 result[key] = value
@@ -168,7 +175,7 @@ class BaseModelRequestWithFormExtra(BaseModelRequestWithExtra):
                     json_value = from_json(value)
 
             *path, leaf = parts
-            current: dict[str, JsonValue] | list[JsonValue] = result
+            current: JsonMappingOrList = result
             for part, next_key in zip(path, [*path[1:], leaf], strict=False):
                 current = _navigate_bracket_part(current, part, next_key)
 

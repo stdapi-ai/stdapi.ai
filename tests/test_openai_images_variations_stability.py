@@ -25,12 +25,12 @@ class TestStabilityVariations:
     def test_variation_b64_single(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_image_file: bytes,
         model_id: str,
     ) -> None:
         """Test basic variation with base64 response format."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Stability AI is not available on the official OpenAI API")
 
         response = openai_client.images.create_variation(

@@ -8,19 +8,20 @@ from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
 
 from pydantic_core import from_json
 
+from stdapi.api_errors import ApiError
 from stdapi.aws import get_client
 from stdapi.aws_bedrock import BEDROCK_BODY_SIZE_LIMIT, MIME_TYPES_TO_VIDEO_TYPE
 from stdapi.aws_s3 import aws_s3_cleanup
 from stdapi.models import get_content_type_and_size, put_to_s3
 from stdapi.models.embedding import EmbeddingModelBase, EmbeddingResponse
 from stdapi.monitoring import REQUEST_ID
-from stdapi.openai_exceptions import OpenaiError
 from stdapi.tokenizer import estimate_token_count
 
 if TYPE_CHECKING:
     from fastapi import BackgroundTasks
-    from pydantic import JsonValue
     from types_aiobotocore_s3.client import S3Client
+
+    from stdapi.types import JsonMapping
 
 _TaskType = Literal["SINGLE_EMBEDDING", "SEGMENTED_EMBEDDING"]
 _EmbeddingPurpose = Literal[
@@ -253,7 +254,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         self,
         inputs: list[str],
         dimensions: int | None,
-        extra_params: dict[str, JsonValue],
+        extra_params: JsonMapping,
         background_tasks: BackgroundTasks,
     ) -> EmbeddingResponse:
         """Get embeddings for text.
@@ -302,7 +303,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         self,
         value: str,
         base_params: _EmbeddingParams,
-        extra_params: dict[str, JsonValue],
+        extra_params: JsonMapping,
         background_tasks: BackgroundTasks,
         *,
         force_s3_data: bool = False,
@@ -377,7 +378,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         media_type: _MediaTypes,
         file_format: str,
         base_params: _EmbeddingParams,
-        extra_params: dict[str, JsonValue],
+        extra_params: JsonMapping,
     ) -> _Response:
         """Handles synchronous single media embeddings.
 
@@ -394,7 +395,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             processed media segments.
 
         Raises:
-            OpenaiError: If any part of the segmented embedding result indicates a
+            ApiError: If any part of the segmented embedding result indicates a
             failure, an exception is raised detailing the error reason and message.
         """
         s3_source = value.startswith("s3://")
@@ -462,7 +463,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         media_type: _MediaTypes,
         file_format: str,
         base_params: _EmbeddingParams,
-        extra_params: dict[str, JsonValue],
+        extra_params: JsonMapping,
         background_tasks: BackgroundTasks,
     ) -> _Response:
         """Handles asynchronous segmented media embeddings.
@@ -482,7 +483,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             processed media segments.
 
         Raises:
-            OpenaiError: If any part of the segmented embedding result indicates a
+            ApiError: If any part of the segmented embedding result indicates a
             failure, an exception is raised detailing the error reason and message.
         """
         if media_type == "image":
@@ -545,7 +546,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
 
             if errors:
                 msg = f"Error in segmented embedding results: {'; '.join(errors)}."
-                raise OpenaiError(msg)
+                raise ApiError(msg)
 
             return _Response(
                 embeddings=[
@@ -594,7 +595,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
 
     @staticmethod
     def _add_extra_params(
-        extra_params: dict[str, JsonValue],
+        extra_params: JsonMapping,
         media_type: _MediaTypes,
         params: _SegmentedEmbeddingParams | _SingleEmbeddingParams,
     ) -> None:

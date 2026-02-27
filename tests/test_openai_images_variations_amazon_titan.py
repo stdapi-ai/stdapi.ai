@@ -26,12 +26,12 @@ class TestAmazonTitanVariations:
     def test_variation_b64_single(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_image_file: bytes,
         model_id: str,
     ) -> None:
         """Test basic variation with base64 response format."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Amazon Titan is not available on the official OpenAI API")
 
         response = openai_client.images.create_variation(
@@ -60,12 +60,12 @@ class TestAmazonTitanVariations:
     def test_variation_with_text_image_task_type(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_image_file: bytes,
         model_id: str,
     ) -> None:
         """Test variation with TEXT_IMAGE taskType (condition image generation)."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Amazon Titan is not available on the official OpenAI API")
 
         response = openai_client.images.create_variation(
@@ -88,12 +88,12 @@ class TestAmazonTitanVariations:
     def test_variation_with_color_guided_task_type(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_image_file: bytes,
         model_id: str,
     ) -> None:
         """Test variation with COLOR_GUIDED_GENERATION taskType."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Amazon Titan is not available on the official OpenAI API")
 
         response = openai_client.images.create_variation(
@@ -120,12 +120,12 @@ class TestAmazonTitanVariations:
     def test_variation_with_invalid_task_type(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_image_file: bytes,
         model_id: str,
     ) -> None:
         """Test that invalid taskType raises BadRequestError."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Amazon Titan is not available on the official OpenAI API")
 
         with pytest.raises(BadRequestError) as exc_info:
@@ -147,12 +147,12 @@ class TestAmazonTitanVariations:
     def test_variation_color_guided_missing_colors(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_image_file: bytes,
         model_id: str,
     ) -> None:
         """Test that COLOR_GUIDED_GENERATION without colors raises BadRequestError."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Amazon Titan is not available on the official OpenAI API")
 
         with pytest.raises(BadRequestError) as exc_info:

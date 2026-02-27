@@ -4,7 +4,7 @@ from typing import Annotated, ClassVar, Literal, Self
 
 from pydantic import AliasChoices, Field, model_validator
 
-from stdapi.openai_exceptions import OpenaiUnsupportedParameterError
+from stdapi.api_errors import UnsupportedParameterError
 from stdapi.types import BaseModelRequest, BaseModelRequestWithExtra, BaseModelResponse
 from stdapi.types.bedrock import AmazonBedrockGuardrailConfigParams  # noqa: TC001
 from stdapi.types.openai import (
@@ -1467,7 +1467,7 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
 
         Raises:
             ValueError: If incompatible options are provided (e.g., n>1 with stream, conflicting tools).
-            OpenaiUnsupportedParameterError: If a request parameter marked as unsupported is used.
+            UnsupportedParameterError: If a request parameter marked as unsupported is used.
         """
         if self.n is not None and self.n != 1 and self.stream is True:
             msg = "Multiple choices (n>1) are not supported with streaming enabled on this backend."
@@ -1519,5 +1519,5 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
             msg = "`custom` tools are not supported on this backend."
             raise ValueError(msg)
         for key in self._UNSUPPORTED & self.model_fields_set:
-            raise OpenaiUnsupportedParameterError(key)
+            raise UnsupportedParameterError(key)
         return self

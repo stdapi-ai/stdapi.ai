@@ -5,8 +5,8 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
 from botocore.exceptions import ClientError
-from fastapi import HTTPException
 
+from stdapi.api_errors import ApiError, UnsupportedModelError
 from stdapi.aws import get_client
 from stdapi.config import SETTINGS
 from stdapi.media import encode_audio_stream, stream_body
@@ -14,20 +14,17 @@ from stdapi.models import (
     EXTRA_MODELS,
     EXTRA_MODELS_INPUT_MODALITY,
     EXTRA_MODELS_OUTPUT_MODALITY,
-    MODEL_ALIASES,
     ModelDetails,
 )
 from stdapi.models.audio import AudioModelBase, TTSResponse
 from stdapi.monitoring import REQUEST_LOG
-from stdapi.openai_exceptions import OpenaiUnsupportedModelError
-from stdapi.types import BaseModelResponse
+from stdapi.types import BaseModelResponse, JsonMapping
 from stdapi.types.openai_audio import OPENAI_VOICES_FEMALE
 from stdapi.utils import format_language_code, validation_error_handler
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
-    from pydantic import JsonValue
     from types_aiobotocore_comprehend.client import ComprehendClient
     from types_aiobotocore_polly.client import PollyClient
     from types_aiobotocore_polly.literals import (
@@ -80,11 +77,6 @@ _SUPPORTED_SPEECH_MODELS: set[str] = {
     f"{_PREFIX}generative",
 }
 
-# Use AWS Polly as the default TTS engine
-MODEL_ALIASES.update(
-    {"tts-1": "amazon.polly-standard", "tts-1-hd": "amazon.polly-neural"}
-)
-
 _VOICES_DESCRIPTIONS: dict[VoiceIdType, str] = {}
 _VOICES_BY_GENDERS: dict[GenderType, set[VoiceIdType]] = {}
 _VOICES_BY_LANGUAGE: dict[LanguageCodeType, set[VoiceIdType]] = {}
@@ -109,7 +101,7 @@ def _engine_from_model(model: str) -> EngineType:
         Engine name.
     """
     if model not in _SUPPORTED_SPEECH_MODELS:
-        raise OpenaiUnsupportedModelError(model)
+        raise UnsupportedModelError(model)
     return model.removeprefix(_PREFIX)  # type: ignore[return-value]
 
 
@@ -267,7 +259,7 @@ def _handle_polly_error(
         engine: Polly engine being used
 
     Raises:
-        HTTPException: With the appropriate error message and status code
+        ApiError: With the appropriate error message and status code
 
     Usage:
         with _handle_polly_error(model_id, voice_id, engine):
@@ -290,14 +282,10 @@ def _handle_polly_error(
                 if voices
                 else "Ensure this model is available for your region"
             )
-            raise HTTPException(
-                status_code=400,
-                detail=f"Voice '{voice_id}' not found for model '{model_id}'. {message}.",
-            ) from error
+            msg = f"Voice '{voice_id}' not found for model '{model_id}'. {message}."
+            raise ApiError(msg) from error
         if error.response["Error"]["Code"] in _CLIENT_VALIDATION_ERRORS:
-            raise HTTPException(
-                status_code=400, detail=error.response["Error"]["Message"]
-            ) from error
+            raise ApiError(error.response["Error"]["Message"]) from error
         raise  # pragma: no cover
 
 
@@ -306,13 +294,28 @@ class AudioModel(AudioModelBase[None, None]):
 
     MATCHER = _PREFIX
 
+    @classmethod
+    def get_aliases(cls, all_models: dict[str, ModelDetails]) -> dict[str, str]:  # noqa: ARG003
+        """Return dynamic aliases specific to this model class.
+
+        Override in subclasses to provide model-specific aliases.
+        Each alias maps an alternative name to a Bedrock model ID.
+
+        Args:
+            all_models: All available models keyed by model ID.
+
+        Returns:
+            A dict mapping alias to model ID.
+        """
+        return {"tts-1": "amazon.polly-standard", "tts-1-hd": "amazon.polly-neural"}
+
     async def tts(
         self,
         text: str,
         voice: str,
         resp_format: AudioFileFormat,
         speed: float = 1.0,
-        extra_params: dict[str, JsonValue] | None = None,
+        extra_params: JsonMapping | None = None,
     ) -> TTSResponse:
         """Generate audio from text using AWS Polly.
 

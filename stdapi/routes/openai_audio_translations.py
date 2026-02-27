@@ -12,6 +12,7 @@ from fastapi import (
     UploadFile,
 )
 
+from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
 from stdapi.config import SETTINGS
 from stdapi.models import validate_model
@@ -26,7 +27,7 @@ from stdapi.types.openai_audio import (
 from stdapi.utils import validation_error_handler
 
 router = APIRouter(
-    prefix=f"{SETTINGS.openai_routes_prefix}/v1/audio", tags=["audio", "openai"]
+    prefix=f"{SETTINGS.openai_routes_prefix}/v1/audio", tags=["Audio", TAG_OPENAI]
 )
 
 
@@ -133,7 +134,7 @@ async def create_translation(
         The translated text in English in the requested format.
 
     Raises:
-        HTTPException: When translation fails or invalid parameters are provided.
+        ApiError: When translation fails or invalid parameters are provided.
     """
     with validation_error_handler():
         request = TranslationCreateParams(

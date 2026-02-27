@@ -5,8 +5,8 @@ from contextlib import suppress
 from subprocess import PIPE
 from typing import TYPE_CHECKING
 
+from stdapi.api_errors import ApiError
 from stdapi.monitoring import log_error_details
-from stdapi.openai_exceptions import OpenaiError
 
 if TYPE_CHECKING:
     from asyncio.streams import StreamReader, StreamWriter
@@ -70,7 +70,7 @@ async def encode_audio_stream(
 
     Raises:
         ValueError: If raw PCM is specified without sample_rate or channels.
-        OpenaiError: If ffmpeg is not installed on the server.
+        ApiError: If ffmpeg is not installed on the server.
     """
     ffmpeg_args = ["ffmpeg"]
 
@@ -114,7 +114,7 @@ async def encode_audio_stream(
             f"The '{output_format}' encoding is not supported by the server. "
             "Please contact the administrator to enabled it."
         )
-        raise OpenaiError(msg) from exception
+        raise ApiError(msg) from exception
 
     input_task = create_task(_process_input_stream(stream, process.stdin))
 

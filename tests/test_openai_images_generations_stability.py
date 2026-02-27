@@ -18,10 +18,10 @@ class TestStabilityImages:
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", STABILITY_ALL)
     def test_generate_b64_single(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+        self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
         """Simple prompt returns one base64 image when response_format=b64_json."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Stability models are not available on the official OpenAI API")
 
         response = openai_client.images.generate(
@@ -40,13 +40,13 @@ class TestStabilityImages:
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", STABILITY_SAMPLE)
     def test_extra_params_negative_prompt(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+        self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
         """Extra body parameter negative_prompt is forwarded to provider.
 
         Not part of OpenAI Images API; accepted here as provider-specific field.
         """
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Stability models are not available on the official OpenAI API")
 
         response = openai_client.images.generate(
@@ -62,10 +62,10 @@ class TestStabilityImages:
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", STABILITY_SAMPLE)
     def test_generate_and_convert_to_webp(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+        self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
         """Generate a format not supported natively by the model."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Stability models are not available on the official OpenAI API")
 
         response = openai_client.images.generate(
@@ -87,10 +87,10 @@ class TestStabilityImages:
 
     @pytest.mark.parametrize("model_id", STABILITY_SAMPLE)
     def test_quality_unsupported_raises(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+        self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
         """Passing quality should raise 400 as the backend forbids it."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Stability models are not available on the official OpenAI API")
 
         with pytest.raises(BadRequestError):
@@ -103,10 +103,10 @@ class TestStabilityImages:
 
     @pytest.mark.parametrize("model_id", STABILITY_SAMPLE)
     def test_style_unsupported_raises(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+        self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
         """Passing style should raise 400 as the backend forbids it."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Stability models are not available on the official OpenAI API")
 
         with pytest.raises(BadRequestError):

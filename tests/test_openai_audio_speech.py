@@ -89,7 +89,7 @@ class TestAudioSpeech:
         self,
         openai_client: OpenAI,
         speech_standard_model: str,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_rate: str,
     ) -> None:
         """Test speech generation with extra Polly-specific parameters.
@@ -101,7 +101,7 @@ class TestAudioSpeech:
         Args:
             openai_client: OpenAI client instance for API calls
             speech_standard_model: Standard speech model identifier
-            use_openai_api: True is using official OpenAI API.
+            use_official_api: True is using official OpenAI API.
             sample_rate: Saple rate of generated voice.
 
         Validates:
@@ -109,7 +109,7 @@ class TestAudioSpeech:
             - SampleRate parameter works correctly
             - Audio is generated successfully with custom sample rate
         """
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Amazon Polly is not available on the official OpenAI API")
         response = openai_client.audio.speech.create(
             model=speech_standard_model,
@@ -125,7 +125,7 @@ class TestAudioSpeech:
         assert response.response.headers.get("content-type") == "audio/flac"
 
     def test_speech_with_extra_invalid_parameter(
-        self, openai_client: OpenAI, speech_standard_model: str, use_openai_api: bool
+        self, openai_client: OpenAI, speech_standard_model: str, use_official_api: bool
     ) -> None:
         """Test speech generation with invalid extra Polly-specific parameters.
 
@@ -135,14 +135,14 @@ class TestAudioSpeech:
         Args:
             openai_client: OpenAI client instance for API calls
             speech_standard_model: Standard speech model identifier
-            use_openai_api: True is using official OpenAI API.
+            use_official_api: True is using official OpenAI API.
 
         Validates:
             - Invalid extra Polly parameters are rejected
             - Proper error response with validation details
             - Error indicates the parameter validation failure
         """
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Amazon Polly is not available on the official OpenAI API")
 
         with pytest.raises(BadRequestError):

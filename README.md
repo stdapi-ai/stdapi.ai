@@ -3,9 +3,9 @@
 
 # stdapi.ai
 
-**OpenAI-Compatible API Gateway for AWS Bedrock and AI Services**
+**OpenAI & Anthropic Compatible API Gateway for AWS Bedrock and AI Services**
 
-Deploy any OpenAI-compatible application on AWS Bedrock—no code changes required. Access 80+ models from Claude, Llama, Nova, and more with enterprise-grade privacy, compliance controls, and AWS direct pricing.
+Run your favorite OpenAI and Anthropic-compatible applications on AWS Bedrock—works out of the box with any app or tool that supports the OpenAI or Anthropic APIs. Access 80+ models from Claude, Llama, Nova, and more with enterprise-grade privacy, compliance controls, and AWS pricing.
 
 [![AWS Marketplace](https://img.shields.io/badge/AWS-Marketplace-FF9900?logo=amazon-aws&logoColor=white)](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo)
 [![Documentation](https://img.shields.io/badge/docs-stdapi.ai-blue)](https://stdapi.ai)
@@ -16,11 +16,11 @@ Deploy any OpenAI-compatible application on AWS Bedrock—no code changes requir
 
 ## 🚀 What is stdapi.ai?
 
-**stdapi.ai** is an OpenAI-compatible API gateway for AWS Bedrock and AI services. Drop-in replacement for OpenAI SDK—works with LangChain, Continue.dev, Open WebUI, n8n, and 1000+ tools. Deploy your existing OpenAI applications to AWS without code changes.
+**stdapi.ai** is an OpenAI and Anthropic-compatible API gateway for AWS Bedrock and AI services. Drop-in replacement for OpenAI and Anthropic SDKs—works with LangChain, Continue.dev, Open WebUI, n8n, Claude SDK, and 1000+ tools without any modifications.
 
 ### Why Choose stdapi.ai?
 
-- **🔌 Production-Ready OpenAI API Compatibility** – Full support for chat, embeddings, images, audio (speech/transcription/translation), and more. Applications designed for OpenAI's API work instantly.
+- **🔌 Production-Ready OpenAI & Anthropic API Compatibility** – Full support for chat, embeddings, images, audio (speech/transcription/translation), and more. Applications designed for OpenAI's or Anthropic's API work instantly.
 - **🔒 Enterprise Compliance & Data Sovereignty** – Configure allowed AWS regions to meet your compliance requirements. All inference stays in your AWS account—data never shared with model providers or used for training.
 - **🌍 Multi-Region Bedrock Access** – Automatic cross-region inference profile selection for optimal availability and pricing. Access models across multiple AWS regions through one unified endpoint.
 - **💰 AWS Direct Pricing, No Markup** – Pay-per-use pricing with no subscriptions. Pay only AWS Bedrock rates for exactly what you use—no monthly minimums or capacity commitments.
@@ -134,11 +134,11 @@ Build self-directed AI agents for complex multi-step tasks.
 
 ## 🎯 Why Use stdapi.ai for Integrations?
 
-- ✅ **No code changes required** – Just update the API endpoint in your application settings
+- ✅ **Works out of the box** – Just update the API endpoint in your application settings
 - ✅ **Access 80+ models** – Claude 4.6+, Nova 2, Llama 4, DeepSeek v3.2, Stable Diffusion, and more
 - ✅ **Enterprise data control** – All processing stays in your AWS account
 - ✅ **Pay-per-use pricing** – No subscriptions, pay only AWS Bedrock rates for actual usage
-- ✅ **AWS-native features** – Leverage prompt caching, reasoning modes, and guardrails through standard OpenAI API
+- ✅ **AWS-native features** – Leverage prompt caching, reasoning modes, and guardrails through standard OpenAI or Anthropic APIs
 
 **📚 [View Complete Use Cases & Integration Guides →](https://stdapi.ai/use_cases/)**
 
@@ -172,12 +172,12 @@ Build self-directed AI agents for complex multi-step tasks.
 Launch via Terraform module on ECS, or run the Docker image locally for development.
 
 **2. Point your application to stdapi.ai**
-Change only the `base_url` in your OpenAI client. All existing code, prompts, and workflows continue working.
+Update the `base_url` in your OpenAI or Anthropic client settings. All existing code, prompts, and workflows continue working.
 
 **3. Access AWS Bedrock models immediately**
-Use Claude, Nova, Llama, or any Bedrock model. Switch between models, regions, and providers without changing application code.
+Use Claude, Nova, Llama, or any Bedrock model. Switch between models, regions, and providers instantly.
 
-**Zero lock-in:** Standard OpenAI API means you can switch back or to another provider anytime.
+**Zero lock-in:** Standard OpenAI and Anthropic APIs mean you can switch back or to another provider anytime.
 
 ---
 

@@ -9,13 +9,15 @@ from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 from aiohttp import ClientError as AIOHTTPClientError
 from aiohttp import ClientSession
 from botocore.exceptions import ClientError
-from fastapi import HTTPException
 from magic import from_buffer
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, JsonValue
 
+from stdapi.api_errors import ApiError
+from stdapi.aws import get_client
 from stdapi.config import DOWNLOAD_TIMEOUT, SETTINGS
 from stdapi.security import validate_url_ssrf
 from stdapi.server import HTTP_CLIENT_HEADERS
+from stdapi.types import JsonMapping  # noqa: TC001
 from stdapi.utils import b64decode, validation_error_handler
 
 if TYPE_CHECKING:
@@ -32,12 +34,12 @@ if TYPE_CHECKING:
         VideoFormatType,
     )
     from types_aiobotocore_bedrock_runtime.type_defs import (
-        CachePointBlockTypeDef,
         ContentBlockTypeDef,
         GuardrailStreamConfigurationTypeDef,
         ImageBlockTypeDef,
         InferenceConfigurationTypeDef,
         MessageUnionTypeDef,
+        OutputConfigTypeDef,
         PerformanceConfigurationTypeDef,
         PromptVariableValuesTypeDef,
         ServiceTierTypeDef,
@@ -66,6 +68,7 @@ if TYPE_CHECKING:
         performanceConfig: NotRequired[PerformanceConfigurationTypeDef]
         guardrailConfig: NotRequired[GuardrailStreamConfigurationTypeDef]
         serviceTier: NotRequired[ServiceTierTypeDef]
+        outputConfig: NotRequired[OutputConfigTypeDef]
 
 
 #: Bedrock documents types with the matching MIME type
@@ -141,10 +144,11 @@ PromptCaching = Literal["system", "messages", "tools"]
 #: Available prompt caching
 PROMPT_CACHING: frozenset[PromptCaching] = frozenset(("system", "messages", "tools"))
 
+#: Minimal prompt caching
+PROMPT_CACHING_BASIC: frozenset[PromptCaching] = frozenset(("system", "messages"))
+
 # Default prompt caching configuration
-PROMPT_CACHING_DEFAULT: dict[Literal["cachePoint"], CachePointBlockTypeDef] = {
-    "cachePoint": {"type": "default"}
-}
+PROMPT_CACHING_DEFAULT: ContentBlockTypeDef = {"cachePoint": {"type": "default"}}
 
 
 class _DefaultModelParameters(BaseModel):
@@ -176,7 +180,7 @@ class _DefaultModelParameters(BaseModel):
     """
 
     model_config = ConfigDict(extra="allow", frozen=True)
-    __pydantic_extra__: dict[str, JsonValue] = {}
+    __pydantic_extra__: JsonMapping = {}
 
     # Validate AWS Bedrock defined inference parameters
     # With validation_alias to the Bedrock native name
@@ -276,7 +280,7 @@ def set_performance_configuration(headers: Headers) -> None:
 
 def set_inference_configuration(
     model_id: str,
-    additional_request_fields: dict[str, JsonValue],
+    additional_request_fields: JsonMapping,
     temperature: float | None = None,
     top_p: float | None = None,
     max_tokens: int | None = None,
@@ -338,7 +342,7 @@ def set_inference_configuration(
 
 def get_extra_model_parameters(
     model_id: str, request: BaseModelRequestWithExtra
-) -> dict[str, JsonValue]:
+) -> JsonMapping:
     """Fetches additional model parameters for a given model and request.
 
     This function retrieves the default parameters associated with the specified
@@ -355,7 +359,7 @@ def get_extra_model_parameters(
         A dictionary containing the aggregated model parameters.
     """
     try:
-        params: dict[str, JsonValue] = SETTINGS.default_model_params[model_id]
+        params: JsonMapping = SETTINGS.default_model_params[model_id]
     except KeyError:
         params = {}
     params.update(request.model_extra or {})
@@ -367,7 +371,7 @@ def handle_bedrock_client_error() -> Generator[None]:
     """Context manager to translate Bedrock client errors to appropriate HTTP 4XX/5XX when possible.
 
     Raises:
-        HTTPException: With a status mapped from common Bedrock error codes.
+        ApiError: With a status mapped from common Bedrock error codes.
 
     Usage:
         with handle_bedrock_client_error():
@@ -376,24 +380,20 @@ def handle_bedrock_client_error() -> Generator[None]:
     try:
         yield
     except ClientError as error:
-        error_code = error.response["Error"]["Code"]
         error_message = error.response["Error"]["Message"]
-        if (
-            error.response["Error"]["Code"] == "ValidationException"
-            and "Invalid S3 credentials" in error.response["Error"]["Message"]
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail=(
+        match error.response["Error"]["Code"]:
+            case "ValidationException" if "Invalid S3 credentials" in error_message:
+                msg = (
                     "Unable to access the S3 bucket. "
                     "Ensure the S3 bucket is in the same region as the Bedrock model that is called."
-                ),
-            ) from error
-        if error_code in _BEDROCK_MODEL_ERROR_CODES:  # pragma: no cover
-            raise HTTPException(status_code=500, detail=error_message) from error
-        if error_code == "ModelNotReadyException":  # pragma: no cover
-            raise HTTPException(status_code=503, detail=error_message) from error
-        raise  # pragma: no cover
+                )
+                raise ApiError(msg) from error
+            case code if code in _BEDROCK_MODEL_ERROR_CODES:  # pragma: no cover
+                raise ApiError(error_message, status=500) from error
+            case "ModelNotReadyException":  # pragma: no cover
+                raise ApiError(error_message, status=503) from error
+            case _:  # pragma: no cover
+                raise
 
 
 def image_block_from_bytes(data: bytes, mime: str = "") -> ContentBlockTypeDef:
@@ -419,86 +419,156 @@ def image_block_from_bytes(data: bytes, mime: str = "") -> ContentBlockTypeDef:
     return {"image": image_block}
 
 
-async def image_block_from_s3_url(url: str) -> ContentBlockTypeDef | None:
+async def _download_http(url: str) -> bytes:
+    """Download content from an HTTP(S) URL.
+
+    Validates the URL against SSRF before downloading.
+
+    Args:
+        url: HTTP or HTTPS URL (caller must ensure the scheme is http/https).
+
+    Returns:
+        Downloaded bytes.
+
+    Raises:
+        ApiError: With status 400 when the download fails or the body is empty.
+    """
+    await validate_url_ssrf(url.lower())
+    async with ClientSession(
+        headers=HTTP_CLIENT_HEADERS, timeout=DOWNLOAD_TIMEOUT
+    ) as session:
+        try:
+            async with session.get(url) as resp:
+                resp.raise_for_status()
+                body = await resp.read()
+        except AIOHTTPClientError as error:
+            msg = f"Error downloading {url}: {error}"
+            raise ApiError(msg) from error
+        if not body:
+            msg = f"Error downloading {url}: Empty body"
+            raise ApiError(msg)
+        return body
+
+
+async def _download_s3(url: str) -> bytes:
+    """Download content from an S3 URL via the S3 client.
+
+    Args:
+        url: S3 URL string like s3://bucket/key (caller must ensure s3:// scheme).
+
+    Returns:
+        Downloaded bytes.
+
+    Raises:
+        ApiError: If the S3 URL is malformed or the download fails.
+    """
+    path = url[5:]
+    bucket, _, key = path.partition("/")
+    if not bucket or not key:
+        msg = f"Invalid S3 URL: {url}"
+        raise ApiError(msg)
+    async with get_client("s3") as s3:
+        try:
+            response = await s3.get_object(Bucket=bucket, Key=key)
+            return await response["Body"].read()  # type: ignore[no-any-return]
+        except ClientError as error:
+            msg = f"Error downloading {url}: {error}"
+            raise ApiError(msg) from error
+
+
+def _image_block_from_s3_url(url: str) -> ContentBlockTypeDef:
     """Convert an s3:// URL to a Bedrock image content block using s3Location.
 
     Args:
         url: S3 URL string like s3://bucket/key
 
     Returns:
-        Content block dict with s3Location, or None when not s3.
+        Content block dict with s3Location.
 
     Raises:
-        HTTPException: If the URL does not contain a supported image extension.
+        ApiError: If the URL does not contain a supported image extension.
     """
-    if not url.lower().startswith("s3://"):
-        return None  # Not an S3 URL
-    match = _IMAGE_URL_EXT.search(url)
-    if match:
-        ext = match.group(1).lower()
+    if m := _IMAGE_URL_EXT.search(url):
+        ext = m.group(1).lower()
         image: ImageBlockTypeDef = {
             "format": "jpeg" if ext == "jpg" else ext,  # type: ignore[typeddict-item]
             "source": {"s3Location": {"uri": url}},
         }
         return {"image": image}
-    raise HTTPException(status_code=400, detail=f"Invalid image data URL: {url}")
+    msg = f"Invalid image URL: {url}"
+    raise ApiError(msg)
 
 
-async def image_block_from_http_url(url: str) -> ContentBlockTypeDef | None:
-    """Download an image over HTTP(S) and return a Bedrock content block.
+async def image_block_from_url(url: str) -> ContentBlockTypeDef:
+    """Convert any supported image URL to a Bedrock image content block.
+
+    Supports data URLs, s3:// URLs, and http(s) URLs.
 
     Args:
-        url: HTTP or HTTPS URL.
+        url: Image URL string (data:, s3://, http://, or https://).
 
     Returns:
-        A ContentBlockTypeDef with image bytes and inferred format, or None if
-        the URL is not HTTP(S).
+        A Bedrock ContentBlockTypeDef for the referenced image.
 
     Raises:
-        HTTPException: With status 400 when the download fails or the body is empty.
+        ApiError: If the URL scheme is not supported.
     """
     url_lower = url.lower()
-    if url_lower.startswith(("http://", "https://")):
-        await validate_url_ssrf(url_lower)
-        async with ClientSession(
-            headers=HTTP_CLIENT_HEADERS, timeout=DOWNLOAD_TIMEOUT
-        ) as session:
-            try:
-                async with session.get(url) as resp:
-                    resp.raise_for_status()
-                    body = await resp.read()
-            except AIOHTTPClientError as error:
-                raise HTTPException(
-                    status_code=400, detail=f"Error downloading image {url}: {error}"
-                ) from error
-            if not body:
-                raise HTTPException(
-                    status_code=400, detail=f"Error downloading image {url}: Empty body"
-                )
-            return image_block_from_bytes(body)
-    return None
+    match url_lower:
+        case _ if url_lower.startswith("data:"):
+            if m := _IMAGE_DATA_EXT.match(url):
+                try:
+                    data = await b64decode(m.group(2), validate=True)
+                except ValueError as error:
+                    msg = f"Invalid base64 in data URL starting with {url[:16]}: {error.args[0]}"
+                    raise ApiError(msg) from None
+                return image_block_from_bytes(data)
+            msg = f"Invalid image data URL: {url}"
+            raise ApiError(msg)
+        case _ if url_lower.startswith("s3://"):
+            return _image_block_from_s3_url(url)
+        case _ if url_lower.startswith(("http://", "https://")):
+            return image_block_from_bytes(await _download_http(url))
+        case _:
+            msg = f"Unsupported image URL: {url}"
+            raise ApiError(msg)
 
 
-async def image_block_from_data_url(url: str) -> ContentBlockTypeDef | None:
-    """Convert a data: URL to a Bedrock image content block.
-
-    Supports common image mime types and base64 payloads only. Returns None when
-    the URL is not a supported data URL.
+async def download_content(url: str) -> bytes:
+    """Download content from any supported URL scheme (http(s), s3).
 
     Args:
-        url: Data URL string like data:image/png;base64,<b64>
+        url: URL string (http://, https://, or s3://).
 
     Returns:
-        Content block dict with image bytes and format, or None.
+        Downloaded bytes.
+
+    Raises:
+        ApiError: If the URL scheme is not supported or the download fails.
     """
-    match = _IMAGE_DATA_EXT.match(url)
-    if not match:
-        return None  # Not an image data
-    try:
-        data = await b64decode(match.group(2), validate=True)
-    except ValueError as error:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid base64 in data URL starting with {url[:16]}: {error.args[0]}",
-        ) from None
-    return image_block_from_bytes(data)
+    url_lower = url.lower()
+    match url_lower:
+        case _ if url_lower.startswith(("http://", "https://")):
+            return await _download_http(url)
+        case _ if url_lower.startswith("s3://"):
+            return await _download_s3(url)
+        case _:
+            msg = f"Unsupported URL scheme: {url}"
+            raise ApiError(msg)
+
+
+def build_system_blocks(*content: str) -> list[SystemContentBlockTypeDef]:
+    """Builds and returns a list of system content blocks from provided text elements.
+
+    This function filters out any empty values from the given input and constructs a list
+    of `SystemContentBlockTypeDef` dictionary objects, where each dictionary contains the
+    text content.
+
+    Args:
+        *content: A variable number of string arguments representing the input content.
+
+    Returns:
+        A list of dictionary objects, each containing
+            a `text` key with the corresponding non-None input string as its value.
+    """
+    return [{"text": part} for part in content if part]

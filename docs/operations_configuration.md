@@ -189,11 +189,12 @@ Choose **one** method (mutually exclusive):
 | [`API_KEY_SECRETSMANAGER_KEY`](#api-key-secretsmanager-key)       | `api_key` | JSON key name within Secrets Manager secret                        |
 | [`API_KEY`](#api-key)                                             | None      | Direct API key value (not recommended for production)              |
 
-### :material-api: OpenAI Compatibility
+### :material-api: API Compatibility
 
-| Variable                                        | Default | Description                                       |
-|-------------------------------------------------|---------|---------------------------------------------------|
-| [`OPENAI_ROUTES_PREFIX`](#openai-routes-prefix) |         | Base path prefix for OpenAI-compatible API routes |
+| Variable                                              | Default      | Description                                          |
+|-------------------------------------------------------|--------------|------------------------------------------------------|
+| [`OPENAI_ROUTES_PREFIX`](#openai-routes-prefix)       |              | Base path prefix for OpenAI-compatible API routes    |
+| [`ANTHROPIC_ROUTES_PREFIX`](#anthropic-routes-prefix) | `/anthropic` | Base path prefix for Anthropic-compatible API routes |
 
 ### :material-chart-line: Logging
 
@@ -224,17 +225,19 @@ Choose **one** method (mutually exclusive):
 
 ### :material-cog: Application Behavior
 
-| Variable                                                 | Default                 | Description                                                                                |
-|----------------------------------------------------------|-------------------------|--------------------------------------------------------------------------------------------|
-| [`TIMEZONE`](#validation-and-logging)                    | `UTC`                   | IANA timezone identifier for request timestamps                                            |
-| [`STRICT_INPUT_VALIDATION`](#validation-and-logging)     | `false`                 | Reject API requests with unknown/extra fields                                              |
-| [`DEFAULT_TTS_MODEL`](#default-tts-model)                | `amazon.polly-standard` | Default text-to-speech model: `standard`, `neural`, `long-form`, or `generative`           |
-| [`DEFAULT_TTS_LANGUAGE`](#default-tts-language)          | None                    | Default language for TTS (e.g., `en-US`); when set, skips AWS Comprehend auto-detection    |
-| [`TOKENS_ESTIMATION`](#tokens-estimation)                | `false`                 | Estimate token counts using tiktoken when model doesn't provide them                       |
-| [`TOKENS_ESTIMATION_DEFAULT_ENCODING`](#tokens-encoding) | `o200k_base`            | Tiktoken encoding algorithm: `o200k_base` (GPT-4o+), `cl100k_base` (GPT-4), or `p50k_base` |
-| [`DEFAULT_MODEL_PARAMS`](#default-model-params)          | `{}`                    | JSON object with per-model default inference parameters (temperature, max_tokens, etc.)    |
-| [`MODEL_CACHE_SECONDS`](#model-cache-seconds)            | `900`                   | Model list cache lifetime in seconds before lazy refresh (default: 15 minutes)             |
-| [`DROP_UNSUPPORTED_SYSTEM_PROMPT`](#drop-unsupported-system-prompt) | `true`      | Drop system prompts for unsupported models; when `false`, return error instead             |
+| Variable                                                            | Default                 | Description                                                                                |
+|---------------------------------------------------------------------|-------------------------|--------------------------------------------------------------------------------------------|
+| [`TIMEZONE`](#validation-and-logging)                               | `UTC`                   | IANA timezone identifier for request timestamps                                            |
+| [`STRICT_INPUT_VALIDATION`](#validation-and-logging)                | `false`                 | Reject API requests with unknown/extra fields                                              |
+| [`DEFAULT_TTS_MODEL`](#default-tts-model)                           | `amazon.polly-standard` | Default text-to-speech model: `standard`, `neural`, `long-form`, or `generative`           |
+| [`DEFAULT_TTS_LANGUAGE`](#default-tts-language)                     | None                    | Default language for TTS (e.g., `en-US`); when set, skips AWS Comprehend auto-detection    |
+| [`TOKENS_ESTIMATION`](#tokens-estimation)                           | `false`                 | Estimate token counts using tiktoken when model doesn't provide them                       |
+| [`TOKENS_ESTIMATION_DEFAULT_ENCODING`](#tokens-encoding)            | `o200k_base`            | Tiktoken encoding algorithm: `o200k_base` (GPT-4o+), `cl100k_base` (GPT-4), or `p50k_base` |
+| [`DEFAULT_MODEL_PARAMS`](#default-model-params)                     | `{}`                    | JSON object with per-model default inference parameters (temperature, max_tokens, etc.)    |
+| [`MODEL_CACHE_SECONDS`](#model-cache-seconds)                       | `900`                   | Model list cache lifetime in seconds before lazy refresh (default: 15 minutes)             |
+| [`DROP_UNSUPPORTED_SYSTEM_PROMPT`](#drop-unsupported-system-prompt) | `true`                  | Drop system prompts for unsupported models; when `false`, return error instead             |
+| [`ANTHROPIC_BETA_FILTER`](#anthropic-beta-filter)                   | `true`                  | Enable filtering of unsupported `anthropic_beta` flags for Claude models                   |
+| [`ANTHROPIC_BETA_ALLOWLIST`](#anthropic-beta-allowlist)             | `(empty)`               | Additional `anthropic_beta` flags to allow beyond built-in Bedrock defaults                |
 
 ### :material-file-document: API Documentation
 
@@ -1040,6 +1043,7 @@ These permissions are mandatory for stdapi.ai to discover and invoke Bedrock mod
       "Sid": "BedrockModelInvoke",
       "Effect": "Allow",
       "Action": [
+        "bedrock:CountTokens",
         "bedrock:GetAsyncInvoke",
         "bedrock:InvokeModel",
         "bedrock:InvokeModelWithResponseStream",
@@ -1339,6 +1343,7 @@ Required if you configure API authentication. See [Authentication](#authenticati
           "Sid": "BedrockModelInvoke",
           "Effect": "Allow",
           "Action": [
+            "bedrock:CountTokens",
             "bedrock:GetAsyncInvoke",
             "bedrock:InvokeModel",
             "bedrock:InvokeModelWithResponseStream",
@@ -1382,6 +1387,7 @@ Required if you configure API authentication. See [Authentication](#authenticati
           "Sid": "BedrockModelInvoke",
           "Effect": "Allow",
           "Action": [
+            "bedrock:CountTokens",
             "bedrock:GetAsyncInvoke",
             "bedrock:InvokeModel",
             "bedrock:InvokeModelWithResponseStream",
@@ -1443,7 +1449,7 @@ Required if you configure API authentication. See [Authentication](#authenticati
 
 | Feature                                         | Required Permissions                                                                                                                                       | Configuration                                                                |
 |-------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------|
-| **Bedrock Models (Invoke)**                     | `bedrock:InvokeModel`<br>`bedrock:InvokeModelWithResponseStream`<br>`bedrock:InvokeTool`                                                                   | Always required                                                              |
+| **Bedrock Models (Invoke)**                     | `bedrock:CountTokens`<br>`bedrock:InvokeModel`<br>`bedrock:InvokeModelWithResponseStream`<br>`bedrock:InvokeTool`                                          | Always required                                                              |
 | **Bedrock Models (Discovery)**                  | `bedrock:ListFoundationModels`<br>`bedrock:GetFoundationModelAvailability`<br>`bedrock:ListProvisionedModelThroughputs`<br>`bedrock:ListInferenceProfiles` | Always required                                                              |
 | **Bedrock Marketplace Auto-Subscribe**          | `aws-marketplace:Subscribe`<br>`aws-marketplace:ViewSubscriptions`                                                                                         | `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE=true` (default)                      |
 | **Bedrock Inference Profiles & Prompt Routers** | `bedrock:GetInferenceProfile`<br>`bedrock:GetPromptRouter`                                                                                                 | `AWS_BEDROCK_ALLOW_*_ARN=true` or `AWS_BEDROCK_MODEL_ARN_MAPPING` configured |
@@ -1567,7 +1573,9 @@ export API_KEY=sk-1234567890abcdef...
 
 ---
 
-## OpenAI API Compatibility
+## API Compatibility
+
+Configure the base URL paths for OpenAI and Anthropic-compatible API routes.
 
 #### `OPENAI_ROUTES_PREFIX` { #openai-routes-prefix }
 
@@ -1575,7 +1583,7 @@ export API_KEY=sk-1234567890abcdef...
 :   Base path prefix for OpenAI-compatible API routes
 
 :octicons-gear-24: **Default**
-:   
+:   `` (empty, routes mounted at root)
 
 :octicons-workflow-24: **Effect**
 :   All OpenAI-compatible endpoints will be mounted under this prefix
@@ -1590,6 +1598,35 @@ export OPENAI_ROUTES_PREFIX=/api
     - `/api/v1/chat/completions`
     - `/api/v1/models`
     - `/api/v1/embeddings`
+
+#### `ANTHROPIC_ROUTES_PREFIX` { #anthropic-routes-prefix }
+
+:octicons-package-24: **Purpose**
+:   Base path prefix for Anthropic-compatible API routes
+
+:octicons-gear-24: **Default**
+:   `/anthropic`
+
+:octicons-workflow-24: **Effect**
+:   All Anthropic-compatible endpoints will be mounted under this prefix
+
+```bash
+export ANTHROPIC_ROUTES_PREFIX=/anthropic
+```
+
+!!! example "Example Endpoints"
+    With the default prefix `/anthropic`, endpoints are available at:
+
+    - `/anthropic/v1/messages`
+
+!!! tip "Custom Prefix"
+    You can change the prefix to match your organization's API structure:
+
+    ```bash
+    export ANTHROPIC_ROUTES_PREFIX=/api/anthropic
+    ```
+
+    This would mount the Messages API at `/api/anthropic/v1/messages`
 
 ---
 
@@ -2980,6 +3017,9 @@ Configure custom aliases to map user-friendly model names to actual model IDs. T
     - `tts-1-hd` → `amazon.polly-neural`
     - `whisper-1` → `amazon.transcribe`
 
+    stdapi.ai also supports dynamic model name aliases matching official provider APIs (OpenAI, Anthropic). You can use model names from provider documentation (e.g., `claude-sonnet-4-6`, `gpt-oss-20b`) which are automatically resolved to their corresponding AWS Bedrock model identifiers.
+
+
 #### `MODEL_ALIASES` { #model-aliases }
 
 :octicons-package-24: **Purpose**
@@ -3147,6 +3187,87 @@ export DROP_UNSUPPORTED_SYSTEM_PROMPT=false
     - :material-alert: **Strict validation** - Catch configuration errors early
     - :material-bug: **Debugging** - Identify when system prompts aren't being used
     - :material-shield-alert: **Security requirements** - Ensure system prompts are always applied
+
+## Anthropic Beta Flag Filtering
+
+Anthropic-compatible clients like Claude Code send `anthropic-beta` headers with experimental beta flags. Many of these flags (such as `files-api-2025-04-14`, `prompt-caching-2024-07-31`) are **not supported by AWS Bedrock** and cause `ValidationException` errors (HTTP 400).
+
+stdapi.ai automatically filters out unsupported flags while preserving supported ones, so clients work without any special configuration. Previously, the workaround was to set `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` on the client side, but this also disabled Bedrock-supported flags like `Interleaved-thinking-2025-05-14` and `token-efficient-tools-2025-02-19`, degrading capabilities. This workaround is no longer needed.
+
+Filtering is controlled by two settings: [`ANTHROPIC_BETA_FILTER`](#anthropic-beta-filter) to enable or disable it, and [`ANTHROPIC_BETA_ALLOWLIST`](#anthropic-beta-allowlist) to extend the built-in set of allowed flags.
+
+#### `ANTHROPIC_BETA_FILTER` { #anthropic-beta-filter }
+
+:octicons-package-24: **Purpose**
+:   Enable or disable filtering of unsupported `anthropic_beta` flags for Anthropic Claude models
+
+:octicons-database-24: **Type**
+:   Boolean
+
+:octicons-gear-24: **Default**
+:   `true`
+
+:octicons-workflow-24: **Behavior**
+:   When enabled, `anthropic_beta` flags not in the allowlist are silently removed from requests before they reach Bedrock. A warning is logged when flags are filtered. When disabled, all flags are passed through to Bedrock as-is
+
+```bash
+# Enabled (default) - filter unsupported flags automatically
+# No environment variable needed
+
+# Disable filtering entirely (pass all flags through to Bedrock)
+export ANTHROPIC_BETA_FILTER=false
+```
+
+!!! tip "When to Disable"
+    Set to `false` only when:
+
+    - :material-test-tube: **Testing** - You want to verify Bedrock behavior with specific flags directly
+    - :material-cog: **Custom setups** - You manage flag compatibility at the client level
+
+#### `ANTHROPIC_BETA_ALLOWLIST` { #anthropic-beta-allowlist }
+
+:octicons-package-24: **Purpose**
+:   Add extra `anthropic_beta` flags to the built-in set of Bedrock-supported flags
+
+:octicons-code-24: **Format**
+:   Comma-separated string of additional beta flag names
+
+:octicons-gear-24: **Default**
+:   Empty (only the built-in Bedrock defaults are used)
+
+:octicons-workflow-24: **Behavior**
+:   The flags specified here are **merged with** the built-in set of Bedrock-supported flags. You only need to specify extra flags beyond the defaults (e.g., newly added Bedrock flags). Only effective when [`ANTHROPIC_BETA_FILTER`](#anthropic-beta-filter) is `true`
+
+```bash
+# Use built-in defaults only (recommended) - no environment variable needed
+
+# Add newly supported Bedrock flags without waiting for a stdapi.ai update
+export ANTHROPIC_BETA_ALLOWLIST='new-feature-2026-03-01,another-flag-2026-04-01'
+```
+
+**Built-in Allowed Flags:**
+
+| Flag                               | Feature                       |
+|------------------------------------|-------------------------------|
+| `computer-use-2024-10-22`          | Computer use (Claude 3.5)     |
+| `computer-use-2025-01-24`          | Computer use (Claude 3.7)     |
+| `computer-use-2025-11-24`          | Computer use (Claude 4.5/4.6) |
+| `token-efficient-tools-2025-02-19` | Token efficient tools         |
+| `Interleaved-thinking-2025-05-14`  | Interleaved thinking          |
+| `output-128k-2025-02-19`           | 128K output                   |
+| `dev-full-thinking-2025-05-14`     | Raw thinking dev mode         |
+| `context-1m-2025-08-07`            | 1M context                    |
+| `context-management-2025-06-27`    | Context management (memory)   |
+| `effort-2025-11-24`                | Effort control                |
+| `tool-search-tool-2025-10-19`      | Tool search                   |
+| `tool-examples-2025-10-29`         | Tool use examples             |
+
+!!! success "Use Cases"
+    **Filtering enabled (default)** for:
+
+    - :material-robot: **Claude Code via Bedrock** - Clients work without `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`
+    - :material-shield-check: **Production stability** - Prevent unsupported flags from causing request failures
+    - :material-swap-horizontal: **Drop-in compatibility** - Clients configured for direct Anthropic API work through stdapi.ai without changes
 
 ---
 

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Response
 from fastapi.responses import StreamingResponse
 from sse_starlette import EventSourceResponse, JSONServerSentEvent
 
+from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
 from stdapi.aws_bedrock import get_extra_model_parameters
 from stdapi.config import SETTINGS
@@ -29,7 +30,7 @@ if TYPE_CHECKING:
 
 
 router = APIRouter(
-    prefix=f"{SETTINGS.openai_routes_prefix}/v1/audio", tags=["audio", "openai"]
+    prefix=f"{SETTINGS.openai_routes_prefix}/v1/audio", tags=["Audio", TAG_OPENAI]
 )
 
 #: Content-type format name if different from the response format name
@@ -153,7 +154,7 @@ async def create_speech(
         Response: Audio file in the specified format or streaming response.
 
     Raises:
-        HTTPException: When audio generation fails, validation errors occur, or
+        ApiError: When audio generation fails, validation errors occur, or
             unsupported voice/model combinations are provided.
     """
     log_request_params(request)

@@ -13,7 +13,8 @@ from stdapi.utils import is_data_uri
 
 if TYPE_CHECKING:
     from fastapi import BackgroundTasks
-    from pydantic import JsonValue
+
+    from stdapi.types import JsonMapping
 
 
 class _EmbeddingConfig(TypedDict):
@@ -66,7 +67,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         self,
         inputs: list[str],
         dimensions: int | None,
-        extra_params: dict[str, JsonValue],
+        extra_params: JsonMapping,
         background_tasks: BackgroundTasks,  # noqa: ARG002
     ) -> EmbeddingResponse:
         """Get embeddings for text.

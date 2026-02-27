@@ -16,10 +16,10 @@ class TestNovaChatCompletions:
     @pytest.mark.expensive
     @pytest.mark.parametrize("model", NOVA_ALL)
     def test_reasoning_effort_parameter(
-        self, openai_client: OpenAI, use_openai_api: bool, model: str
+        self, openai_client: OpenAI, use_official_api: bool, model: str
     ) -> None:
         """reasoning_effort parameter: accepted and yields valid response on this backend."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Amazon Nova is not supported on the official API")
         resp = openai_client.chat.completions.create(
             model=model,

@@ -256,7 +256,7 @@ class TestModels:
         assert "model" in error_body["message"].lower()
 
     def test_deprecated_model_retrieval_error(
-        self, openai_client: OpenAI, use_openai_api: bool
+        self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
         """Test error handling for deprecated model ID retrieval.
 
@@ -264,7 +264,7 @@ class TestModels:
 
         Args:
             openai_client: OpenAI client instance for API calls
-            use_openai_api: True is using official OpenAI API.
+            use_official_api: True is using official OpenAI API.
 
         Validates:
             - Correct HTTP status code (404)
@@ -272,7 +272,7 @@ class TestModels:
             - Error message identifies model as invalid
             - Consistent error response structure
         """
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Not available on the official OpenAI API")
 
         with pytest.raises(NotFoundError) as exc_info:

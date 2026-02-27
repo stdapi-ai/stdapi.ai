@@ -18,11 +18,13 @@ if TYPE_CHECKING:
 
     from fastapi import Request
     from pydantic.main import IncEx
+    from starlette.datastructures import Headers
     from types_aiobotocore_meteringmarketplace.type_defs import (
         RegisterUsageResultTypeDef,
     )
 
     from stdapi.monitoring_otel import OpenTelemetryManager
+    from stdapi.types import JsonList, JsonMappingOrList
 
 if not SETTINGS.otel_enabled:
     from stdapi.monitoring_otel_base import (  # type: ignore[assignment]
@@ -45,13 +47,13 @@ class EventLog(TypedDict):
     type: Literal["request", "start", "stop", "background", "request_stream"]
     level: LogLevel
     date: AwareDatetime
-    error_detail: NotRequired[list[JsonValue]]
+    error_detail: NotRequired[JsonList]
     server_id: str
     server_version: str
 
     # "start" type
     server_start_time_ms: NotRequired[int]
-    server_warnings: NotRequired[list[JsonValue]]
+    server_warnings: NotRequired[JsonList]
     register_usage_response: NotRequired[RegisterUsageResultTypeDef]
 
     # "stop" type
@@ -78,11 +80,9 @@ class EventLog(TypedDict):
     request_org_id: NotRequired[str]  # Org ID passed from request
 
     request_params: NotRequired[
-        dict[str, JsonValue] | list[JsonValue]
+        JsonMappingOrList
     ]  # Request params (Body, form, query, ...)
-    request_response: NotRequired[
-        dict[str, JsonValue] | list[JsonValue]
-    ]  # Request response
+    request_response: NotRequired[JsonMappingOrList]  # Request response
 
 
 ParamsT = TypeVar("ParamsT", bound="BaseModel | dict[str, Any] | list[Any] | None")
@@ -95,6 +95,9 @@ REQUEST_TIME: ContextVar[AwareDatetime] = ContextVar("request_time")
 
 #: Request log dict
 REQUEST_LOG: ContextVar[EventLog] = ContextVar("request_log")
+
+#: Request HTTP headers
+REQUEST_HEADERS: ContextVar[Headers] = ContextVar("request_headers")
 
 #: Paths to ignore in logging
 LOGGING_PATHS_IGNORE = {
@@ -256,14 +259,20 @@ def log_response_params[ParamsT: "BaseModel | dict[str, Any] | list[Any] | None"
     return response
 
 
-def log_error_details(*error_detail: JsonValue, level: LogLevel | None = None) -> None:
+def log_error_details(
+    *error_detail: JsonValue, level: LogLevel | None = None, status: int | None = None
+) -> None:
     """Logs error details into the current request context.
 
     Args:
         *error_detail: Variable length argument list of error details to be
             logged. Each item should be a JSON-compatible value.
         level: Optional. Logging level to specify the severity of the error.
+        status: Optional. HTTP status code associated with the error.
     """
+    level = level or (
+        ("warning" if status < 500 else "error") if status else "critical"
+    )
     log = REQUEST_LOG.get()
     log.setdefault("error_detail", []).extend(error_detail)
     if level and _SORTED_LOG_LEVELS.index(level) > _SORTED_LOG_LEVELS.index(

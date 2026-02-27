@@ -395,7 +395,7 @@ class TestAudioTranscriptions:
         sample_audio_file: bytes,
         transcription_model: str,
         temperature: float,
-        use_openai_api: bool,
+        use_official_api: bool,
     ) -> None:
         """Test temperature parameter with various values.
 
@@ -408,14 +408,14 @@ class TestAudioTranscriptions:
             sample_audio_file: Audio file bytes for transcription testing
             transcription_model: Valid transcription model identifier
             temperature: The temperature value to test
-            use_openai_api: True if using the official OpenAI API
+            use_official_api: True if using the official OpenAI API
 
         Validates:
             - Various temperature values are accepted
             - Response contains text attribute
             - Response text is string type
         """
-        if not use_openai_api:
+        if not use_official_api:
             pytest.skip("Parameter is not supported by Amazon Transcribe.")
 
         response = openai_client.audio.transcriptions.create(

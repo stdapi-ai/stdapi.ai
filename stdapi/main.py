@@ -15,24 +15,23 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 
+from stdapi.api_errors import ApiError
+from stdapi.api_providers import format_http_error, get_request_id_header
 from stdapi.auth import initialize_authentication
 from stdapi.aws import AWSConnectionManager, initialize_aws_account_info
 from stdapi.aws_bedrock import (
     set_guardrail_configuration,
     set_performance_configuration,
 )
-from stdapi.config import SETTINGS, LogLevel
+from stdapi.config import SETTINGS
 from stdapi.exceptions import ServerError
 from stdapi.metering import EDITION_TITLE, LICENCE_INFO, SERVER_FULL_VERSION, register
-from stdapi.models import (
-    MODEL_ALIASES,
-    initialize_bedrock_models,
-    update_unified_models_collections,
-)
+from stdapi.models import initialize_bedrock_models, update_unified_models_collections
 from stdapi.models.audio.amazon_polly import initialize_polly_models
 from stdapi.models.audio.amazon_transcribe import initialize_transcribe_models
 from stdapi.monitoring import (
     LOGGING_PATHS_IGNORE,
+    REQUEST_HEADERS,
     EventLog,
     log_error_details,
     log_request_event,
@@ -40,13 +39,13 @@ from stdapi.monitoring import (
     write_log_event,
 )
 from stdapi.openai import set_openai_headers
-from stdapi.openai_exceptions import OpenaiError
 from stdapi.routes import discover_routers
 from stdapi.server import SERVER_NAME, SERVER_VERSION
 from stdapi.utils import hide_security_details
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable
+    from typing import Any
 
 
 @asynccontextmanager
@@ -83,7 +82,6 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                 "Application start", attributes={"server.id": SERVER_NAME}
             )
             with otel_manager.use_span(span_context):
-                MODEL_ALIASES.update(SETTINGS.model_aliases)
                 results = await gather(
                     initialize_authentication(),
                     initialize_bedrock_models(),
@@ -226,128 +224,90 @@ async def _middleware(
         response = await call_next(request)
     else:
         with log_request_event(request) as log:
+            REQUEST_HEADERS.set(request.headers)
             set_guardrail_configuration(request.headers)
             set_performance_configuration(request.headers)
             response = await call_next(request)
             log["status_code"] = response.status_code
-            response.headers["x-request-id"] = log["id"]
+            response.headers[get_request_id_header(request)] = log["id"]
         set_openai_headers(request, response, log["id"], log["execution_time_ms"])
     response.headers["server"] = "stdapi.ai"
     return response
 
 
-#: Status codes to OpenAI error codes
-_STATUS_ERROR_MAP = {
-    400: "invalid_request_error",
-    401: "authentication_error",
-    403: "permission_error",
-    404: "not_found_error",
-    409: "conflict_error",
-    422: "invalid_request_error",
-    429: "rate_limit_error",
-}
-
-
 @app.exception_handler(HTTPException)
-async def handle_http_exception(_: Request, exc: HTTPException) -> JSONResponse:
-    """Convert standard FastAPI HTTPException using OpenAI error envelope.
-
-    The response body matches: {"error": {"message", "type", "param", "code"}}.
+async def handle_http_exception(request: Request, exc: HTTPException) -> JSONResponse:
+    """Convert standard FastAPI HTTPException to the correct API error envelope.
 
     Args:
-        _: The current request (unused).
+        request: The current request.
         exc: The HTTPException raised by a route or dependency.
 
     Returns:
-        JSONResponse formatted in OpenAI error schema with the appropriate status.
+        JSONResponse formatted in the appropriate error schema.
     """
     status_code = exc.status_code
     message = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
-    if 500 <= status_code <= 599:
-        level: LogLevel = "error"
-        error_type = "server_error"
-    else:
-        level = "warning"
-        error_type = _STATUS_ERROR_MAP.get(status_code, "api_error")
-    log_error_details(message, level=level)
+    log_error_details(message, status=status_code)
     return JSONResponse(
-        status_code=status_code,
-        content={
-            "error": {
-                "message": hide_security_details(status_code, message),
-                "type": error_type,
-                "param": None,
-                "code": None,
-            }
-        },
+        *format_http_error(
+            request, status_code, hide_security_details(status_code, message)
+        )
     )
 
 
-@app.exception_handler(OpenaiError)
-async def handle_openai_exception(_: Request, exc: OpenaiError) -> JSONResponse:
-    """Raise FastAPI HTTPException using OpenAI error envelope.
-
-    The response body matches: {"error": {"message", "type", "param", "code"}}.
+@app.exception_handler(ApiError)
+async def handle_api_error(request: Request, exc: ApiError) -> JSONResponse:
+    """Convert ApiError to the correct API error envelope.
 
     Args:
-        _: The current request (unused).
-        exc: The HTTPException raised by a route or dependency.
+        request: The current request.
+        exc: The ApiError raised by low-level code.
 
     Returns:
-        JSONResponse formatted in OpenAI error schema with the appropriate status.
+        JSONResponse formatted in the appropriate error schema.
     """
-    log_error_details(exc.args[0], level="warning")
+    status_code = exc.status
+    log_error_details(exc.args[0], status=status_code)
     return JSONResponse(
-        status_code=exc.status,
-        content={
-            "error": {
-                "message": hide_security_details(exc.status, exc.args[0]),
-                "type": exc.type,
-                "param": exc.param,
-                "code": exc.code,
-            }
-        },
+        *format_http_error(
+            request,
+            status_code,
+            hide_security_details(status_code, exc.args[0]),
+            exc.param,
+            exc.code,
+        )
     )
 
 
 @app.exception_handler(RequestValidationError)
 async def handle_validation_exception(
-    _: Request, exc: RequestValidationError
+    request: Request, exc: RequestValidationError
 ) -> JSONResponse:
-    """Format Pydantic/FastAPI validation errors as OpenAI invalid_request_error (422).
+    """Format Pydantic/FastAPI validation errors as invalid_request_error.
 
     Args:
-        _: The current request (unused).
+        request: The current request.
         exc: The RequestValidationError raised by FastAPI/Pydantic.
 
     Returns:
-        JSONResponse with status 400 and OpenAI error schema content.
+        JSONResponse with status 400 and the appropriate error schema.
     """
-    # Build a concise message summarizing the first error to align with OpenAI style
-    code = None
-    param = None
-
-    if exc.errors():
-        first = exc.errors()[0]
-        loc = ".".join(str(x) for x in first.get("loc", []))
-        msg = first.get("msg", "validation error")
-        message = (
-            f"Validation error at {loc}: {msg}" if loc else f"Validation error: {msg}"
-        )
-    else:
-        message = "Validation error"
-
+    match exc.errors():
+        case [{"loc": loc, "msg": msg}, *_]:
+            loc_str = ".".join(str(x) for x in loc)
+            message = (
+                f"Validation error at {loc_str}: {msg}"
+                if loc_str
+                else f"Validation error: {msg}"
+            )
+        case [{"msg": msg}, *_]:
+            message = f"Validation error: {msg}"
+        case _:
+            message = "Validation error"
     log_error_details(message, level="warning")
     return JSONResponse(
-        status_code=400,
-        content={
-            "error": {
-                "message": message,
-                "type": "invalid_request_error",
-                "param": param,
-                "code": code,
-            }
-        },
+        *format_http_error(request, 400, message, "invalid_request_error")
     )
 
 
@@ -386,30 +346,65 @@ _AWS_ERROR_MAP: dict[str, tuple[int, str]] = {
 
 
 @app.exception_handler(ClientError)
-async def handle_botocore_client_error(_: Request, exc: ClientError) -> JSONResponse:
-    """Format AWS botocore ClientError using OpenAI error envelope.
+async def handle_botocore_client_error(
+    request: Request, exc: ClientError
+) -> JSONResponse:
+    """Format AWS botocore ClientError using the correct API error envelope.
 
     Maps common AWS error codes to appropriate HTTP statuses.
 
     Args:
-        _: The current request (unused).
+        request: The current request.
         exc: The AWS botocore ClientError raised by SDK calls.
 
     Returns:
-        JSONResponse with mapped HTTP status and OpenAI error schema content.
+        JSONResponse with mapped HTTP status and the appropriate error schema.
     """
     error = exc.response["Error"]
     aws_code = error["Code"]
     status, err_type = _AWS_ERROR_MAP.get(aws_code, (502, "server_error"))
-    log_error_details(error["Message"], level="warning" if status < 500 else "error")
+    log_error_details(error["Message"], status=status)
     return JSONResponse(
-        status_code=status,
-        content={
-            "error": {
-                "message": hide_security_details(status, error["Message"]),
-                "type": err_type,
-                "param": None,
-                "code": aws_code,
-            }
-        },
+        *format_http_error(
+            request,
+            status,
+            hide_security_details(status, error["Message"]),
+            err_type,
+            code=aws_code,
+        )
     )
+
+
+#: All exception handlers
+_EXCEPTION_HANDLERS: dict[
+    type[Exception], Callable[[Request, Any], Awaitable[JSONResponse]]
+] = {
+    ApiError: handle_api_error,
+    ClientError: handle_botocore_client_error,
+    HTTPException: handle_http_exception,
+}
+
+
+@app.exception_handler(ExceptionGroup)
+async def handle_exception_group(request: Request, exc: ExceptionGroup) -> JSONResponse:
+    """Unwrap ExceptionGroup (from TaskGroup) and handle known sub-exceptions.
+
+    If all sub-exceptions are of a known handled type, returns the appropriate
+    error response for the first match. If any sub-exception is unhandled,
+    logs all sub-exceptions and re-raises to trigger the default 500 path with
+    critical logging.
+
+    Args:
+        request: The current request.
+        exc: The ExceptionGroup raised by a TaskGroup.
+
+    Returns:
+        JSONResponse formatted in the appropriate error schema.
+    """
+    handled_exceptions, unhandled_exceptions = exc.split(tuple(_EXCEPTION_HANDLERS))
+    if handled_exceptions and not unhandled_exceptions:
+        first = handled_exceptions.exceptions[0]
+        while isinstance(first, BaseExceptionGroup):
+            first = first.exceptions[0]
+        return await _EXCEPTION_HANDLERS[first.__class__](request, first)
+    raise exc

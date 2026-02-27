@@ -8,8 +8,10 @@ Embeddings, Cohere Embed v3) to compute embedding vectors.
 from array import array
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends
 
+from stdapi.api_errors import ApiError
+from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
 from stdapi.aws_bedrock import get_extra_model_parameters
 from stdapi.config import SETTINGS
@@ -25,7 +27,7 @@ from stdapi.types.openai_embeddings import (
 from stdapi.utils import b64encode
 
 router = APIRouter(
-    prefix=f"{SETTINGS.openai_routes_prefix}/v1", tags=["embeddings", "openai"]
+    prefix=f"{SETTINGS.openai_routes_prefix}/v1", tags=["Embeddings", TAG_OPENAI]
 )
 
 
@@ -80,7 +82,7 @@ async def create_embeddings(
         EmbeddingListResponse containing embedding vectors, one per input item.
 
     Raises:
-        HTTPException: With 404 if the model does not exist; 400 on unsupported
+        ApiError: With 404 if the model does not exist; 400 on unsupported
             options or invalid values.
     """
     log_request_params(request, user_id=request.user)
@@ -90,7 +92,8 @@ async def create_embeddings(
     elif isinstance(request.input[0], str):
         input_texts = list(request.input)
     else:  # pragma: no cover
-        raise HTTPException(status_code=400, detail="Unsupported input type.")
+        msg = "Unsupported input type."
+        raise ApiError(msg)
 
     response = await get_embedding_model(model_id).embed_text(
         input_texts,

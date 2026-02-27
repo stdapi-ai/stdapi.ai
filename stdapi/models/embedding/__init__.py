@@ -15,7 +15,7 @@ Design:
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel
 
 from stdapi.models import ModelBase, RequestT, ResponseT, get_model, load_model_plugins
 
@@ -23,6 +23,8 @@ if TYPE_CHECKING:
     from re import Pattern
 
     from fastapi import BackgroundTasks
+
+    from stdapi.types import JsonMapping
 
 
 class EmbeddingResponse(BaseModel):
@@ -47,7 +49,7 @@ class EmbeddingModelBase(ModelBase[RequestT, ResponseT]):
         self,
         inputs: list[str],
         dimensions: int | None,
-        extra_params: dict[str, JsonValue],
+        extra_params: JsonMapping,
         background_tasks: BackgroundTasks,
     ) -> EmbeddingResponse:
         """Get embeddings for text.

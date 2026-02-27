@@ -16,9 +16,9 @@ from typing import TYPE_CHECKING, Any, TypedDict
 
 from fastapi import Response
 
+from stdapi.api_errors import ApiError, UnsupportedParameterError
 from stdapi.config import SETTINGS
 from stdapi.models import ModelBase, get_model, load_model_plugins
-from stdapi.openai_exceptions import OpenaiError, OpenaiUnsupportedParameterError
 from stdapi.utils import language_code_to_name
 
 if TYPE_CHECKING:
@@ -26,8 +26,8 @@ if TYPE_CHECKING:
     from re import Pattern
 
     from fastapi import BackgroundTasks, UploadFile
-    from pydantic import JsonValue
 
+    from stdapi.types import JsonMapping
     from stdapi.types.openai_audio import (
         AudioFileFormat,
         AudioResponseFormat,
@@ -75,7 +75,7 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
         voice: str,  # noqa: ARG002
         resp_format: AudioFileFormat,  # noqa: ARG002
         speed: float = 1.0,  # noqa: ARG002
-        extra_params: dict[str, JsonValue] | None = None,  # noqa: ARG002
+        extra_params: JsonMapping | None = None,  # noqa: ARG002
     ) -> TTSResponse:
         """Generate audio from text.
 
@@ -90,10 +90,10 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
             TTS response with audio stream.
 
         Raises:
-            OpenaiError: If TTS is not supported by this model.
+            ApiError: If TTS is not supported by this model.
         """
         msg = f"Text-to-speech is not supported by {self.model.id}"
-        raise OpenaiError(msg)
+        raise ApiError(msg)
 
     async def stt(
         self,
@@ -123,10 +123,10 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
             Formatted transcription response (str | TranscriptionCreateResponse | TranscriptionDiarized | Response).
 
         Raises:
-            OpenaiError: If transcription is not supported by this model.
+            ApiError: If transcription is not supported by this model.
         """
         msg = f"Audio transcription is not supported by {self.model.id}"
-        raise OpenaiError(msg)
+        raise ApiError(msg)
 
     async def stt_stream(
         self,
@@ -154,10 +154,10 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
             TranscriptionTextDeltaEvent or TranscriptionTextDoneEvent objects.
 
         Raises:
-            OpenaiError: If streaming transcription is not supported by this model.
+            ApiError: If streaming transcription is not supported by this model.
         """
         msg = f"Streaming audio transcription is not supported by {self.model.id}"
-        raise OpenaiError(msg)
+        raise ApiError(msg)
         yield
 
     async def stt_translate(
@@ -181,10 +181,10 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
             Formatted translation response (str | TranslationCreateResponse | Response).
 
         Raises:
-            OpenaiError: If translation is not supported by this model.
+            ApiError: If translation is not supported by this model.
         """
         msg = f"Audio transcription and translation is not supported by {self.model.id}"
-        raise OpenaiError(msg)
+        raise ApiError(msg)
 
     @staticmethod
     def _format_subtitle_response(
@@ -223,11 +223,11 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
             value: The value to validate
 
         Raises:
-            HTTPException: If a parameter is provided.
+            ApiError: If a parameter is provided.
         """
         if value:
             param = "temperature"
-            raise OpenaiUnsupportedParameterError(param)
+            raise UnsupportedParameterError(param)
 
     @staticmethod
     def _validate_no_prompt(value: str | None) -> None:
@@ -237,11 +237,11 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
             value: The value to validate
 
         Raises:
-            HTTPException: If a parameter is provided.
+            ApiError: If a parameter is provided.
         """
         if value is not None:
             param = "prompt"
-            raise OpenaiUnsupportedParameterError(param)
+            raise UnsupportedParameterError(param)
 
     @staticmethod
     def _validate_no_language(value: str | None) -> None:
@@ -251,11 +251,11 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
             value: The value to validate
 
         Raises:
-            HTTPException: If a parameter is provided.
+            ApiError: If a parameter is provided.
         """
         if value is not None:
             param = "language"
-            raise OpenaiUnsupportedParameterError(param)
+            raise UnsupportedParameterError(param)
 
     @staticmethod
     def _validate_no_logprobs(value: bool) -> None:  # noqa: FBT001
@@ -265,11 +265,11 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
             value: The value to validate
 
         Raises:
-            HTTPException: If a parameter is provided.
+            ApiError: If a parameter is provided.
         """
         if value:
             param = "include.logprobs"
-            raise OpenaiUnsupportedParameterError(param)
+            raise UnsupportedParameterError(param)
 
     @classmethod
     def _validate_response_formats(
@@ -284,17 +284,17 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
             timestamp_granularities: Timestamp granularities
 
         Raises:
-            HTTPException: If a parameter is provided.
+            ApiError: If a parameter is provided.
         """
         if value not in cls.SUPPORTED_RESPONSES_FORMATS:
             msg = f"Response format '{value}' is not supported by this model."
-            raise OpenaiError(msg)
+            raise ApiError(msg)
 
         if value == "verbose_json" and timestamp_granularities:
             for granularity in timestamp_granularities:
                 if granularity not in cls.SUPPORTED_TIMESTAMP_GRANULARITIES:
                     msg = f"'verbose_json' with '{granularity}' timestamp granularity is not supported by this model."
-                    raise OpenaiError(msg)
+                    raise ApiError(msg)
 
     @classmethod
     def _built_prompt(

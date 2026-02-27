@@ -3,6 +3,9 @@
 .coverage
 .pytest_cache/
 .venv/
+**/.env
+**/.env.*
+!tests/.env.example
 tests/output/
 .output.txt
 
@@ -40,3 +43,4 @@ Thumbs.db
 .settings/
 .idea/
 .vscode/
+.claude/

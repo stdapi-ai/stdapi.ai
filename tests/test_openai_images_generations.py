@@ -377,7 +377,7 @@ class TestImageGeneration:
         self,
         openai_client: OpenAI,
         image_generation_hd_model: str,
-        use_openai_api: bool,
+        use_official_api: bool,
     ) -> None:
         """Test quality parameter functionality with HD-capable models."""
         response = openai_client.images.generate(
@@ -385,7 +385,7 @@ class TestImageGeneration:
             model=image_generation_hd_model,
             n=1,
             size="1024x1024",
-            quality="hd" if use_openai_api else "premium",  # type: ignore[call-overload]
+            quality="hd" if use_official_api else "premium",  # type: ignore[call-overload]
         )
 
         assert response.created is not None
@@ -400,7 +400,7 @@ class TestImageGeneration:
         self,
         openai_client: OpenAI,
         image_generation_hd_model: str,
-        use_openai_api: bool,
+        use_official_api: bool,
     ) -> None:
         """Test style parameter functionality with compatible models."""
         response = openai_client.images.generate(
@@ -408,7 +408,7 @@ class TestImageGeneration:
             model=image_generation_hd_model,
             n=1,
             size="1024x1024",
-            style="vivid" if use_openai_api else "PHOTOREALISM",  # type: ignore[call-overload]
+            style="vivid" if use_official_api else "PHOTOREALISM",  # type: ignore[call-overload]
         )
 
         assert response.created is not None
@@ -579,14 +579,14 @@ class TestImageGeneration:
         )
 
     def test_stream_parameter_error_with_unsupported_models(
-        self, openai_client: OpenAI, image_generation_model: str, use_openai_api: bool
+        self, openai_client: OpenAI, image_generation_model: str, use_official_api: bool
     ) -> None:
         """Test stream parameter error with models that don't support streaming.
 
         The stream parameter should only work with advanced models like gpt-image-1
         and return 'unknown_parameter' error with other models like dall-e-2, dall-e-3.
         """
-        if not use_openai_api:
+        if not use_official_api:
             pytest.skip(
                 "Streaming supported on all Bedrock models in this implementation"
             )

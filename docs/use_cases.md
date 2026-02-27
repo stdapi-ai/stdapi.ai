@@ -1,12 +1,12 @@
 ---
 title: Use Cases - AWS Bedrock Integration Examples
-description: Integrate AWS Bedrock with Open WebUI, n8n, Continue.dev, and other OpenAI-compatible tools. Step-by-step guides for chat interfaces, coding assistants, and workflow automation.
-keywords: AWS Bedrock integration, Open WebUI AWS, ChatGPT alternative, AI coding assistant AWS, n8n AI workflow, private ChatGPT, AI automation tools, OpenAI integration examples
+description: Integrate AWS Bedrock with Open WebUI, n8n, Continue.dev, and other OpenAI and Anthropic-compatible tools. Step-by-step guides for chat interfaces, coding assistants, and workflow automation.
+keywords: AWS Bedrock integration, Open WebUI AWS, ChatGPT alternative, Claude alternative, AI coding assistant AWS, n8n AI workflow, private ChatGPT, private Claude, AI automation tools, OpenAI integration examples, Anthropic integration examples
 ---
 
 # Use Cases
 
-Discover how to integrate stdapi.ai with popular AI applications and tools. stdapi.ai's OpenAI-compatible API makes it a drop-in replacement for OpenAI in hundreds of applications, giving you access to AWS Bedrock models with zero code changes.
+Discover how to integrate stdapi.ai with popular AI applications and tools. stdapi.ai's OpenAI and Anthropic-compatible APIs make it a drop-in replacement for OpenAI and Anthropic in hundreds of applications, giving you access to AWS Bedrock models with zero code changes.
 
 **Why use stdapi.ai for integrations?**
 
@@ -14,7 +14,8 @@ Discover how to integrate stdapi.ai with popular AI applications and tools. stda
 - **Access 80+ models** - Claude 4.6+, Nova 2, Llama 4, DeepSeek v3.2, Stable Diffusion, and more
 - **Enterprise data control** - All processing stays in your AWS account
 - **Pay-per-use pricing** - No subscriptions, pay only AWS Bedrock rates for actual usage
-- **AWS-native features** - Leverage prompt caching, reasoning modes, and guardrails through standard OpenAI API
+- **AWS-native features** - Leverage prompt caching, reasoning modes, and guardrails through standard OpenAI and Anthropic APIs
+- **Dual API compatibility** - Use OpenAI SDK or Anthropic SDK with the same deployment
 
 ## Choose Your Integration
 

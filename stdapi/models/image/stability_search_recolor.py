@@ -7,12 +7,12 @@ Supported Models:
 from re import compile as compile_regex
 from typing import TYPE_CHECKING
 
+from stdapi.api_errors import ApiError
 from stdapi.models.image._stability import (
     SearchRecolorRequest,
     StabilityImageGenerationJobBase,
     StabilityImageModelBase,
 )
-from stdapi.openai_exceptions import OpenaiError
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Iterable
@@ -34,7 +34,7 @@ class _SearchRecolorJob(StabilityImageGenerationJobBase):
             select_prompt = str(self._extra_params["select_prompt"])
         except KeyError as err:
             msg = '"select_prompt" parameter is required for this model.'
-            raise OpenaiError(msg) from err
+            raise ApiError(msg) from err
 
         request: SearchRecolorRequest = {
             "prompt": self._prompt,

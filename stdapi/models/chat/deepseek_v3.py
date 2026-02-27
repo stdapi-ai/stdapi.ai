@@ -1,10 +1,11 @@
 """DeepSeek V3 chat model implementation."""
 
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Literal
 
 from stdapi.models.chat._default import ChatModel as _BaseChatModel
 
 if TYPE_CHECKING:
+    from stdapi.types import JsonMapping
     from stdapi.types.openai_chat_completions import ReasoningEffort
 
 DeepseekReasoning = Literal["low", "medium", "high"]
@@ -25,11 +26,10 @@ class ChatModel(_BaseChatModel):
 
     def _req_configure_reasoning(
         self,
-        *,
-        reasoning_effort: ReasoningEffort | None,
-        budget_tokens: int | None,
-        max_tokens: int | None,  # noqa: ARG002
-        additional_request_fields: dict[str, Any],
+        additional_request_fields: JsonMapping,
+        reasoning_effort: ReasoningEffort | None = None,
+        budget_tokens: int | None = None,
+        max_tokens: int | None = None,  # noqa: ARG002
     ) -> None:
         """Configure reasoning parameters for DeepSeek models.
 
@@ -43,7 +43,7 @@ class ChatModel(_BaseChatModel):
             additional_request_fields: Request fields to modify with reasoning config.
 
         Raises:
-            OpenaiError: If budget_tokens is provided.
+            ApiError: If budget_tokens is provided.
         """
         self._validate_no_budget_tokens(budget_tokens)
         additional_request_fields["reasoning_config"] = _REASONING_OVERRIDE.get(

@@ -2,9 +2,9 @@
 
 from typing import Annotated, Literal
 
-from pydantic import ConfigDict, Field, JsonValue, StringConstraints
+from pydantic import ConfigDict, Field, StringConstraints
 
-from stdapi.types import BaseModelRequest, BaseModelResponse
+from stdapi.types import BaseModelRequest, BaseModelResponse, JsonMapping
 
 # Constrained string aliases
 NameStr = Annotated[
@@ -29,7 +29,7 @@ Metadata = dict[str, str]
 
 
 # Ref: openai.types.shared_params.function_parameters
-FunctionParameters = dict[str, JsonValue]
+FunctionParameters = JsonMapping
 
 
 class _Strict(BaseModelRequest):
@@ -56,7 +56,7 @@ class LegacyFunction(BaseModelRequest):
         default=None,
         description="A description of what the function does, used by the model to choose when and how to call the function.",
     )
-    parameters: dict[str, JsonValue] | None = Field(
+    parameters: JsonMapping | None = Field(
         default=None,
         description="The parameters the functions accepts, described as a JSON Schema object.\n"
         "See the [guide](https://platform.openai.com/docs/guides/function-calling) for examples, and the "
@@ -107,7 +107,7 @@ class JSONSchema(_Strict):
             "A description of what the response format is for, used by the model to determine how to respond in the format."
         ),
     )
-    schema_: dict[str, JsonValue] = Field(
+    schema_: JsonMapping = Field(
         alias="schema",
         serialization_alias="schema",
         description=(

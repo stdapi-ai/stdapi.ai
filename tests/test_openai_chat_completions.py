@@ -8,6 +8,7 @@ import base64
 import json as _json
 from asyncio import sleep
 from secrets import token_hex
+from time import time
 from typing import TYPE_CHECKING
 
 import pytest
@@ -1199,7 +1200,7 @@ class TestChatCompletions:
         assert response.usage.total_tokens >= response.usage.prompt_tokens
 
     def test_allowed_tools_auto(
-        self, openai_client: OpenAI, chat_vision_model: str, use_openai_api: bool
+        self, openai_client: OpenAI, chat_vision_model: str, use_official_api: bool
     ) -> None:
         """allowed_tools tool choice: ensure request is accepted and outputs valid.
 
@@ -1238,7 +1239,7 @@ class TestChatCompletions:
             },
         }
 
-        if not use_openai_api:
+        if not use_official_api:
             with pytest.raises(BadRequestError) as exc_info:
                 openai_client.chat.completions.create(  # type: ignore[call-overload]
                     model=chat_vision_model,
@@ -1282,7 +1283,7 @@ class TestChatCompletions:
         assert response.usage is not None
 
     def test_custom_tool_choice_supported(
-        self, openai_client: OpenAI, chat_vision_model: str, use_openai_api: bool
+        self, openai_client: OpenAI, chat_vision_model: str, use_official_api: bool
     ) -> None:
         """Custom tool choice: ensure request is accepted and outputs valid.
 
@@ -1303,7 +1304,7 @@ class TestChatCompletions:
         ]
         tool_choice = {"type": "custom", "custom": {"name": "my_custom_tool"}}
 
-        if not use_openai_api:
+        if not use_official_api:
             with pytest.raises(BadRequestError) as exc_info:
                 openai_client.chat.completions.create(  # type: ignore[call-overload]
                     model=chat_vision_model,
@@ -1446,14 +1447,14 @@ class TestChatCompletions:
         openai_client: OpenAI,
         chat_audio_model: str,
         sample_audio_mp3_file_base64: str,
-        use_openai_api: bool,
+        use_official_api: bool,
     ) -> None:
         """Audio file in file part should be successfully handled.
 
         Tests that audio MIME types are now supported by sending a MP3 file
         and requesting transcription from the model.
         """
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Audio file handling as file not supported by OpenAI API")
 
         response = openai_client.chat.completions.create(
@@ -1543,14 +1544,18 @@ class TestChatCompletions:
 
     @pytest.mark.parametrize("bad_b64", ["@@@", "!", "==?"])
     def test_file_part_invalid_base64_error(
-        self, openai_client: OpenAI, chat_model: str, bad_b64: str, use_openai_api: bool
+        self,
+        openai_client: OpenAI,
+        chat_model: str,
+        bad_b64: str,
+        use_official_api: bool,
     ) -> None:
         """Invalid base64 in file content part should yield 400 invalid_request_error.
 
         Skipped against the official OpenAI API since this project-specific file part
         format is not part of the public API.
         """
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("File content part shape is implementation-specific here")
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.chat.completions.create(
@@ -1579,7 +1584,7 @@ class TestChatCompletions:
         assert body["type"] == "invalid_request_error"
 
     def test_file_part_unsupported_mime_error(
-        self, openai_client: OpenAI, chat_model: str, use_openai_api: bool
+        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
     ) -> None:
         """Unsupported MIME type in file part should yield 400.
 
@@ -1588,7 +1593,7 @@ class TestChatCompletions:
         Uses a model/gltf-binary MIME type which starts with model/.
         Skipped against the official OpenAI API.
         """
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("File content part shape is implementation-specific here")
         # Create a minimal glTF binary header to trigger model/gltf-binary detection
         # Magic: glTF (0x46546C67), version: 2, length: 20 bytes
@@ -1626,14 +1631,14 @@ class TestChatCompletions:
         )
 
     def test_validation_parallel_tool_calls_false_error(
-        self, openai_client: OpenAI, chat_model: str, use_openai_api: bool
+        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
     ) -> None:
         """parallel_tool_calls=False should be rejected by this implementation.
 
         Skipped against the official OpenAI API if their behavior differs and the
         output result differs.
         """
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Project-specific restriction: parallel_tool_calls=False")
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.chat.completions.create(
@@ -1649,14 +1654,14 @@ class TestChatCompletions:
         assert "parallel_tool_calls" in body["message"].lower()
 
     def test_validation_stream_n_gt1_error(
-        self, openai_client: OpenAI, chat_model: str, use_openai_api: bool
+        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
     ) -> None:
         """n>1 with stream=True is explicitly unsupported on this backend.
 
         Skipped against the official OpenAI API if their behavior differs and the
         output result differs.
         """
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Project-specific restriction: stream with n>1 unsupported")
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.chat.completions.create(
@@ -1672,10 +1677,10 @@ class TestChatCompletions:
         assert body["type"] == "invalid_request_error"
 
     def test_unsupported_response_format_error(
-        self, openai_client: OpenAI, chat_model: str, use_openai_api: bool
+        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
     ) -> None:
         """response_format is unsupported; expect 400 (skip on OpenAI)."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Unsupported fields are project-specific here")
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.chat.completions.create(
@@ -1686,10 +1691,10 @@ class TestChatCompletions:
         assert exc_info.value.status_code == 400
 
     def test_unsupported_seed_error(
-        self, openai_client: OpenAI, chat_model: str, use_openai_api: bool
+        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
     ) -> None:
         """Seed is unsupported; expect 400 (skip on OpenAI)."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Unsupported fields are project-specific here")
         with pytest.raises(BadRequestError):
             openai_client.chat.completions.create(
@@ -1697,10 +1702,10 @@ class TestChatCompletions:
             )
 
     def test_unsupported_store_error(
-        self, openai_client: OpenAI, chat_model: str, use_openai_api: bool
+        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
     ) -> None:
         """Store is unsupported; expect 400 (skip on OpenAI)."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Unsupported fields are project-specific here")
         with pytest.raises(BadRequestError):
             openai_client.chat.completions.create(
@@ -1710,10 +1715,10 @@ class TestChatCompletions:
             )
 
     def test_unsupported_verbosity_error(
-        self, openai_client: OpenAI, chat_model: str, use_openai_api: bool
+        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
     ) -> None:
         """Verbosity is unsupported; expect 400 (skip on OpenAI)."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Unsupported fields are project-specific here")
         with pytest.raises(BadRequestError):
             openai_client.chat.completions.create(
@@ -1723,10 +1728,10 @@ class TestChatCompletions:
             )
 
     def test_unsupported_web_search_options_error(
-        self, openai_client: OpenAI, chat_model: str, use_openai_api: bool
+        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
     ) -> None:
         """web_search_options is unsupported; expect 400 (skip on OpenAI)."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Unsupported fields are project-specific here")
         with pytest.raises(BadRequestError):
             openai_client.chat.completions.create(
@@ -1742,10 +1747,10 @@ class TestChatCompletions:
             )
 
     def test_unsupported_prediction_error(
-        self, openai_client: OpenAI, chat_model: str, use_openai_api: bool
+        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
     ) -> None:
         """Prediction is unsupported; expect 400 (skip on OpenAI)."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Unsupported fields are project-specific here")
         with pytest.raises(BadRequestError):
             openai_client.chat.completions.create(
@@ -1755,10 +1760,10 @@ class TestChatCompletions:
             )
 
     def test_unsupported_metadata_error(
-        self, openai_client: OpenAI, chat_model: str, use_openai_api: bool
+        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
     ) -> None:
         """Metadata is unsupported; expect 400 (skip on OpenAI)."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Unsupported fields are project-specific here")
         with pytest.raises(BadRequestError):
             openai_client.chat.completions.create(
@@ -1768,10 +1773,10 @@ class TestChatCompletions:
             )
 
     def test_unsupported_top_logprobs_error(
-        self, openai_client: OpenAI, chat_model: str, use_openai_api: bool
+        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
     ) -> None:
         """top_logprobs is unsupported; expect 400 (skip on OpenAI)."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Unsupported fields are project-specific here")
         with pytest.raises(BadRequestError):
             openai_client.chat.completions.create(
@@ -1781,7 +1786,7 @@ class TestChatCompletions:
             )
 
     def test_prompt_cache_key_with_long_system_prompt(
-        self, openai_client: OpenAI, chat_model: str, use_openai_api: bool
+        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
     ) -> None:
         """Test prompt_cache_key caches long system prompts with tools.
 
@@ -1849,14 +1854,14 @@ class TestChatCompletions:
         usage_details = getattr(response2.usage, "prompt_tokens_details", None)
         assert usage_details is not None, "prompt_tokens_details not found in usage"
         cached_tokens = getattr(usage_details, "cached_tokens", 0)
-        if use_openai_api and cached_tokens == 0:
+        if use_official_api and cached_tokens == 0:
             pytest.xfail(
                 "Cached tokens may not be available when testing against OpenAI API"
             )
         assert cached_tokens > 0, f"Expected cached_tokens > 0, got {cached_tokens}"
 
     def test_prompt_cache_key_with_long_system_prompt_streaming(
-        self, openai_client: OpenAI, chat_model: str, use_openai_api: bool
+        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
     ) -> None:
         """Test prompt_cache_key caches long system prompts with tools in streaming mode.
 
@@ -1942,21 +1947,21 @@ class TestChatCompletions:
 
         # Check that cached tokens were used
         usage_details = getattr(usage2, "prompt_tokens_details", None)
-        if use_openai_api and usage_details is None:
+        if use_official_api and usage_details is None:
             pytest.xfail(
                 "Prompt tokens details not available when testing against OpenAI API"
             )
         assert usage_details is not None, "prompt_tokens_details not found in usage"
         cached_tokens = getattr(usage_details, "cached_tokens", 0)
-        if use_openai_api and cached_tokens == 0:
+        if use_official_api and cached_tokens == 0:
             pytest.xfail("Cached tokens not available when testing against OpenAI API")
         assert cached_tokens > 0, f"Expected cached_tokens > 0, got {cached_tokens}"
 
     def test_unsupported_modalities_audio_error(
-        self, openai_client: OpenAI, chat_model: str, use_openai_api: bool
+        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
     ) -> None:
         """Modalities including 'audio' are unsupported; expect 400 (skip on OpenAI)."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Unsupported fields are project-specific here")
         with pytest.raises(BadRequestError):
             openai_client.chat.completions.create(
@@ -1966,10 +1971,10 @@ class TestChatCompletions:
             )
 
     def test_custom_tools_in_tools_unsupported(
-        self, openai_client: OpenAI, chat_model: str, use_openai_api: bool
+        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
     ) -> None:
         """Providing custom tools in 'tools' is unsupported and should 400 here."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Custom tools unsupported only on this backend")
         tools = [
             {
@@ -1992,10 +1997,10 @@ class TestChatCompletions:
         assert body["type"] == "invalid_request_error"
 
     def test_tool_choice_custom_unsupported(
-        self, openai_client: OpenAI, chat_model: str, use_openai_api: bool
+        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
     ) -> None:
         """Specifying a custom tool in tool_choice should 400 on this backend."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Custom tool_choice unsupported only on this backend")
         tool_choice = {"type": "custom", "custom": {"name": "my_custom"}}
         with pytest.raises(BadRequestError) as exc_info:
@@ -2009,7 +2014,7 @@ class TestChatCompletions:
         assert body["type"] == "invalid_request_error"
 
     def test_service_tier(
-        self, openai_client: OpenAI, chat_model: str, use_openai_api: bool
+        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
     ) -> None:
         """Validate service_tier mapping to response.service_tier."""
         response = openai_client.chat.completions.create(
@@ -2021,7 +2026,7 @@ class TestChatCompletions:
         assert getattr(response, "service_tier", None) == "default"
 
         # Test Bedrock headers
-        if not use_openai_api:
+        if not use_official_api:
             response = openai_client.chat.completions.create(
                 model=chat_model,
                 messages=[{"role": "user", "content": "Say hi again"}],
@@ -2058,10 +2063,10 @@ class TestChatCompletions:
         assert resp.usage is not None
 
     def test_qwen_thinking_effort_parameter(
-        self, openai_client: OpenAI, chat_reasoning_model: str, use_openai_api: bool
+        self, openai_client: OpenAI, chat_reasoning_model: str, use_official_api: bool
     ) -> None:
         """enable_thinking parameter: accepted and yields valid response on this backend."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Qwen thinking response parameter is not supported on the official API"
             )
@@ -2083,7 +2088,7 @@ class TestChatCompletions:
         assert resp.usage is not None
 
     def test_unsupported_reasoning(
-        self, openai_client: OpenAI, chat_model: str
+        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
     ) -> None:
         """Tests unsupported reasoning on model for OpenAI chat API.
 
@@ -2091,9 +2096,13 @@ class TestChatCompletions:
             openai_client: An instance of the OpenAI client to interact with the
                 chat completion API.
             chat_model: The identifier of the chat model to be used for completions.
-            use_openai_api: A boolean indicating whether to use the official OpenAI
+            use_official_api: A boolean indicating whether to use the official OpenAI
                 API or skip the test.
         """
+        if use_official_api:
+            pytest.skip(
+                "Behavior changed on current model bu was validated previously."
+            )
         with pytest.raises(BadRequestError):
             openai_client.chat.completions.create(
                 model=chat_model,
@@ -2102,7 +2111,7 @@ class TestChatCompletions:
             )
 
     def test_unsupported_thinking_param_combinations(
-        self, openai_client: OpenAI, chat_model: str, use_openai_api: bool
+        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
     ) -> None:
         """Tests unsupported combinations of thinking parameters for OpenAI chat API.
 
@@ -2116,14 +2125,14 @@ class TestChatCompletions:
             openai_client: An instance of the OpenAI client to interact with the
                 chat completion API.
             chat_model: The identifier of the chat model to be used for completions.
-            use_openai_api: A boolean indicating whether to use the official OpenAI
+            use_official_api: A boolean indicating whether to use the official OpenAI
                 API or skip the test.
 
         Raises:
             BadRequestError: Raised when unsupported parameter combinations are
                 provided to the chat completion API.
         """
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Qwen thinking response parameter is not supported on the official API"
             )
@@ -2154,10 +2163,10 @@ class TestChatCompletions:
             )
 
     def test_deepseek_reasoning_response_parameter(
-        self, openai_client: OpenAI, use_openai_api: bool
+        self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
         """Check Deepseek reasoning response parameter."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Deepseek reasoning response parameter "
                 "is not supported on the official API"
@@ -2209,7 +2218,7 @@ class TestChatCompletions:
         assert msg.role == "assistant"
 
     def test_tool_choice_none_no_tool_calls(
-        self, openai_client: OpenAI, chat_vision_model: str, use_openai_api: bool
+        self, openai_client: OpenAI, chat_vision_model: str, use_official_api: bool
     ) -> None:
         """With tools provided but tool_choice='none', expect assistant text and no tool_calls."""
         tools = [
@@ -2225,7 +2234,7 @@ class TestChatCompletions:
                 },
             }
         ]
-        if not use_openai_api:
+        if not use_official_api:
             with pytest.raises(BadRequestError) as exc_info:
                 openai_client.chat.completions.create(  # type: ignore[call-overload]
                     model=chat_vision_model,
@@ -2385,7 +2394,7 @@ class TestChatCompletions:
             pytest.fail(f"Audio data is not valid base64: {error}")
 
     def test_audio_output_with_modalities_audio_only_unsupported(
-        self, openai_client: OpenAI, chat_audio_model: str, use_openai_api: bool
+        self, openai_client: OpenAI, chat_audio_model: str, use_official_api: bool
     ) -> None:
         """Audio parameter only should raise an error."""
         with pytest.raises(BadRequestError) as exc_info:
@@ -2403,7 +2412,7 @@ class TestChatCompletions:
         assert "modalities" in body["message"].lower()
 
     def test_audio_with_streaming_unsupported(
-        self, openai_client: OpenAI, chat_audio_model: str, use_openai_api: bool
+        self, openai_client: OpenAI, chat_audio_model: str, use_official_api: bool
     ) -> None:
         """Audio parameter with streaming should raise an error."""
         with pytest.raises(BadRequestError) as exc_info:
@@ -2422,7 +2431,7 @@ class TestChatCompletions:
         assert "stream" in body["message"].lower()
 
     def test_audio_without_details_unsupported(
-        self, openai_client: OpenAI, chat_audio_model: str, use_openai_api: bool
+        self, openai_client: OpenAI, chat_audio_model: str, use_official_api: bool
     ) -> None:
         """Audio parameter with streaming should raise an error."""
         with pytest.raises(BadRequestError) as exc_info:
@@ -2476,7 +2485,7 @@ class TestChatCompletions:
     async def test_inference_profile_as_model(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         aws_region: str,
         aws_account_id: str,
     ) -> None:
@@ -2486,7 +2495,7 @@ class TestChatCompletions:
         in a chat completion request, and then deletes the profile. Only runs when not
         testing against the official OpenAI API.
         """
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Application inference profiles are AWS Bedrock specific")
 
         inference_profile_arn = None
@@ -2543,7 +2552,7 @@ class TestChatCompletions:
     async def test_prompt_router_as_model(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         aws_region: str,
         aws_account_id: str,
     ) -> None:
@@ -2553,7 +2562,7 @@ class TestChatCompletions:
         in a chat completion request. Only runs when not testing against
         the official OpenAI API.
         """
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("Prompt routers are AWS Bedrock specific")
 
         # Test using the prompt router as model parameter
@@ -2588,7 +2597,7 @@ class TestChatCompletions:
         assert "ARN does not match a valid" in str(exc_info)
 
     def test_system_tool_with_citations(
-        self, openai_client: OpenAI, use_openai_api: bool
+        self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
         """Test system tools (e.g., nova_grounding) return citations in non-streaming mode.
 
@@ -2601,7 +2610,7 @@ class TestChatCompletions:
 
         Args:
             openai_client: OpenAI client instance for API calls
-            use_openai_api: Whether testing against official OpenAI API
+            use_official_api: Whether testing against official OpenAI API
 
         Validates:
             - System tool can be invoked with systemTool_ prefix
@@ -2609,7 +2618,7 @@ class TestChatCompletions:
             - Annotations are present in the response
             - URL citations have proper structure (url, title, indices)
         """
-        if use_openai_api:
+        if use_official_api:
             pytest.skip("System tools are AWS Bedrock specific")
 
         # Make request with nova_grounding system tool
@@ -2667,3 +2676,153 @@ class TestChatCompletions:
         assert hasattr(url_citation, "end_index")
         assert isinstance(url_citation.start_index, int)
         assert isinstance(url_citation.end_index, int)
+
+    # --- Response metadata fields ---
+
+    def test_response_id_format(self, openai_client: OpenAI, chat_model: str) -> None:
+        """Verify response ID starts with 'chatcmpl-'."""
+        response = openai_client.chat.completions.create(
+            model=chat_model,
+            messages=[{"role": "user", "content": "Say OK."}],
+            max_completion_tokens=16,
+        )
+        assert response.id.startswith("chatcmpl-")
+
+    def test_response_object_and_created_fields(
+        self, openai_client: OpenAI, chat_model: str
+    ) -> None:
+        """Verify response.object is 'chat.completion' and created is a valid timestamp."""
+        response = openai_client.chat.completions.create(
+            model=chat_model,
+            messages=[{"role": "user", "content": "Say OK."}],
+            max_completion_tokens=16,
+        )
+        assert response.object == "chat.completion"
+        assert isinstance(response.created, int)
+        # Timestamp should be within 60 seconds of now
+        assert abs(response.created - int(time())) < 60
+
+    def test_streaming_finish_reason_stop(
+        self, openai_client: OpenAI, chat_model: str
+    ) -> None:
+        """Verify that the last streaming chunk has finish_reason='stop'."""
+        response = openai_client.chat.completions.create(
+            model=chat_model,
+            messages=[{"role": "user", "content": "Say OK."}],
+            stream=True,
+        )
+
+        finish_reason = None
+        for chunk in response:
+            if isinstance(chunk, str) and chunk == "[DONE]":
+                break
+            if chunk.choices and chunk.choices[0].finish_reason is not None:
+                finish_reason = chunk.choices[0].finish_reason
+
+        assert finish_reason == "stop"
+
+    def test_streaming_chunk_object_field(
+        self, openai_client: OpenAI, chat_model: str
+    ) -> None:
+        """Verify streaming chunks have object='chat.completion.chunk'."""
+        response = openai_client.chat.completions.create(
+            model=chat_model,
+            messages=[{"role": "user", "content": "Say OK."}],
+            stream=True,
+            max_completion_tokens=16,
+        )
+
+        for chunk in response:
+            if isinstance(chunk, str) and chunk == "[DONE]":
+                break
+            assert chunk.object == "chat.completion.chunk"
+            break  # Only need to check first chunk
+
+    def test_streaming_with_stop_sequences(
+        self, openai_client: OpenAI, chat_legacy_model: str
+    ) -> None:
+        """Streaming with stop sequences produces finish_reason='stop'."""
+        response = openai_client.chat.completions.create(
+            model=chat_legacy_model,
+            messages=[
+                {"role": "user", "content": "Count: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10"}
+            ],
+            stop=["5"],
+            stream=True,
+            max_completion_tokens=200,
+        )
+
+        finish_reason = None
+        for chunk in response:
+            if isinstance(chunk, str) and chunk == "[DONE]":
+                break
+            if chunk.choices and chunk.choices[0].finish_reason is not None:
+                finish_reason = chunk.choices[0].finish_reason
+
+        assert finish_reason == "stop"
+
+    def test_user_parameter_accepted(
+        self, openai_client: OpenAI, chat_model: str
+    ) -> None:
+        """Verify the user parameter is accepted."""
+        response = openai_client.chat.completions.create(
+            model=chat_model,
+            messages=[{"role": "user", "content": "Say OK."}],
+            user="test-user-123",
+            max_completion_tokens=16,
+        )
+        assert len(response.choices) >= 1
+        assert response.choices[0].message.role == "assistant"
+
+    def test_frequency_penalty_accepted(
+        self, openai_client: OpenAI, chat_legacy_model: str, use_official_api: bool
+    ) -> None:
+        """Verify frequency_penalty=1.0 is accepted on models that support it."""
+        if not use_official_api:
+            pytest.skip(
+                "frequency_penalty is model-dependent and may not be supported"
+                " on all Bedrock models"
+            )
+        response = openai_client.chat.completions.create(
+            model=chat_legacy_model,
+            messages=[{"role": "user", "content": "Say OK."}],
+            frequency_penalty=1.0,
+            max_completion_tokens=16,
+        )
+        assert len(response.choices) >= 1
+
+    def test_presence_penalty_accepted(
+        self, openai_client: OpenAI, chat_legacy_model: str, use_official_api: bool
+    ) -> None:
+        """Verify presence_penalty=1.0 is accepted on models that support it."""
+        if not use_official_api:
+            pytest.skip(
+                "presence_penalty is model-dependent and may not be supported"
+                " on all Bedrock models"
+            )
+        response = openai_client.chat.completions.create(
+            model=chat_legacy_model,
+            messages=[{"role": "user", "content": "Say OK."}],
+            presence_penalty=1.0,
+            max_completion_tokens=16,
+        )
+        assert len(response.choices) >= 1
+
+    def test_max_completion_tokens_limits_output(
+        self, openai_client: OpenAI, chat_model: str
+    ) -> None:
+        """Verify max_completion_tokens=1 limits output and returns length finish_reason."""
+        max_tokens = 100
+        response = openai_client.chat.completions.create(
+            model=chat_model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Write a very long detailed essay about the universe.",
+                }
+            ],
+            max_completion_tokens=max_tokens,
+        )
+        assert response.choices[0].finish_reason == "length"
+        assert response.usage
+        assert response.usage.completion_tokens <= max_tokens

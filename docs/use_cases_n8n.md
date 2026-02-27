@@ -1,12 +1,12 @@
 ---
 title: n8n Integration - AWS Bedrock Workflow Automation
-description: Connect n8n workflows to AWS Bedrock using stdapi.ai. Automate business processes with AI using 400+ integrations, no-code interface, and OpenAI-compatible nodes.
-keywords: n8n AI integration, workflow automation AI, no-code AI automation, AWS Bedrock workflows, business process automation, AI workflow tools, n8n AWS Bedrock, OpenAI n8n
+description: Connect n8n workflows to AWS Bedrock using stdapi.ai. Automate business processes with AI using 400+ integrations, no-code interface, and OpenAI-compatible or Anthropic-compatible nodes.
+keywords: n8n AI integration, workflow automation AI, no-code AI automation, AWS Bedrock workflows, business process automation, AI workflow tools, n8n AWS Bedrock, OpenAI n8n, Anthropic n8n
 ---
 
 # n8n Integration
 
-Connect n8n automation workflows to AWS Bedrock models through stdapi.ai's OpenAI-compatible interface. Existing OpenAI templates from the n8n marketplace work out of the box—simply point them to your stdapi.ai instance and access AWS Bedrock models.
+Connect n8n automation workflows to AWS Bedrock models through stdapi.ai's OpenAI-compatible or Anthropic-compatible interfaces. Existing OpenAI and Anthropic templates from the n8n marketplace work out of the box—simply point them to your stdapi.ai instance and access AWS Bedrock models.
 
 ## About n8n
 
@@ -29,6 +29,9 @@ n8n is a powerful workflow automation platform that enables you to connect any a
 
 - :material-puzzle: __Use Existing OpenAI Templates__
   <br>stdapi.ai works with n8n's OpenAI nodes. Thousands of marketplace templates and workflows designed for OpenAI run on AWS Bedrock—zero modifications needed.
+
+- :material-robot: __Use Existing Anthropic Templates__
+  <br>stdapi.ai works with n8n's Anthropic nodes. Templates and workflows designed for Anthropic Claude run on AWS Bedrock—zero modifications needed.
 
 - :material-aws: __Access AWS Bedrock Models__
   <br>Claude 4.6+, Nova 2, Llama 4, DeepSeek v3.2, Stable Diffusion, and 80+ models available in n8n workflows. Switch models without changing automation logic.
@@ -65,7 +68,9 @@ flowchart LR
 
 ## ⚙️ Configuration
 
-### 🔑 Set Up Your Credentials
+### ![OpenAI](styles/logo_openai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } OpenAI Nodes
+
+#### 🔑 Set Up Your Credentials
 
 The foundation of any n8n integration is configuring your API credentials. This one-time setup unlocks all AI capabilities.
 
@@ -84,11 +89,11 @@ The foundation of any n8n integration is configuring your API credentials. This 
 !!! tip "What This Does"
     By setting a custom Base URL, you redirect all OpenAI API calls to your stdapi.ai instance. n8n will use this credential to authenticate and route requests to Amazon Bedrock models instead of OpenAI's servers.
 
-### 🔧 Configure Nodes
+#### 🔧 Configure Nodes
 
 For each node, first select the credentials you previously created in the node parameters. Then, select the model you want to use. If you want to use a model that is not listed, you can enter its ID as an expression in the `Model` parameter.
 
-### 💬 Chat completions
+#### 💬 Chat completions
 
 Enables: Text generation and conversational AI in workflows.
 
@@ -100,7 +105,7 @@ Enables: Text generation and conversational AI in workflows.
 
     n8n calls `POST /v1/chat/completions` (see [Chat Completions API](api_openai_chat_completions.md)), so the model must be a text/chat-capable model from the correct family.
 
-### 📚 Embeddings
+#### 📚 Embeddings
 
 Enables: Vector embeddings for semantic search and RAG workflows.
 
@@ -111,7 +116,7 @@ Enables: Vector embeddings for semantic search and RAG workflows.
 
     n8n calls `POST /v1/embeddings` (see [Embeddings API](api_openai_embeddings.md)), so the model must be an embeddings-capable model from the correct family.
 
-### 🎨 Image generation
+#### 🎨 Image generation
 
 Enables: Text-to-image creation in workflows.
 
@@ -122,7 +127,7 @@ Enables: Text-to-image creation in workflows.
 
     n8n calls `POST /v1/images/generations` (see [Images Generations API](api_openai_images_generations.md)), so the model must be an image-generation model from the correct family.
 
-### 🖼️ Image editing
+#### 🖼️ Image editing
 
 Enables: Image transformation and editing in workflows.
 
@@ -133,7 +138,7 @@ Enables: Image transformation and editing in workflows.
 
     n8n calls `POST /v1/images/edits` (see [Images Edits API](api_openai_images_edits.md)), so the model must be an image-editing model from the correct family.
 
-### 🔊 Audio generation (TTS)
+#### 🔊 Audio generation (TTS)
 
 Enables: Text-to-speech audio generation in workflows.
 
@@ -145,7 +150,7 @@ Enables: Text-to-speech audio generation in workflows.
 
     n8n calls `POST /v1/audio/speech` (see [Audio Speech API](api_openai_audio_speech.md)), so the model must match the text-to-speech modality and family.
 
-### 🎤 Audio transcription (STT)
+#### 🎤 Audio transcription (STT)
 
 Enables: Speech-to-text transcription in workflows.
 
@@ -157,10 +162,80 @@ Enables: Speech-to-text transcription in workflows.
 
     n8n calls `POST /v1/audio/transcriptions` (see [Audio Transcriptions API](api_openai_audio_transcriptions.md)), so the model must match the speech-to-text modality.
 
-### ⚠️ Unsupported Nodes
+#### ⚠️ Unsupported Nodes
 
 The following nodes are not yet supported:
 
 !!! warning "Known Limitations"
     - **`OpenAI/Message a model`** — Requires Responses API (not supported yet by stdapi.ai). Use `OpenAI Chat Model` instead.
     - **`OpenAI/Analyze image`** — Requires Responses API (not supported yet by stdapi.ai). Use `OpenAI Chat Model` instead.
+
+---
+
+### ![Anthropic](styles/logo_anthropic.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Anthropic Nodes
+
+#### 🔑 Set Up Your Credentials
+
+!!! example "Creating Your stdapi.ai Anthropic Credential"
+    **In your n8n interface:**
+
+    1. Navigate to **Credentials** menu
+    2. Click **Create Credential**
+    3. Search and select **"Anthropic"** in the credential list
+    4. Configure the following fields:
+        ```
+        API Key:  YOUR_STDAPI_KEY
+        Base URL: https://YOUR_STDAPI_URL/anthropic
+        ```
+
+!!! tip "Anthropic Base URL"
+    By default, all Anthropic-compatible routes are prefixed with `/anthropic`, so the Base URL must end with `/anthropic`. You can customize this prefix using the `ANTHROPIC_ROUTES_PREFIX` configuration variable documented in [Operations Configuration](operations_configuration.md#anthropic-routes-prefix).
+
+#### 🔧 Configure Nodes
+
+For each node, first select the credentials you previously created in the node parameters. Then, select the model you want to use. The model can be selected directly in the `Model` parameter for all supported nodes.
+
+#### 💬 Chat completions
+
+Enables: Text generation and conversational AI in workflows.
+
+!!! example "Supported Nodes"
+    **`Anthropic Chat Model`**
+
+    - Model can be selected directly in the `Model` parameter
+
+    ---
+
+    **`Anthropic/Message a model`**
+
+    - Model can be selected directly in the `Model` parameter
+
+    ---
+
+    **`Message a model in Anthropic`**
+
+    - Model can be selected directly in the `Model` parameter
+
+    n8n calls `POST /anthropic/v1/messages` (see [Anthropic Messages API](api_anthropic_messages.md)), so the model must be a text/chat-capable model from the correct family.
+
+#### 🖼️ Image analysis
+
+Enables: Image understanding and analysis in workflows.
+
+!!! example "Supported Node"
+    **`Anthropic/Analyze image`**
+
+    - Model can be selected directly in the `Model` parameter
+
+    n8n calls `POST /anthropic/v1/messages` with image content (see [Anthropic Messages API](api_anthropic_messages.md)), so the model must support vision capabilities.
+
+#### 📄 Document analysis
+
+Enables: Document understanding and extraction in workflows.
+
+!!! example "Supported Node"
+    **`Anthropic/Analyze document`**
+
+    - Model can be selected directly in the `Model` parameter
+
+    n8n calls `POST /anthropic/v1/messages` with document content (see [Anthropic Messages API](api_anthropic_messages.md)), so the model must support document processing capabilities.

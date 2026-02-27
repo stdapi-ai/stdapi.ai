@@ -13,6 +13,7 @@ from fastapi import (
 )
 from sse_starlette import EventSourceResponse, JSONServerSentEvent
 
+from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
 from stdapi.config import SETTINGS
 from stdapi.models import validate_model
@@ -36,7 +37,7 @@ if TYPE_CHECKING:
 
 
 router = APIRouter(
-    prefix=f"{SETTINGS.openai_routes_prefix}/v1/audio", tags=["audio", "openai"]
+    prefix=f"{SETTINGS.openai_routes_prefix}/v1/audio", tags=["Audio", TAG_OPENAI]
 )
 
 
@@ -250,7 +251,7 @@ async def create_transcription(
         The transcribed text in the requested format.
 
     Raises:
-        HTTPException: When transcription fails or invalid parameters are provided.
+        ApiError: When transcription fails or invalid parameters are provided.
     """
     with validation_error_handler():
         request = TranscriptionCreateParams(

@@ -5,8 +5,7 @@
 
 from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
 
-from fastapi import HTTPException
-
+from stdapi.api_errors import ApiError
 from stdapi.models.image import (
     DEFAULT_VARIATION_PROMPT,
     ImageGenerationJobBase,
@@ -18,7 +17,6 @@ from stdapi.models.image.amazon_titan_image_generator import (
     get_amz_quality,
     random_seed,
 )
-from stdapi.openai_exceptions import OpenaiError
 from stdapi.utils import get_data_uri_data
 
 if TYPE_CHECKING:
@@ -238,7 +236,7 @@ class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
             Iterable of awaitable image generation responses.
 
         Raises:
-            HTTPException: If model returns an error.
+            ApiError: If model returns an error.
         """
         self._response_height = self._height
         self._response_width = self._width
@@ -246,7 +244,7 @@ class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
 
         response = await self._model.invoke(request)
         if "error" in response:
-            raise HTTPException(status_code=400, detail=response["error"])
+            raise ApiError(response["error"])
 
         return tuple(
             self._create_response(image, index)
@@ -292,7 +290,7 @@ class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
             request = self._get_request_color_guided_generation(image_generation_config)
         else:
             msg = '"taskType" value must be "TEXT_IMAGE" or "COLOR_GUIDED_GENERATION".'
-            raise OpenaiError(msg)
+            raise ApiError(msg)
 
         return await self._invoke_and_process_response(request)
 
@@ -337,7 +335,7 @@ class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
             )
         else:
             msg = '"taskType" value must be "TEXT_IMAGE", "INPAINTING", "OUTPAINTING", "BACKGROUND_REMOVAL" or "VIRTUAL_TRY_ON".'
-            raise OpenaiError(msg)
+            raise ApiError(msg)
 
         return await self._invoke_and_process_response(request)
 
@@ -370,7 +368,7 @@ class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
             )
         else:
             msg = '"taskType" value must be "IMAGE_VARIATION", "TEXT_IMAGE" or "COLOR_GUIDED_GENERATION".'
-            raise OpenaiError(msg)
+            raise ApiError(msg)
 
         return await self._invoke_and_process_response(request)
 
@@ -511,7 +509,7 @@ class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
             params["imageBasedMask"].update(user_params.pop("imageBasedMask", {}))
         else:
             msg = f'Invalid virtualTryOnParams.maskType "{mask_type}". Must be one of "PROMPT", "GARMENT" or "IMAGE".'
-            raise OpenaiError(msg)
+            raise ApiError(msg)
 
         request = _Request(
             taskType="VIRTUAL_TRY_ON",
@@ -572,7 +570,7 @@ class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
             colors: list[str] = color_params["colors"]  # type: ignore[call-overload,assignment,index]
         except (KeyError, TypeError, IndexError) as exc:
             msg = "Required parameter for COLOR_GUIDED_GENERATION: colorGuidedGenerationParams.colors"
-            raise OpenaiError(msg) from exc
+            raise ApiError(msg) from exc
 
         request = _Request(
             taskType="COLOR_GUIDED_GENERATION",

@@ -21,7 +21,7 @@ from pybase64 import b64encode as _b64encode
 from pydantic import JsonValue, ValidationError
 from pydantic_core import from_json, to_json
 
-from stdapi.openai_exceptions import OpenaiError
+from stdapi.api_errors import ApiError
 
 if TYPE_CHECKING:
     from collections.abc import Buffer, Generator
@@ -587,10 +587,10 @@ def get_and_validate_mime(content: bytes, mime_pattern: Pattern[str]) -> str:
         mime_pattern: Compiled regex pattern (e.g., AUDIO_MIME_PATTERN).
 
     Raises:
-        OpenaiError: If MIME type doesn't match the pattern.
+        ApiError: If MIME type doesn't match the pattern.
     """
     mime = from_buffer(content, mime=True)
     if not mime_pattern.match(mime):
         msg = f"Unsupported input file format: {mime}"
-        raise OpenaiError(msg)
+        raise ApiError(msg)
     return mime

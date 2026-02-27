@@ -7,12 +7,12 @@ Supported Models:
 from re import compile as compile_regex
 from typing import TYPE_CHECKING
 
+from stdapi.api_errors import ApiError
 from stdapi.models.image._stability import (
     StabilityImageGenerationJobBase,
     StabilityImageModelBase,
     StyleTransferRequest,
 )
-from stdapi.openai_exceptions import OpenaiError
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Iterable
@@ -33,7 +33,7 @@ class _StyleTransferJob(StabilityImageGenerationJobBase):
                 mask = str(self._extra_params["style_image"])
             except KeyError as err:
                 msg = '"mask" parameter is required by this model (As style_image parameter).'
-                raise OpenaiError(msg) from err
+                raise ApiError(msg) from err
 
         request: StyleTransferRequest = {
             "prompt": self._prompt,

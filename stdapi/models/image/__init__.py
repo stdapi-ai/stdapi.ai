@@ -15,18 +15,19 @@ Design:
 from asyncio import Lock, as_completed, gather
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel
 
+from stdapi.api_errors import ApiError
 from stdapi.aws_s3 import put_object_and_get_url
 from stdapi.models import ModelBase, get_model, load_model_plugins
 from stdapi.monitoring import REQUEST_ID
-from stdapi.openai_exceptions import OpenaiError
 from stdapi.utils import b64decode, convert_base64_image, get_base64_image_size
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Iterable
     from re import Pattern
 
+    from stdapi.types import JsonMapping
     from stdapi.types.openai_images import ImageOutputFormats, ImageOutputQuality
 
 __all__ = [
@@ -89,7 +90,7 @@ class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"]:
         style: str | None,
         output_format: ImageOutputFormats | None,
         output_compression: int,
-        extra_params: dict[str, JsonValue],
+        extra_params: JsonMapping,
         *,
         is_url: bool = False,
     ) -> None:
@@ -170,11 +171,11 @@ class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"]:
             reason: Extra reason for validation failure.
 
         Raises:
-            OpenaiError: If mask requirement is not met.
+            ApiError: If mask requirement is not met.
         """
         if mask is not None:
             msg = f'"mask" parameter is not supported{" " if reason else ""}{reason}.'
-            raise OpenaiError(msg)
+            raise ApiError(msg)
 
     @staticmethod
     def _validate_mask(mask: str | None, reason: str = "") -> str:
@@ -185,32 +186,32 @@ class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"]:
             reason: Extra reason for validation failure.
 
         Raises:
-            OpenaiError: If mask requirement is not met.
+            ApiError: If mask requirement is not met.
         """
         if mask is None:
             msg = f'"mask" parameter is required{" " if reason else ""}{reason}.'
-            raise OpenaiError(msg)
+            raise ApiError(msg)
         return mask
 
     def _validate_no_quality(self) -> None:
         """Validate that quality parameter is not provided.
 
         Raises:
-            HTTPException: If quality parameter is provided.
+            ApiError: If quality parameter is provided.
         """
         if self._quality is not None:
             msg = '"quality" parameter is not supported by this model.'
-            raise OpenaiError(msg)
+            raise ApiError(msg)
 
     def _validate_no_style(self) -> None:
         """Validate that style parameter is not provided.
 
         Raises:
-            HTTPException: If style parameter is provided.
+            ApiError: If style parameter is provided.
         """
         if self._style is not None:
             msg = '"style" parameter is not supported by this model.'
-            raise OpenaiError(msg)
+            raise ApiError(msg)
 
     def _get_one_image_from_list(self, images: list[str]) -> str:
         """Extracts a single image from the provided list of images.
@@ -222,11 +223,11 @@ class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"]:
             str: The single image path or identifier from the input list.
 
         Raises:
-            OpenaiError: If the provided list of images does not contain exactly one image.
+            ApiError: If the provided list of images does not contain exactly one image.
         """
         if len(images) != 1:
             msg = "Exactly one image must be provided."
-            raise OpenaiError(msg)
+            raise ApiError(msg)
         return images[0]
 
     async def generate_images(self) -> Iterable[ImageGenerationResponse]:
@@ -321,10 +322,10 @@ class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"]:
             Iterable of awaitable image generation responses.
 
         Raises:
-            HTTPException: If the model does not support text-to-image generation.
+            ApiError: If the model does not support text-to-image generation.
         """
         msg = f"Text-to-image generation is not supported by {self._model.model.id}"
-        raise OpenaiError(msg)
+        raise ApiError(msg)
 
     async def _edit_image(
         self,
@@ -341,10 +342,10 @@ class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"]:
             Iterable of awaitable image generation responses.
 
         Raises:
-            HTTPException: If the model does not support inpainting.
+            ApiError: If the model does not support inpainting.
         """
         msg = "Image editing is not supported by {self._model.model.id}."
-        raise OpenaiError(msg)
+        raise ApiError(msg)
 
     async def _create_image_variations(
         self,
@@ -359,10 +360,10 @@ class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"]:
             Iterable of awaitable image generation responses.
 
         Raises:
-            HTTPException: If the model does not support image variations.
+            ApiError: If the model does not support image variations.
         """
         msg = f"Image variations are not supported by {self._model.model.id}."
-        raise OpenaiError(msg)
+        raise ApiError(msg)
 
     async def _generate_images_stream(
         self,
@@ -465,7 +466,7 @@ class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"]:
             Presigned download URL valid for 1 hour.
 
         Raises:
-            HTTPException: If S3 operations fail.
+            ApiError: If S3 operations fail.
         """
         request_id = REQUEST_ID.get()
         return await put_object_and_get_url(
@@ -495,7 +496,7 @@ class ImageModelBase[RequestT, ResponseT, ImageGenerationJobT](
         style: str | None,
         output_format: ImageOutputFormats | None,
         output_compression: int,
-        extra_params: dict[str, JsonValue],
+        extra_params: JsonMapping,
         *,
         is_url: bool = False,
     ) -> ImageGenerationJobT:
@@ -535,7 +536,7 @@ class ImageModelBase[RequestT, ResponseT, ImageGenerationJobT](
         height: int,
         output_format: ImageOutputFormats | None,
         output_compression: int,
-        extra_params: dict[str, JsonValue],
+        extra_params: JsonMapping,
         *,
         is_url: bool = False,
     ) -> ImageGenerationJobT:
@@ -575,7 +576,7 @@ class ImageModelBase[RequestT, ResponseT, ImageGenerationJobT](
         height: int,
         output_format: ImageOutputFormats | None,
         output_compression: int,
-        extra_params: dict[str, JsonValue],
+        extra_params: JsonMapping,
         *,
         is_url: bool = False,
     ) -> ImageGenerationJobT:

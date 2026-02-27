@@ -58,6 +58,9 @@ nav:
             - Audio Translations: api_openai_audio_translations.md
             - Embeddings: api_openai_embeddings.md
             - Models: api_openai_models.md
+          - Anthropic Compatible:
+            - Messages: api_anthropic_messages.md
+            - Models: api_anthropic_models.md
       - Operations:
           - Getting started: operations_getting_started.md
           - Configuration: operations_configuration.md

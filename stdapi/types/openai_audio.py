@@ -4,7 +4,7 @@ from typing import Annotated, Literal, Self
 
 from pydantic import AliasChoices, BaseModel, Field, model_validator
 
-from stdapi.openai_exceptions import OpenaiUnsupportedParameterError
+from stdapi.api_errors import UnsupportedParameterError
 from stdapi.types import BaseModelRequest, BaseModelRequestWithExtra, BaseModelResponse
 from stdapi.types.openai import Auto
 
@@ -413,7 +413,7 @@ class SpeechCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=True):
 
 
 # Ref: openai.types.audio.transcription_create_params.TranscriptionCreateParams
-class TranscriptionCreateParams(BaseModelRequest, str_strip_whitespace=True):
+class TranscriptionCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=True):
     """Request model for audio transcription.
 
     Validates unsupported fields/values and incompatible combinations.
@@ -508,12 +508,12 @@ class TranscriptionCreateParams(BaseModelRequest, str_strip_whitespace=True):
         if isinstance(self.chunking_strategy, dict) or self.chunking_strategy != "auto":
             # Any explicit server_vad config or non-auto is unsupported
             param = "chunking_strategy"
-            raise OpenaiUnsupportedParameterError(param)
+            raise UnsupportedParameterError(param)
         return self
 
 
 # Ref: openai.types.audio.translation_create_params.TranslationCreateParams
-class TranslationCreateParams(BaseModelRequest, str_strip_whitespace=True):
+class TranslationCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=True):
     """Request model for audio translation.
 
     Validates unsupported fields/values and incompatible combinations.

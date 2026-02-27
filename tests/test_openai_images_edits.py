@@ -155,10 +155,10 @@ class TestImagesEditsBasic:
         openai_client: OpenAI,
         sample_image_file: bytes,
         sample_mask_file: bytes,
-        use_openai_api: bool,
+        use_official_api: bool,
     ) -> None:
         """Test error when mask is provided to a model that doesn't support it."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Nova Canvas is not available on the official OpenAI API"
             )
@@ -178,10 +178,10 @@ class TestImagesEditsBasic:
         assert "not supported" in error_msg or "not allowed" in error_msg
 
     def test_mask_required_error(
-        self, openai_client: OpenAI, sample_image_file: bytes, use_openai_api: bool
+        self, openai_client: OpenAI, sample_image_file: bytes, use_official_api: bool
     ) -> None:
         """Test error when mask is required but not provided."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Nova Canvas is not available on the official OpenAI API"
             )

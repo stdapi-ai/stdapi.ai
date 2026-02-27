@@ -7,6 +7,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Path
 from pydantic import BaseModel
 
+from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
 from stdapi.config import SETTINGS
 from stdapi.models import (
@@ -19,7 +20,7 @@ from stdapi.monitoring import log_request_params, log_response_params
 from stdapi.types.openai_models import Model
 
 router = APIRouter(
-    prefix=f"{SETTINGS.openai_routes_prefix}/v1", tags=["models", "openai"]
+    prefix=f"{SETTINGS.openai_routes_prefix}/v1", tags=["Models", TAG_OPENAI]
 )
 
 #: /v1/models route response cache
@@ -106,7 +107,7 @@ async def list_models(_: Annotated[None, Depends(authenticate)]) -> ModelsRespon
         ModelsResponse containing list of all available models with metadata
 
     Raises:
-        HTTPException: When unable to retrieve models from backend services (500)
+        ApiError: When unable to retrieve models from backend services (500)
     """
     updated = (await initialize_bedrock_models())[0]
     async with _ALL_MODELS_LOCK:
@@ -191,7 +192,7 @@ async def retrieve_model(
         Model object with details about the specified model
 
     Raises:
-        HTTPException: When the model is not found (404)
+        ApiError: When the model is not found (404)
     """
     log_request_params({"model": model})
     return log_response_params(

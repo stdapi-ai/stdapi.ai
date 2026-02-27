@@ -7,8 +7,8 @@ from urllib.parse import urlparse
 
 from aiodns import DNSResolver
 from aiodns.error import DNSError
-from fastapi import HTTPException
 
+from stdapi.api_errors import ApiError
 from stdapi.config import SETTINGS
 
 _RESOLVER_CACHE: dict[Literal["DNS"], DNSResolver] = {}
@@ -79,7 +79,7 @@ async def _validate_hostname(
     """Validates a domain by ensuring it does not resolve to an unsafe IP address.
 
     Performs a domain name system (DNS) query for the given hostname and query type.
-    If the resolved IP is deemed unsafe, an HTTPException is raised.
+    If the resolved IP is deemed unsafe, an ApiError is raised.
     If the DNS query fails, the process silently ignores the error and returns None.
 
     Args:
@@ -89,13 +89,12 @@ async def _validate_hostname(
             for IPv4 or "AAAA" for IPv6.
 
     Raises:
-        HTTPException: If the hostname resolves to an unsafe IP address.
+        ApiError: If the hostname resolves to an unsafe IP address.
     """
     try:
         for rdata in await resolver.query(hostname, query_type):
             if _is_unsafe_ip(rdata.host):
-                raise HTTPException(
-                    status_code=403, detail=f"Forbidden hostname in URL: {hostname}."
-                )
+                msg = f"Forbidden hostname in URL: {hostname}."
+                raise ApiError(msg, status=403)
     except DNSError:
         return

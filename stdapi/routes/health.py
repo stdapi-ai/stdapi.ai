@@ -18,7 +18,7 @@ class HealthResponse(BaseModel):
     status: str = "ok"
 
 
-router = APIRouter(tags=["health"])
+router = APIRouter(tags=["Health"])
 
 
 @router.get(

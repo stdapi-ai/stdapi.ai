@@ -144,6 +144,12 @@ class TestImagesVariationsProviderParams:
     Test unique variation parameters like similarityStrength and text hints.
     """
 
+    @pytest.fixture(autouse=True)
+    def _skip_non_local(self, use_official_api: bool) -> None:
+        """Skip web search tests when running against the official Anthropic API."""
+        if use_official_api:
+            pytest.skip("Unittest only for local tests.")
+
     @pytest.mark.expensive
     def test_variation_with_similarity_strength(
         self, openai_client: OpenAI, sample_image_file: bytes

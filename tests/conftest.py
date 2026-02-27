@@ -1,6 +1,7 @@
 """Pytest configuration and fixtures."""
 
 import base64
+import sys
 from io import BytesIO
 from os import environ
 from pathlib import Path
@@ -9,6 +10,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 from aiobotocore.session import get_session
+from dotenv import load_dotenv
 from openai import OpenAI
 from PIL import Image as PILImage
 from pybase64 import b64encode
@@ -16,6 +18,57 @@ from starlette.testclient import TestClient
 
 if TYPE_CHECKING:
     from collections.abc import Generator
+
+
+_loaded_env_file: str | None = None
+
+
+def _load_env_profile() -> None:
+    """Load environment variables from a profile .env file.
+
+    Builds a candidate list of dotenv files and loads the first one that exists:
+
+    1. ``--env-profile <name>`` (CLI or ``PYTEST_ENV_PROFILE`` env var) adds
+       ``tests/.env.<name>`` as the highest-priority candidate.
+    2. ``--use-official-api`` appends ``tests/.env.use-official-api``.
+    3. ``--server-url`` appends ``tests/.env.server-url``.
+    4. ``tests/.env`` is always appended as the default fallback.
+
+    This runs at module import time (before pytest parses arguments) so that
+    ``PYTEST_ADDOPTS`` from the ``.env`` file is available during arg parsing.
+    """
+    global _loaded_env_file  # noqa: PLW0603
+
+    def _argv_value(argv: list[str], option: str) -> str:
+        """Return the value of a ``--option value`` or ``--option=value`` CLI arg."""
+        prefix = f"{option}="
+        for i, arg in enumerate(argv):
+            if arg == option and i + 1 < len(argv):
+                return argv[i + 1]
+            if arg.startswith(prefix):
+                return arg.split("=", 1)[1]
+        return ""
+
+    argv = sys.argv
+    profile = _argv_value(argv, "--env-profile") or environ.get(
+        "PYTEST_ENV_PROFILE", ""
+    )
+    tests_dir = Path(__file__).parent
+    candidates = (
+        f".env.{profile}" if profile else "",
+        ".env.use-official-api" if "--use-official-api" in argv else "",
+        ".env.server-url" if _argv_value(argv, "--server-url") else "",
+        ".env",
+    )
+    for name in candidates:
+        if name and (env_file := tests_dir / name).is_file():
+            _loaded_env_file = str(env_file.relative_to(tests_dir.parent))
+            load_dotenv(env_file, override=True)
+            return
+
+
+_load_env_profile()
+del _load_env_profile
 
 # Model mappings for different test contexts
 MODEL_MAPPINGS = {
@@ -62,16 +115,24 @@ _OPENAI_ORGANIZATION = "tests_stdapi.ai"
 def pytest_addoption(parser: pytest.Parser) -> None:
     """Add custom pytest command line options."""
     parser.addoption(
+        "--env-profile",
+        action="store",
+        default="",
+        help="Name of env profile to load (e.g. 'remote' loads tests/.env.remote). "
+        "Default loads tests/.env if it exists. "
+        "Can also be set via the PYTEST_ENV_PROFILE environment variable.",
+    )
+    parser.addoption(
         "--server-url",
         action="store",
         default=None,
         help="URL of the server to test against instead of using test client",
     )
     parser.addoption(
-        "--use-openai-api",
+        "--use-official-api",
         action="store_true",
         default=False,
-        help="Run tests against the official OpenAI API instead of local implementation",
+        help="Run tests against an official API (OpenAI, Anthropic, etc.) instead of local implementation",
     )
     parser.addoption(
         "--expensive",
@@ -84,8 +145,15 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         action="store_true",
         default=False,
         help="Run the test server with 'info' log level. "
-        "Only if --server-url and --use-openai-api are not specified.",
+        "Only if --server-url and --use-official-api are not specified.",
     )
+
+
+def pytest_report_header() -> str | None:
+    """Show which env file was loaded in the pytest session header."""
+    if _loaded_env_file:
+        return f"envfile: {_loaded_env_file}"
+    return None
 
 
 def pytest_collection_modifyitems(
@@ -102,15 +170,15 @@ def pytest_collection_modifyitems(
 
 
 @pytest.fixture(scope="session")
-def use_openai_api(request: pytest.FixtureRequest) -> bool:
-    """Determine if we should use the official OpenAI API."""
-    return request.config.getoption("--use-openai-api")  # type: ignore[no-any-return]
+def use_official_api(request: pytest.FixtureRequest) -> bool:
+    """Determine if we should use an official API (OpenAI, Anthropic, etc.)."""
+    return request.config.getoption("--use-official-api")  # type: ignore[no-any-return]
 
 
 @pytest.fixture(scope="session")
-def models(use_openai_api: bool) -> dict[str, str]:
+def models(use_official_api: bool) -> dict[str, str]:
     """Provide appropriate models based on test context."""
-    return MODEL_MAPPINGS["openai" if use_openai_api else "local"].copy()
+    return MODEL_MAPPINGS["openai" if use_official_api else "local"].copy()
 
 
 @pytest.fixture(scope="session")
@@ -198,23 +266,19 @@ def image_generation_stream_model(models: dict[str, str]) -> str:
 
 
 @pytest.fixture(scope="session")
-def openai_client(request: pytest.FixtureRequest) -> Generator[OpenAI]:
-    """Create an OpenAI client for either local or official API testing."""
-    server_url = request.config.getoption("--server-url")
-    if request.config.getoption("--use-openai-api"):
-        # Use official OpenAI API
-        yield OpenAI(max_retries=5)
+def api_key() -> str:
+    """Returns a random API key to use for the test session with local clients."""
+    return token_hex()
 
-    elif server_url:
-        # Use specified server URL (for local testing against external server)
-        yield OpenAI(
-            base_url=f"{server_url.rstrip('/')}/v1",
-            max_retries=5,
-            organization=_OPENAI_ORGANIZATION,
-        )
 
-    else:
-        api_key = token_hex()
+@pytest.fixture(scope="session")
+def test_client(
+    request: pytest.FixtureRequest, api_key: str
+) -> Generator[TestClient | None]:
+    """Create a Starlette test client for local API testing."""
+    if not request.config.getoption(
+        "--use-official-api"
+    ) and not request.config.getoption("--server-url"):
         environ.update(
             {
                 # Use FastAPI TestClient for local testing
@@ -239,13 +303,36 @@ def openai_client(request: pytest.FixtureRequest) -> Generator[OpenAI]:
         from stdapi.main import app  # noqa: PLC0415
 
         with TestClient(app) as test_client:
-            yield OpenAI(
-                base_url="http://testserver/v1",
-                api_key=api_key,
-                max_retries=5,
-                organization=_OPENAI_ORGANIZATION,
-                http_client=test_client,
-            )
+            yield test_client
+    else:
+        yield None
+
+
+@pytest.fixture(scope="session")
+def openai_client(
+    request: pytest.FixtureRequest, test_client: TestClient | None, api_key: str
+) -> OpenAI:
+    """Create an OpenAI client for either local or official API testing."""
+    # Local test
+    if test_client:
+        return OpenAI(
+            base_url="http://testserver/v1",
+            api_key=api_key,
+            max_retries=5,
+            organization=_OPENAI_ORGANIZATION,
+            http_client=test_client,
+        )
+
+    # Official API test
+    if request.config.getoption("--use-official-api"):
+        return OpenAI(max_retries=5)
+
+    # Remote server test
+    return OpenAI(
+        base_url=f"{request.config.getoption('--server-url').rstrip('/')}/v1",
+        max_retries=5,
+        organization=_OPENAI_ORGANIZATION,
+    )
 
 
 @pytest.fixture(scope="session")
@@ -254,7 +341,7 @@ def sample_audio_file(openai_client: OpenAI, speech_standard_model: str) -> byte
 
     This fixture generates a short WAV audio snippet using the TTS endpoint once,
     caches it under tests/.cache/audio.wav, and returns its bytes for reuse by
-    tests (both local server and --use-openai-api modes).
+    tests (both local server and --use-official-api modes).
     """
     audio_file = _CACHE_DIR / "audio.wav"
     if audio_file.exists():
@@ -288,7 +375,7 @@ def sample_audio_mp3_file(openai_client: OpenAI, speech_standard_model: str) -> 
 
     This fixture generates a short MP3 audio snippet using the TTS endpoint once,
     caches it under tests/.cache/audio.mp3, and returns its bytes for reuse by
-    tests (both local server and --use-openai-api modes).
+    tests (both local server and --use-official-api modes).
     """
     audio_file = _CACHE_DIR / "audio.mp3"
     if audio_file.exists():

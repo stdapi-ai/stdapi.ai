@@ -6,11 +6,10 @@ from math import ceil
 from typing import TYPE_CHECKING, NotRequired
 
 from botocore.exceptions import ClientError
-from fastapi import HTTPException, Response
-from fastapi import UploadFile as FastAPIUploadFile
 from pydantic_core import from_json
 from typing_extensions import TypedDict
 
+from stdapi.api_errors import ApiError, InvalidLanguageFormatError
 from stdapi.aws import get_client
 from stdapi.aws_s3 import get_text_from_s3, put_upload_file_to_s3
 from stdapi.aws_translate import translate, translate_subtitle
@@ -19,7 +18,6 @@ from stdapi.models import (
     EXTRA_MODELS,
     EXTRA_MODELS_INPUT_MODALITY,
     EXTRA_MODELS_OUTPUT_MODALITY,
-    MODEL_ALIASES,
     ModelDetails,
 )
 from stdapi.models.audio import AudioModelBase
@@ -29,7 +27,6 @@ from stdapi.monitoring import (
     log_error_details,
     log_response_params,
 )
-from stdapi.openai_exceptions import OpenaiInvalidLanguageFormatError
 from stdapi.tokenizer import estimate_token_count
 from stdapi.types.openai_audio import (
     SUBTITLE_FORMATS,
@@ -56,7 +53,8 @@ from stdapi.utils import format_language_code, language_code_to_name
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator
 
-    from fastapi import BackgroundTasks, UploadFile
+    from fastapi import BackgroundTasks, Response, UploadFile
+    from fastapi import UploadFile as FastAPIUploadFile
     from types_aiobotocore_s3.client import S3Client
     from types_aiobotocore_transcribe.client import TranscribeServiceClient
     from types_aiobotocore_transcribe.type_defs import (
@@ -65,9 +63,6 @@ if TYPE_CHECKING:
 
 #: Transcribe model ID
 AWS_TRANSCRIBE_MODEL_ID = "amazon.transcribe"
-
-# Use AWS transcribe as the default STT engine
-MODEL_ALIASES["whisper-1"] = AWS_TRANSCRIBE_MODEL_ID
 
 #: Ordinal value of the "A" letter used as speaker label
 _A_ORDINAL_VALUE = ord("A")
@@ -219,7 +214,7 @@ def _handle_transcription_error(language: str | None) -> Generator[None]:
         language: Language code that may have caused the error
 
     Raises:
-        HTTPException: With appropriate error message
+        ApiError: With appropriate error message
 
     Usage:
         with _handle_transcription_error(language):
@@ -231,10 +226,10 @@ def _handle_transcription_error(language: str | None) -> Generator[None]:
         if error.response["Error"]["Code"] == "BadRequestException":
             error_message = error.response["Error"]["Message"]
             if "languageCode" in error_message:
-                msg = (f"Language '{language}' is not supported by the model",)
-                raise OpenaiInvalidLanguageFormatError(msg) from error
+                msg = f"Language '{language}' is not supported by the model"
+                raise InvalidLanguageFormatError(msg) from error
             if "file" in error_message:
-                raise HTTPException(status_code=400, detail=error_message) from error
+                raise ApiError(error_message) from error
         raise  # pragma: no cover
 
 
@@ -248,7 +243,7 @@ async def _wait_for_transcription_completion(
         job_id: Transcription job ID
 
     Raises:
-        HTTPException: If transcription fails
+        ApiError: If transcription fails
     """
     while True:  # Timeout at FastAPI level
         job = (await transcribe.get_transcription_job(TranscriptionJobName=job_id))[
@@ -257,7 +252,7 @@ async def _wait_for_transcription_completion(
         if job["TranscriptionJobStatus"] == "COMPLETED":
             break
         if job["TranscriptionJobStatus"] == "FAILED":
-            raise HTTPException(status_code=400, detail=job["FailureReason"])
+            raise ApiError(job["FailureReason"])
         await sleep(0.5)
 
 
@@ -466,6 +461,21 @@ class AudioModel(AudioModelBase[None, None]):
     )
     SUPPORTED_TIMESTAMP_GRANULARITIES = frozenset({"word", "segment"})
 
+    @classmethod
+    def get_aliases(cls, all_models: dict[str, ModelDetails]) -> dict[str, str]:  # noqa: ARG003
+        """Return dynamic aliases specific to this model class.
+
+        Override in subclasses to provide model-specific aliases.
+        Each alias maps an alternative name to a Bedrock model ID.
+
+        Args:
+            all_models: All available models keyed by model ID.
+
+        Returns:
+            A dict mapping alias to model ID.
+        """
+        return {"whisper-1": "amazon.transcribe"}
+
     async def _transcribe(
         self,
         audio_content: UploadFile,
@@ -496,7 +506,7 @@ class AudioModel(AudioModelBase[None, None]):
             Raw transcription response
 
         Raises:
-            HTTPException: When transcription fails, validation errors occur, or
+            ApiError: When transcription fails, validation errors occur, or
                 unsupported file formats are provided
         """
         self._validate_no_prompt(prompt)
@@ -509,11 +519,11 @@ class AudioModel(AudioModelBase[None, None]):
                 "No S3 bucket configured for AWS Transcribe. "
                 "AWS_S3_BUCKET and AWS_TRANSCRIBE_S3_BUCKET environment variable are not set."
             )
-            raise HTTPException(
-                status_code=404,
-                detail="This model is not available on the current server. "
-                "Please contact the administrator to enabled it.",
+            msg = (
+                "This model is not available on the current server. "
+                "Please contact the administrator to enabled it."
             )
+            raise ApiError(msg, status=404)
 
         transcribe: TranscribeServiceClient = get_client("transcribe")
         s3_client: S3Client = get_client("s3", transcribe.meta.region_name)
@@ -693,7 +703,7 @@ class AudioModel(AudioModelBase[None, None]):
             Formatted transcription response
 
         Raises:
-            HTTPException: When transcription fails, validation errors occur, or
+            ApiError: When transcription fails, validation errors occur, or
                 unsupported file formats are provided
         """
         self._validate_response_formats(response_format, timestamp_granularities)
@@ -738,7 +748,7 @@ class AudioModel(AudioModelBase[None, None]):
             TranscriptionTextDeltaEvent or TranscriptionTextDoneEvent objects
 
         Raises:
-            HTTPException: When transcription fails
+            ApiError: When transcription fails
         """
         transcript_data = await self._transcribe(
             audio_content,
@@ -798,7 +808,7 @@ class AudioModel(AudioModelBase[None, None]):
             Formatted translation response with translated text in English
 
         Raises:
-            HTTPException: When transcription or translation fails
+            ApiError: When transcription or translation fails
         """
         transcript_data = await self._transcribe(
             audio_content,

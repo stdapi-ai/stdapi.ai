@@ -1,25 +1,29 @@
-"""API key authentication for OpenAI-compatible endpoints."""
+"""API key authentication for API endpoints."""
 
 from hashlib import blake2b
 from hmac import compare_digest
 from secrets import token_bytes
 
 from botocore.exceptions import ClientError
-from fastapi import Depends, HTTPException
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import Depends
+from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import SecretBytes, SecretStr
 from pydantic_core import from_json
 
+from stdapi.api_errors import ApiError
 from stdapi.aws import CONFIG
 from stdapi.config import AWS_REGION, AWS_SESSION, SETTINGS
 from stdapi.monitoring import log_error_details
 
 #: HTTPBearer security scheme for API key authentication
-_security = HTTPBearer(auto_error=False)
+_authorization_bearer = HTTPBearer(auto_error=False)
+
+#: APIKeyHeader security scheme for x-api-key authentication
+_x_api_key = APIKeyHeader(name="x-api-key", auto_error=False)
 
 
 class AuthenticationHandler:
-    """Handles API key authentication with secure hashing for OpenAI-compatible endpoints."""
+    """Handles API key authentication with secure hashing for API endpoints."""
 
     __slots__ = ("_api_key_hash", "_api_key_salt")
 
@@ -142,39 +146,37 @@ class AuthenticationHandler:
             )
             raise ValueError(msg) from exc
 
-    def verify_credentials(
-        self, credentials: HTTPAuthorizationCredentials | None
-    ) -> None:
-        """Verify API key authentication for OpenAI-compatible endpoints.
+    def verify_credentials(self, token: SecretStr | None) -> None:
+        """Verify authentication for API endpoints.
 
         This method validates the Authorization header against the cached API key hash
         using secure constant-time comparison. If authentication is disabled, this method
         does nothing and allows all requests.
 
         Args:
-            credentials: HTTP Bearer token credentials from the Authorization header.
+            token: Authentication token.
 
         Raises:
-            HTTPException: 401 if authentication is required but missing/invalid.
+            ApiError: 401 if authentication is required but missing/invalid.
         """
         if self._api_key_hash is None or self._api_key_salt is None:
             return
 
-        if credentials is None:
+        if token is None:
             log_error_details("Missing API key")
-            raise HTTPException(status_code=401, detail="Unauthorized")
+            msg = "Unauthorized"
+            raise ApiError(msg, status=401)
 
-        value = SecretStr(credentials.credentials)
-        credentials.credentials = ""
         if not compare_digest(
             blake2b(
-                value.get_secret_value().encode("utf-8"),
+                token.get_secret_value().encode("utf-8"),
                 salt=self._api_key_salt.get_secret_value(),
             ).digest(),
             self._api_key_hash.get_secret_value(),
         ):
             log_error_details("Invalid API key")
-            raise HTTPException(status_code=401, detail="Unauthorized")
+            msg = "Unauthorized"
+            raise ApiError(msg, status=401)
 
 
 #: Global authentication handler instance
@@ -194,7 +196,8 @@ async def initialize_authentication() -> bool:
 
 
 async def authenticate(
-    credentials: HTTPAuthorizationCredentials | None = Depends(_security),
+    credentials: HTTPAuthorizationCredentials | None = Depends(_authorization_bearer),
+    x_api_key: str | None = Depends(_x_api_key),
 ) -> None:
     """Verify API key authentication dependency for FastAPI routes.
 
@@ -203,8 +206,16 @@ async def authenticate(
 
     Args:
         credentials: HTTP Bearer token credentials from the Authorization header.
+        x_api_key: API key from the X-API-Key header.
 
     Raises:
-        HTTPException: 401 if authentication is required but missing/invalid.
+        ApiError: 401 if authentication is required but missing/invalid.
     """
-    _auth_handler.verify_credentials(credentials)
+    if x_api_key:
+        token: SecretStr | None = SecretStr(x_api_key)
+    elif credentials:
+        token = SecretStr(credentials.credentials)
+        credentials.credentials = ""
+    else:
+        token = None
+    _auth_handler.verify_credentials(token)

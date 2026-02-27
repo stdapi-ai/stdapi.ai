@@ -9,19 +9,19 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 
+from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
 from stdapi.aws_bedrock import get_extra_model_parameters
 from stdapi.config import SETTINGS
 from stdapi.models import validate_model
 from stdapi.models.image import get_image_model
 from stdapi.monitoring import log_request_params
-from stdapi.openai_exceptions import OpenaiError, OpenaiUnsupportedModelError
 from stdapi.routes._images_common import build_images_response
 from stdapi.types.openai_images import ImagesResponse, ImageVariationParams
 from stdapi.utils import read_and_b64encode_file, validation_error_handler
 
 router = APIRouter(
-    prefix=f"{SETTINGS.openai_routes_prefix}/v1", tags=["images", "openai"]
+    prefix=f"{SETTINGS.openai_routes_prefix}/v1", tags=["Images", TAG_OPENAI]
 )
 
 #: Includes model fields and file parameters handled separately in the route
@@ -129,7 +129,7 @@ async def create_image_variations(
         ImagesResponse containing image variation URLs or base64 data.
 
     Raises:
-        HTTPException: With 404 if the model does not exist; 400 on unsupported
+        ApiError: With 404 if the model does not exist; 400 on unsupported
             options or invalid values.
     """
     with validation_error_handler():
@@ -146,15 +146,14 @@ async def create_image_variations(
             },
         )
     log_request_params(request, user_id=request.user)
-    try:
-        model_id = (
-            await validate_model(
-                request.model, input_modality="IMAGE", output_modality="IMAGE"
-            )
-        ).id
-    except OpenaiUnsupportedModelError as Error:
-        # This route does not return standard 404 error if invalid model.
-        raise OpenaiError(Error.args[0]) from None
+    model_id = (
+        await validate_model(
+            request.model,
+            input_modality="IMAGE",
+            output_modality="IMAGE",
+            error_status=400,
+        )
+    ).id
 
     width, height = map(int, request.size.split("x"))
     job = get_image_model(model_id).get_image_variation_job(

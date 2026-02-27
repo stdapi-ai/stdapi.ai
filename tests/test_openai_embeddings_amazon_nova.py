@@ -18,10 +18,10 @@ class TestAmazonNovaEmbeddings:
 
     @pytest.mark.parametrize("model_id", NOVA_ALL)
     def test_text_single(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+        self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
         """Text input returns a valid embedding vector."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Nova models are not available on the official OpenAI API"
             )
@@ -37,10 +37,10 @@ class TestAmazonNovaEmbeddings:
 
     @pytest.mark.parametrize("model_id", NOVA_ALL)
     def test_text_batch(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+        self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
         """Batch of text inputs returns one embedding per item."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Nova models are not available on the official OpenAI API"
             )
@@ -61,10 +61,10 @@ class TestAmazonNovaEmbeddings:
 
     @pytest.mark.parametrize("model_id", NOVA_SAMPLE)
     def test_dimensions(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+        self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
         """Dimensions parameter is accepted and returns correct size."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Nova models are not available on the official OpenAI API"
             )
@@ -84,14 +84,14 @@ class TestAmazonNovaEmbeddings:
 
     @pytest.mark.parametrize("model_id", NOVA_SAMPLE)
     def test_extra_params_embedding_purpose(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+        self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
         """Extra body parameter embeddingPurpose is forwarded to provider.
 
         Nova supports GENERIC_INDEX (default), CLASSIFICATION, and CLUSTERING
         as embedding purposes. Not part of OpenAI Embeddings API.
         """
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Nova models are not available on the official OpenAI API"
             )
@@ -113,12 +113,12 @@ class TestAmazonNovaEmbeddings:
     def test_image_single(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_image_file_base64: str,
         model_id: str,
     ) -> None:
         """Image data URI returns a valid embedding vector."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Nova models are not available on the official OpenAI API"
             )
@@ -137,12 +137,12 @@ class TestAmazonNovaEmbeddings:
     def test_image_batch(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_image_file_base64: str,
         model_id: str,
     ) -> None:
         """Batch of image data URIs returns embeddings for all items."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Nova models are not available on the official OpenAI API"
             )
@@ -162,7 +162,7 @@ class TestAmazonNovaEmbeddings:
     def test_mixed_text_image_batch(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_image_file_base64: str,
         model_id: str,
     ) -> None:
@@ -171,7 +171,7 @@ class TestAmazonNovaEmbeddings:
         Nova supports multimodal embeddings in a unified semantic space,
         allowing text and images to be embedded together.
         """
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Nova models are not available on the official OpenAI API"
             )
@@ -195,7 +195,7 @@ class TestAmazonNovaEmbeddings:
     def test_audio_single(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_audio_mp3_file_base64: str,
         model_id: str,
     ) -> None:
@@ -203,7 +203,7 @@ class TestAmazonNovaEmbeddings:
 
         Nova supports audio embeddings up to 30 seconds in duration.
         """
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Nova models are not available on the official OpenAI API"
             )
@@ -222,7 +222,7 @@ class TestAmazonNovaEmbeddings:
     def test_video_single(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_video_file_base64: str,
         model_id: str,
     ) -> None:
@@ -231,7 +231,7 @@ class TestAmazonNovaEmbeddings:
         Nova supports video embeddings up to 30 seconds in duration.
         This test is skipped if no sample video file is available.
         """
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Nova models are not available on the official OpenAI API"
             )
@@ -254,7 +254,7 @@ class TestAmazonNovaEmbeddings:
     def test_multimodal_batch(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_image_file_base64: str,
         sample_audio_mp3_file_base64: str,
         model_id: str,
@@ -264,7 +264,7 @@ class TestAmazonNovaEmbeddings:
         Nova's unified semantic space allows embedding text, images, and audio
         in the same batch for cross-modal retrieval and comparison.
         """
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Nova models are not available on the official OpenAI API"
             )
@@ -288,12 +288,12 @@ class TestAmazonNovaEmbeddings:
     def test_image_with_dimensions(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_image_file_base64: str,
         model_id: str,
     ) -> None:
         """Image embedding with custom dimensions parameter works correctly."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Nova models are not available on the official OpenAI API"
             )
@@ -312,10 +312,10 @@ class TestAmazonNovaEmbeddings:
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", NOVA_SAMPLE)
     def test_clustering_purpose(
-        self, openai_client: OpenAI, use_openai_api: bool, model_id: str
+        self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
         """Clustering embedding purpose is accepted and returns valid embeddings."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Nova models are not available on the official OpenAI API"
             )
@@ -341,7 +341,7 @@ class TestAmazonNovaEmbeddings:
     def test_force_s3_data_with_small_image(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_image_file_base64: str,
         model_id: str,
     ) -> None:
@@ -350,7 +350,7 @@ class TestAmazonNovaEmbeddings:
         This tests that small files (under 6MB) can be forced to use S3 and
         async invocation via the force_s3_data extra parameter.
         """
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Nova models are not available on the official OpenAI API"
             )
@@ -372,12 +372,12 @@ class TestAmazonNovaEmbeddings:
     def test_force_s3_data_with_audio(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_audio_mp3_file_base64: str,
         model_id: str,
     ) -> None:
         """Force S3 upload for audio using force_s3_data parameter."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Nova models are not available on the official OpenAI API"
             )
@@ -399,12 +399,12 @@ class TestAmazonNovaEmbeddings:
     def test_force_s3_data_with_video(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_video_file_base64: str,
         model_id: str,
     ) -> None:
         """Force S3 upload for video using force_s3_data parameter."""
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Nova models are not available on the official OpenAI API"
             )
@@ -430,7 +430,7 @@ class TestAmazonNovaEmbeddings:
     def test_force_s3_data_with_multimodal_batch(
         self,
         openai_client: OpenAI,
-        use_openai_api: bool,
+        use_official_api: bool,
         sample_image_file_base64: str,
         sample_audio_mp3_file_base64: str,
         model_id: str,
@@ -440,7 +440,7 @@ class TestAmazonNovaEmbeddings:
         This tests that the force_s3_data parameter works correctly with
         mixed input types (text, image, audio) in a single batch.
         """
-        if use_openai_api:
+        if use_official_api:
             pytest.skip(
                 "Amazon Nova models are not available on the official OpenAI API"
             )

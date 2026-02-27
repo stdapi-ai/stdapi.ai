@@ -59,6 +59,24 @@ LogLevel = Literal["info", "warning", "error", "critical"]
 #: AWS Session
 AWS_SESSION = get_session()
 
+#: Built-in set of ``anthropic_beta`` flags known to be supported by AWS Bedrock.
+_ANTHROPIC_BETA_BEDROCK_FLAGS: frozenset[str] = frozenset(
+    {
+        "computer-use-2024-10-22",
+        "computer-use-2025-01-24",
+        "computer-use-2025-11-24",
+        "token-efficient-tools-2025-02-19",
+        "Interleaved-thinking-2025-05-14",
+        "output-128k-2025-02-19",
+        "dev-full-thinking-2025-05-14",
+        "context-1m-2025-08-07",
+        "context-management-2025-06-27",
+        "effort-2025-11-24",
+        "tool-search-tool-2025-10-19",
+        "tool-examples-2025-10-29",
+    }
+)
+
 
 class _Settings(BaseSettings):
     """Application configuration loaded from environment variables.
@@ -350,6 +368,10 @@ class _Settings(BaseSettings):
 
     openai_routes_prefix: str = Field(
         default="", description="OpenAI API compatible routes prefix"
+    )
+
+    anthropic_routes_prefix: str = Field(
+        default="/anthropic", description="Anthropic API compatible routes prefix"
     )
 
     api_key: SecretStr | None = Field(
@@ -689,6 +711,54 @@ class _Settings(BaseSettings):
             "Default: True for backward compatibility."
         ),
     )
+
+    anthropic_beta_filter: bool = Field(
+        default=True,
+        description=(
+            "Enable filtering of unsupported anthropic_beta flags for Anthropic "
+            "Claude models. When enabled, flags not in the allowlist are silently "
+            "removed to prevent Bedrock ValidationException errors.\n\n"
+            "Set to false to pass all flags through.\n"
+            "Default: true"
+        ),
+    )
+
+    anthropic_beta_allowlist: Annotated[frozenset[str], NoDecode] = Field(
+        default=frozenset(),
+        description=(
+            "Additional anthropic_beta flags to allow beyond the built-in defaults. "
+            "This is merged with the built-in set of Bedrock-supported flags, so you "
+            "only need to specify extra flags here (e.g., newly added Bedrock flags).\n\n"
+            "Only effective when anthropic_beta_filter is true.\n\n"
+            "Environment variable format: Comma-separated string\n"
+            "Example: 'new-feature-2026-03-01,another-flag-2026-04-01'"
+        ),
+    )
+
+    @field_validator("anthropic_beta_allowlist", mode="before")
+    @classmethod
+    def _parse_anthropic_beta_allowlist(
+        cls, value: frozenset[str] | str
+    ) -> frozenset[str]:
+        """Parse anthropic_beta_allowlist and merge with built-in defaults.
+
+        Converts a comma-separated string to a frozenset and merges with
+        `ANTHROPIC_BETA_BEDROCK_FLAGS`.
+
+        Args:
+            value: A comma-separated string of extra flags or a frozenset.
+
+        Returns:
+            A frozenset of all allowed flags (built-in + user-specified).
+        """
+        return frozenset(
+            _ANTHROPIC_BETA_BEDROCK_FLAGS
+            | set(
+                (flag for flag in (v.strip() for v in value.split(",")) if flag)
+                if isinstance(value, str)
+                else value
+            )
+        )
 
     @field_validator("aws_bedrock_regions", mode="before")
     @classmethod

@@ -2,8 +2,9 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Query
 
+from stdapi.api_errors import ApiError
 from stdapi.models import (
     ModelDetails,
     get_all_models_details_and_modalities,
@@ -11,7 +12,7 @@ from stdapi.models import (
 )
 from stdapi.monitoring import log_request_params, log_response_params
 
-router = APIRouter(prefix="", tags=["models"])
+router = APIRouter(prefix="", tags=["Models"])
 
 
 @router.get(
@@ -55,7 +56,7 @@ async def list_models(
         Models list
 
     Raises:
-        HTTPException: When unable to retrieve models from backend services (500)
+        ApiError: When unable to retrieve models from backend services (500)
     """
     log_request_params(
         {"input_modalities": input_modalities, "output_modalities": output_modalities}
@@ -100,8 +101,6 @@ def _filter_by_modality(
             try:
                 modalities_models_ids |= models_by_modalities[modality]
             except KeyError:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"No model matching {modality_type} modality: {modality}.",
-                ) from None
+                msg = f"No model matching {modality_type} modality: {modality}."
+                raise ApiError(msg) from None
         models_ids &= modalities_models_ids

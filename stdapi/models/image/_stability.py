@@ -7,8 +7,7 @@ ImageModel and MATCHER.
 
 from typing import ClassVar, Literal, NotRequired, TypedDict
 
-from fastapi import HTTPException
-
+from stdapi.api_errors import ApiError
 from stdapi.models.image import (
     ImageGenerationJobBase,
     ImageGenerationResponse,
@@ -225,7 +224,7 @@ class StabilityImageGenerationJobBase(
             Image data extracted from the response.
 
         Raises:
-            HTTPException: If request was filtered.
+            ApiError: If request was filtered.
         """
         response = await self._model.invoke(request)
         try:
@@ -235,10 +234,8 @@ class StabilityImageGenerationJobBase(
         else:
             reasons = tuple(reason for reason in finish_reasons if reason)
             if reasons:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Request was filtered: {', '.join(set(reasons))}",
-                )
+                msg = f"Request was filtered: {', '.join(set(reasons))}"
+                raise ApiError(msg)
         return ImageGenerationResponse(image=response["images"][0], index=index)
 
     @staticmethod
