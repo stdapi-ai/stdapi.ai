@@ -6,13 +6,13 @@ keywords: stdapi.ai releases, AI gateway updates, AWS Bedrock features, API gate
 
 # Releases & Roadmap
 
-**stdapi.ai is under active development** with regular feature releases. Five major releases delivered since launch (v1.0-v1.5) with continuous improvements.
+**stdapi.ai is under active development** with regular feature releases. Six major releases delivered since launch (v1.0-v1.6) with continuous improvements.
 
 ## ✨ Recent Releases
 
-See [Release History below](#release-history) for the full changelog of v1.5, v1.4, v1.3, v1.2, v1.1, and v1.0 releases.
+See [Release History below](#release-history) for the full changelog of v1.6, v1.5, v1.4, v1.3, v1.2, v1.1, and v1.0 releases.
 
-**Latest: v1.5** – Advanced Reasoning & Model Compatibility (Amazon Nova 2, Claude 4.6+ adaptive reasoning, system prompt handling)
+**Latest: v1.6** – Anthropic API Compatibility & Advanced Claude Capabilities (Anthropic Messages API, Claude server tools, token estimation, beta flag filtering)
 
 ---
 
@@ -28,7 +28,6 @@ The following features may be implemented in future releases based on community 
 |------------------------------------------------------------------------------------------|----------------------------------------------|------------------------------------------------------------------------------------------------------------------------|
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**           | `/v1/completions`                            | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**           | `/v1/responses`                              | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
-| ![Claude](styles/logo_anthropic_claude.svg){: style="height:20px;width:20px"} **Claude** | `/v1/messages`                               | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
 | ![Ollama](styles/logo_ollama.svg){: style="height:20px;width:20px"} **Ollama**           | `/api/generate`                              | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
 | ![Ollama](styles/logo_ollama.svg){: style="height:20px;width:20px"} **Ollama**           | `/api/chat`                                  | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
 | ![Cohere](styles/logo_cohere.svg){: style="height:20px;width:20px"} **Cohere**           | `/v1/chat`                                   | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
@@ -139,6 +138,44 @@ The following features may be implemented in future releases based on community 
 ---
 
 ## 📋 Release History
+
+### v1.6.0 – Anthropic API Compatibility & Advanced Claude Capabilities
+
+Introduces a full Anthropic-compatible API layer, enabling direct use of the Anthropic SDK and Claude-native tools with AWS Bedrock. Adds Claude server tools support via OpenAI chat completions, token count estimation, automatic Anthropic beta flag filtering, and configurable route prefixes.
+
+#### 💬 Chat Completions
+
+| Provider                                                                       | Endpoint/Feature                                                                                                                     | AWS Backend                                                                                                   |
+|--------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------|
+| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/chat/completions` Claude server tools (`systemTool_bash`, `systemTool_text_editor`, `systemTool_computer`, `systemTool_memory`) | ![Claude](styles/logo_anthropic_claude.svg){: style="height:20px;width:20px"} Claude models on Amazon Bedrock |
+
+#### 💬 Messages (Anthropic-Compatible)
+
+| Provider                                                                                      | Endpoint/Feature                                          | AWS Backend                                                                                                          |
+|-----------------------------------------------------------------------------------------------|-----------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------|
+| ![Anthropic](styles/logo_anthropic.svg){: style="height:20px;width:20px"} **Anthropic**       | `/v1/messages` – Full Anthropic Messages API              | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - Converse API    |
+| ![Anthropic](styles/logo_anthropic.svg){: style="height:20px;width:20px"} **Anthropic**       | `/v1/messages/count_tokens` – Token counting              | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - CountTokens API |
+| ![Claude](styles/logo_anthropic_claude.svg){: style="height:20px;width:20px"} **Claude**      | Claude server tools (bash, text editor, computer, memory) | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - Claude models   |
+| ![Amazon Nova](styles/logo_amazon_nova.svg){: style="height:20px;width:20px"} **Amazon Nova** | Web search tool (`web_search` → `nova_grounding`)         | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - Nova models     |
+
+#### 📋 Model Discovery (Anthropic-Compatible)
+
+| Provider                                                                                | Endpoint/Feature                              | AWS Backend                                                                                                        |
+|-----------------------------------------------------------------------------------------|-----------------------------------------------|--------------------------------------------------------------------------------------------------------------------|
+| ![Anthropic](styles/logo_anthropic.svg){: style="height:20px;width:20px"} **Anthropic** | `/v1/models` – List models (Anthropic format) | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - model catalog |
+| ![Anthropic](styles/logo_anthropic.svg){: style="height:20px;width:20px"} **Anthropic** | `/v1/models/{model_id}` – Get model details   | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - model catalog |
+
+#### Platform Features
+
+| Feature                                                 | Description                                                                                                                                        |
+|---------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------|
+| `ANTHROPIC_ROUTES_PREFIX` configuration                 | Configurable base path prefix for Anthropic-compatible routes (default: `/anthropic`)                                                              |
+| `OPENAI_ROUTES_PREFIX` configuration                    | Configurable base path prefix for OpenAI-compatible routes                                                                                         |
+| Token count estimation (`TOKENS_ESTIMATION`)            | Estimate token counts via tiktoken when models don't provide them; configurable encoding via `TOKENS_ESTIMATION_DEFAULT_ENCODING`                  |
+| Anthropic beta flag filtering (`ANTHROPIC_BETA_FILTER`) | Automatically filter unsupported `anthropic-beta` flags to prevent Bedrock `ValidationException` errors; extensible via `ANTHROPIC_BETA_ALLOWLIST` |
+| Claude model name aliases                               | Use official Anthropic model names (e.g., `claude-opus-4-6`) auto-resolved to AWS Bedrock identifiers                                              |
+
+---
 
 ### v1.5.0 – Advanced Reasoning & Model Compatibility (with v1.5.1–v1.5.2 maintenance updates)
 
