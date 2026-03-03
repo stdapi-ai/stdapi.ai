@@ -25,7 +25,7 @@ from stdapi.models.chat._adapters import _anthropic_message as anthropic_adapter
 from stdapi.models.chat._adapters import _openai_chat_completion as openai_adapter
 from stdapi.monitoring import (
     REQUEST_HEADERS,
-    log_request_stream_event,
+    log_request_sse_stream_event,
     log_response_params,
 )
 from stdapi.types.anthropic_messages import ToolChoiceToolParam
@@ -158,7 +158,7 @@ class ChatModel(ChatModelBase[Any, Any]):
         )
         if request.stream:
             return EventSourceResponse(
-                await log_request_stream_event(
+                log_request_sse_stream_event(
                     openai_adapter.format_stream(
                         completion_id,
                         created,
@@ -267,7 +267,7 @@ class ChatModel(ChatModelBase[Any, Any]):
                     await bedrock_runtime.converse_stream(**bedrock_request)
                 )["stream"]
             return EventSourceResponse(
-                await log_request_stream_event(
+                log_request_sse_stream_event(
                     anthropic_adapter.format_stream(
                         message_id, request.model, bedrock_stream, forced_tool
                     )

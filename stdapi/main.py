@@ -20,6 +20,7 @@ from stdapi.api_providers import format_http_error, get_request_id_header
 from stdapi.auth import initialize_authentication
 from stdapi.aws import AWSConnectionManager, initialize_aws_account_info
 from stdapi.aws_bedrock import (
+    AWS_ERROR_MAP,
     set_guardrail_configuration,
     set_performance_configuration,
 )
@@ -311,40 +312,6 @@ async def handle_validation_exception(
     )
 
 
-#: AWS error codes to OpenAI error codes
-_AWS_ERROR_MAP: dict[str, tuple[int, str]] = {
-    **dict.fromkeys(
-        {
-            "ThrottlingException",
-            "TooManyRequestsException",
-            "ServiceQuotaExceededException",
-        },
-        (429, "rate_limit_error"),
-    ),
-    **dict.fromkeys({"AccessDeniedException"}, (403, "permission_error")),
-    **dict.fromkeys(
-        {
-            "UnrecognizedClientException",
-            "InvalidSignatureException",
-            "ExpiredTokenException",
-        },
-        (401, "authentication_error"),
-    ),
-    **dict.fromkeys({"ResourceNotFoundException"}, (404, "not_found_error")),
-    **dict.fromkeys(
-        {"ValidationException", "BadRequestException"}, (400, "invalid_request_error")
-    ),
-    **dict.fromkeys(
-        {
-            "ServiceUnavailableException",
-            "InternalServerException",
-            "ServiceFailureException",
-        },
-        (503, "server_error"),
-    ),
-}
-
-
 @app.exception_handler(ClientError)
 async def handle_botocore_client_error(
     request: Request, exc: ClientError
@@ -362,7 +329,7 @@ async def handle_botocore_client_error(
     """
     error = exc.response["Error"]
     aws_code = error["Code"]
-    status, err_type = _AWS_ERROR_MAP.get(aws_code, (502, "server_error"))
+    status, err_type = AWS_ERROR_MAP.get(aws_code, (502, "server_error"))
     log_error_details(error["Message"], status=status)
     return JSONResponse(
         *format_http_error(

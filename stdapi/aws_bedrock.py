@@ -366,6 +366,41 @@ def get_extra_model_parameters(
     return params
 
 
+#: AWS error codes to HTTP status + error type mapping
+AWS_ERROR_MAP: dict[str, tuple[int, str]] = {
+    **dict.fromkeys(
+        {
+            "ThrottlingException",
+            "TooManyRequestsException",
+            "ServiceQuotaExceededException",
+        },
+        (429, "rate_limit_error"),
+    ),
+    **dict.fromkeys({"AccessDeniedException"}, (403, "permission_error")),
+    **dict.fromkeys(
+        {
+            "UnrecognizedClientException",
+            "InvalidSignatureException",
+            "ExpiredTokenException",
+        },
+        (401, "authentication_error"),
+    ),
+    **dict.fromkeys({"ResourceNotFoundException"}, (404, "not_found_error")),
+    **dict.fromkeys(
+        {"ValidationException", "BadRequestException"}, (400, "invalid_request_error")
+    ),
+    **dict.fromkeys(
+        {
+            "ServiceUnavailableException",
+            "InternalServerException",
+            "ServiceFailureException",
+            "ReadTimeoutError",
+        },
+        (503, "server_error"),
+    ),
+}
+
+
 @contextmanager
 def handle_bedrock_client_error() -> Generator[None]:
     """Context manager to translate Bedrock client errors to appropriate HTTP 4XX/5XX when possible.

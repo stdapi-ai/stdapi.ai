@@ -6,17 +6,22 @@ from time import perf_counter_ns
 from traceback import format_exception
 from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict, TypeVar
 
+from botocore.exceptions import ClientError
+from fastapi import Request  # noqa: TC002
 from pydantic import AwareDatetime, BaseModel, JsonValue
+from sse_starlette import JSONServerSentEvent
 
+from stdapi.api_errors import ApiError
+from stdapi.api_providers import format_http_error
+from stdapi.aws_bedrock import AWS_ERROR_MAP
 from stdapi.config import SETTINGS, LogLevel
 from stdapi.metering import SERVER_FULL_VERSION
 from stdapi.server import SERVER_NAME
-from stdapi.utils import stdout_write, webuuid
+from stdapi.utils import hide_security_details, stdout_write, webuuid
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator
 
-    from fastapi import Request
     from pydantic.main import IncEx
     from starlette.datastructures import Headers
     from types_aiobotocore_meteringmarketplace.type_defs import (
@@ -99,6 +104,9 @@ REQUEST_LOG: ContextVar[EventLog] = ContextVar("request_log")
 #: Request HTTP headers
 REQUEST_HEADERS: ContextVar[Headers] = ContextVar("request_headers")
 
+#: HTTP request object
+REQUEST: ContextVar[Request] = ContextVar("request")
+
 #: Paths to ignore in logging
 LOGGING_PATHS_IGNORE = {
     "/",
@@ -162,6 +170,7 @@ def log_request_event(request: Request) -> Generator[EventLog]:
     REQUEST_ID.set(request_id)
     request_time = SETTINGS.now()
     REQUEST_TIME.set(request_time)
+    REQUEST.set(request)
     log = EventLog(
         type="request",
         level="info",
@@ -408,3 +417,58 @@ async def log_request_stream_event[T](stream: AsyncGenerator[T]) -> AsyncGenerat
         Items from the input asynchronous generator in their modified or original form.
     """
     return _rebuild_and_log_stream(await stream.__anext__(), stream)
+
+
+async def log_request_sse_stream_event(
+    stream: AsyncGenerator[JSONServerSentEvent],
+) -> AsyncGenerator[JSONServerSentEvent]:
+    """Log, monitor, and error-guard an SSE stream for use with ``EventSourceResponse``.
+
+    Combines :func:`log_request_stream_event` and an SSE error boundary into a
+    single step.  After the HTTP response headers are sent, any exception that
+    escapes the underlying generator cannot be turned into an HTTP error response
+    (Starlette raises ``RuntimeError: Caught handled exception, but response
+    already started``).  This wrapper catches such exceptions, logs them via
+    :func:`log_error_details`, and yields a terminal ``error`` SSE event
+    formatted for the matched API provider so that ``EventSourceResponse`` can
+    close the connection cleanly.
+
+    Args:
+        stream: Raw SSE async generator (e.g. from an adapter's ``format_stream``).
+
+    Yields:
+        Items from ``stream`` (after monitoring setup), followed by a provider-
+        formatted ``error`` SSE event on failure.
+    """
+    try:
+        async for chunk in _rebuild_and_log_stream(await stream.__anext__(), stream):
+            yield chunk
+    except ApiError as exc:
+        status = exc.status
+        log_error_details(exc.args[0], status=status)
+        yield JSONServerSentEvent(
+            data=format_http_error(
+                REQUEST.get(),
+                status,
+                hide_security_details(status, exc.args[0]),
+                exc.param,
+                exc.code,
+            )[0],
+            event="error",
+        )
+    except ClientError as exc:
+        error = exc.response["Error"]
+        status = AWS_ERROR_MAP.get(error["Code"], (502, "server_error"))[0]
+        log_error_details(error["Message"], status=status)
+        yield JSONServerSentEvent(
+            data=format_http_error(
+                REQUEST.get(), status, hide_security_details(status, error["Message"])
+            )[0],
+            event="error",
+        )
+    except Exception as exc:  # noqa: BLE001
+        log_error_details("\n".join(format_exception(exc)), level="critical")
+        yield JSONServerSentEvent(
+            data=format_http_error(REQUEST.get(), 500, "Internal Server Error")[0],
+            event="error",
+        )

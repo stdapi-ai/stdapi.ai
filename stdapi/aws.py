@@ -28,6 +28,7 @@ CONFIG = AioConfig(
     retries=_RETRIES,
     max_pool_connections=_MAX_POOL_CONNECTIONS,
     parameter_validation=False,
+    read_timeout=SETTINGS.ai_response_timeout,
 )
 
 getLogger("aiobotocore").setLevel("CRITICAL")

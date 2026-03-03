@@ -235,6 +235,7 @@ Choose **one** method (mutually exclusive):
 | [`TOKENS_ESTIMATION_DEFAULT_ENCODING`](#tokens-encoding)            | `o200k_base`            | Tiktoken encoding algorithm: `o200k_base` (GPT-4o+), `cl100k_base` (GPT-4), or `p50k_base` |
 | [`DEFAULT_MODEL_PARAMS`](#default-model-params)                     | `{}`                    | JSON object with per-model default inference parameters (temperature, max_tokens, etc.)    |
 | [`MODEL_CACHE_SECONDS`](#model-cache-seconds)                       | `900`                   | Model list cache lifetime in seconds before lazy refresh (default: 15 minutes)             |
+| [`AI_RESPONSE_TIMEOUT`](#ai-response-timeout)                       | `600`                   | Maximum seconds to wait for a model to complete a response (default: 10 minutes)           |
 | [`DROP_UNSUPPORTED_SYSTEM_PROMPT`](#drop-unsupported-system-prompt) | `true`                  | Drop system prompts for unsupported models; when `false`, return error instead             |
 | [`ANTHROPIC_BETA_FILTER`](#anthropic-beta-filter)                   | `true`                  | Enable filtering of unsupported `anthropic_beta` flags for Claude models                   |
 | [`ANTHROPIC_BETA_ALLOWLIST`](#anthropic-beta-allowlist)             | `(empty)`               | Additional `anthropic_beta` flags to allow beyond built-in Bedrock defaults                |
@@ -2894,6 +2895,38 @@ export MODEL_CACHE_SECONDS=3600
     - **API Calls**: Each refresh makes parallel calls to `ListFoundationModels`, `GetFoundationModelAvailability`, and `ListInferenceProfiles` across all configured regions. Lower cache lifetimes increase the frequency of these calls.
     - **Rate Limits**: Very frequent refreshes in high-traffic deployments may approach API rate limits, though parallel execution doesn't increase per-region request rate
     - **Multi-Region**: Refresh latency is determined by the slowest responding region, not the total number of regions, thanks to parallel execution
+
+#### `AI_RESPONSE_TIMEOUT` { #ai-response-timeout }
+
+:octicons-package-24: **Purpose**
+:   Maximum time in seconds to wait for an AI model to complete a response
+
+:octicons-database-24: **Type**
+:   Integer (seconds, must be greater than 0)
+
+:octicons-gear-24: **Default**
+:   `600` (10 minutes)
+
+:octicons-workflow-24: **Behavior**
+:   Applies to both streaming and non-streaming requests. The timer starts from the moment the model begins generating and covers the full duration until the last token is received. If the model does not complete within this limit, the connection is closed and the request fails with a timeout error
+
+```bash
+# Default (10 minutes) - suitable for extended thinking models
+export AI_RESPONSE_TIMEOUT=600
+
+# Shorter timeout for standard models (2 minutes)
+export AI_RESPONSE_TIMEOUT=120
+
+# Longer timeout for very long documents or high reasoning budgets (15 minutes)
+export AI_RESPONSE_TIMEOUT=900
+```
+
+!!! tip "When to Adjust"
+    - **Increase** if you see timeout errors with models that use extended thinking/reasoning, large document analysis, or high token budgets
+    - **Decrease** to fail fast and free resources if your workload only uses standard models where long waits indicate a problem
+
+!!! info "Extended Thinking Models"
+    Models with extended reasoning capabilities (such as Claude with `thinking` enabled or high `reasoning_effort`) may spend significant time generating internal reasoning steps before producing output. The default of 600 seconds accommodates these use cases. Standard models without extended thinking typically respond within 60 seconds.
 
 ---
 

@@ -671,6 +671,24 @@ class _Settings(BaseSettings):
         ),
     )
 
+    ai_response_timeout: int = Field(
+        default=600,
+        gt=0,
+        description=(
+            "Maximum time in seconds to wait for an AI model to complete a response. "
+            "This applies to both streaming and non-streaming requests, from the moment "
+            "the model starts generating until the last token is received.\n\n"
+            "The default of 600 seconds (10 minutes) accommodates models with extended "
+            "reasoning or thinking capabilities, which may take longer to generate "
+            "complex responses. For standard models without extended thinking, responses "
+            "typically complete well within 60 seconds.\n\n"
+            "Increase this value if you experience timeout errors with long-running "
+            "requests (e.g., large document analysis, complex reasoning tasks). "
+            "Decrease it to fail fast on unexpectedly slow responses.\n\n"
+            "Example: 300 (5 minutes), 600 (10 minutes, default), 900 (15 minutes)"
+        ),
+    )
+
     model_cache_seconds: int = Field(
         default=900,
         description=(
