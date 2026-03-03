@@ -22,8 +22,7 @@ from stdapi.models import ModelBase, RequestT, ResponseT, get_model, load_model_
 if TYPE_CHECKING:
     from re import Pattern
 
-    from fastapi import BackgroundTasks
-
+    from stdapi.input_file import InputFileUrl
     from stdapi.types import JsonMapping
 
 
@@ -47,10 +46,9 @@ class EmbeddingModelBase(ModelBase[RequestT, ResponseT]):
     @abstractmethod
     async def embed_text(
         self,
-        inputs: list[str],
+        inputs: list[InputFileUrl | str],
         dimensions: int | None,
         extra_params: JsonMapping,
-        background_tasks: BackgroundTasks,
     ) -> EmbeddingResponse:
         """Get embeddings for text.
 
@@ -58,7 +56,6 @@ class EmbeddingModelBase(ModelBase[RequestT, ResponseT]):
             inputs: Texts to embed.
             dimensions: Number of dimensions.
             extra_params: Extra model parameters.
-            background_tasks: FastAPI background tasks.
 
         Returns:
             Embedding response.

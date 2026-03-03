@@ -4,6 +4,7 @@ This module provides the default chat completion implementation that works with
 all AWS Bedrock models supporting the Converse and ConverseStream APIs.
 """
 
+from asyncio import gather
 from contextlib import suppress
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -11,15 +12,14 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from sse_starlette import EventSourceResponse
 
 from stdapi.api_errors import ApiError
-from stdapi.aws import get_client
 from stdapi.aws_bedrock import (
     GUARDTRAIL_CONFIG_VAR,
     PERFORMANCE_CONFIG_VAR,
     PROMPT_CACHING_DEFAULT,
     PromptCaching,
-    handle_bedrock_client_error,
 )
 from stdapi.config import SETTINGS
+from stdapi.input_file import prefetch_all_content_types
 from stdapi.models.chat import ChatModelBase
 from stdapi.models.chat._adapters import _anthropic_message as anthropic_adapter
 from stdapi.models.chat._adapters import _openai_chat_completion as openai_adapter
@@ -27,7 +27,6 @@ from stdapi.monitoring import REQUEST, log_request_sse_stream_event, log_respons
 from stdapi.types.anthropic_messages import ToolChoiceToolParam
 
 if TYPE_CHECKING:
-    from types_aiobotocore_bedrock_runtime import BedrockRuntimeClient
     from types_aiobotocore_bedrock_runtime.literals import (
         CacheTTLType,
         ServiceTierTypeType,
@@ -42,7 +41,6 @@ if TYPE_CHECKING:
     )
 
     from stdapi.aws_bedrock import ConverseRequestBaseTypeDef
-    from stdapi.models import ModelDetails
     from stdapi.types import JsonMapping
     from stdapi.types.anthropic_messages import (
         Message,
@@ -81,11 +79,7 @@ class ChatModel(ChatModelBase[Any, Any]):
     )
 
     async def create_completion(
-        self,
-        model: ModelDetails,
-        request: CompletionCreateParams,
-        completion_id: str,
-        created: int,
+        self, request: CompletionCreateParams, completion_id: str, created: int
     ) -> ChatCompletion | EventSourceResponse:
         """Creates a completion response for the given input parameters.
 
@@ -94,7 +88,6 @@ class ChatModel(ChatModelBase[Any, Any]):
         OpenAI chat completion adapter.
 
         Args:
-            model: The model details to use for generating the completion.
             request: The parameters defining the completion request.
             completion_id: A unique identifier for the completion request.
             created: The timestamp indicating when the request was created.
@@ -102,6 +95,7 @@ class ChatModel(ChatModelBase[Any, Any]):
         Returns:
             Completed response or streaming event source response based on the configuration.
         """
+        await prefetch_all_content_types()
         bedrock_messages, system_blocks = await openai_adapter.map_messages(
             request.messages
         )
@@ -143,8 +137,7 @@ class ChatModel(ChatModelBase[Any, Any]):
             ),
         )
 
-        bedrock_runtime, bedrock_request = await self._prepare_converse_request(
-            model=model,
+        bedrock_request = await self._prepare_converse_request(
             bedrock_messages=bedrock_messages,
             inference_cfg=inference_cfg,
             system_blocks=system_blocks,
@@ -159,8 +152,7 @@ class ChatModel(ChatModelBase[Any, Any]):
                         completion_id,
                         created,
                         self._model_id,
-                        bedrock_runtime,
-                        bedrock_request,
+                        (await self.converse_stream(bedrock_request))["stream"],
                         openai_service_tier,
                         include_usage=(
                             request.stream_options is not None
@@ -173,16 +165,16 @@ class ChatModel(ChatModelBase[Any, Any]):
             completion_id,
             created,
             self._model_id,
-            bedrock_runtime,
-            bedrock_request,
+            await gather(
+                *(self.converse(bedrock_request) for _ in range(choices_count))
+            ),
             openai_service_tier,
-            choices_count,
             request.audio,
             request.modalities or openai_adapter.DEFAULT_OUTPUT_MODALITIES,  # type: ignore[arg-type]
         )
 
     async def create_message(
-        self, model: ModelDetails, request: MessageCreateParams, message_id: str
+        self, request: MessageCreateParams, message_id: str
     ) -> Message | EventSourceResponse:
         """Create a message using Anthropic Messages API format.
 
@@ -190,13 +182,13 @@ class ChatModel(ChatModelBase[Any, Any]):
         and formats the response back to Anthropic format.
 
         Args:
-            model: Model details for the chat model.
             request: Message creation request following Anthropic spec.
             message_id: Stable identifier for the message.
 
         Returns:
             Message when stream is False, EventSourceResponse when stream is True.
         """
+        await prefetch_all_content_types()
         (
             bedrock_messages,
             system_blocks,
@@ -246,8 +238,7 @@ class ChatModel(ChatModelBase[Any, Any]):
             else None
         )
 
-        bedrock_runtime, bedrock_request = await self._prepare_converse_request(
-            model=model,
+        bedrock_request = await self._prepare_converse_request(
             bedrock_messages=bedrock_messages,
             inference_cfg=inference_cfg,
             system_blocks=system_blocks,
@@ -258,21 +249,18 @@ class ChatModel(ChatModelBase[Any, Any]):
         )
 
         if request.stream:
-            with handle_bedrock_client_error():
-                bedrock_stream = (
-                    await bedrock_runtime.converse_stream(**bedrock_request)
-                )["stream"]
             return EventSourceResponse(
                 log_request_sse_stream_event(
                     anthropic_adapter.format_stream(
-                        message_id, request.model, bedrock_stream, forced_tool
+                        message_id,
+                        request.model,
+                        (await self.converse_stream(bedrock_request))["stream"],
+                        forced_tool,
                     )
                 )
             )
 
-        with handle_bedrock_client_error():
-            response = await bedrock_runtime.converse(**bedrock_request)
-
+        response = await self.converse(bedrock_request)
         return log_response_params(
             await anthropic_adapter.format_response(
                 response["output"]["message"]["content"],
@@ -286,7 +274,6 @@ class ChatModel(ChatModelBase[Any, Any]):
 
     async def _prepare_converse_request(
         self,
-        model: ModelDetails,
         bedrock_messages: list[MessageTypeDef],
         inference_cfg: InferenceConfigurationTypeDef,
         system_blocks: list[SystemContentBlockTypeDef],
@@ -294,11 +281,16 @@ class ChatModel(ChatModelBase[Any, Any]):
         additional_request_fields: dict[str, Any],
         service_tier: ServiceTierTypeType | None,
         output_config: JsonSchemaDefinitionTypeDef | None = None,
-    ) -> tuple[BedrockRuntimeClient, ConverseRequestBaseTypeDef]:
-        """Prepare a Bedrock Converse request payload and client.
+    ) -> ConverseRequestBaseTypeDef:
+        """Build a Bedrock Converse request payload.
+
+        Assembles all request fields from the translated inputs.  Region
+        selection and the actual AWS call are delegated to
+        :meth:`~stdapi.models.ModelBase.converse` /
+        :meth:`~stdapi.models.ModelBase.converse_stream`, which overwrite the
+        ``modelId`` placeholder with the final region-specific value.
 
         Args:
-            model: Model details.
             bedrock_messages: Converted Bedrock message list.
             inference_cfg: Bedrock inference configuration.
             system_blocks: Optional top-level system instruction blocks.
@@ -308,11 +300,12 @@ class ChatModel(ChatModelBase[Any, Any]):
             output_config: Optional Bedrock output JSON Schema configuration.
 
         Returns:
-            Tuple of (BedrockRuntimeClient, request payload dict).
+            Bedrock Converse request payload with ``modelId`` set to an empty
+            string placeholder; the routing layer fills in the real value.
         """
         latency, default_service_tier = PERFORMANCE_CONFIG_VAR.get()
         request: ConverseRequestBaseTypeDef = {
-            "modelId": model.get_id(inference_profile=True),
+            "modelId": "",  # placeholder — overwritten by converse()/converse_stream()
             "messages": bedrock_messages,
             "inferenceConfig": inference_cfg,
         }
@@ -337,10 +330,9 @@ class ChatModel(ChatModelBase[Any, Any]):
                     "structure": {"jsonSchema": output_config},
                 }
             }
-
         with suppress(LookupError):
             request["guardrailConfig"] = GUARDTRAIL_CONFIG_VAR.get()
-        return get_client("bedrock-runtime", model.region), request
+        return request
 
     def _get_passthrough_header_fields(self) -> dict[str, Any]:
         """Extract additional request fields from passthrough HTTP headers.

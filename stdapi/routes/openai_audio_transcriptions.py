@@ -2,20 +2,13 @@
 
 from typing import TYPE_CHECKING, Annotated
 
-from fastapi import (
-    APIRouter,
-    BackgroundTasks,
-    Depends,
-    File,
-    Form,
-    Response,
-    UploadFile,
-)
+from fastapi import APIRouter, Depends, File, Form, Response, UploadFile
 from sse_starlette import EventSourceResponse, JSONServerSentEvent
 
 from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
 from stdapi.config import SETTINGS
+from stdapi.input_file import InputFile
 from stdapi.models import validate_model
 from stdapi.models.audio import get_audio_model
 from stdapi.models.audio.amazon_transcribe import AWS_TRANSCRIBE_MODEL_ID
@@ -216,7 +209,6 @@ async def create_transcription(
             )
         ),
     ] = None,
-    background_tasks: BackgroundTasks = BackgroundTasks(),
     _: Annotated[None, Depends(authenticate)] = None,
 ) -> (
     str
@@ -245,7 +237,6 @@ async def create_transcription(
         stream: Whether to stream partial results via Server-Sent Events.
         known_speaker_names: Optional list of known speaker names. UNSUPPORTED on this implementation.
         known_speaker_references: Optional list of audio references for known speakers. UNSUPPORTED on this implementation.
-        background_tasks: FastAPI background tasks for cleanup.
 
     Returns:
         The transcribed text in the requested format.
@@ -285,8 +276,7 @@ async def create_transcription(
             await log_request_stream_event(
                 _transcript_audio_sse(
                     get_audio_model(model).stt_stream(
-                        audio_content=file,
-                        background_tasks=background_tasks,
+                        audio_content=InputFile(file),
                         response_format=request.response_format,
                         language=request.language,
                         temperature=request.temperature,
@@ -298,8 +288,7 @@ async def create_transcription(
         )
 
     return await get_audio_model(model).stt(
-        audio_content=file,
-        background_tasks=background_tasks,
+        audio_content=InputFile(file),
         response_format=request.response_format,
         language=request.language,
         timestamp_granularities=request.timestamp_granularities,

@@ -5,22 +5,18 @@
 """
 
 from asyncio import create_task, gather
-from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
 
 from stdapi.api_errors import ApiError
-from stdapi.aws import AWS_ACCOUNT_INFO, get_client
+from stdapi.aws import AWS_ACCOUNT_INFO
 from stdapi.aws_bedrock import BEDROCK_BODY_SIZE_LIMIT
-from stdapi.aws_s3 import aws_s3_cleanup
-from stdapi.models import get_content_type_and_size, put_to_s3
+from stdapi.aws_s3 import S3Object
+from stdapi.input_file import InputFileUrl, prefetch_all_content_types
 from stdapi.models.embedding import EmbeddingModelBase, EmbeddingResponse
-from stdapi.monitoring import REQUEST_ID
 from stdapi.tokenizer import estimate_token_count
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
-
-    from fastapi import BackgroundTasks
+    from types_aiobotocore_bedrock.literals import RegionName
 
     from stdapi.types import JsonMapping
 
@@ -212,10 +208,9 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
 
     async def embed_text(
         self,
-        inputs: list[str],
+        inputs: list[InputFileUrl | str],
         dimensions: int | None,
         extra_params: JsonMapping,
-        background_tasks: BackgroundTasks,
     ) -> EmbeddingResponse:
         """Get embeddings for text.
 
@@ -223,7 +218,6 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             inputs: Texts to embed.
             dimensions: Number of dimensions.
             extra_params: Extra model parameters.
-            background_tasks: FastAPI background tasks.
 
         Returns:
             Embedding response.
@@ -236,11 +230,9 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         token_task = create_task(estimate_token_count(*inputs))
         embeddings: list[list[float]] = []
 
-        content_types_and_sizes = await gather(
-            *(get_content_type_and_size(value, self.model) for value in inputs)
-        )
+        await prefetch_all_content_types()
 
-        text_image = self._get_text_image_input(inputs, content_types_and_sizes)
+        text_image = await self._get_text_image_input(inputs)
         if text_image:
             embeddings.extend(
                 vector["embedding"]
@@ -248,10 +240,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
                     await self._embed_text_image(
                         image_text=text_image[0],
                         value=text_image[1],
-                        content_type=text_image[2],
-                        size=text_image[3],
                         extra_params=extra_params,
-                        background_tasks=background_tasks,
                         force_s3_data=force_s3_data,
                     )
                 )["data"]
@@ -261,15 +250,10 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
                 *(
                     self._embed(
                         value=value,
-                        content_type=content_type,
-                        size=size,
                         extra_params=extra_params,
-                        background_tasks=background_tasks,
                         force_s3_data=force_s3_data,
                     )
-                    for value, (content_type, size) in zip(
-                        inputs, content_types_and_sizes, strict=False
-                    )
+                    for value in inputs
                 )
             ):
                 embeddings.extend(vector["embedding"] for vector in response["data"])
@@ -284,10 +268,9 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
     def _build_request(
         self,
         media_type: _MediaTypes,
-        value: str,
+        value: str | S3Object,
         extra_params: JsonMapping,
         *,
-        s3_uri: bool = False,
         image_text: str = "",
     ) -> _Request:
         """Build a request for V3+ models.
@@ -296,44 +279,41 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             media_type: Type of media.
             value: Text value or media identifier (for text_image, this is the image).
             extra_params: Extra parameters to add.
-            s3_uri: True if the media source is an S3 URI.
             image_text: Image text for text_image mode.
 
         Returns:
             Request object.
         """
-        if media_type == "text_image":
-            request: _Request = _TextImageRequest(
-                inputType="text_image",
-                text_image=_TextImagePayload(
-                    inputText=image_text,
-                    mediaSource=self._media_source(value, s3_uri=s3_uri),
-                ),
-            )
-        elif media_type == "image":
-            request = _ImageRequest(
-                inputType="image",
-                image=_ImagePayload(
-                    mediaSource=self._media_source(value, s3_uri=s3_uri)
-                ),
-            )
-        elif media_type == "video":
-            request = _VideoRequest(
-                inputType="video",
-                video=_VideoPayload(
-                    mediaSource=self._media_source(value, s3_uri=s3_uri)
-                ),
-            )
-        elif media_type == "audio":
-            request = _AudioRequest(
-                inputType="audio",
-                audio=_AudioPayload(
-                    mediaSource=self._media_source(value, s3_uri=s3_uri)
-                ),
-            )
-        else:
-            # Default to text
-            request = _TextRequest(inputType="text", text=_TextPayload(inputText=value))
+        match media_type:
+            case "text_image":
+                request: _Request = _TextImageRequest(
+                    inputType="text_image",
+                    text_image=_TextImagePayload(
+                        inputText=image_text, mediaSource=self._media_source(value)
+                    ),
+                )
+            case "image":
+                request = _ImageRequest(
+                    inputType="image",
+                    image=_ImagePayload(mediaSource=self._media_source(value)),
+                )
+            case "video":
+                request = _VideoRequest(
+                    inputType="video",
+                    video=_VideoPayload(mediaSource=self._media_source(value)),
+                )
+            case "audio":
+                request = _AudioRequest(
+                    inputType="audio",
+                    audio=_AudioPayload(mediaSource=self._media_source(value)),
+                )
+            case _ if isinstance(value, str):
+                request = _TextRequest(
+                    inputType="text", text=_TextPayload(inputText=value)
+                )
+            case _:
+                msg = f"Unsupported media type: {media_type}"
+                raise ApiError(msg)
 
         request[request["inputType"]].update(  # type: ignore[literal-required,typeddict-item]
             {k: v for k, v in extra_params.items() if k not in _RESERVED_MEDIA_PARAMS}
@@ -341,12 +321,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         return request
 
     def _build_v2_request(
-        self,
-        media_type: _MediaTypes,
-        value: str,
-        extra_params: JsonMapping,
-        *,
-        s3_uri: bool = False,
+        self, media_type: _MediaTypes, value: str | S3Object, extra_params: JsonMapping
     ) -> _Request:
         """Build a request for legacy V2 models.
 
@@ -354,26 +329,28 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             media_type: Type of media.
             value: Text value or media identifier.
             extra_params: Extra parameters to add.
-            s3_uri: True if the media source is an S3 URI.
 
         Returns:
             Request object.
         """
-        if media_type == "image":
-            request: _Request = _V2ImageRequest(
-                inputType="image", mediaSource=self._media_source(value, s3_uri=s3_uri)
-            )
-        elif media_type == "video":
-            request = _V2VideoRequest(
-                inputType="video", mediaSource=self._media_source(value, s3_uri=s3_uri)
-            )
-        elif media_type == "audio":
-            request = _V2AudioRequest(
-                inputType="audio", mediaSource=self._media_source(value, s3_uri=s3_uri)
-            )
-        else:
-            # Default to text
-            request = _V2TextRequest(inputType="text", inputText=value)
+        match media_type:
+            case "image":
+                request: _Request = _V2ImageRequest(
+                    inputType="image", mediaSource=self._media_source(value)
+                )
+            case "video":
+                request = _V2VideoRequest(
+                    inputType="video", mediaSource=self._media_source(value)
+                )
+            case "audio":
+                request = _V2AudioRequest(
+                    inputType="audio", mediaSource=self._media_source(value)
+                )
+            case _ if isinstance(value, str):
+                request = _V2TextRequest(inputType="text", inputText=value)
+            case _:
+                msg = f"Unsupported media type: {media_type}"
+                raise ApiError(msg)
 
         if extra_params:
             request.update(
@@ -387,11 +364,8 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
 
     async def _embed(
         self,
-        value: str,
-        content_type: str,
-        size: int,
+        value: str | InputFileUrl,
         extra_params: JsonMapping,
-        background_tasks: BackgroundTasks,
         *,
         force_s3_data: bool = False,
     ) -> _Response:
@@ -399,42 +373,34 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
 
         Args:
             value: Base64-encoded media data (without data URI prefix).
-            content_type: Pre-computed content type.
-            size: Pre-computed size.
             extra_params: Optional extra parameters for the input constructor.
-            background_tasks: FastAPI background tasks.
             force_s3_data: Force S3 upload regardless of size.
 
         Returns:
             Response from the model.
         """
-        media_type: _MediaTypes = content_type.split("/", 1)[0]  # type: ignore[assignment]
-        async with self._process_media_value(
-            value,
-            content_type=content_type,
-            size=size,
-            background_tasks=background_tasks,
-            force_s3_data=force_s3_data,
-            is_text=(media_type == "text"),
-        ) as (processed_value, s3_uri):
-            request = (
-                self._build_v2_request if self._is_v2() else self._build_request
-            )(media_type, processed_value, extra_params, s3_uri=s3_uri)
+        media_type: _MediaTypes = (
+            "text"
+            if isinstance(value, str)
+            else (await value.get_content_type_tuple())[0]  # type: ignore[assignment]
+        )
+        region = await self._select_fixed_region(value, force_s3_data=force_s3_data)
+        data = await self._process_media_value(
+            value, region, force_s3_data=force_s3_data
+        )
+        request = (self._build_v2_request if self._is_v2() else self._build_request)(
+            media_type, data, extra_params
+        )
 
-            if s3_uri or media_type in _ASYNC_MEDIA_TYPES:
-                return await self.invoke_async(
-                    request, background_tasks=background_tasks, inference_profile=False
-                )
-            return await self.invoke(request)
+        if isinstance(data, S3Object) or media_type in _ASYNC_MEDIA_TYPES:
+            return await self.invoke_async(request, inference_profile=False)
+        return await self.invoke(request, region=region)
 
     async def _embed_text_image(
         self,
-        value: str,
-        content_type: str,
-        size: int,
+        value: InputFileUrl,
         image_text: str,
         extra_params: JsonMapping,
-        background_tasks: BackgroundTasks,
         *,
         force_s3_data: bool = False,
     ) -> _Response:
@@ -442,70 +408,84 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
 
         Args:
             value: Image data (base64 or S3 URI).
-            content_type: Pre-computed content type of image.
-            size: Pre-computed size of image.
             image_text: Text caption of the image.
             extra_params: Optional extra parameters.
-            background_tasks: FastAPI background tasks.
             force_s3_data: Force S3 upload regardless of size.
 
         Returns:
             Response from the model.
         """
-        async with self._process_media_value(
-            value,
-            content_type=content_type,
-            size=size,
-            force_s3_data=force_s3_data,
-            background_tasks=background_tasks,
-        ) as (processed_value, s3_uri):
-            return await self.invoke(
-                self._build_request(
-                    media_type="text_image",
-                    value=processed_value,
-                    extra_params=extra_params,
-                    s3_uri=s3_uri,
-                    image_text=image_text,
-                )
+        region = await self._select_fixed_region(value, force_s3_data=force_s3_data)
+        return await self.invoke(
+            self._build_request(
+                media_type="text_image",
+                value=await self._process_media_value(
+                    value, region, force_s3_data=force_s3_data
+                ),
+                extra_params=extra_params,
+                image_text=image_text,
+            ),
+            region=region,
+        )
+
+    async def _select_fixed_region(
+        self, value: InputFileUrl | str, *, force_s3_data: bool
+    ) -> RegionName | None:
+        """Selects the region based on model and input requirements.
+
+        Args:
+            value: The input value.
+            force_s3_data: Force S3 upload regardless of size.
+
+        Returns:
+            The determined fixed region if S3 is required, otherwise `None`.
+        """
+        return (
+            await self.select_region(s3_required=True)
+            if isinstance(value, InputFileUrl)
+            and (
+                force_s3_data
+                or value.is_s3
+                or await value.get_size() > BEDROCK_BODY_SIZE_LIMIT
             )
+            else None
+        )
 
     def _is_v2(self) -> bool:
         """Check if the model is version 3+."""
         return "-2-" in self.model.id
 
-    def _get_text_image_input(
-        self, inputs: list[str], content_type_results: list[tuple[str, int]]
-    ) -> tuple[str, str, str, int] | None:
+    async def _get_text_image_input(
+        self, inputs: list[InputFileUrl | str]
+    ) -> tuple[str, InputFileUrl] | None:
         """Detect if inputs are exactly one text and one image.
 
         Args:
             inputs: List of input values.
-            content_type_results: Pre-computed content types and sizes.
 
         Returns:
             Tuple of (text_value, image_value, image_content_type, image_size) if detected, None otherwise.
         """
         if len(inputs) == 2 and not self._is_v2():
-            media_types = tuple(ct.split("/", 1)[0] for ct, _ in content_type_results)
+            media_types = [
+                "text"
+                if isinstance(data, str)
+                else (await data.get_content_type_tuple())[0]
+                for data in inputs
+            ]
             if set(media_types) == {"image", "text"}:
-                image_index = media_types.index("image")
-                content_type, size = content_type_results[image_index]
-                return (
-                    inputs[media_types.index("text")],
-                    inputs[image_index],
-                    content_type,
-                    size,
+                return (  # type: ignore[return-value]
+                    inputs[text_index := media_types.index("text")],
+                    inputs[1 - text_index],
                 )
         return None
 
     @staticmethod
-    def _media_source(value: str, *, s3_uri: bool) -> _MediaSource:
+    def _media_source(value: str | S3Object) -> _MediaSource:
         """Creates and returns an appropriate _MediaSource object.
 
         Args:
             value: Input value to be used as either an S3 URI or a base64 string.
-            s3_uri: Determines whether the `value` parameter should be interpreted
-                as an S3 URI (True) or a base64 string (False).
 
         Returns:
             An instance of `MediaSource` configured with either an S3
@@ -514,62 +494,42 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         return (
             _MediaSource(
                 s3Location=_MediaSourceS3Location(
-                    uri=value, bucketOwner=AWS_ACCOUNT_INFO["account_id"]
+                    uri=value.uri, bucketOwner=AWS_ACCOUNT_INFO["account_id"]
                 )
             )
-            if s3_uri
+            if isinstance(value, S3Object)
             else _MediaSource(base64String=value)
         )
 
-    @asynccontextmanager
+    @staticmethod
     async def _process_media_value(
-        self,
-        value: str,
-        content_type: str,
-        size: int,
-        background_tasks: BackgroundTasks,
+        value: InputFileUrl | str,
+        region: RegionName | None,
         *,
         force_s3_data: bool = False,
-        is_text: bool = False,
-    ) -> AsyncGenerator[tuple[str, bool]]:
+    ) -> str | S3Object:
         """Process media value and handle S3 upload if needed.
 
         Args:
             value: Media value (base64, data URI, or S3 URI).
-            content_type: Pre-computed content type (optional).
-            size: Pre-computed size (optional).
-            background_tasks: FastAPI Background tasks.
+            region: S3 region to use for uploads. ``None`` means no S3 is
+                required and the value is returned as base64.
             force_s3_data: Force S3 upload regardless of size.
-            is_text: Whether this is plain text (no processing needed).
 
-        Yields:
-            Tuple of (processed_value, is_s3_uri).
+        Returns:
+            Processed_value.
         """
-        s3_tmp_objects: list[tuple[str, str]] = []
-        try:
-            s3_uri = value.startswith("s3://")
-
-            if not is_text and not s3_uri:
-                if force_s3_data or size > BEDROCK_BODY_SIZE_LIMIT:
-                    # Large files require S3
-                    s3_uri = True
-                    s3_bucket, s3_key = await put_to_s3(
-                        value, content_type=content_type, model=self.model
-                    )
-                    s3_tmp_objects.append((s3_bucket, s3_key))
-                    value = f"s3://{s3_bucket}/{s3_key}"
-
-                elif value.startswith("data:"):
-                    # Require raw base64 content
-                    value = value.split(",", 1)[1]
-
-            yield value, s3_uri
-
-        finally:
-            if s3_tmp_objects:
-                background_tasks.add_task(
-                    aws_s3_cleanup,
-                    get_client("s3", region_name=self.model.region),
-                    s3_tmp_objects,
-                    REQUEST_ID.get(),
+        if not isinstance(value, InputFileUrl):
+            return value
+        return await (
+            value.to_s3(region=region)
+            if (
+                (
+                    force_s3_data
+                    or value.is_s3
+                    or await value.get_size() > BEDROCK_BODY_SIZE_LIMIT
                 )
+                and region
+            )
+            else value.to_base64()
+        )

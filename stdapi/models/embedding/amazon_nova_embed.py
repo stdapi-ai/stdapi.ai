@@ -11,16 +11,21 @@ from pydantic_core import from_json
 from stdapi.api_errors import ApiError
 from stdapi.aws import get_client
 from stdapi.aws_bedrock import BEDROCK_BODY_SIZE_LIMIT, MIME_TYPES_TO_VIDEO_TYPE
-from stdapi.aws_s3 import aws_s3_cleanup
-from stdapi.models import get_content_type_and_size, put_to_s3
+from stdapi.aws_s3 import (
+    BUCKET_TO_REGION,
+    S3Object,
+    put_s3_object,
+    track_temporary_s3_objects,
+)
+from stdapi.input_file import InputFile
 from stdapi.models.embedding import EmbeddingModelBase, EmbeddingResponse
-from stdapi.monitoring import REQUEST_ID
 from stdapi.tokenizer import estimate_token_count
 
 if TYPE_CHECKING:
-    from fastapi import BackgroundTasks
+    from types_aiobotocore_bedrock.literals import RegionName
     from types_aiobotocore_s3.client import S3Client
 
+    from stdapi.input_file import InputFileUrl
     from stdapi.types import JsonMapping
 
 _TaskType = Literal["SINGLE_EMBEDDING", "SEGMENTED_EMBEDDING"]
@@ -252,10 +257,9 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
 
     async def embed_text(
         self,
-        inputs: list[str],
+        inputs: list[InputFileUrl | str],
         dimensions: int | None,
         extra_params: JsonMapping,
-        background_tasks: BackgroundTasks,
     ) -> EmbeddingResponse:
         """Get embeddings for text.
 
@@ -263,7 +267,6 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             inputs: Texts to embed.
             dimensions: Number of dimensions.
             extra_params: Extra model parameters.
-            background_tasks: FastAPI background tasks.
 
         Returns:
             Embedding response.
@@ -284,7 +287,6 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
                     value=value,
                     base_params=base_params,
                     extra_params=extra_params,
-                    background_tasks=background_tasks,
                     force_s3_data=force_s3_data,
                 )
                 for value in inputs
@@ -301,84 +303,83 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
 
     async def _embed(
         self,
-        value: str,
+        value: InputFile | str,
         base_params: _EmbeddingParams,
         extra_params: JsonMapping,
-        background_tasks: BackgroundTasks,
         *,
         force_s3_data: bool = False,
     ) -> _Response:
         """Handle media input with automatic S3 upload for large files.
 
         Args:
-            value: Base64-encoded media data (without data URI prefix).
+            value: Plain text, base64, data URI, or S3 URI.
             base_params: Base embedding parameters.
             extra_params: Optional extra parameters for the input constructor.
-            background_tasks: FastAPI background tasks.
             force_s3_data: Force S3 upload regardless of size.
 
         Returns:
             Response from the model.
         """
-        s3_tmp_objects = []
-        try:
-            content_type, size = await get_content_type_and_size(value, self.model)
-            content_type_split = content_type.split("/", 1)
-            media_type: _MediaTypes = content_type_split[0]  # type: ignore[assignment]
-            file_format = content_type_split[1]
-            s3_uri = value.startswith("s3://")
+        if isinstance(value, str):
+            media_type: _MediaTypes = "text"
+            file_format = "plain"
+            size = len(value)
+        else:
+            size = await value.get_size()
+            media_type, file_format = await value.get_content_type_tuple()  # type: ignore[assignment]
 
-            if not s3_uri:
-                if force_s3_data or size > (
-                    _TEXT_SIZE_LIMIT
-                    if media_type == "text"
-                    else BEDROCK_BODY_SIZE_LIMIT
-                ):
-                    # Large files require to be passed using S3
-                    s3_uri = True
-                    s3_bucket, s3_key = await put_to_s3(
-                        value, content_type=content_type, model=self.model
-                    )
-                    s3_tmp_objects.append((s3_bucket, s3_key))
-                    value = f"s3://{s3_bucket}/{s3_key}"
-
-                elif value.startswith("data:"):
-                    # Require raw base64 content
-                    value = value.split(",", 1)[1]
-
-            if s3_uri and size > _SYNC_LIMIT_SIZES[media_type]:
-                return await self._embed_segmented(
-                    value=value,
-                    media_type=media_type,
-                    file_format=file_format,
-                    base_params=base_params,
-                    extra_params=extra_params,
-                    background_tasks=background_tasks,
+        if (
+            force_s3_data
+            or (isinstance(value, InputFile) and value.is_s3)
+            or size
+            > (_TEXT_SIZE_LIMIT if media_type == "text" else BEDROCK_BODY_SIZE_LIMIT)
+        ):
+            # Large file or already S3 file requires to be passed using S3
+            region = await self.select_region(s3_required=True)
+            val: str | S3Object = await (
+                put_s3_object(
+                    value.encode(),
+                    content_type="text/plain",
+                    region=region,
+                    temporary=True,
                 )
-            return await self._embed_single(
-                value=value,
+                if isinstance(value, str)
+                else value.to_s3(region=region)
+            )
+        elif isinstance(value, InputFile):
+            # Require raw base64 content
+            val = await value.to_base64()
+            region = None
+        else:
+            # str input value
+            val = value
+            region = None
+
+        if isinstance(val, S3Object) and size > _SYNC_LIMIT_SIZES[media_type]:
+            return await self._embed_segmented(
+                value=val,
                 media_type=media_type,
                 file_format=file_format,
                 base_params=base_params,
                 extra_params=extra_params,
             )
-
-        finally:
-            if s3_tmp_objects:
-                background_tasks.add_task(
-                    aws_s3_cleanup,
-                    get_client("s3", region_name=self.model.region),
-                    s3_tmp_objects,
-                    REQUEST_ID.get(),
-                )
+        return await self._embed_single(
+            value=val,
+            media_type=media_type,
+            file_format=file_format,
+            base_params=base_params,
+            extra_params=extra_params,
+            region=region,
+        )
 
     async def _embed_single(
         self,
-        value: str,
+        value: str | S3Object,
         media_type: _MediaTypes,
         file_format: str,
         base_params: _EmbeddingParams,
         extra_params: JsonMapping,
+        region: RegionName | None,
     ) -> _Response:
         """Handles synchronous single media embeddings.
 
@@ -389,6 +390,9 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             base_params: The base embedding parameters used across all types of media.
             extra_params: Additional parameters specific to the media type.
                 These parameters are merged into the base settings.
+            region: When set, locks the Bedrock invocation to this region
+                (S3 inputs were already placed there).  When ``None``,
+                full multi-region retry applies.
 
         Returns:
             A response object containing the embeddings aggregated from the
@@ -398,73 +402,60 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             ApiError: If any part of the segmented embedding result indicates a
             failure, an exception is raised detailing the error reason and message.
         """
-        s3_source = value.startswith("s3://")
-        if media_type == "image":
-            params = _SingleEmbeddingParams(
-                image=_ImageInput(
-                    source=(
-                        _MediaSource(s3Location=_S3Location(uri=value))
-                        if s3_source
-                        else _MediaSource(bytes=value)
+        source = (
+            _MediaSource(s3Location=_S3Location(uri=value.uri))
+            if isinstance(value, S3Object)
+            else _MediaSource(bytes=value)
+        )
+        match media_type:
+            case "image":
+                params = _SingleEmbeddingParams(
+                    image=_ImageInput(source=source, format=file_format),  # type: ignore[typeddict-item]
+                    **base_params,
+                )
+            case "audio":
+                params = _SingleEmbeddingParams(
+                    audio=_AudioInput(source=source, format=file_format),  # type: ignore[typeddict-item]
+                    **base_params,
+                )
+            case "video":
+                params = _SingleEmbeddingParams(
+                    video=_VideoInput(
+                        source=source,
+                        format=MIME_TYPES_TO_VIDEO_TYPE.get(file_format, file_format),  # type: ignore[arg-type]
+                        embeddingMode=_DEFAULT_VIDEO_EMBEDDING_MODE,
                     ),
-                    format=file_format,  # type: ignore[typeddict-item]
-                ),
-                **base_params,
-            )
-        elif media_type == "audio":
-            params = _SingleEmbeddingParams(
-                audio=_AudioInput(
-                    source=(
-                        _MediaSource(s3Location=_S3Location(uri=value))
-                        if s3_source
-                        else _MediaSource(bytes=value)
+                    **base_params,
+                )
+            case _:
+                # Default to text content
+                params = _SingleEmbeddingParams(
+                    text=(
+                        _TextInput(
+                            source=_TextSource(s3Location=_S3Location(uri=value.uri)),
+                            truncationMode=_DEFAULT_TEXT_TRUNCATION_MODE,
+                        )
+                        if isinstance(value, S3Object)
+                        else _TextInput(
+                            value=value, truncationMode=_DEFAULT_TEXT_TRUNCATION_MODE
+                        )
                     ),
-                    format=file_format,  # type: ignore[typeddict-item]
-                ),
-                **base_params,
-            )
-        elif media_type == "video":
-            params = _SingleEmbeddingParams(
-                video=_VideoInput(
-                    source=(
-                        _MediaSource(s3Location=_S3Location(uri=value))
-                        if s3_source
-                        else _MediaSource(bytes=value)
-                    ),
-                    format=MIME_TYPES_TO_VIDEO_TYPE.get(file_format, file_format),  # type: ignore[arg-type]
-                    embeddingMode=_DEFAULT_VIDEO_EMBEDDING_MODE,
-                ),
-                **base_params,
-            )
-        else:
-            # Default to text content
-            params = _SingleEmbeddingParams(
-                text=(
-                    _TextInput(
-                        source=_TextSource(s3Location=_S3Location(uri=value)),
-                        truncationMode=_DEFAULT_TEXT_TRUNCATION_MODE,
-                    )
-                    if s3_source
-                    else _TextInput(
-                        value=value, truncationMode=_DEFAULT_TEXT_TRUNCATION_MODE
-                    )
-                ),
-                **base_params,
-            )
+                    **base_params,
+                )
         self._add_extra_params(extra_params, media_type, params)
 
         return await self.invoke(
-            _Request(taskType="SINGLE_EMBEDDING", singleEmbeddingParams=params)
+            _Request(taskType="SINGLE_EMBEDDING", singleEmbeddingParams=params),
+            region=region,
         )
 
     async def _embed_segmented(
         self,
-        value: str,
+        value: S3Object,
         media_type: _MediaTypes,
         file_format: str,
         base_params: _EmbeddingParams,
         extra_params: JsonMapping,
-        background_tasks: BackgroundTasks,
     ) -> _Response:
         """Handles asynchronous segmented media embeddings.
 
@@ -475,8 +466,6 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             base_params: The base embedding parameters used across all types of media.
             extra_params: Additional parameters specific to the media type.
                 These parameters are merged into the base settings.
-            background_tasks: A FastAPI background tasks object to
-                manage the cleanup of temporary S3 files post-processing.
 
         Returns:
             A response object containing the embeddings aggregated from the
@@ -486,86 +475,79 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             ApiError: If any part of the segmented embedding result indicates a
             failure, an exception is raised detailing the error reason and message.
         """
-        if media_type == "image":
-            params = _SegmentedEmbeddingParams(
-                image=_ImageInput(
-                    source=_MediaSource(s3Location=_S3Location(uri=value)),
-                    format=file_format,  # type: ignore[typeddict-item]
-                ),
-                **base_params,
-            )
-        elif media_type == "audio":
-            params = _SegmentedEmbeddingParams(
-                audio=_SegmentedAudioInput(
-                    source=_MediaSource(s3Location=_S3Location(uri=value)),
-                    format=file_format,  # type: ignore[typeddict-item]
-                    segmentationConfig=_MediaSegmentationConfig(durationSeconds=5),
-                ),
-                **base_params,
-            )
-        elif media_type == "video":
-            params = _SegmentedEmbeddingParams(
-                video=_SegmentedVideoInput(
-                    source=_MediaSource(s3Location=_S3Location(uri=value)),
-                    format=MIME_TYPES_TO_VIDEO_TYPE.get(file_format, file_format),  # type: ignore[arg-type]
-                    segmentationConfig=_MediaSegmentationConfig(durationSeconds=5),
-                    embeddingMode=_DEFAULT_VIDEO_EMBEDDING_MODE,
-                ),
-                **base_params,
-            )
-        else:
-            # Default to text content
-            params = _SegmentedEmbeddingParams(
-                text=_SegmentedTextInput(
-                    source=_TextSource(s3Location=_S3Location(uri=value)),
-                    segmentationConfig=_TextSegmentationConfig(),
-                    truncationMode=_DEFAULT_TEXT_TRUNCATION_MODE,
-                ),
-                **base_params,
-            )
+        s3_source = _MediaSource(s3Location=_S3Location(uri=value.uri))
+        match media_type:
+            case "image":
+                params = _SegmentedEmbeddingParams(
+                    image=_ImageInput(
+                        source=s3_source,
+                        format=file_format,  # type: ignore[typeddict-item]
+                    ),
+                    **base_params,
+                )
+            case "audio":
+                params = _SegmentedEmbeddingParams(
+                    audio=_SegmentedAudioInput(
+                        source=s3_source,
+                        format=file_format,  # type: ignore[typeddict-item]
+                        segmentationConfig=_MediaSegmentationConfig(durationSeconds=5),
+                    ),
+                    **base_params,
+                )
+            case "video":
+                params = _SegmentedEmbeddingParams(
+                    video=_SegmentedVideoInput(
+                        source=s3_source,
+                        format=MIME_TYPES_TO_VIDEO_TYPE.get(file_format, file_format),  # type: ignore[arg-type]
+                        segmentationConfig=_MediaSegmentationConfig(durationSeconds=5),
+                        embeddingMode=_DEFAULT_VIDEO_EMBEDDING_MODE,
+                    ),
+                    **base_params,
+                )
+            case _:
+                # Default to text content
+                params = _SegmentedEmbeddingParams(
+                    text=_SegmentedTextInput(
+                        source=_TextSource(s3Location=_S3Location(uri=value.uri)),
+                        segmentationConfig=_TextSegmentationConfig(),
+                        truncationMode=_DEFAULT_TEXT_TRUNCATION_MODE,
+                    ),
+                    **base_params,
+                )
         self._add_extra_params(extra_params, media_type, params)
 
         embedding_result: _SegmentedEmbeddingResultResponse = await self.invoke_async(  # type: ignore[assignment]
             _Request(taskType="SEGMENTED_EMBEDDING", segmentedEmbeddingParams=params),
-            background_tasks=background_tasks,
             output_file="segmented-embedding-result.json",
         )
 
-        s3_client: S3Client = get_client("s3", self.model.region)
-        s3_tmp_objects: list[tuple[str, str]] = []
+        results: list[tuple[str, str]] = []
         errors: list[str] = []
-        try:
-            for result in embedding_result["embeddingResults"]:
-                if result["status"] == "SUCCESS":
-                    bucket, key = (
-                        result["outputFileUri"].replace("s3://", "").split("/", 1)
-                    )
-                    s3_tmp_objects.append((bucket, key))
-                else:
-                    errors.append(f"{result['failureReason']}: {result['message']}")
+        for result in embedding_result["embeddingResults"]:
+            if result["status"] == "SUCCESS":
+                bucket, key = result["outputFileUri"].replace("s3://", "").split("/", 1)
+                results.append((bucket, key))
+                track_temporary_s3_objects(bucket, key)
+            else:
+                errors.append(f"{result['failureReason']}: {result['message']}")
 
-            if errors:
-                msg = f"Error in segmented embedding results: {'; '.join(errors)}."
-                raise ApiError(msg)
+        if errors:
+            msg = f"Error in segmented embedding results: {'; '.join(errors)}."
+            raise ApiError(msg)
 
-            return _Response(
-                embeddings=[
-                    embedding
-                    for sublist in await gather(
-                        *(
-                            self._fetch_and_parse_embedding_jsonl(
-                                s3_client, bucket, key
-                            )
-                            for bucket, key in s3_tmp_objects
-                        )
+        s3_client: S3Client = get_client("s3", BUCKET_TO_REGION.get(results[0][0]))
+        return _Response(
+            embeddings=[
+                embedding
+                for sublist in await gather(
+                    *(
+                        self._fetch_and_parse_embedding_jsonl(s3_client, bucket, key)
+                        for bucket, key in results
                     )
-                    for embedding in sublist
-                ]
-            )
-        finally:
-            background_tasks.add_task(
-                aws_s3_cleanup, s3_client, s3_tmp_objects, REQUEST_ID.get()
-            )
+                )
+                for embedding in sublist
+            ]
+        )
 
     @staticmethod
     async def _fetch_and_parse_embedding_jsonl(
@@ -609,15 +591,13 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             params: The parameter dictionary that will be updated with additional parameters
                 for the specified media type.
         """
-        if (
-            extra_params
-            and media_type in extra_params
-            and isinstance(extra_params[media_type], dict)
+        if extra_params and isinstance(
+            media_extra := extra_params.get(media_type), dict
         ):
             params[media_type].update(
                 {  # type: ignore[typeddict-item]
                     k: v
-                    for k, v in extra_params[media_type].items()  # type: ignore[union-attr]
+                    for k, v in media_extra.items()
                     if k not in _RESERVED_MEDIA_PARAMS
                 }
             )

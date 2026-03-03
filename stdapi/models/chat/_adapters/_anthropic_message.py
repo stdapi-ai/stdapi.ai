@@ -6,7 +6,6 @@ close to Bedrock's native format, so many mappings are near 1:1.
 """
 
 import re
-from asyncio import Task, TaskGroup
 from typing import TYPE_CHECKING, Any
 
 from pydantic_core import to_json
@@ -20,9 +19,7 @@ from stdapi.aws_bedrock import (
     PROMPT_CACHING_DEFAULT,
     PromptCaching,
     build_system_blocks,
-    download_content,
     handle_bedrock_client_error,
-    image_block_from_url,
     set_inference_configuration,
 )
 from stdapi.monitoring import log_response_params
@@ -99,6 +96,7 @@ from stdapi.utils import b64decode, b64encode
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator
 
+    from types_aiobotocore_bedrock.literals import RegionName
     from types_aiobotocore_bedrock_runtime.literals import (
         CacheTTLType,
         ServiceTierTypeType,
@@ -169,14 +167,6 @@ _SERVICES_TIERS: dict[ServiceTiers | None, ServiceTierTypeType] = {
 #: Regex to sanitize document names for Bedrock (only [a-zA-Z0-9_-] allowed)
 _RE_DOC_NAME = re.compile(r"[^a-zA-Z0-9_-]")
 
-#: Blocks requiring async handling
-_ASYNC_BLOCKS = (
-    ImageBlockParam,
-    DocumentBlockParam,
-    ToolResultBlockParam,
-    RedactedThinkingBlockParam,
-)
-
 
 def _map_stop_reason(stop_reason: StopReasonType | None) -> StopReason:
     """Map a Bedrock stop reason to an Anthropic stop reason.
@@ -220,29 +210,18 @@ def _map_system_blocks(
 async def _map_image_to_bedrock(
     source: Base64ImageSource | URLImageSource,
 ) -> ContentBlockTypeDef:
-    """Convert an Anthropic image source to a Bedrock image content block.
-
-    Supports both base64-encoded and URL image sources. URL images support
-    data URLs, s3:// URIs, and http(s) URLs.
+    """Convert an Anthropic image source to a Bedrock content block.
 
     Args:
         source: Base64-encoded or URL image source.
 
     Returns:
-        Bedrock content block dict containing image bytes.
-
-    Raises:
-        ApiError: If the URL image cannot be downloaded or is unsupported.
+        A partial content block dict (source will be resolved later).
     """
-    return (
-        (await image_block_from_url(source.url))
+    return await (
+        source.url.to_bedrock_content_block()
         if isinstance(source, URLImageSource)
-        else {
-            "image": {  # type: ignore[misc,typeddict-item]
-                "source": {"bytes": await b64decode(source.data)},
-                "format": source.media_type.split("/")[1],
-            }
-        }
+        else source.data.to_bedrock_content_block(content_type=source.media_type)
     )
 
 
@@ -262,20 +241,11 @@ async def _map_tool_result_to_bedrock(
         case str(text):
             content_parts = [{"text": text}]
         case _:
-            async with TaskGroup() as tg:
-                tasks: tuple[
-                    tuple[ContentBlockTypeDef, None]
-                    | tuple[None, Task[ContentBlockTypeDef]],
-                    ...,
-                ] = tuple(
-                    (None, tg.create_task(_map_image_to_bedrock(part.source)))  # type: ignore[misc]
-                    if not isinstance(part, TextBlockParam)
-                    else ({"text": part.text}, None)
-                    for part in block.content
-                )
             content_parts = [
-                text_block if text_block is not None else task.result()  # type: ignore[union-attr]
-                for text_block, task in tasks
+                {"text": part.text}
+                if isinstance(part, TextBlockParam)
+                else await _map_image_to_bedrock(part.source)
+                for part in block.content
             ]
 
     result: ToolResultBlockTypeDef = {
@@ -288,107 +258,95 @@ async def _map_tool_result_to_bedrock(
 
 
 async def _map_document_to_bedrock(block: DocumentBlockParam) -> ContentBlockTypeDef:
-    """Convert an Anthropic document block to a Bedrock document content block.
+    """Convert an Anthropic document block to a Bedrock content block.
+
+    For PDF sources (base64 or URL), calls to_bedrock_content_block.
+    For plain-text sources, returns a fully built document block immediately.
 
     Args:
         block: Anthropic document block param.
 
     Returns:
-        Bedrock content block dict with ``document`` key.
+        Bedrock content block dict.
 
     Raises:
         ApiError: If the document source type is unsupported.
     """
+    doc_name = _RE_DOC_NAME.sub("_", block.title or "document")[:200]
+    match block.source:
+        case Base64PDFSource(data=data):
+            return await data.to_bedrock_content_block(
+                filename=doc_name,
+                content_type="application/pdf",
+                context=block.context or None,
+                citations_enabled=bool(block.citations and block.citations.enabled),
+            )
+        case URLPDFSource(url=url):
+            return await url.to_bedrock_content_block(
+                filename=doc_name,
+                context=block.context or None,
+                citations_enabled=bool(block.citations and block.citations.enabled),
+            )
+        case PlainTextSourceParam(data=data):
+            doc_bytes = data.encode("utf-8")
+        case ContentBlockSourceParam(content=str(text)):
+            doc_bytes = text.encode("utf-8")
+        case ContentBlockSourceParam(content=content):
+            doc_bytes = "\n".join(
+                part.text for part in content if isinstance(part, TextBlockParam)
+            ).encode("utf-8")
+        case _:  # pragma: no cover
+            msg = f"Unsupported document source type: {type(block.source)}"
+            raise ApiError(msg)
     doc: dict[str, object] = {
-        "name": _RE_DOC_NAME.sub("_", block.title or "document")[:200]
+        "name": doc_name,
+        "format": "txt",
+        "source": {"bytes": doc_bytes},
     }
     if block.context:
         doc["context"] = block.context
     if block.citations and block.citations.enabled:
         doc["citations"] = {"enabled": True}
-    return {"document": await _set_document_source(doc, block.source)}  # type: ignore[typeddict-item]
+    return {"document": doc}  # type: ignore[typeddict-item]
 
 
-async def _set_document_source(
-    doc: dict[str, object],
-    source: Base64PDFSource
-    | URLPDFSource
-    | PlainTextSourceParam
-    | ContentBlockSourceParam,
-) -> dict[str, object]:
-    """Set the source fields on a Bedrock document dict.
-
-    Args:
-        doc: Partially built Bedrock document dict.
-        source: Anthropic document source.
-
-    Returns:
-        Updated document dict with format and source set.
-    """
-    match source:
-        case Base64PDFSource(data=data):
-            doc["format"] = "pdf"
-            doc["source"] = {"bytes": await b64decode(data)}
-        case URLPDFSource(url=url):
-            body = await download_content(url)
-            doc["format"] = "pdf"
-            doc["source"] = {"bytes": body}
-        case PlainTextSourceParam(data=data):
-            doc["format"] = "txt"
-            doc["source"] = {"bytes": data.encode("utf-8")}
-        case ContentBlockSourceParam(content=str(text)):
-            doc["format"] = "txt"
-            doc["source"] = {"bytes": text.encode("utf-8")}
-        case ContentBlockSourceParam(content=content):
-            text_data = "\n".join(
-                part.text for part in content if isinstance(part, TextBlockParam)
-            )
-            doc["format"] = "txt"
-            doc["source"] = {"bytes": text_data.encode("utf-8")}
-        case _:  # pragma: no cover
-            msg = f"Unsupported document source type: {type(source)}"
-            raise ApiError(msg)
-    return doc
-
-
-async def _map_content_block_to_bedrock(
+async def _map_content_block_to_bedrock(  # noqa: PLR0911
     block: ContentBlockParam,
-) -> ContentBlockTypeDef:
-    """Convert a single Anthropic content block param to a Bedrock content block.
+) -> ContentBlockTypeDef | None:
+    """Convert a single Anthropic content block to a Bedrock content block.
+
+    Returns ``None`` for unrecognized blocks (``RedactedThinkingBlockParam``
+    is handled separately by the caller).
 
     Args:
         block: Any Anthropic content block param variant.
 
     Returns:
-        Bedrock content block dict.
+        Bedrock content block dict, or ``None`` when the caller must handle it.
 
     Raises:
         ApiError: If the content block type is unsupported.
     """
-    result: ContentBlockTypeDef
     match block:
         case TextBlockParam(text=text):
-            result = {"text": text}
+            return {"text": text}
         case ImageBlockParam(source=source):
             return await _map_image_to_bedrock(source)
         case DocumentBlockParam():
             return await _map_document_to_bedrock(block)
         case SearchResultBlockParam(source=source, title=title, content=sr_blocks):
-            sr_content_list: list[ContentBlockTypeDef] = [
-                {"text": b.text} for b in sr_blocks if b.text
-            ]
-            result = {
-                "searchResult": {  # type: ignore[typeddict-item,misc]
+            return {
+                "searchResult": {
                     "source": source,
                     "title": title,
-                    "content": sr_content_list,
+                    "content": [{"text": b.text} for b in sr_blocks if b.text],
                 }
             }
         case (
             ToolUseBlockParam(id=id_, name=name, input=input_)
             | ServerToolUseBlockParam(id=id_, name=name, input=input_)
         ):
-            result = {
+            return {
                 "toolUse": {
                     "toolUseId": id_.removeprefix("toolu_"),
                     "name": name,
@@ -401,15 +359,14 @@ async def _map_content_block_to_bedrock(
             reasoning_text: ReasoningTextBlockTypeDef = {"text": thinking}
             if signature:
                 reasoning_text["signature"] = signature
-            result = {"reasoningContent": {"reasoningText": reasoning_text}}
-        case RedactedThinkingBlockParam(data=data):
-            result = {"reasoningContent": {"redactedContent": await b64decode(data)}}
+            return {"reasoningContent": {"reasoningText": reasoning_text}}
+        case RedactedThinkingBlockParam():
+            return None
         case _:
             msg = (
                 f"Unsupported content block type: {getattr(block, 'type', type(block))}"
             )
             raise ApiError(msg)
-    return result
 
 
 async def _map_messages(
@@ -430,22 +387,20 @@ async def _map_messages(
             case str(text):
                 content: list[ContentBlockTypeDef] = [{"text": text}]
             case _:
-                blocks_list = list(msg.content)
-                async with TaskGroup() as tg:
-                    tasks: tuple[Task[ContentBlockTypeDef] | None, ...] = tuple(
-                        tg.create_task(_map_content_block_to_bedrock(b))
-                        if isinstance(b, _ASYNC_BLOCKS)
-                        else None
-                        for b in blocks_list
-                    )
-
                 content = []
-                for block, task in zip(blocks_list, tasks, strict=False):
-                    content.append(
-                        task.result()
-                        if task is not None
-                        else await _map_content_block_to_bedrock(block)
-                    )
+                for block in msg.content:
+                    if (
+                        converted := await _map_content_block_to_bedrock(block)
+                    ) is not None:
+                        content.append(converted)
+                    elif isinstance(block, RedactedThinkingBlockParam):
+                        content.append(
+                            {
+                                "reasoningContent": {
+                                    "redactedContent": await b64decode(block.data)
+                                }
+                            }
+                        )
                     if (
                         allow_explicit_caching
                         and hasattr(block, "cache_control")
@@ -1200,7 +1155,7 @@ async def format_stream(
 
 
 async def count_tokens_via_bedrock(
-    request: MessageCountTokensParams, model_id: str, region: str
+    request: MessageCountTokensParams, model_id: str, region: RegionName
 ) -> int:
     """Count tokens using the AWS Bedrock Runtime CountTokens API.
 

@@ -143,12 +143,21 @@ This section provides a quick reference of all available configuration options. 
 | [`AWS_S3_BUCKET`](#aws-s3-bucket)             | None           | Primary S3 bucket for file storage; must be in first region of `AWS_BEDROCK_REGIONS` |
 | [`AWS_BEDROCK_REGIONS`](#aws-bedrock-regions) | Current region | Comma-separated regions for Bedrock; first region is where server should be hosted   |
 
-### :material-aws: AWS Storage
+### :material-aws: AWS Client
+
+| Variable                                                | Default         | Description                                                                                          |
+|---------------------------------------------------------|-----------------|------------------------------------------------------------------------------------------------------|
+| [`AWS_ADAPTIVE_RETRY`](#aws-adaptive-retry)             | `false`         | Enable adaptive retry mode that throttles back under congestion rather than using fixed exponential backoff |
+| [`AWS_MAX_POOL_CONNECTIONS`](#aws-max-pool-connections) | `50`            | Maximum concurrent HTTP connections per AWS service client                                                 |
+| [`AWS_CONNECT_TIMEOUT`](#aws-connect-timeout)           | `5`             | Timeout in seconds for establishing a connection to an AWS service endpoint                                |
+
+### :material-database: AWS Storage
 
 | Variable                                                | Default         | Description                                                                                          |
 |---------------------------------------------------------|-----------------|------------------------------------------------------------------------------------------------------|
 | [`AWS_S3_ACCELERATE`](#aws-s3-accelerate)               | `false`         | Enable S3 Transfer Acceleration for faster global downloads via CloudFront edge locations            |
 | [`AWS_S3_REGIONAL_BUCKETS`](#aws-s3-regional-buckets)   | `{}`            | Region-specific S3 buckets for Bedrock async/batch inference operations                              |
+| [`AWS_S3_ACCEPTED_BUCKETS`](#aws-s3-accepted-buckets)   | `{}`            | External S3 buckets with read access, mapped to their region for S3 URI conversion and routing       |
 | [`AWS_S3_TMP_PREFIX`](#aws-s3-tmp-prefix)               | `tmp/`          | S3 prefix for temporary files used for jobs; configure lifecycle policies on this prefix             |
 | [`AWS_TRANSCRIBE_S3_BUCKET`](#aws-transcribe-s3-bucket) | `AWS_S3_BUCKET` | S3 bucket for temporary audio transcription files; must be in same region as `AWS_TRANSCRIBE_REGION` |
 
@@ -161,12 +170,24 @@ This section provides a quick reference of all available configuration options. 
 | [`AWS_TRANSCRIBE_REGION`](#aws-transcribe-region) | First `AWS_BEDROCK_REGIONS` | AWS region for Amazon Transcribe speech-to-text service     |
 | [`AWS_TRANSLATE_REGION`](#aws-translate-region)   | First `AWS_BEDROCK_REGIONS` | AWS region for Amazon Translate text translation service    |
 
+### :material-directions-fork: Resilience & Failover
+
+| Variable                                                                                                | Default    | Description                                                                                                                  |
+|---------------------------------------------------------------------------------------------------------|------------|------------------------------------------------------------------------------------------------------------------------------|
+| [`AWS_BEDROCK_REGION_ROUTING`](#bedrock-region-routing)                                                 | `ordered`  | Region routing strategy: `disabled`, `ordered`, `lowest_latency`, or `round_robin` ([details](operations_resilience.md))    |
+| [`AWS_BEDROCK_REGION_ROUTING_QUOTA_BACKOFF_SECONDS`](#bedrock-region-routing-quota-backoff)             | `60`       | Base interval in seconds for exponential quota backoff per region                                                            |
+| [`AWS_BEDROCK_REGION_ROUTING_MAX_QUOTA_BACKOFF_SECONDS`](#bedrock-region-routing-max-quota-backoff)     | `3600`     | Hard ceiling in seconds on the exponential quota backoff per region (default: 1 hour)                                        |
+| [`AWS_BEDROCK_REGION_ROUTING_QUOTA_STALE_FACTOR`](#bedrock-region-routing-quota-stale-factor)           | `2`        | Multiplier on max quota backoff to determine when the consecutive-error counter resets                                       |
+| [`AWS_BEDROCK_REGION_ROUTING_UNAVAILABLE_BACKOFF_SECONDS`](#bedrock-region-routing-unavailable-backoff) | `30`       | Seconds to avoid a region after unavailability errors                                                                        |
+| [`AWS_BEDROCK_MAX_RETRIES`](#bedrock-max-retries)                                                       | `9`        | Total retries across all regions per Bedrock invocation; retries cycle through regions in order                              |
+
 ### :material-shield-check: Bedrock Advanced
 
 | Variable                                                                                          | Default | Description                                                                                        |
 |---------------------------------------------------------------------------------------------------|---------|----------------------------------------------------------------------------------------------------|
 | [`AWS_BEDROCK_CROSS_REGION_INFERENCE`](#cross-region-inference)                                   | `true`  | Allow automatic model routing to other configured regions                                          |
 | [`AWS_BEDROCK_CROSS_REGION_INFERENCE_GLOBAL`](#cross-region-global)                               | `true`  | Allow global cross-region inference routing to any region worldwide (disable for GDPR compliance)  |
+| [`AWS_BEDROCK_MODEL_REGION_RESTRICT`](#bedrock-model-region-restrict)                             | `{}`    | Restrict a model to specific region(s) only (e.g. for region-specific features like Nova grounding) |
 | [`AWS_BEDROCK_LEGACY`](#bedrock-legacy)                                                           | `true`  | Allow usage of deprecated/legacy Bedrock models                                                    |
 | [`AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE`](#bedrock-marketplace-auto-subscribe)                   | `true`  | Allow automatic subscription to new models in AWS Marketplace                                      |
 | [`AWS_BEDROCK_ALLOW_CROSS_REGION_INFERENCE_PROFILE_ARN`](#bedrock-allow-cross-region-profile-arn) | `false` | Allow users to pass cross-region inference profile ARNs directly as model IDs                      |
@@ -252,6 +273,80 @@ Choose **one** method (mutually exclusive):
 
 ## AWS Services and Regions
 
+### General Configuration
+
+#### `AWS_ADAPTIVE_RETRY` { #aws-adaptive-retry }
+
+:octicons-package-24: **Purpose**
+:   Enable adaptive retry mode that adjusts retry pacing based on observed error rates across all AWS service calls
+
+:octicons-database-24: **Type**
+:   Boolean (`true` / `false`)
+
+:octicons-gear-24: **Default**
+:   `false`
+
+:octicons-workflow-24: **Behavior**
+:   When enabled, the retry strategy dynamically responds to real-time congestion signals. If errors are occurring frequently, retries are spaced further apart to avoid amplifying load on an already-stressed endpoint. Once conditions improve, the pacing returns to normal. When disabled, retries follow a standard exponential backoff strategy with fixed intervals. Applies to all AWS services (Bedrock, S3, Polly, Transcribe, etc.).
+
+!!! warning "Latency Impact"
+    Adaptive retry can increase the latency of individual requests when throttling is detected, as the client intentionally delays retries to shed load. Avoid enabling it for latency-sensitive, low-traffic workloads.
+
+```bash
+# Default: standard exponential backoff
+export AWS_ADAPTIVE_RETRY=false
+
+# Enable adaptive retry (recommended under sustained high load)
+export AWS_ADAPTIVE_RETRY=true
+```
+
+!!! tip "When to enable"
+    Adaptive retry is most beneficial when many clients share the same endpoint and sustained congestion is likely. It paces retries based on real-time error signals, reducing the risk of retry storms — at the cost of potentially higher per-request latency under load. For low-traffic or latency-sensitive workloads the default standard mode is preferable.
+
+#### `AWS_MAX_POOL_CONNECTIONS` { #aws-max-pool-connections }
+
+:octicons-package-24: **Purpose**
+:   Maximum number of concurrent HTTP connections per AWS service client
+
+:octicons-database-24: **Type**
+:   Integer (must be > 0)
+
+:octicons-gear-24: **Default**
+:   `50`
+
+:octicons-workflow-24: **Behavior**
+:   Each AWS service client (one per service per region) maintains its own connection pool up to this limit. Under high concurrency, increasing this value prevents requests from queuing for an available connection. Setting it too high may exhaust system file descriptors.
+
+```bash
+# Default
+export AWS_MAX_POOL_CONNECTIONS=50
+
+# High-concurrency deployment
+export AWS_MAX_POOL_CONNECTIONS=100
+```
+
+#### `AWS_CONNECT_TIMEOUT` { #aws-connect-timeout }
+
+:octicons-package-24: **Purpose**
+:   Timeout in seconds for establishing a connection to an AWS service endpoint
+
+:octicons-database-24: **Type**
+:   Integer (must be > 0)
+
+:octicons-gear-24: **Default**
+:   `5`
+
+:octicons-workflow-24: **Behavior**
+:   Limits how long the client waits when opening a new connection. A short value allows fast failover to another region when an endpoint is unreachable. Increase it only if you see spurious connection timeouts on high-latency networks.
+
+```bash
+# Default: 5 seconds
+export AWS_CONNECT_TIMEOUT=5
+
+# High-latency network
+export AWS_CONNECT_TIMEOUT=10
+```
+
 ### Storage Configuration
 
 #### `AWS_S3_BUCKET` { #aws-s3-bucket }
@@ -271,6 +366,9 @@ export AWS_S3_BUCKET=my-llm-storage-us-east-1
 
 !!! tip "Presigned URLs"
     Files are served via presigned URLs for secure, time-limited access. Presigned URLs expire after 1 hour by default.
+
+!!! warning "Startup Warning"
+    If not set, a warning is logged at startup and features that require file storage (image generation, audio output, document processing) will be unavailable.
 
 #### `AWS_S3_ACCELERATE` { #aws-s3-accelerate }
 
@@ -430,6 +528,46 @@ export AWS_S3_REGIONAL_BUCKETS='{"us-east-1": "my-bedrock-temp-us-east-1", "eu-w
 !!! tip "Best Practice"
     Apply the same [S3 Bucket Lifecycle Configuration](#s3-lifecycle) to these regional buckets as you would for the primary bucket to automatically clean up temporary files.
 
+#### `AWS_S3_ACCEPTED_BUCKETS` { #aws-s3-accepted-buckets }
+
+:octicons-package-24: **Purpose**
+:   Declare external S3 buckets that the application has read access to, mapped to their AWS region
+
+:octicons-database-24: **Type**
+:   JSON object (keys: bucket names, values: AWS region identifiers)
+
+:octicons-gear-24: **Default**
+:   `{}` (empty — only the application's own buckets are recognized)
+
+:octicons-workflow-24: **Behavior**
+:   Buckets listed here are recognized for two purposes:
+
+    - **S3 HTTP URL to S3 URI conversion** — When a user passes an S3 HTTP URL (including presigned URLs) for one of these buckets, it is automatically converted to an `s3://` URI so Bedrock can access the object directly.
+    - **Region-aware routing** — The router knows the region of these buckets and can factor it into region selection to minimize cross-region data transfer.
+
+    Without this setting, only the application's own buckets (`AWS_S3_BUCKET` and `AWS_S3_REGIONAL_BUCKETS`) are recognized.
+
+```bash
+export AWS_S3_ACCEPTED_BUCKETS='{"my-data-bucket": "us-east-1", "my-eu-bucket": "eu-west-1"}'
+```
+
+!!! warning "Required IAM Permissions"
+    The application's IAM role must have `s3:GetObject` permission on each declared bucket. Granting access at the bucket level is recommended:
+
+    ```json
+    {
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": [
+        "arn:aws:s3:::my-data-bucket/*",
+        "arn:aws:s3:::my-eu-bucket/*"
+      ]
+    }
+    ```
+
+!!! tip "When to Use"
+    Configure this when your users provide S3 URLs from buckets outside the application's own buckets. This enables automatic HTTP-to-S3 URI conversion and optimal region routing for those objects.
+
 #### S3 Bucket Lifecycle Configuration { #s3-lifecycle }
 
 :octicons-package-24: **Purpose**
@@ -533,6 +671,9 @@ export AWS_BEDROCK_REGIONS=us-east-1,us-west-2,eu-west-1
 !!! tip "Advanced Configuration"
     See [Compliance and Latency Optimization](#compliance-and-latency-optimization) for detailed configuration examples including GDPR compliance, regional optimization strategies, and best practices for multi-region deployments.
 
+!!! warning "Startup Warning"
+    If any models in the configured regions fail availability checks (not enabled, unauthorized, or missing entitlement/agreement in your AWS account), a warning listing the affected models and per-region issues is logged at startup. Enable the required models in the [AWS Bedrock console](https://console.aws.amazon.com/bedrock/home#/modelaccess) for each configured region.
+
 #### `AWS_BEDROCK_CROSS_REGION_INFERENCE` { #cross-region-inference }
 
 :octicons-package-24: **Purpose**
@@ -564,6 +705,208 @@ export AWS_BEDROCK_CROSS_REGION_INFERENCE=true
     ```bash
     export AWS_BEDROCK_CROSS_REGION_INFERENCE_GLOBAL=false
     ```
+
+#### `AWS_BEDROCK_REGION_ROUTING` { #bedrock-region-routing }
+
+:octicons-package-24: **Purpose**
+:   Automatic region routing strategy for distributing Bedrock requests across configured regions
+
+:octicons-database-24: **Type**
+:   String
+
+:octicons-gear-24: **Default**
+:   `ordered`
+
+:octicons-workflow-24: **Behavior**
+:   When multiple regions are configured in `AWS_BEDROCK_REGIONS`, this setting controls how requests are distributed across them. The router automatically handles quota/throttling errors and regional unavailability by temporarily avoiding affected regions
+
+:octicons-alert-24: **Requirement**
+:   Requires at least 2 regions in `AWS_BEDROCK_REGIONS` to take effect
+
+**Available strategies:**
+
+| Strategy | Description |
+|----------|-------------|
+| `disabled` | No routing; uses the single region where the model was discovered |
+| `ordered` | Try regions in configured order, skipping temporarily blocked ones (default). Best for prompt caching compatibility |
+| `lowest_latency` | Prefer the region with lowest measured latency. Latencies are measured at startup |
+| `round_robin` | Distribute requests evenly across regions. Incompatible with prompt caching |
+
+```bash
+# Use ordered routing (default)
+export AWS_BEDROCK_REGION_ROUTING=ordered
+
+# Use lowest latency routing
+export AWS_BEDROCK_REGION_ROUTING=lowest_latency
+
+# Disable routing
+export AWS_BEDROCK_REGION_ROUTING=disabled
+```
+
+!!! tip "Strategy Selection"
+    - **`ordered`** (default): Best general-purpose choice. Compatible with prompt caching since requests consistently go to the same region. Provides failover when a region hits quota limits
+    - **`lowest_latency`**: Best when response time is critical. Measures region latencies at startup and prefers the fastest region. Falls back to others when the preferred region is blocked
+    - **`round_robin`**: Best for maximizing aggregate throughput across regions. Not recommended with prompt caching as it distributes requests across all regions equally
+
+!!! info "More Details"
+    For comprehensive documentation on region routing including failover behavior, S3 bucket pinning, logging, and best practices, see the [Region Routing Guide](operations_resilience.md).
+
+#### `AWS_BEDROCK_REGION_ROUTING_QUOTA_BACKOFF_SECONDS` { #bedrock-region-routing-quota-backoff }
+
+:octicons-package-24: **Purpose**
+:   Duration to temporarily avoid a region after receiving a quota or throttling error
+
+:octicons-database-24: **Type**
+:   Integer (seconds, must be > 0)
+
+:octicons-gear-24: **Default**
+:   `60`
+
+:octicons-workflow-24: **Behavior**
+:   This is the **base** backoff value. When a Bedrock API call fails due to quota limits (`ThrottlingException`, `TooManyRequestsException`, `ServiceQuotaExceededException`), the affected region is temporarily blocked. The actual delay doubles with each consecutive quota error on the same region (exponential backoff), up to a hard ceiling of 1 hour. The counter resets after a successful request. Subsequent requests are routed to other available regions during the backoff period.
+
+```bash
+# Default: 60 seconds (base value — actual delay doubles per consecutive error)
+export AWS_BEDROCK_REGION_ROUTING_QUOTA_BACKOFF_SECONDS=60
+
+# Shorter base backoff for aggressive retry
+export AWS_BEDROCK_REGION_ROUTING_QUOTA_BACKOFF_SECONDS=30
+
+# Longer base backoff for conservative approach
+export AWS_BEDROCK_REGION_ROUTING_QUOTA_BACKOFF_SECONDS=120
+```
+
+!!! tip "Tuning"
+    The base value controls how long the first quota error blocks a region. Subsequent consecutive errors on the same region double the delay (60 s → 120 s → 240 s → …, capped at 1 hour). Lower base values retry the region sooner but risk repeated throttling. Higher values provide more conservative avoidance at the cost of reduced region utilization.
+
+    See [Region Routing — Overview](operations_resilience.md#overview) for full backoff behavior details.
+
+#### `AWS_BEDROCK_REGION_ROUTING_UNAVAILABLE_BACKOFF_SECONDS` { #bedrock-region-routing-unavailable-backoff }
+
+:octicons-package-24: **Purpose**
+:   Duration to temporarily avoid a region after receiving an unavailability error
+
+:octicons-database-24: **Type**
+:   Integer (seconds, must be > 0)
+
+:octicons-gear-24: **Default**
+:   `30`
+
+:octicons-workflow-24: **Behavior**
+:   When a Bedrock API call fails due to service unavailability (`ServiceUnavailableException`, `ModelNotReadyException`), the affected region is temporarily blocked for this many seconds. These errors are typically shorter-lived than quota limits, so the default is shorter
+
+```bash
+# Default: 30 seconds
+export AWS_BEDROCK_REGION_ROUTING_UNAVAILABLE_BACKOFF_SECONDS=30
+
+# Longer backoff for stability
+export AWS_BEDROCK_REGION_ROUTING_UNAVAILABLE_BACKOFF_SECONDS=60
+```
+
+!!! info "More Details"
+    See [Region Routing — Overview](operations_resilience.md#overview) for full backoff behavior details.
+
+#### `AWS_BEDROCK_REGION_ROUTING_MAX_QUOTA_BACKOFF_SECONDS` { #bedrock-region-routing-max-quota-backoff }
+
+:octicons-package-24: **Purpose**
+:   Hard ceiling in seconds on the exponential quota backoff for a single region
+
+:octicons-database-24: **Type**
+:   Integer (seconds, must be > 0)
+
+:octicons-gear-24: **Default**
+:   `3600` (1 hour)
+
+:octicons-workflow-24: **Behavior**
+:   Quota backoff grows exponentially with consecutive errors (base interval × 2^n). This setting caps how large that value can become, preventing a region from being blocked indefinitely. Reduce it to allow faster recovery; increase it to keep a misbehaving region sidelined for longer.
+
+```bash
+# Default: 1 hour ceiling
+export AWS_BEDROCK_REGION_ROUTING_MAX_QUOTA_BACKOFF_SECONDS=3600
+
+# More aggressive recovery
+export AWS_BEDROCK_REGION_ROUTING_MAX_QUOTA_BACKOFF_SECONDS=600
+```
+
+#### `AWS_BEDROCK_REGION_ROUTING_QUOTA_STALE_FACTOR` { #bedrock-region-routing-quota-stale-factor }
+
+:octicons-package-24: **Purpose**
+:   Multiplier applied to the max quota backoff to compute the stale-error reset threshold
+
+:octicons-database-24: **Type**
+:   Integer (must be > 0)
+
+:octicons-gear-24: **Default**
+:   `2` (threshold = 2 × max quota backoff = 2 hours with defaults)
+
+:octicons-workflow-24: **Behavior**
+:   If the most recent quota error on a region occurred more than `max_quota_backoff × factor` seconds ago, the consecutive-error counter is reset and the next error is treated as a fresh start rather than an escalation. A higher value keeps memory of past errors for longer before resetting the counter.
+
+```bash
+# Default: reset counter after 2× the max backoff window
+export AWS_BEDROCK_REGION_ROUTING_QUOTA_STALE_FACTOR=2
+
+# Longer memory of past errors
+export AWS_BEDROCK_REGION_ROUTING_QUOTA_STALE_FACTOR=4
+```
+
+#### `AWS_BEDROCK_MAX_RETRIES` { #bedrock-max-retries }
+
+:octicons-package-24: **Purpose**
+:   Total number of retries per Bedrock invocation, cycling through available regions in order
+
+:octicons-database-24: **Type**
+:   Integer (must be > 0)
+
+:octicons-gear-24: **Default**
+:   `9`
+
+:octicons-workflow-24: **Behavior**
+:   Controls the total retry budget for each Bedrock API call. When region routing is enabled, retries cycle through the available regions in priority order — after exhausting all regions the cycle starts again. For example, with 3 regions and 9 retries the attempt sequence is `r1, r2, r3, r1, r2, r3, r1, r2, r3, r1` (1 initial + 9 retries = 10 total attempts). When routing is disabled, retries are performed against the single configured region.
+
+```bash
+# Default: 9 retries (10 total attempts)
+export AWS_BEDROCK_MAX_RETRIES=9
+
+# Fail faster (e.g. low-latency interactive use cases)
+export AWS_BEDROCK_MAX_RETRIES=3
+
+# More resilient (e.g. batch workloads tolerant of longer waits)
+export AWS_BEDROCK_MAX_RETRIES=18
+```
+
+!!! tip "Related setting"
+    See [`AWS_BEDROCK_REGION_ROUTING`](#bedrock-region-routing) and [Region Routing](operations_resilience.md) for the full retry and cycling behavior.
+
+#### `AWS_BEDROCK_MODEL_REGION_RESTRICT` { #bedrock-model-region-restrict }
+
+:octicons-package-24: **Purpose**
+:   Restrict a model to specific region(s) only, useful when a model provides important features only in certain regions
+
+:octicons-database-24: **Type**
+:   JSON object (keys: Bedrock model IDs or prefixes, values: ordered lists of allowed regions)
+
+:octicons-gear-24: **Default**
+:   `{}` (empty — no model-specific region restriction)
+
+:octicons-workflow-24: **Behavior**
+:   When set, the model is made available **only** in the listed regions. No fallback to other regions occurs. The order of the list determines routing priority when multiple regions are listed. Keys can be exact model IDs or prefixes that match the beginning of a model ID
+
+```bash
+# Restrict Nova Pro to us-east-1 for grounding support
+export AWS_BEDROCK_MODEL_REGION_RESTRICT='{"amazon.nova-pro-v1:0": ["us-east-1"]}'
+```
+
+!!! tip "Use Case: Region-Specific Features"
+    Some model features are only available in specific regions. For example, Nova grounding is only available in `us-east-1`. Restricting the model to that region ensures the feature is always available.
+
+    See [Region Routing — Model Region Restrict](operations_resilience.md#model-region-restrict) for more details.
+
+!!! warning "Startup Warning"
+    If a key has no matching available model, a warning is logged at startup. This can happen for two reasons:
+
+    - **Typo or unknown model** — the key (exact ID or prefix) does not match any model ID returned by Bedrock.
+    - **No matching region** — the model exists but is not available in any of the regions listed in `AWS_BEDROCK_REGIONS` (e.g. the model is not enabled in those regions, or the restricted regions are not configured).
 
 #### `AWS_BEDROCK_LEGACY` { #bedrock-legacy }
 
@@ -852,6 +1195,9 @@ export AWS_BEDROCK_MODEL_ARN_MAPPING='{
     - :material-file-document: Document your ARN mappings and their purposes
     - :material-update: Keep ARN mappings in version control alongside other configuration
     - :material-monitor: Monitor routing behavior after updating mappings
+
+!!! warning "Startup Warning"
+    If any model IDs in `AWS_BEDROCK_MODEL_ARN_MAPPING` are not found among available Bedrock models, a warning listing the affected entries is logged at startup. This typically means the model is not enabled in your configured regions or the model ID contains a typo.
 
 ### Other AWS Services
 
@@ -1488,7 +1834,7 @@ stdapi.ai supports three methods for API key authentication.
     3. :material-key: **Direct API key** (lowest precedence)
 
 !!! danger "No Authentication Warning"
-    If no authentication method is configured, the API accepts all requests without authentication. This is suitable **only for internal/private deployments**.
+    If no authentication method is configured, the API accepts all requests without authentication and a security warning is logged at startup. This is suitable **only for internal/private deployments**.
 
 ### Method 1: SSM Parameter Store (Recommended)
 

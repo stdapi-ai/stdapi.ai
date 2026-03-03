@@ -99,7 +99,7 @@ def anthropic_client(
         return Anthropic(
             base_url="http://testserver/anthropic/",
             api_key=api_key,
-            max_retries=5,
+            max_retries=0,
             http_client=test_client,
         )
 
@@ -113,7 +113,7 @@ def anthropic_client(
     # Remote server test
     return Anthropic(
         base_url=f"{request.config.getoption('--server-url').rstrip('/')}/anthropic/",
-        max_retries=5,
+        max_retries=0,
         api_key=getenv("OPENAI_API_KEY"),
     )
 
@@ -630,9 +630,6 @@ class TestAnthropicMessages:
         assert "content_block_start" in event_types
         assert "message_stop" in event_types
 
-    # --- Extended thinking ---
-
-    @pytest.mark.expensive
     def test_extended_thinking_enabled(
         self, anthropic_client: Anthropic, anthropic_chat_reasoning_model: str
     ) -> None:
@@ -660,7 +657,6 @@ class TestAnthropicMessages:
         assert len(text_blocks) >= 1
         assert "405" in text_blocks[0].text
 
-    @pytest.mark.expensive
     def test_extended_thinking_non_claude_enabled(
         self, anthropic_client: Anthropic, use_official_api: bool
     ) -> None:
@@ -691,7 +687,6 @@ class TestAnthropicMessages:
         assert len(text_blocks) >= 1
         assert "405" in text_blocks[0].text
 
-    @pytest.mark.expensive
     def test_extended_thinking_streaming(
         self, anthropic_client: Anthropic, anthropic_chat_reasoning_model: str
     ) -> None:
@@ -720,7 +715,6 @@ class TestAnthropicMessages:
         assert "thinking_delta" in delta_types
         assert "text_delta" in delta_types
 
-    @pytest.mark.expensive
     def test_extended_thinking_non_claude_streaming(
         self, anthropic_client: Anthropic, use_official_api: bool
     ) -> None:

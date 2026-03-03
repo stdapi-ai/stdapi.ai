@@ -22,7 +22,7 @@ Run your favorite OpenAI and Anthropic-compatible applications on AWS Bedrock—
 
 - **🔌 Production-Ready OpenAI & Anthropic API Compatibility** – Full support for chat, embeddings, images, audio (speech/transcription/translation), and more. Applications designed for OpenAI's or Anthropic's API work instantly.
 - **🔒 Enterprise Compliance & Data Sovereignty** – Configure allowed AWS regions to meet your compliance requirements. All inference stays in your AWS account—data never shared with model providers or used for training.
-- **🌍 Multi-Region Bedrock Access** – Automatic cross-region inference profile selection for optimal availability and pricing. Access models across multiple AWS regions through one unified endpoint.
+- **🌍 Multi-Region Bedrock Access** – Automatic region routing and cross-region inference profile selection for optimal availability, quota management, and pricing. Access models across multiple AWS regions through one unified endpoint.
 - **💰 AWS Direct Pricing, No Markup** – Pay-per-use pricing with no subscriptions. Pay only AWS Bedrock rates for exactly what you use—no monthly minimums or capacity commitments.
 - **⚡ Advanced Model Capabilities** – Reasoning modes (Claude 4.6+, Nova 2), prompt caching, guardrails, prompt routers, application inference profiles, and service tiers built-in.
 
@@ -325,7 +325,7 @@ Sponsorship benefits include priority support, feature prioritization, dedicated
 
 ## 🌟 Enterprise-Grade Features
 
-- **🌍 Multi-region Bedrock access** – Automatic cross-region inference profile selection for optimal availability and pricing
+- **🌍 Multi-region Bedrock access** – Automatic region routing and cross-region inference profile selection for optimal availability, quota management, and pricing
 - **⭐ Advanced model capabilities** – Reasoning modes (Claude 4.6+, Nova 2), prompt caching, guardrails, service tiers
 - **🔌 Complete API coverage** – Chat, embeddings, image generation/editing, audio speech/transcription/translation
 - **🎯 AWS AI services integration** – Amazon Polly (TTS), Transcribe (STT with diarization), Translate—unified under OpenAI API

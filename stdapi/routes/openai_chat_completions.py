@@ -153,12 +153,12 @@ async def create_chat_completion(
         ApiError: If model is invalid or does not support text output.
     """
     log_request_params(request, user_id=request.safety_identifier or request.user)
-    model = await validate_model(
-        request.model, input_modality="TEXT", output_modality="TEXT"
-    )
-    return await get_chat_model(model.id).create_completion(
-        model,
-        request,
-        f"chatcmpl-{REQUEST_ID.get()}",
-        int(REQUEST_TIME.get().timestamp()),
+    return await get_chat_model(
+        (
+            await validate_model(
+                request.model, input_modality="TEXT", output_modality="TEXT"
+            )
+        ).id
+    ).create_completion(
+        request, f"chatcmpl-{REQUEST_ID.get()}", int(REQUEST_TIME.get().timestamp())
     )

@@ -27,7 +27,7 @@ For detailed configuration options, see the _Settings class documentation.
 """
 
 from datetime import datetime
-from typing import Annotated, Literal, Self
+from typing import TYPE_CHECKING, Annotated, Literal, Self
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 from aiobotocore.session import get_session
@@ -49,6 +49,11 @@ from stdapi.utils import (
     match_bedrock_prompt_router_arn,
     stdout_write,
 )
+
+if TYPE_CHECKING:
+    from types_aiobotocore_bedrock.literals import RegionName
+else:
+    type RegionName = str
 
 #: HTTP download timeout
 DOWNLOAD_TIMEOUT = ClientTimeout(total=20, connect=5)
@@ -140,6 +145,43 @@ class _Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_ignore_empty=True)
 
+    aws_adaptive_retry: bool = Field(
+        default=False,
+        description=(
+            "Enable adaptive retry mode for all AWS service calls. "
+            "When enabled, the client dynamically adjusts its retry behavior based on observed error rates: "
+            "it slows down and spreads out retries when a service appears congested, "
+            "and resumes normal pacing once conditions improve. "
+            "This reduces the risk of amplifying load on an already-stressed endpoint, "
+            "but may add latency to individual requests when throttling is detected. "
+            "When disabled, retries follow a standard exponential backoff strategy. "
+            "Default: false."
+        ),
+    )
+
+    aws_max_pool_connections: int = Field(
+        default=50,
+        gt=0,
+        description=(
+            "Maximum number of concurrent HTTP connections per AWS service client. "
+            "Each AWS service client (per region) maintains its own connection pool up to this limit. "
+            "Increase this value if you observe connection pool exhaustion under high concurrency. "
+            "Default: 50."
+        ),
+    )
+
+    aws_connect_timeout: int = Field(
+        default=5,
+        gt=0,
+        description=(
+            "Timeout in seconds for establishing a connection to an AWS service endpoint. "
+            "Keeping this value short allows fast failover to another region when a connection "
+            "cannot be established. Increase it only if you experience spurious connection timeouts "
+            "on high-latency networks. "
+            "Default: 5."
+        ),
+    )
+
     aws_s3_bucket: str | None = Field(
         default=None,
         description=(
@@ -157,7 +199,7 @@ class _Settings(BaseSettings):
         ),
     )
 
-    aws_s3_regional_buckets: dict[str, str] = Field(
+    aws_s3_regional_buckets: dict[RegionName, str] = Field(
         default={},
         description=(
             "Region-specific S3 buckets for temporary file storage during Bedrock operations. "
@@ -184,15 +226,15 @@ class _Settings(BaseSettings):
         ),
     )
 
-    aws_polly_region: str | None = Field(
+    aws_polly_region: RegionName | None = Field(
         default=None, description="AWS region for Polly text-to-speech service"
     )
 
-    aws_comprehend_region: str | None = Field(
+    aws_comprehend_region: RegionName | None = Field(
         default=None, description="AWS region for Comprehend language detection service"
     )
 
-    aws_bedrock_regions: Annotated[list[str], NoDecode] = Field(
+    aws_bedrock_regions: Annotated[list[RegionName], NoDecode] = Field(
         default=[],
         description=(
             "List of AWS regions where Bedrock AI models are available for use. "
@@ -210,6 +252,107 @@ class _Settings(BaseSettings):
             "- us-west-2: Good selection, often first for new models\n"
             "- eu-west-1: European compliance, subset of US models\n\n"
             "If not specified, the current region detected by the AWS SDK will be used."
+        ),
+    )
+
+    aws_bedrock_region_routing: Literal[
+        "disabled", "ordered", "lowest_latency", "round_robin"
+    ] = Field(
+        default="ordered",
+        description=(
+            "Automatic region routing strategy for Bedrock invocations.\n"
+            "Distributes requests across configured regions to handle quota limits "
+            "and regional unavailability.\n\n"
+            "Strategies:\n"
+            "- 'disabled': No routing, uses single region per model\n"
+            "- 'ordered': Try regions in configured order, skip blocked ones (default). "
+            "Best for prompt caching compatibility.\n"
+            "- 'lowest_latency': Prefer the region with lowest measured latency.\n"
+            "- 'round_robin': Distribute evenly across regions. "
+            "Incompatible with prompt caching.\n\n"
+            "Requires at least 2 regions in aws_bedrock_regions to take effect."
+        ),
+    )
+
+    aws_bedrock_region_routing_quota_backoff_seconds: int = Field(
+        default=60,
+        gt=0,
+        description=(
+            "Seconds to avoid a region after receiving a quota/throttling error. "
+            "Only effective when aws_bedrock_region_routing is not 'disabled'."
+        ),
+    )
+
+    aws_bedrock_region_routing_unavailable_backoff_seconds: int = Field(
+        default=30,
+        gt=0,
+        description=(
+            "Seconds to avoid a region after receiving an unavailability error. "
+            "Only effective when aws_bedrock_region_routing is not 'disabled'."
+        ),
+    )
+
+    aws_bedrock_region_routing_max_quota_backoff_seconds: int = Field(
+        default=3600,
+        gt=0,
+        description=(
+            "Hard ceiling in seconds on the exponential quota backoff for a single region. "
+            "Quota backoff doubles on each consecutive error; this value caps how high it can grow. "
+            "Only effective when aws_bedrock_region_routing is not 'disabled'. "
+            "Default: 3600 (1 hour)."
+        ),
+    )
+
+    aws_bedrock_region_routing_quota_stale_factor: int = Field(
+        default=2,
+        gt=0,
+        description=(
+            "Multiplier applied to the max quota backoff to compute the stale-error threshold. "
+            "If the most recent quota error for a region is older than "
+            "(max_quota_backoff * factor) seconds, the consecutive-error counter is reset "
+            "and the next error is treated as a fresh start rather than an escalation. "
+            "A higher value keeps memory of past errors for longer before resetting. "
+            "Only effective when aws_bedrock_region_routing is not 'disabled'. "
+            "Default: 2 (threshold = 2 * max_quota_backoff)."
+        ),
+    )
+
+    aws_bedrock_max_retries: int = Field(
+        default=9,
+        ge=0,
+        description=(
+            "Maximum number of retries for Bedrock invocations. "
+            "When region routing is enabled, retries cycle through all available regions in order. "
+            "When region routing is disabled, retries are performed against the single configured region."
+        ),
+    )
+
+    aws_s3_accepted_buckets: dict[str, RegionName] = Field(
+        default={},
+        description=(
+            "S3 buckets that the application has read access to, mapped to their region. "
+            "These buckets can be used as input S3 data sources, and S3 HTTP URLs "
+            "(including presigned URLs) for these buckets will be automatically converted "
+            "to S3 URIs for direct access.\n\n"
+            "Keys are bucket names, values are AWS region identifiers.\n\n"
+            "Example: {'my-data-bucket': 'us-east-1', 'my-eu-bucket': 'eu-west-1'}\n\n"
+            "If not specified, only the application's own S3 buckets (aws_s3_bucket and "
+            "aws_s3_regional_buckets) are recognized for S3 URI conversion."
+        ),
+    )
+
+    aws_bedrock_model_region_restrict: dict[str, frozenset[RegionName]] = Field(
+        default={},
+        description=(
+            "Restrict a model to specific region(s) only. Can be used when a model "
+            "provides important features only in certain regions.\n\n"
+            "Keys are Bedrock model IDs (or prefixes), values are ordered lists of "
+            "allowed regions. When set, the model will only be available in the listed "
+            "regions (intersected with the regions where it is actually available). "
+            "No fallback to other regions occurs.\n\n"
+            "Example: {'amazon.nova-pro-v1:0': ['us-east-1']}\n\n"
+            "Use case: Nova grounding is only available in us-east-1, so restricting "
+            "nova-pro to us-east-1 ensures grounding always works."
         ),
     )
 
@@ -330,7 +473,7 @@ class _Settings(BaseSettings):
         ),
     )
 
-    aws_transcribe_region: str | None = Field(
+    aws_transcribe_region: RegionName | None = Field(
         default=None, description="AWS region for Transcribe speech-to-text service"
     )
 
@@ -358,7 +501,7 @@ class _Settings(BaseSettings):
         ),
     )
 
-    aws_translate_region: str | None = Field(
+    aws_translate_region: RegionName | None = Field(
         default=None, description="AWS region for Translate text translation service"
     )
 

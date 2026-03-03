@@ -8,9 +8,8 @@ Embeddings, Cohere Embed v3) to compute embedding vectors.
 from array import array
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, Depends
 
-from stdapi.api_errors import ApiError
 from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
 from stdapi.aws_bedrock import get_extra_model_parameters
@@ -68,15 +67,12 @@ router = APIRouter(
     response_model_exclude_none=True,
 )
 async def create_embeddings(
-    request: EmbeddingCreateParams,
-    background_tasks: BackgroundTasks = BackgroundTasks(),
-    _: Annotated[None, Depends(authenticate)] = None,
+    request: EmbeddingCreateParams, _: Annotated[None, Depends(authenticate)] = None
 ) -> CreateEmbeddingResponse:
     """Create embeddings for the provided input strings.
 
     Args:
         request: Embedding creation parameters following OpenAI API.
-        background_tasks: FastAPI background tasks.
 
     Returns:
         EmbeddingListResponse containing embedding vectors, one per input item.
@@ -87,19 +83,10 @@ async def create_embeddings(
     """
     log_request_params(request, user_id=request.user)
     model_id = (await validate_model(request.model, "EMBEDDING")).id
-    if isinstance(request.input, str):
-        input_texts: list[str] = [request.input]
-    elif isinstance(request.input[0], str):
-        input_texts = list(request.input)
-    else:  # pragma: no cover
-        msg = "Unsupported input type."
-        raise ApiError(msg)
-
     response = await get_embedding_model(model_id).embed_text(
-        input_texts,
+        request.input if isinstance(request.input, list) else [request.input],
         dimensions=request.dimensions,
         extra_params=get_extra_model_parameters(model_id, request),
-        background_tasks=background_tasks,
     )
     b64_embedding = request.encoding_format == "base64"
     return log_response_params(

@@ -2,19 +2,12 @@
 
 from typing import Annotated
 
-from fastapi import (
-    APIRouter,
-    BackgroundTasks,
-    Depends,
-    File,
-    Form,
-    Response,
-    UploadFile,
-)
+from fastapi import APIRouter, Depends, File, Form, Response, UploadFile
 
 from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
 from stdapi.config import SETTINGS
+from stdapi.input_file import InputFile
 from stdapi.models import validate_model
 from stdapi.models.audio import get_audio_model
 from stdapi.models.audio.amazon_transcribe import AWS_TRANSCRIBE_MODEL_ID
@@ -112,7 +105,6 @@ async def create_translation(
             )
         ),
     ] = None,
-    background_tasks: BackgroundTasks = BackgroundTasks(),
     _: Annotated[None, Depends(authenticate)] = None,
 ) -> str | TranslationCreateResponse | Response:
     """Translates audio into English.
@@ -128,7 +120,6 @@ async def create_translation(
         prompt: Optional style guidance for the model. UNSUPPORTED on this implementation.
         response_format: Output format: `json`, `text`, `srt`, `verbose_json`, or `vtt`.
         temperature: Sampling temperature. UNSUPPORTED on this implementation (must be 0.0).
-        background_tasks: FastAPI background tasks for cleanup.
 
     Returns:
         The translated text in English in the requested format.
@@ -155,8 +146,7 @@ async def create_translation(
     ).id
 
     return await get_audio_model(model).stt_translate(
-        audio_content=file,
-        background_tasks=background_tasks,
+        audio_content=InputFile(file),
         response_format=request.response_format,
         temperature=request.temperature,
         prompt=request.prompt,

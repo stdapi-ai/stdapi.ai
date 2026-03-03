@@ -20,6 +20,7 @@ from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
 from stdapi.aws_bedrock import get_extra_model_parameters
 from stdapi.config import SETTINGS
+from stdapi.input_file import InputFile
 from stdapi.models import validate_model
 from stdapi.models.image import get_image_model
 from stdapi.monitoring import REQUEST_TIME, log_request_params, log_request_stream_event
@@ -33,7 +34,7 @@ from stdapi.types.openai_images import (
     ImageOutputFormats,
     ImagesResponse,
 )
-from stdapi.utils import read_and_b64encode_file, validation_error_handler
+from stdapi.utils import validation_error_handler
 
 router = APIRouter(
     prefix=f"{SETTINGS.openai_routes_prefix}/v1", tags=["Images", TAG_OPENAI]
@@ -351,13 +352,12 @@ async def edit_images(
         extra_params=get_extra_model_parameters(model, request),
     )
 
-    # Read and encode image files in parallel
-    tasks = [read_and_b64encode_file(img) for img in image]
     if mask:
-        tasks.append(read_and_b64encode_file(mask))
-        *images_b64, mask_b64 = await gather(*tasks)
+        *images_b64, mask_b64 = await gather(
+            *(InputFile(img).to_base64() for img in [*image, mask])
+        )
     else:
-        images_b64 = await gather(*tasks)
+        images_b64 = await gather(*(InputFile(img).to_base64() for img in image))
         mask_b64 = None
 
     # Handle streaming requests

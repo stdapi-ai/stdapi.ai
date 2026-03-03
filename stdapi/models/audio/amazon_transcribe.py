@@ -11,8 +11,9 @@ from typing_extensions import TypedDict
 
 from stdapi.api_errors import ApiError, InvalidLanguageFormatError
 from stdapi.aws import get_client
-from stdapi.aws_s3 import get_text_from_s3, put_upload_file_to_s3
+from stdapi.aws_s3 import get_text_from_s3, track_temporary_s3_objects
 from stdapi.aws_translate import translate, translate_subtitle
+from stdapi.cleanup import schedule_cleanup
 from stdapi.config import SETTINGS
 from stdapi.models import (
     EXTRA_MODELS,
@@ -21,12 +22,7 @@ from stdapi.models import (
     ModelDetails,
 )
 from stdapi.models.audio import AudioModelBase
-from stdapi.monitoring import (
-    REQUEST_ID,
-    log_background_event,
-    log_error_details,
-    log_response_params,
-)
+from stdapi.monitoring import REQUEST_ID, log_error_details, log_response_params
 from stdapi.tokenizer import estimate_token_count
 from stdapi.types.openai_audio import (
     SUBTITLE_FORMATS,
@@ -53,13 +49,13 @@ from stdapi.utils import format_language_code, language_code_to_name
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator
 
-    from fastapi import BackgroundTasks, Response, UploadFile
-    from fastapi import UploadFile as FastAPIUploadFile
-    from types_aiobotocore_s3.client import S3Client
+    from fastapi import Response
     from types_aiobotocore_transcribe.client import TranscribeServiceClient
     from types_aiobotocore_transcribe.type_defs import (
         StartTranscriptionJobRequestTypeDef,
     )
+
+    from stdapi.input_file import InputFile
 
 #: Transcribe model ID
 AWS_TRANSCRIBE_MODEL_ID = "amazon.transcribe"
@@ -129,7 +125,7 @@ async def initialize_transcribe_models() -> None:
         id=AWS_TRANSCRIBE_MODEL_ID,
         name="Transcribe",
         provider="Amazon",
-        region=transcribe.meta.region_name,
+        region=transcribe.meta.region_name,  # type: ignore[arg-type]
         service="AWS Transcribe",
         input_modalities=["SPEECH"],
         output_modalities=["TEXT"],
@@ -257,12 +253,11 @@ async def _wait_for_transcription_completion(
 
 
 async def _get_transcription_results(
-    s3_client: S3Client, s3_bucket: str, job_id: str, response_format: str
+    s3_bucket: str, job_id: str, response_format: str
 ) -> TranscribeJobData:
     """Get transcription results from S3.
 
     Args:
-        s3_client: S3 client
         s3_bucket: S3 bucket name
         job_id: Job identifier
         response_format: Response format
@@ -275,9 +270,9 @@ async def _get_transcription_results(
 
     if response_format in SUBTITLE_FORMATS:
         data, subtitle = await gather(
-            get_text_from_s3(s3_client, s3_bucket, s3_output_key),
+            get_text_from_s3(s3_bucket, s3_output_key),
             get_text_from_s3(
-                s3_client, s3_bucket, f"{s3_prefix}{job_id}/output.{response_format}"
+                s3_bucket, f"{s3_prefix}{job_id}/output.{response_format}"
             ),
         )
         transcription_data: TranscribeJobData = from_json(data)["results"]
@@ -285,7 +280,7 @@ async def _get_transcription_results(
         return transcription_data
 
     return from_json(  # type: ignore[no-any-return]
-        await get_text_from_s3(s3_client, s3_bucket, s3_output_key)
+        await get_text_from_s3(s3_bucket, s3_output_key)
     )["results"]
 
 
@@ -307,37 +302,6 @@ async def _delete_transcription_job(
         ):
             return
         raise
-
-
-async def _transcribe_cleanup(
-    s3_client: S3Client,
-    transcribe: TranscribeServiceClient,
-    s3_bucket: str,
-    s3_tmp_objects: set[str],
-    transcribe_tmp_jobs: set[str],
-    request_id: str,
-) -> None:
-    """Cleanup tasks for temporary resources.
-
-    Args:
-        s3_client: S3 client
-        transcribe: Transcribe client
-        s3_bucket: S3 bucket name
-        s3_tmp_objects: Set of S3 objects to delete
-        transcribe_tmp_jobs: Set of transcription jobs to delete
-        request_id: request id.
-    """
-    with log_background_event("aws_transcribe_cleanup", request_id):
-        await gather(
-            *(
-                s3_client.delete_object(Bucket=s3_bucket, Key=key)
-                for key in s3_tmp_objects
-            ),
-            *(
-                _delete_transcription_job(transcribe, job_name)
-                for job_name in transcribe_tmp_jobs
-            ),
-        )
 
 
 def _format_diarized_json_response(
@@ -478,8 +442,7 @@ class AudioModel(AudioModelBase[None, None]):
 
     async def _transcribe(
         self,
-        audio_content: UploadFile,
-        background_tasks: BackgroundTasks,
+        audio_content: InputFile,
         response_format: AudioResponseFormat,
         language: str | None = None,
         prompt: str | None = None,
@@ -495,7 +458,6 @@ class AudioModel(AudioModelBase[None, None]):
 
         Args:
             audio_content: Audio file content file
-            background_tasks: FastAPI background tasks for cleanup
             response_format: Format for the output response (json, text, srt, vtt, verbose_json, diarized_json)
             language: Optional language code for the input audio (ISO-639-1 format)
             prompt: Optional prompt for transcription.
@@ -526,19 +488,18 @@ class AudioModel(AudioModelBase[None, None]):
             raise ApiError(msg, status=404)
 
         transcribe: TranscribeServiceClient = get_client("transcribe")
-        s3_client: S3Client = get_client("s3", transcribe.meta.region_name)
-        s3_tmp_objects: set[str] = set()
-        transcribe_tmp_jobs: set[str] = set()
+        to_cleanup_job_id: str | None = None
         request_id = REQUEST_ID.get()
 
         try:
             # Upload audio to S3
             s3_prefix = SETTINGS.aws_s3_tmp_prefix
             s3_input_key = f"{s3_prefix}{request_id}/input"
-            await put_upload_file_to_s3(
-                audio_content, s3_client, s3_bucket, s3_input_key
+            await audio_content.to_s3(
+                transcribe.meta.region_name,  # type: ignore[arg-type]
+                bucket=s3_bucket,
+                key=s3_input_key,
             )
-            s3_tmp_objects.add(s3_input_key)
 
             # Build job parameters and start transcription
             job_params = _build_transcription_job_params(
@@ -549,52 +510,51 @@ class AudioModel(AudioModelBase[None, None]):
                 await transcribe.start_transcription_job(**job_params)
 
             # Track resources for cleanup
-            transcribe_tmp_jobs.add(request_id)
-            s3_tmp_objects.add(f"{s3_prefix}{request_id}/output.json")
-            s3_tmp_objects.add(f"{s3_prefix}{request_id}/.write_access_check_file.temp")
+            to_cleanup_job_id = request_id
+            track_temporary_s3_objects(
+                s3_bucket,
+                f"{s3_prefix}{request_id}/output.json",
+                f"{s3_prefix}{request_id}/.write_access_check_file.temp",
+            )
             if response_format in SUBTITLE_FORMATS:
-                s3_tmp_objects.add(f"{s3_prefix}{request_id}/output.{response_format}")
+                track_temporary_s3_objects(
+                    s3_bucket, f"{s3_prefix}{request_id}/output.{response_format}"
+                )
 
             # Wait for completion and get results
             await _wait_for_transcription_completion(transcribe, request_id)
             return await _get_transcription_results(
-                s3_client, s3_bucket, request_id, response_format
+                s3_bucket, request_id, response_format
             )
 
         finally:
-            if s3_tmp_objects or transcribe_tmp_jobs:
-                background_tasks.add_task(
-                    _transcribe_cleanup,
-                    s3_client,
-                    transcribe,
-                    s3_bucket,
-                    s3_tmp_objects,
-                    transcribe_tmp_jobs,
-                    request_id,
+            if to_cleanup_job_id:
+                schedule_cleanup(
+                    _delete_transcription_job(transcribe, to_cleanup_job_id)
                 )
 
     @classmethod
-    def _format_transcription_response(
+    async def _format_transcription_response(
         cls,
         transcript_data: TranscribeJobData,
-        file: FastAPIUploadFile,
         response_format: AudioResponseFormat,
         timestamp_granularities: list[AudioTimestampGranularities] | None = None,
+        filename: str | None = None,
     ) -> str | TranscriptionCreateResponse | TranscriptionDiarized | Response:
         """Format transcription response for the route.
 
         Args:
             transcript_data: AWS Transcribe job data
-            file: Original uploaded file
             response_format: Requested response format
             timestamp_granularities: Optional timestamp granularities for verbose_json
+            filename: Original filename of the audio file
 
         Returns:
             Formatted response in the requested format
         """
         if response_format in SUBTITLE_FORMATS:
-            return cls._format_subtitle_response(
-                response_format, transcript_data["subtitle_content"], file
+            return await cls._format_subtitle_response(
+                response_format, transcript_data["subtitle_content"], filename
             )
 
         text = _get_transcript_text(transcript_data)
@@ -620,27 +580,27 @@ class AudioModel(AudioModelBase[None, None]):
         return log_response_params(Transcription(text=text, usage=usage_duration))
 
     @classmethod
-    def _format_translation_response(
+    async def _format_translation_response(
         cls,
         transcript_data: TranscribeJobData,
         translated_content: str,
-        file: FastAPIUploadFile,
         response_format: AudioResponseFormat,
+        filename: str | None = None,
     ) -> str | TranslationCreateResponse | Response:
         """Format translation response for the route.
 
         Args:
             transcript_data: AWS Transcribe job data
             translated_content: Pre-translated text or subtitle content
-            file: Original uploaded file
             response_format: Requested response format
+            filename: Original filename of the audio file
 
         Returns:
             Formatted response in the requested format
         """
         if "subtitle_content" in transcript_data:
-            return cls._format_subtitle_response(
-                response_format, translated_content, file
+            return await cls._format_subtitle_response(
+                response_format, translated_content, filename
             )
 
         if response_format == "text":
@@ -673,8 +633,7 @@ class AudioModel(AudioModelBase[None, None]):
 
     async def stt(
         self,
-        audio_content: UploadFile,
-        background_tasks: BackgroundTasks,
+        audio_content: InputFile,
         response_format: AudioResponseFormat,
         language: str | None = None,
         timestamp_granularities: list[AudioTimestampGranularities] | None = None,
@@ -691,7 +650,6 @@ class AudioModel(AudioModelBase[None, None]):
 
         Args:
             audio_content: Audio file content file
-            background_tasks: FastAPI background tasks for cleanup
             response_format: Format for the output response (json, text, srt, vtt, verbose_json, diarized_json)
             language: Optional language code for the input audio (ISO-639-1 format)
             timestamp_granularities: Optional timestamp granularities for verbose_json
@@ -707,25 +665,23 @@ class AudioModel(AudioModelBase[None, None]):
                 unsupported file formats are provided
         """
         self._validate_response_formats(response_format, timestamp_granularities)
-        return self._format_transcription_response(
+        return await self._format_transcription_response(
             await self._transcribe(
                 audio_content,
-                background_tasks,
                 response_format,
                 language,
                 prompt,
                 temperature,
                 logprobs=logprobs,
             ),
-            audio_content,
             response_format,
             timestamp_granularities,
+            await audio_content.get_filename(),
         )
 
     async def stt_stream(
         self,
-        audio_content: UploadFile,
-        background_tasks: BackgroundTasks,
+        audio_content: InputFile,
         response_format: AudioResponseFormat,
         language: str | None = None,
         prompt: str | None = None,
@@ -737,7 +693,6 @@ class AudioModel(AudioModelBase[None, None]):
 
         Args:
             audio_content: Audio file to transcribe
-            background_tasks: FastAPI background tasks for cleanup
             response_format: Format for output
             language: Optional language code
             prompt: Optional prompt for transcription.
@@ -751,12 +706,7 @@ class AudioModel(AudioModelBase[None, None]):
             ApiError: When transcription fails
         """
         transcript_data = await self._transcribe(
-            audio_content,
-            background_tasks,
-            response_format,
-            language,
-            prompt,
-            temperature,
+            audio_content, response_format, language, prompt, temperature
         )
 
         full_text_parts: list[str] = []
@@ -786,8 +736,7 @@ class AudioModel(AudioModelBase[None, None]):
 
     async def stt_translate(
         self,
-        audio_content: UploadFile,
-        background_tasks: BackgroundTasks,
+        audio_content: InputFile,
         response_format: AudioResponseFormat,
         prompt: str | None,
         temperature: float | None = None,
@@ -799,7 +748,6 @@ class AudioModel(AudioModelBase[None, None]):
 
         Args:
             audio_content: Audio file to transcribe and translate
-            background_tasks: FastAPI background tasks for cleanup
             response_format: Format for output (json, text, srt, vtt, verbose_json)
             prompt: Optional prompt for translation.
             temperature: Optional temperature for transcription.
@@ -811,11 +759,7 @@ class AudioModel(AudioModelBase[None, None]):
             ApiError: When transcription or translation fails
         """
         transcript_data = await self._transcribe(
-            audio_content,
-            background_tasks,
-            response_format,
-            prompt=prompt,
-            temperature=temperature,
+            audio_content, response_format, prompt=prompt, temperature=temperature
         )
 
         language = transcript_data["language_code"]
@@ -828,6 +772,9 @@ class AudioModel(AudioModelBase[None, None]):
                 _get_transcript_text(transcript_data), language
             )
 
-        return self._format_translation_response(
-            transcript_data, translated_content, audio_content, response_format
+        return await self._format_translation_response(
+            transcript_data,
+            translated_content,
+            response_format,
+            await audio_content.get_filename(),
         )

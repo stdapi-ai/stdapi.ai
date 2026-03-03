@@ -3,7 +3,7 @@
 from typing import TYPE_CHECKING
 
 import pytest
-from openai import BadRequestError
+from openai import BadRequestError, NotFoundError
 
 if TYPE_CHECKING:
     from openai import OpenAI
@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 CLAUDE_ALL = (
     "anthropic.claude-3-7-sonnet-20250219-v1:0",
     "anthropic.claude-haiku-4-5-20251001-v1:0",
-    "anthropic.claude-opus-4-1-20250805-v1:0",
+    # "anthropic.claude-opus-4-1-20250805-v1:0", # Disabled, performance issue
     "anthropic.claude-opus-4-20250514-v1:0",
     "anthropic.claude-opus-4-5-20251101-v1:0",
     "anthropic.claude-opus-4-6-v1",
@@ -39,20 +39,22 @@ class TestAnthropicClaudeChatCompletions:
         """reasoning_effort parameter: accepted and yields valid response on this backend."""
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
-        resp = openai_client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": "Reply with OK."}],
-            reasoning_effort="minimal",
-            max_completion_tokens=4096,  # Required for Opus 4.1
-        )
+        try:
+            resp = openai_client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": "Reply with OK."}],
+                reasoning_effort="minimal",
+                max_completion_tokens=4096,  # Required for Opus 4.1
+            )
+        except NotFoundError as exc:
+            if "Legacy" in str(exc):
+                pytest.xfail(str(exc))
+
         assert hasattr(resp, "choices")
         assert len(resp.choices) >= 1
         msg = resp.choices[0].message
         assert msg.role == "assistant"
 
-    # --- Claude server tools via systemTool_ prefix ---
-
-    @pytest.mark.expensive
     def test_claude_server_tool_bash_accepted(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
@@ -72,7 +74,6 @@ class TestAnthropicClaudeChatCompletions:
         msg = resp.choices[0].message
         assert msg.role == "assistant"
 
-    @pytest.mark.expensive
     def test_claude_server_tool_with_custom_tool(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
@@ -124,8 +125,6 @@ class TestAnthropicClaudeChatCompletions:
         assert isinstance(error_body, dict)
         assert error_body["type"] == "invalid_request_error"
 
-    # --- Reasoning effort mappings ---
-
     @pytest.mark.expensive
     def test_reasoning_effort_medium(
         self, openai_client: OpenAI, use_official_api: bool
@@ -142,7 +141,6 @@ class TestAnthropicClaudeChatCompletions:
         assert len(resp.choices) >= 1
         assert resp.choices[0].message.role == "assistant"
 
-    @pytest.mark.expensive
     def test_reasoning_effort_on_non_claude_model_error(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
@@ -162,9 +160,6 @@ class TestAnthropicClaudeChatCompletions:
         assert isinstance(error_body, dict)
         assert error_body["type"] == "invalid_request_error"
 
-    # --- Unsupported server tool name ---
-
-    @pytest.mark.expensive
     def test_claude_unsupported_server_tool_name(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
@@ -187,9 +182,6 @@ class TestAnthropicClaudeChatCompletions:
         assert isinstance(error_body, dict)
         assert error_body["type"] == "invalid_request_error"
 
-    # --- Streaming with reasoning ---
-
-    @pytest.mark.expensive
     def test_claude_streaming_with_reasoning(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:

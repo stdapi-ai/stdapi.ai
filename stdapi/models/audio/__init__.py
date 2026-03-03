@@ -25,8 +25,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
     from re import Pattern
 
-    from fastapi import BackgroundTasks, UploadFile
-
+    from stdapi.input_file import InputFile
     from stdapi.types import JsonMapping
     from stdapi.types.openai_audio import (
         AudioFileFormat,
@@ -97,8 +96,7 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
 
     async def stt(
         self,
-        audio_content: UploadFile,  # noqa: ARG002
-        background_tasks: BackgroundTasks,  # noqa: ARG002
+        audio_content: InputFile,  # noqa: ARG002
         response_format: AudioResponseFormat,  # noqa: ARG002
         language: str | None = None,  # noqa: ARG002
         timestamp_granularities: list[AudioTimestampGranularities] | None = None,  # noqa: ARG002
@@ -111,7 +109,6 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
 
         Args:
             audio_content: Audio file to transcribe.
-            background_tasks: FastAPI background tasks for cleanup.
             response_format: Format for output (json, text, srt, vtt, verbose_json, diarized_json).
             language: Optional language code.
             timestamp_granularities: Optional timestamp granularities for verbose_json.
@@ -130,8 +127,7 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
 
     async def stt_stream(
         self,
-        audio_content: UploadFile,  # noqa: ARG002
-        background_tasks: BackgroundTasks,  # noqa: ARG002
+        audio_content: InputFile,  # noqa: ARG002
         response_format: AudioResponseFormat,  # noqa: ARG002
         language: str | None = None,  # noqa: ARG002
         prompt: str | None = None,  # noqa: ARG002
@@ -143,7 +139,6 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
 
         Args:
             audio_content: Audio file to transcribe.
-            background_tasks: FastAPI background tasks for cleanup.
             response_format: Format for output.
             language: Optional language code.
             prompt: Optional prompt for transcription.
@@ -162,8 +157,7 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
 
     async def stt_translate(
         self,
-        audio_content: UploadFile,  # noqa: ARG002
-        background_tasks: BackgroundTasks,  # noqa: ARG002
+        audio_content: InputFile,  # noqa: ARG002
         response_format: AudioResponseFormat,  # noqa: ARG002
         prompt: str | None,  # noqa: ARG002
         temperature: float | None = None,  # noqa: ARG002
@@ -172,7 +166,6 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
 
         Args:
             audio_content: Audio file to transcribe and translate.
-            background_tasks: FastAPI background tasks for cleanup.
             response_format: Format for output (json, text, srt, vtt, verbose_json).
             prompt: Optional prompt for translation.
             temperature: Optional temperature for transcription.
@@ -187,8 +180,10 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
         raise ApiError(msg)
 
     @staticmethod
-    def _format_subtitle_response(
-        response_format: AudioResponseFormat, subtitle_content: str, file: UploadFile
+    async def _format_subtitle_response(
+        response_format: AudioResponseFormat,
+        subtitle_content: str,
+        filename: str | None,
     ) -> Response:
         """Format subtitle response with proper content type and disposition headers.
 
@@ -198,21 +193,19 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
         Args:
             response_format: The subtitle response format (SRT or VTT)
             subtitle_content: The subtitle content as a string
-            file: The original uploaded file for filename extraction
+            filename: The original filename of the audio file
 
         Returns:
             FastAPI Response with subtitle content and appropriate headers
         """
-        content_type = (
-            "application/x-subrip" if response_format == "srt" else "text/vtt"
-        )
-        original_filename = Path(file.filename or "audio").stem
-        filename = f"{original_filename}.{response_format}"
-
         return Response(
             content=subtitle_content,
-            media_type=content_type,
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            media_type=(
+                "application/x-subrip" if response_format == "srt" else "text/vtt"
+            ),
+            headers={
+                "Content-Disposition": f'attachment; filename="{Path(filename or "audio").stem}.{response_format}"'
+            },
         )
 
     @staticmethod

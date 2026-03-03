@@ -13,7 +13,6 @@ NOVA_ALL = ("amazon.nova-2-lite-v1:0",)
 class TestNovaChatCompletions:
     """Amazon Nova chat completions tests."""
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize("model", NOVA_ALL)
     def test_reasoning_effort_parameter(
         self, openai_client: OpenAI, use_official_api: bool, model: str

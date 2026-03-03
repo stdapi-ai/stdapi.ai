@@ -133,12 +133,16 @@ async def create_message(
     log_request_params(
         request, user_id=request.metadata.user_id if request.metadata else None
     )
-    model = await validate_model(
-        request.model, input_modality="TEXT", output_modality="TEXT", error_status=400
-    )
-    return await get_chat_model(model.id).create_message(
-        model, request, f"msg_{REQUEST_ID.get()}"
-    )
+    return await get_chat_model(
+        (
+            await validate_model(
+                request.model,
+                input_modality="TEXT",
+                output_modality="TEXT",
+                error_status=400,
+            )
+        ).id
+    ).create_message(request, f"msg_{REQUEST_ID.get()}")
 
 
 @router.post(

@@ -13,12 +13,13 @@ from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
 from stdapi.aws_bedrock import get_extra_model_parameters
 from stdapi.config import SETTINGS
+from stdapi.input_file import InputFile
 from stdapi.models import validate_model
 from stdapi.models.image import get_image_model
 from stdapi.monitoring import log_request_params
 from stdapi.routes._images_common import build_images_response
 from stdapi.types.openai_images import ImagesResponse, ImageVariationParams
-from stdapi.utils import read_and_b64encode_file, validation_error_handler
+from stdapi.utils import validation_error_handler
 
 router = APIRouter(
     prefix=f"{SETTINGS.openai_routes_prefix}/v1", tags=["Images", TAG_OPENAI]
@@ -166,7 +167,7 @@ async def create_image_variations(
         extra_params=get_extra_model_parameters(model_id, request),
     )
 
-    results = await job.create_variations(images=[await read_and_b64encode_file(image)])
+    results = await job.create_variations(images=[await InputFile(image).to_base64()])
     return await build_images_response(
         job=job,
         results=results,

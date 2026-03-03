@@ -5,9 +5,8 @@ Bedrock Converse API-native types. Handles tool mapping, stop reason mapping,
 message mapping, and response formatting (both streaming and non-streaming).
 """
 
-from asyncio import Task, TaskGroup, create_task, gather
+from asyncio import Task, create_task
 from contextvars import ContextVar
-from os.path import splitext
 from typing import TYPE_CHECKING, Any
 
 from pydantic_core import from_json, to_json
@@ -15,14 +14,8 @@ from sse_starlette import JSONServerSentEvent
 
 from stdapi.api_errors import ApiError
 from stdapi.aws_bedrock import (
-    MIME_TYPES_TO_AUDIO_TYPE,
-    MIME_TYPES_TO_DOCUMENT_TYPE,
-    MIME_TYPES_TO_VIDEO_TYPE,
     PROMPT_CACHING,
     build_system_blocks,
-    handle_bedrock_client_error,
-    image_block_from_bytes,
-    image_block_from_url,
     set_inference_configuration,
 )
 from stdapi.models.audio import synthesize_speech
@@ -64,28 +57,24 @@ from stdapi.types.openai_chat_completions import (
     PromptCacheRetention,
     PromptTokensDetails,
 )
-from stdapi.utils import b64decode_data_or_uri_with_mime, b64encode, try_parse_json
+from stdapi.utils import b64encode, try_parse_json
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Iterable
 
     from pydantic import JsonValue
-    from types_aiobotocore_bedrock_runtime import BedrockRuntimeClient
     from types_aiobotocore_bedrock_runtime.literals import (
-        AudioFormatType,
         CacheTTLType,
         ConversationRoleType,
         ServiceTierTypeType,
         StopReasonType,
-        VideoFormatType,
     )
     from types_aiobotocore_bedrock_runtime.type_defs import (
-        AudioBlockTypeDef,
         ContentBlockDeltaEventTypeDef,
         ContentBlockOutputTypeDef,
         ContentBlockTypeDef,
+        ConverseResponseTypeDef,
         ConverseStreamOutputTypeDef,
-        DocumentBlockTypeDef,
         InferenceConfigurationTypeDef,
         MessageTypeDef,
         ReasoningContentBlockUnionTypeDef,
@@ -97,10 +86,9 @@ if TYPE_CHECKING:
         ToolSpecificationTypeDef,
         ToolTypeDef,
         ToolUseBlockTypeDef,
-        VideoBlockTypeDef,
     )
 
-    from stdapi.aws_bedrock import ConverseRequestBaseTypeDef, PromptCaching
+    from stdapi.aws_bedrock import PromptCaching
     from stdapi.types import JsonMapping
     from stdapi.types.anthropic_messages import ToolUnionParam
     from stdapi.types.openai_chat_completions import (
@@ -461,156 +449,37 @@ def _extract_system_content_blocks(
     return build_system_blocks(*(part.text for part in content))
 
 
-async def _extract_image_content_block(
-    image_part: ChatCompletionContentPartImageParam,
-) -> ContentBlockTypeDef:
-    """Convert an OpenAI image_url section to a Bedrock content block.
-
-    Supports data URLs, s3:// URIs, and http(s) URLs (downloaded via aiohttp).
-
-    Args:
-        image_part: Image content part as provided by OpenAI Chat API.
-
-    Returns:
-        A Bedrock ContentBlockTypeDef for the referenced image.
-
-    Raises:
-        ApiError: If the URL is invalid or unsupported by this implementation.
-    """
-    return await image_block_from_url(image_part.image_url.url)
-
-
-async def _extract_audio_content_block(
-    audio_part: ChatCompletionContentPartInputAudioParam,
-) -> ContentBlockTypeDef:
-    """Convert an OpenAI input_audio section to a Bedrock content block.
-
-    Args:
-        audio_part: Audio content part as provided by OpenAI Chat API.
-
-    Returns:
-        A Bedrock ContentBlockTypeDef for the referenced audio.
-
-    Raises:
-        ApiError: If the URL is invalid or unsupported by this implementation.
-    """
-    try:
-        data = (await b64decode_data_or_uri_with_mime(audio_part.input_audio.data))[0]
-    except ValueError as error:
-        raise ApiError(error.args[0]) from None
-    audio_block_bytes: AudioBlockTypeDef = {
-        "source": {"bytes": data},
-        "format": audio_part.input_audio.format,
-    }
-    return {"audio": audio_block_bytes}
-
-
-async def _extract_file_content_block(file_part: File) -> ContentBlockTypeDef:
-    """Convert an OpenAI file section to a Bedrock content block.
-
-    The OpenAI File part contains base64-encoded bytes (file_data). This helper
-    detects the file's MIME type using python-magic and maps it to the proper
-    Bedrock content block:
-    - image/* → image block with inferred format and bytes
-    - video/* → video block with inferred/normalized format and bytes
-    - audio/* → audio block with inferred/normalized format and bytes
-    - text/* or application/* → document block with inferred/normalized format and bytes
-
-    Args:
-        file_part: OpenAI chat content part with type "file".
-
-    Returns:
-        A Bedrock ContentBlockTypeDef containing an image, video, or document block
-        depending on the detected MIME type.
-
-    Raises:
-        ApiError: When file_data is missing/invalid/empty or the detected
-            MIME type is not supported by this implementation.
-    """
-    file_section = file_part.file
-    b64_data = file_section.file_data
-    try:
-        data, mime = await b64decode_data_or_uri_with_mime(b64_data, validate=True)
-    except ValueError as error:
-        msg = f"Invalid {file_part}: {error.args[0]}"
-        raise ApiError(msg) from None
-
-    if mime.startswith("image/"):
-        return image_block_from_bytes(data, mime)
-
-    file_format = mime.split("/", 1)[1]
-    if mime.startswith("video/"):
-        video_format: VideoFormatType = MIME_TYPES_TO_VIDEO_TYPE.get(
-            file_format,
-            file_format,  # type: ignore[arg-type]
-        )
-        video_block_bytes: VideoBlockTypeDef = {
-            "source": {"bytes": data},
-            "format": video_format,
-        }
-        return {"video": video_block_bytes}
-
-    if mime.startswith("audio/"):
-        audio_format: AudioFormatType = MIME_TYPES_TO_AUDIO_TYPE.get(
-            file_format,
-            file_format,  # type: ignore[arg-type]
-        )
-        audio_block_bytes: AudioBlockTypeDef = {
-            "source": {"bytes": data},
-            "format": audio_format,
-        }
-        return {"audio": audio_block_bytes}
-
-    if mime.startswith(("text/", "application/")):
-        # Default to 'txt' when the MIME subtype is unknown
-        document_format = MIME_TYPES_TO_DOCUMENT_TYPE.get(file_format, "txt")
-        name_value = (
-            # Remove file extension, "." is not supported
-            splitext(file_section.filename)[0]  # noqa: PTH122
-            if file_section.filename is not None
-            else f"file-{document_format}"
-        )
-        document_block_bytes: DocumentBlockTypeDef = {
-            "name": name_value,
-            "source": {"bytes": data},
-            "format": document_format,
-        }
-        return {"document": document_block_bytes}
-
-    msg = f"Unsupported file MIME type for 'file' ({mime}): {file_part}"
-    raise ApiError(msg)
-
-
 _SYNC_OPENAI_PARTS = (ChatCompletionContentPartTextParam,)
 
 
 async def _convert_content_part(
     part: ChatCompletionContentPartParam | ChatCompletionContentPartRefusalParam,
 ) -> ContentBlockTypeDef:
-    """Converts a content part into a corresponding content block representation based on its specific type.
-
-    The method processes different types of
-    content parts and handles them accordingly. If the content part type
-    is not supported, an error is raised.
+    """Convert a content part into a Bedrock content block.
 
     Args:
-        part : The content part to be converted. The type determines how the content
-            is processed into a content block.
+        part: The content part to be converted.
 
     Returns:
-        The converted content block representation of the
-        provided content part.
+        A Bedrock content block dict.
 
     Raises:
         ApiError: If the provided content part has an unsupported type.
     """
     match part:
         case ChatCompletionContentPartImageParam():
-            return await _extract_image_content_block(part)
+            return await part.image_url.url.to_bedrock_content_block()
         case ChatCompletionContentPartInputAudioParam():
-            return await _extract_audio_content_block(part)
+            return await part.input_audio.data.to_bedrock_content_block(
+                "audio", content_type=f"audio/{part.input_audio.format}"
+            )
         case File():
-            return await _extract_file_content_block(part)
+            if part.file.file_data is None:
+                msg = f"Missing file_data in {part}"
+                raise ApiError(msg)
+            return await part.file.file_data.to_bedrock_content_block(
+                filename=part.file.filename
+            )
         case _:  # pragma: no cover
             msg = f"Unsupported content part type: {getattr(part, 'type', type(part))}"
             raise ApiError(msg)
@@ -627,29 +496,19 @@ async def _extract_content_blocks(
 ) -> list[ContentBlockTypeDef]:
     """Extract Bedrock content blocks from OpenAI message content.
 
-    Supports:
-    - text parts
-    - image_url parts with data URLs (base64), s3:// URIs, and http(s) downloads via aiohttp
-    - file parts (image/video/document) with base64 body and MIME sniffing
+    Args:
+        content: OpenAI message content (string, list of parts, or None).
+
+    Returns:
+        List of Bedrock content blocks.
     """
     if isinstance(content, str):
         return [{"text": content}]
-
-    parts = tuple(content or ())
-    if not parts:
-        return []
-
-    async with TaskGroup() as tg:
-        tasks: tuple[Task[ContentBlockTypeDef] | None, ...] = tuple(
-            None
-            if isinstance(p, _SYNC_OPENAI_PARTS)
-            else tg.create_task(_convert_content_part(p))
-            for p in parts
-        )
-
     return [
-        {"text": p.text} if t is None else t.result()  # type: ignore[union-attr]
-        for p, t in zip(parts, tasks, strict=False)
+        {"text": p.text}
+        if isinstance(p, _SYNC_OPENAI_PARTS)
+        else await _convert_content_part(p)
+        for p in (content or ())
     ]
 
 
@@ -907,17 +766,8 @@ async def map_messages(
     bedrock_messages: list[MessageTypeDef] = []
     system_blocks: list[SystemContentBlockTypeDef] = []
 
-    pending_tasks: dict[int, Task[list[ContentBlockTypeDef]]] = {}
-    sync_roles = {"tool", "function", "assistant"}
-    for i, message_param in enumerate(messages):
-        role_name = message_param.role
-        if role_name not in _SYSTEM_ROLES and role_name not in sync_roles:
-            pending_tasks[i] = create_task(
-                _extract_content_blocks(message_param.content)
-            )
-
     previous_role_name = ""
-    for i, message_param in enumerate(messages):
+    for message_param in messages:
         role_name = message_param.role
         role: ConversationRoleType = "assistant" if role_name == "assistant" else "user"
 
@@ -950,7 +800,7 @@ async def map_messages(
             assistant_msg: ChatCompletionAssistantMessageParam = message_param  # type: ignore[assignment]
             content_blocks = _extract_assistant_blocks(assistant_msg)
         else:
-            content_blocks = await pending_tasks[i]
+            content_blocks = await _extract_content_blocks(message_param.content)
 
         bedrock_messages.append({"role": role, "content": content_blocks})
         previous_role_name = role_name
@@ -1117,10 +967,8 @@ async def format_response(
     completion_id: str,
     created: int,
     model_id: str,
-    bedrock_runtime: BedrockRuntimeClient,
-    request: ConverseRequestBaseTypeDef,
+    responses: list[ConverseResponseTypeDef],
     service_tier: ServiceTiers | None,
-    choices_count: int,
     audio_params: ChatCompletionAudioParam | None,
     modalities: list[OutputModalities],
 ) -> ChatCompletion:
@@ -1130,21 +978,14 @@ async def format_response(
         completion_id: Unique identifier for the completion request.
         created: Timestamp indicating when the request was created.
         model_id: The model identifier.
-        bedrock_runtime: Client used to execute the Converse API.
-        request: Payload for the Converse API request.
+        responses: Pre-executed Converse API responses, one per choice.
         service_tier: Optional tier of service for the request.
-        choices_count: Number of response choices to generate.
         audio_params: Optional parameters for audio generation.
         modalities: List of output modalities such as text or audio.
 
     Returns:
         A structured ChatCompletion response.
     """
-    with handle_bedrock_client_error():
-        responses = await gather(
-            *(bedrock_runtime.converse(**request) for _ in range(choices_count))
-        )
-
     choices: list[Choice] = []
     usage = CompletionUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
     reasoning_contents: list[str] = []
@@ -1351,8 +1192,7 @@ async def format_stream(
     completion_id: str,
     created: int,
     model_id: str,
-    bedrock_runtime: BedrockRuntimeClient,
-    request: ConverseRequestBaseTypeDef,
+    stream: AsyncIterator[ConverseStreamOutputTypeDef],
     service_tier: ServiceTiers | None,
     *,
     include_usage: bool = False,
@@ -1363,19 +1203,13 @@ async def format_stream(
         completion_id: Unique identifier for the completion.
         created: Timestamp when the request was initiated.
         model_id: The model identifier.
-        bedrock_runtime: Client for the Bedrock runtime.
-        request: Request payload for the converse stream.
+        stream: Pre-opened Bedrock ConverseStream event iterator.
         service_tier: Service tier being used.
         include_usage: Whether to include usage information.
 
     Yields:
         JSONServerSentEvent containing the formatted response payload.
     """
-    with handle_bedrock_client_error():
-        stream: AsyncIterator[ConverseStreamOutputTypeDef] = (
-            await bedrock_runtime.converse_stream(**request)
-        )["stream"]
-
     yield JSONServerSentEvent(
         data=log_response_params(
             ChatCompletionChunk(

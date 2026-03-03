@@ -13,13 +13,13 @@ from stdapi.types.openai_audio import (
     UsageInputTokenDetails,
     UsageTokens,
 )
-from stdapi.utils import AUDIO_MIME_PATTERN, b64encode, get_and_validate_mime
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
-    from fastapi import BackgroundTasks, Response, UploadFile
+    from fastapi import Response
 
+    from stdapi.input_file import InputFile
     from stdapi.types.openai_audio import (
         AudioResponseFormat,
         AudioTimestampGranularities,
@@ -146,8 +146,7 @@ class AudioModel(AudioModelBase[_Request, _Response]):
 
     async def stt(
         self,
-        audio_content: UploadFile,
-        background_tasks: BackgroundTasks,  # noqa: ARG002
+        audio_content: InputFile,
         response_format: AudioResponseFormat,
         language: str | None = None,
         timestamp_granularities: list[AudioTimestampGranularities] | None = None,
@@ -163,7 +162,6 @@ class AudioModel(AudioModelBase[_Request, _Response]):
 
         Args:
             audio_content: Audio file to transcribe
-            background_tasks: FastAPI background tasks for cleanup
             response_format: Format for output (json, text, verbose_json)
             language: Optional language code (not currently used)
             timestamp_granularities: Optional timestamp granularities (not currently supported)
@@ -208,8 +206,7 @@ class AudioModel(AudioModelBase[_Request, _Response]):
 
     async def stt_stream(
         self,
-        audio_content: UploadFile,
-        background_tasks: BackgroundTasks,  # noqa: ARG002
+        audio_content: InputFile,
         response_format: AudioResponseFormat,  # noqa: ARG002
         language: str | None = None,
         prompt: str | None = None,
@@ -221,7 +218,6 @@ class AudioModel(AudioModelBase[_Request, _Response]):
 
         Args:
             audio_content: Audio file to transcribe
-            background_tasks: FastAPI background tasks for cleanup
             response_format: Format for output (only "text" is supported for streaming)
             language: Optional language code
             prompt: Optional prompt for transcription.
@@ -278,8 +274,7 @@ class AudioModel(AudioModelBase[_Request, _Response]):
 
     async def stt_translate(
         self,
-        audio_content: UploadFile,
-        background_tasks: BackgroundTasks,  # noqa: ARG002
+        audio_content: InputFile,
         response_format: AudioResponseFormat,
         prompt: str | None,
         temperature: float | None = None,
@@ -291,7 +286,6 @@ class AudioModel(AudioModelBase[_Request, _Response]):
 
         Args:
             audio_content: Audio file to transcribe and translate
-            background_tasks: FastAPI background tasks for cleanup
             response_format: Format for output (json, text, srt, vtt, verbose_json)
             prompt: Optional prompt for translation.
             temperature: Optional temperature for transcription.
@@ -316,7 +310,7 @@ class AudioModel(AudioModelBase[_Request, _Response]):
 
     async def _build_request(
         self,
-        audio_content: UploadFile,
+        audio_content: InputFile,
         prompt: str | None,
         temperature: float | None,
         language: str | None = None,
@@ -347,8 +341,7 @@ class AudioModel(AudioModelBase[_Request, _Response]):
         Raises:
             ApiError: If the provided file is not in a supported audio format.
         """
-        audio = await audio_content.read()
-        file_format = get_and_validate_mime(audio, AUDIO_MIME_PATTERN).split("/", 1)[1]
+        file_format = (await audio_content.get_content_type_tuple())[1]
         return {
             "messages": [
                 {
@@ -357,7 +350,7 @@ class AudioModel(AudioModelBase[_Request, _Response]):
                         {
                             "type": "input_audio",
                             "input_audio": {
-                                "data": await b64encode(audio),
+                                "data": await audio_content.to_base64(),
                                 "format": MIME_TYPES_TO_AUDIO_TYPE.get(
                                     file_format, file_format
                                 ),

@@ -5,15 +5,14 @@
 - amazon.titan-embed-text-v2:0
 """
 
+from asyncio import gather
 from contextlib import suppress
 from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
 
+from stdapi.input_file import InputFile, InputFileUrl
 from stdapi.models.embedding import EmbeddingModelBase, EmbeddingResponse
-from stdapi.utils import is_data_uri
 
 if TYPE_CHECKING:
-    from fastapi import BackgroundTasks
-
     from stdapi.types import JsonMapping
 
 
@@ -65,10 +64,9 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
 
     async def embed_text(
         self,
-        inputs: list[str],
+        inputs: list[InputFileUrl | str],
         dimensions: int | None,
         extra_params: JsonMapping,
-        background_tasks: BackgroundTasks,  # noqa: ARG002
     ) -> EmbeddingResponse:
         """Get embeddings for text.
 
@@ -76,7 +74,6 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             inputs: Texts to embed.
             dimensions: Number of dimensions.
             extra_params: Extra model parameters.
-            background_tasks: FastAPI background tasks.
 
         Returns:
             Embedding response.
@@ -87,13 +84,24 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             request["dimensions"] = dimensions
         input_tokens = 0
         embeddings = []
-        for response in await self.batch_invoke(
-            _Request(inputImage=value.split(",", 1)[1], **request)
-            if is_data_uri(value)
-            else _Request(inputText=value, **request)
-            for value in inputs
-        ):
+        for response in await gather(*(self._invoke(request, v) for v in inputs)):
             embeddings.append(response["embedding"])
             with suppress(KeyError):
                 input_tokens += int(response["inputTextTokenCount"])
         return EmbeddingResponse(embeddings=embeddings, prompt_tokens=input_tokens)
+
+    async def _invoke(self, request: _Request, value: InputFileUrl | str) -> _Response:
+        """Call the model with an input file.
+
+        Args:
+            request: The request object.
+            value: The input value to be used with the request.
+
+        Returns:
+            The model response.
+        """
+        return await self.invoke(
+            _Request(inputImage=await value.to_base64(), **request)
+            if isinstance(value, InputFile)
+            else _Request(inputText=value, **request)
+        )

@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 from aiobotocore.session import get_session
-from openai import BadRequestError, NotFoundError, OpenAI
+from openai import APIError, BadRequestError, InternalServerError, NotFoundError, OpenAI
 from pybase64 import b64encode
 
 if TYPE_CHECKING:
@@ -1827,26 +1827,34 @@ class TestChatCompletions:
         ]
 
         # First request - should cache the prompt
-        response1 = openai_client.chat.completions.create(
-            model=chat_model,
-            messages=messages,  # type: ignore[arg-type]
-            tools=tools,  # type: ignore[arg-type]
-            prompt_cache_key="default",
-            max_completion_tokens=50,
-        )
+        try:
+            response1 = openai_client.chat.completions.create(
+                model=chat_model,
+                messages=messages,  # type: ignore[arg-type]
+                tools=tools,  # type: ignore[arg-type]
+                prompt_cache_key="default",
+                max_completion_tokens=50,
+            )
+        except InternalServerError as exc:
+            if "Model produced invalid sequence as part of ToolUse" in str(exc):
+                pytest.xfail(str(exc))
 
         assert hasattr(response1, "choices")
         assert len(response1.choices) == 1
         assert response1.choices[0].message.role == "assistant"
 
         # Second request - should use cached prompt
-        response2 = openai_client.chat.completions.create(
-            model=chat_model,
-            messages=messages,  # type: ignore[arg-type]
-            tools=tools,  # type: ignore[arg-type]
-            prompt_cache_key="default",
-            max_completion_tokens=50,
-        )
+        try:
+            response2 = openai_client.chat.completions.create(
+                model=chat_model,
+                messages=messages,  # type: ignore[arg-type]
+                tools=tools,  # type: ignore[arg-type]
+                prompt_cache_key="default",
+                max_completion_tokens=50,
+            )
+        except InternalServerError as exc:
+            if "Model produced invalid sequence as part of ToolUse" in str(exc):
+                pytest.xfail(str(exc))
 
         assert hasattr(response2, "choices")
         assert len(response2.choices) == 1
@@ -1902,43 +1910,52 @@ class TestChatCompletions:
         ]
 
         # First streaming request - should cache the prompt
-        stream1 = openai_client.chat.completions.create(  # type: ignore[call-overload]
-            model=chat_model,
-            messages=messages,
-            tools=tools,
-            prompt_cache_key="default",
-            stream=True,
-            stream_options={"include_usage": True},
-            max_completion_tokens=50,
-        )
+        try:
+            stream1 = openai_client.chat.completions.create(  # type: ignore[call-overload]
+                model=chat_model,
+                messages=messages,
+                tools=tools,
+                prompt_cache_key="default",
+                stream=True,
+                stream_options={"include_usage": True},
+                max_completion_tokens=50,
+            )
 
-        # Consume the first stream and get the last chunk with usage
-        last_chunk1 = None
-        for chunk in stream1:
-            if isinstance(chunk, str) and chunk == "[DONE]":
-                break
-            last_chunk1 = chunk
+            # Consume the first stream and get the last chunk with usage
+            last_chunk1 = None
+            for chunk in stream1:
+                if isinstance(chunk, str) and chunk == "[DONE]":
+                    break
+                last_chunk1 = chunk
+        except (InternalServerError, APIError) as exc:
+            if "Model produced invalid sequence as part of ToolUse" in str(exc):
+                pytest.xfail(str(exc))
 
         # Validate first stream was successful
         assert last_chunk1 is not None
 
         # Second streaming request - should use cached prompt
-        stream2 = openai_client.chat.completions.create(  # type: ignore[call-overload]
-            model=chat_model,
-            messages=messages,
-            tools=tools,
-            prompt_cache_key="default",
-            stream=True,
-            stream_options={"include_usage": True},
-            max_completion_tokens=50,
-        )
+        try:
+            stream2 = openai_client.chat.completions.create(  # type: ignore[call-overload]
+                model=chat_model,
+                messages=messages,
+                tools=tools,
+                prompt_cache_key="default",
+                stream=True,
+                stream_options={"include_usage": True},
+                max_completion_tokens=50,
+            )
 
-        # Consume the second stream and get the last chunk with usage
-        last_chunk2 = None
-        for chunk in stream2:
-            if isinstance(chunk, str) and chunk == "[DONE]":
-                break
-            last_chunk2 = chunk
+            # Consume the second stream and get the last chunk with usage
+            last_chunk2 = None
+            for chunk in stream2:
+                if isinstance(chunk, str) and chunk == "[DONE]":
+                    break
+                last_chunk2 = chunk
+
+        except (InternalServerError, APIError) as exc:
+            if "Model produced invalid sequence as part of ToolUse" in str(exc):
+                pytest.xfail(str(exc))
 
         # Validate second stream uses cache
         assert last_chunk2 is not None

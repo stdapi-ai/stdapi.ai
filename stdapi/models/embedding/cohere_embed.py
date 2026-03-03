@@ -5,16 +5,14 @@
 - cohere.embed-v4
 """
 
-from asyncio import create_task
+from asyncio import create_task, gather
 from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
 
+from stdapi.input_file import InputFile, InputFileUrl
 from stdapi.models.embedding import EmbeddingModelBase, EmbeddingResponse
 from stdapi.tokenizer import estimate_token_count
-from stdapi.utils import is_data_uri
 
 if TYPE_CHECKING:
-    from fastapi import BackgroundTasks
-
     from stdapi.types import JsonMapping
 
 _EmbeddingType = Literal["float", "int8", "uint8", "binary", "ubinary"]
@@ -95,10 +93,9 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
 
     async def embed_text(
         self,
-        inputs: list[str],
+        inputs: list[InputFileUrl | str],
         dimensions: int | None,
         extra_params: JsonMapping,
-        background_tasks: BackgroundTasks,  # noqa: ARG002
     ) -> EmbeddingResponse:
         """Get embeddings for text.
 
@@ -106,7 +103,6 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             inputs: Texts to embed.
             dimensions: Number of dimensions.
             extra_params: Extra model parameters.
-            background_tasks: FastAPI background tasks.
 
         Returns:
             Embedding response.
@@ -116,36 +112,48 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         if dimensions is not None:
             request["output_dimension"] = dimensions
 
-        is_data: tuple[bool, ...] = tuple(
-            is_data_uri(input_str) for input_str in inputs
-        )
+        is_data: tuple[bool, ...] = tuple(isinstance(v, InputFile) for v in inputs)
         if all(is_data):
-            request["images"] = inputs
+            images: list[InputFile] = inputs  # type: ignore[assignment]
+            request["images"] = await gather(*(image.to_data_uri() for image in images))
             if self._model_id.endswith("v3"):
                 request["input_type"] = "image"
         elif any(is_data):
             request["inputs"] = [
-                _InputContent(
-                    content=[
-                        _InputContentImageUrl(
-                            type="image_url", image_url=_InputUrl(url=value)
-                        )
-                        if is_data[index]
-                        else _InputContentText(type="text", text=value)
-                    ]
+                _InputContent(content=[content])
+                for content in (
+                    await gather(*(self._to_input_content(value) for value in inputs))
                 )
-                for index, value in enumerate(inputs)
             ]
         else:
-            request["texts"] = inputs
+            texts: list[str] = inputs  # type: ignore[assignment]
+            request["texts"] = texts
 
         token_task = create_task(estimate_token_count(*inputs))
-        embeddings = (await self.invoke(request))["embeddings"]
-        if isinstance(embeddings, dict):
-            embeddings = embeddings["float"]
+        resp = (await self.invoke(request))["embeddings"]
         estimated_tokens = await token_task or 0
         return EmbeddingResponse(
-            embeddings=embeddings,
+            embeddings=resp["float"] if isinstance(resp, dict) else resp,
             prompt_tokens=estimated_tokens,
             total_tokens=estimated_tokens,
+        )
+
+    @staticmethod
+    async def _to_input_content(
+        value: InputFileUrl | str,
+    ) -> _InputContentImageUrl | _InputContentText:
+        """Converts the given value into an appropriate input content type asynchronously.
+
+        Args:
+            value: The value to be converted.
+
+        Returns:
+            The converted input content object corresponding to the type and value provided.
+        """
+        return (
+            _InputContentImageUrl(
+                type="image_url", image_url=_InputUrl(url=await value.to_data_uri())
+            )
+            if isinstance(value, InputFile)
+            else _InputContentText(type="text", text=value)
         )

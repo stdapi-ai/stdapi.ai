@@ -14,20 +14,40 @@ from stdapi.server import USER_AGENT
 if TYPE_CHECKING:
     from types import TracebackType
 
+    from types_aiobotocore_bedrock.literals import RegionName
+
 #: AWS account information (populated during startup)
 AWS_ACCOUNT_INFO: dict[str, str] = {}
 
-_CLIENTS: dict[str, dict[str, Any]] = {}
+#: Cached AWS service clients keyed by (service, region)
+_CLIENTS: dict[str, dict[RegionName, Any]] = {}
 
-_RETRIES = {"max_attempts": 10, "mode": "adaptive"}
-_MAX_POOL_CONNECTIONS = 50
+#: Default retry configuration (configurable attempts and retry mode)
+_RETRIES = {
+    "max_attempts": SETTINGS.aws_bedrock_max_retries + 1,
+    "mode": "adaptive" if SETTINGS.aws_adaptive_retry else "standard",
+}
 
-#: Default configuration
+#: Default configuration — used by all services including bedrock-runtime
 CONFIG = AioConfig(
     user_agent=USER_AGENT,
     retries=_RETRIES,
-    max_pool_connections=_MAX_POOL_CONNECTIONS,
+    max_pool_connections=SETTINGS.aws_max_pool_connections,
     parameter_validation=False,
+    connect_timeout=SETTINGS.aws_connect_timeout,
+    read_timeout=SETTINGS.ai_response_timeout,
+)
+
+#: No-retry configuration — used when the application retry loop manages failover across regions
+CONFIG_NO_RETRY = AioConfig(
+    user_agent=USER_AGENT,
+    retries={
+        "max_attempts": 1,
+        "mode": "adaptive" if SETTINGS.aws_adaptive_retry else "standard",
+    },
+    max_pool_connections=SETTINGS.aws_max_pool_connections,
+    parameter_validation=False,
+    connect_timeout=SETTINGS.aws_connect_timeout,
     read_timeout=SETTINGS.ai_response_timeout,
 )
 
@@ -39,7 +59,7 @@ class AWSConnectionManager:
 
     __slots__ = ("_client_specs", "_exit_stack")
 
-    def __init__(self, *clients: tuple[str, str | None]) -> None:
+    def __init__(self, *clients: tuple[str, RegionName | None]) -> None:
         """Initialize AWS connection manager with client specifications.
 
         Args:
@@ -60,17 +80,17 @@ class AWSConnectionManager:
             (service, region or SETTINGS.aws_bedrock_regions[0])
             for service, region in self._client_specs
         }:
-            config = (
-                AioConfig(
+            if service == "s3.accelerate":
+                config = AioConfig(
                     user_agent=USER_AGENT,
                     retries=_RETRIES,
-                    max_pool_connections=_MAX_POOL_CONNECTIONS,
+                    max_pool_connections=SETTINGS.aws_max_pool_connections,
                     parameter_validation=False,
+                    connect_timeout=SETTINGS.aws_connect_timeout,
                     s3={"use_accelerate_endpoint": SETTINGS.aws_s3_accelerate},
                 )
-                if service == "s3.accelerate"
-                else CONFIG
-            )
+            else:
+                config = CONFIG
             _CLIENTS.setdefault(service, {})[
                 region
             ] = await self._exit_stack.enter_async_context(
@@ -78,6 +98,19 @@ class AWSConnectionManager:
                     service.split(".", 1)[0], region_name=region, config=config
                 )
             )
+
+        if (
+            SETTINGS.aws_bedrock_region_routing != "disabled"
+            and "bedrock-runtime" in _CLIENTS
+        ):
+            for region in _CLIENTS["bedrock-runtime"]:
+                _CLIENTS.setdefault("bedrock-runtime.no-retry", {})[
+                    region
+                ] = await self._exit_stack.enter_async_context(
+                    AWS_SESSION.create_client(
+                        "bedrock-runtime", region_name=region, config=CONFIG_NO_RETRY
+                    )
+                )
         return self
 
     async def __aexit__(
@@ -100,7 +133,7 @@ class AWSConnectionManager:
 ClientT = TypeVar("ClientT")
 
 
-def get_client(service: str, region_name: str | None = None) -> Any:  # noqa:ANN401
+def get_client(service: str, region_name: RegionName | None = None) -> Any:  # noqa:ANN401
     """Get AWS client.
 
     Args:

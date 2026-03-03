@@ -113,6 +113,13 @@ stdapi.ai is **engineered specifically for AWS**, unlocking advanced Bedrock fea
 - **Automatic cross-region inference profile selection** — stdapi.ai intelligently selects the best inference profile or falls back to direct model invocation
 - **Region-aware optimization** — Models are routed to the optimal region based on availability and your configuration
 
+### Resilience & Failover
+
+stdapi.ai automatically handles service disruptions and model changes, with no client-side changes needed ([details](operations_resilience.md)):
+
+- **Automatic region routing** — Distribute requests across regions with ordered, lowest-latency, or round-robin strategies to handle quota limits and regional unavailability
+- **Deprecated model failover** — Requests to deprecated or retired models are transparently redirected to their replacements
+
 ### Advanced Bedrock Features
 
 stdapi.ai exposes Bedrock-specific capabilities through the familiar OpenAI API:
@@ -239,6 +246,7 @@ A quick-reference checklist to find what you need at a glance:
 ### AWS Integration
 
 - :material-check-circle:{ .green-check } Multi-region Bedrock access
+- :material-check-circle:{ .green-check } Automatic region routing (ordered, lowest-latency, round-robin)
 - :material-check-circle:{ .green-check } Automatic cross-region inference profile selection
 - :material-check-circle:{ .green-check } Prompt caching
 - :material-check-circle:{ .green-check } Reasoning modes (extended thinking)

@@ -17,7 +17,6 @@ DEEPSEEK_SAMPLE = (DEEPSEEK_V3_2,)
 class TestDeepseekChatCompletions:
     """Deepseek chat completions tests."""
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize("model", DEEPSEEK_SAMPLE)
     def test_reasoning_effort_parameter(
         self, openai_client: OpenAI, use_official_api: bool, model: str

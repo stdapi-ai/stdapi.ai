@@ -14,7 +14,7 @@ Design:
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any
 
-from stdapi.models import ModelBase, ModelDetails, get_model, load_model_plugins
+from stdapi.models import ModelBase, get_model, load_model_plugins
 
 if TYPE_CHECKING:
     from re import Pattern
@@ -33,16 +33,11 @@ class ChatModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
 
     @abstractmethod
     async def create_completion(
-        self,
-        model: ModelDetails,
-        request: CompletionCreateParams,
-        completion_id: str,
-        created: int,
+        self, request: CompletionCreateParams, completion_id: str, created: int
     ) -> ChatCompletion | EventSourceResponse:
         """Create a chat completion.
 
         Args:
-            model: Model details for the chat model.
             request: Chat completion creation request following OpenAI spec.
             completion_id: Stable identifier for the completion.
             created: Unix timestamp (seconds) of the request.
@@ -54,12 +49,11 @@ class ChatModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
 
     @abstractmethod
     async def create_message(
-        self, model: ModelDetails, request: MessageCreateParams, message_id: str
+        self, request: MessageCreateParams, message_id: str
     ) -> Message | EventSourceResponse:
         """Create a message using Anthropic Messages API format.
 
         Args:
-            model: Model details for the chat model.
             request: Message creation request following Anthropic spec.
             message_id: Stable identifier for the message.
 

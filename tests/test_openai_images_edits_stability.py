@@ -237,7 +237,7 @@ class TestStabilityEditModels:
                         {
                             "type": "image_url",
                             "image_url": {
-                                "url": f"data:image/jpeg;base64,{response.data[0].b64_json}"  # type: ignore[index]
+                                "url": f"data:image/png;base64,{response.data[0].b64_json}"  # type: ignore[index]
                             },
                         },
                     ],
@@ -320,7 +320,7 @@ class TestStabilityEditModels:
                         {
                             "type": "image_url",
                             "image_url": {
-                                "url": f"data:image/jpeg;base64,{response.data[0].b64_json}"  # type: ignore[index]
+                                "url": f"data:image/png;base64,{response.data[0].b64_json}"  # type: ignore[index]
                             },
                         },
                     ],
@@ -404,7 +404,7 @@ class TestStabilityEditModels:
                         {
                             "type": "image_url",
                             "image_url": {
-                                "url": f"data:image/jpeg;base64,{response.data[0].b64_json}"  # type: ignore[index]
+                                "url": f"data:image/png;base64,{response.data[0].b64_json}"  # type: ignore[index]
                             },
                         },
                     ],
@@ -591,7 +591,7 @@ class TestStabilityControlModels:
                         {
                             "type": "image_url",
                             "image_url": {
-                                "url": f"data:image/jpeg;base64,{response.data[0].b64_json}"  # type: ignore[index]
+                                "url": f"data:image/png;base64,{response.data[0].b64_json}"  # type: ignore[index]
                             },
                         },
                     ],
@@ -658,7 +658,7 @@ class TestStabilityControlModels:
                         {
                             "type": "image_url",
                             "image_url": {
-                                "url": f"data:image/jpeg;base64,{response.data[0].b64_json}"  # type: ignore[index]
+                                "url": f"data:image/png;base64,{response.data[0].b64_json}"  # type: ignore[index]
                             },
                         },
                     ],
@@ -748,7 +748,7 @@ class TestStabilityStyleModels:
                         {
                             "type": "image_url",
                             "image_url": {
-                                "url": f"data:image/jpeg;base64,{response.data[0].b64_json}"  # type: ignore[index]
+                                "url": f"data:image/png;base64,{response.data[0].b64_json}"  # type: ignore[index]
                             },
                         },
                     ],
@@ -820,7 +820,7 @@ class TestStabilityStyleModels:
                         {
                             "type": "image_url",
                             "image_url": {
-                                "url": f"data:image/jpeg;base64,{response.data[0].b64_json}"  # type: ignore[index]
+                                "url": f"data:image/png;base64,{response.data[0].b64_json}"  # type: ignore[index]
                             },
                         },
                     ],

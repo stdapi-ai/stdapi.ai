@@ -20,7 +20,6 @@ MISTRAL_7B_MODELS = (
 class TestMistral7bChatCompletions:
     """Mistral 7b chat completions tests."""
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize("model", MISTRAL_7B_MODELS)
     def test_system_prompt_silently_dropped_when_enabled(
         self, openai_client: OpenAI, use_official_api: bool, model: str

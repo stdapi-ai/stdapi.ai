@@ -5,6 +5,7 @@ from typing import Annotated, ClassVar, Literal, Self
 from pydantic import AliasChoices, Field, model_validator
 
 from stdapi.api_errors import UnsupportedParameterError
+from stdapi.input_file import InputFile  # noqa: TC001
 from stdapi.types import BaseModelRequest, BaseModelRequestWithExtra, BaseModelResponse
 from stdapi.types.bedrock import AmazonBedrockGuardrailConfigParams  # noqa: TC001
 from stdapi.types.openai import (
@@ -19,7 +20,6 @@ from stdapi.types.openai import (
     ResponseFormatJSONSchema,
     ResponseFormatText,
     TextLiteral,
-    UrlStr,
 )
 
 #: Reasoning effort selector for reasoning models.
@@ -80,7 +80,9 @@ class ChatCompletionContentPartRefusalParam(BaseModelRequest):
 class ImageURL(BaseModelRequest):
     """Image URL detail for image content part."""
 
-    url: UrlStr = Field(description="Image URL string (http(s), s3, or data URL).")
+    url: InputFile = Field(
+        description="Image URL string (or data URI, S3 URI, base64 encode string)."
+    )
     detail: Literal["low", "high", "auto"] | None = Field(
         default=None,
         description=(
@@ -109,9 +111,9 @@ class FileFile(BaseModelRequest):
     file_id: str | None = Field(
         default=None, description="The ID of an uploaded file to use as input."
     )
-    file_data: str | None = Field(
+    file_data: InputFile | None = Field(
         default=None,
-        description="The base64 encoded file data or data URI, used when passing the file to the model as a string.",
+        description="The base64 encoded file data (or data URI, S3 URI or URL), used when passing the file to the model as a string.",
     )
     filename: str | None = Field(
         default=None,
@@ -148,7 +150,9 @@ class File(BaseModelRequest):
 class InputAudio(BaseModelRequest):
     """Input audio descriptor."""
 
-    data: str = Field(description="The base64 encoded audio data.")
+    data: InputFile = Field(
+        description="The base64 encoded audio data (or data URI, S3 URI or URL)."
+    )
     format: Literal["wav", "mp3"] = Field(
         description="The format of the encoded audio data. Currently supports `wav` and `mp3`."
     )

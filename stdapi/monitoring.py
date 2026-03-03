@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator
 
     from pydantic.main import IncEx
+    from types_aiobotocore_bedrock.literals import RegionName
     from types_aiobotocore_meteringmarketplace.type_defs import (
         RegisterUsageResultTypeDef,
     )
@@ -43,6 +44,7 @@ else:
 otel_manager = OpenTelemetryManager()
 
 T = TypeVar("T")
+RegionLatenciesStatsKeys = Literal["latency_ms", "stddev_ms"]
 
 
 class EventLog(TypedDict):
@@ -59,6 +61,9 @@ class EventLog(TypedDict):
     server_start_time_ms: NotRequired[int]
     server_warnings: NotRequired[JsonList]
     register_usage_response: NotRequired[RegisterUsageResultTypeDef]
+    region_latencies: NotRequired[
+        dict[RegionName, dict[RegionLatenciesStatsKeys, float]]
+    ]
 
     # "stop" type
     server_uptime_ms: NotRequired[int]
@@ -78,6 +83,7 @@ class EventLog(TypedDict):
     status_code: NotRequired[int]
 
     model_id: NotRequired[str]
+    model_regions: NotRequired[set[RegionName]]
     voice_id: NotRequired[str]  # TTS voice
 
     request_user_id: NotRequired[str]  # User ID passed from request
@@ -389,7 +395,7 @@ async def _rebuild_and_log_stream[T](
                 async for chunk in stream:
                     yield chunk
 
-        except (ApiError, ClientError):
+        except ApiError, ClientError:
             raise
         except Exception as exc:
             log["level"] = "critical"

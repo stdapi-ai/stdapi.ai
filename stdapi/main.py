@@ -11,9 +11,11 @@ from traceback import format_exception
 from typing import TYPE_CHECKING
 
 from botocore.exceptions import BotoCoreError, ClientError
+from botocore.exceptions import ConnectionError as BotocoreConnectionError
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
+from starlette.background import BackgroundTask
 
 from stdapi.api_errors import ApiError
 from stdapi.api_providers import (
@@ -29,6 +31,7 @@ from stdapi.aws_bedrock import (
     set_guardrail_configuration,
     set_performance_configuration,
 )
+from stdapi.cleanup import CLEANUPS, run_scheduled_cleanups
 from stdapi.config import SETTINGS
 from stdapi.exceptions import ServerError
 from stdapi.metering import EDITION_TITLE, LICENCE_INFO, SERVER_FULL_VERSION, register
@@ -43,6 +46,7 @@ from stdapi.monitoring import (
     otel_manager,
     write_log_event,
 )
+from stdapi.region_routing import measure_region_latencies
 from stdapi.routes import discover_routers
 from stdapi.server import SERVER_NAME, SERVER_VERSION
 from stdapi.utils import hide_security_details
@@ -86,6 +90,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                 "Application start", attributes={"server.id": SERVER_NAME}
             )
             with otel_manager.use_span(span_context):
+                region_latencies = await measure_region_latencies()
                 results = await gather(
                     initialize_authentication(),
                     initialize_bedrock_models(),
@@ -98,6 +103,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                 register_usage_response = results[-1]
                 unavailable_models = results[1][1]
                 invalid_arn_mappings = results[1][2]
+                unmatched_restrict_keys = results[1][3]
                 update_unified_models_collections()
             start_event = EventLog(
                 type="start",
@@ -109,6 +115,8 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
             )
             if register_usage_response:
                 start_event["register_usage_response"] = register_usage_response
+            if region_latencies:
+                start_event["region_latencies"] = region_latencies
             if not auth_enabled:
                 start_event.setdefault("server_warnings", []).append(
                     "SECURITY risk: Authentication is not enabled "
@@ -128,6 +136,12 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
             if invalid_arn_mappings:
                 start_event.setdefault("server_warnings", []).append(
                     {"invalid_bedrock_model_arn_mappings": invalid_arn_mappings}  # type: ignore[dict-item]
+                )
+                start_event["level"] = "warning"
+            if unmatched_restrict_keys:
+                start_event.setdefault("server_warnings", []).append(
+                    f"'aws_bedrock_model_region_restrict' has no matching available model for: {', '.join(sorted(unmatched_restrict_keys))}. "
+                    f"Check for unknown model IDs/prefixes or models not available in the configured regions."
                 )
                 start_event["level"] = "warning"
             write_log_event(start_event)
@@ -227,6 +241,7 @@ async def _middleware(
     if request.url.path in LOGGING_PATHS_IGNORE:
         response = await call_next(request)
     else:
+        CLEANUPS.set([])
         with log_request_event(request) as log:
             set_guardrail_configuration(request.headers)
             set_performance_configuration(request.headers)
@@ -235,6 +250,8 @@ async def _middleware(
             response.headers[get_request_id_header(request)] = log["id"]
             set_log_fields(request, log)
         set_response_headers(request, response, log["execution_time_ms"])
+        if CLEANUPS.get():
+            response.background = BackgroundTask(run_scheduled_cleanups)
     response.headers["server"] = "stdapi.ai"
     return response
 
@@ -322,6 +339,7 @@ async def handle_botocore_client_error(
     """Format AWS botocore ClientError using the correct API error envelope.
 
     Maps common AWS error codes to appropriate HTTP statuses.
+    When region routing is enabled, marks the region as blocked for retryable errors.
 
     Args:
         request: The current request.
@@ -345,12 +363,31 @@ async def handle_botocore_client_error(
     )
 
 
+@app.exception_handler(BotocoreConnectionError)
+async def handle_botocore_connection_error(
+    request: Request, exc: BotocoreConnectionError
+) -> JSONResponse:
+    """Format botocore connection errors (timeouts, unreachable endpoints) as 503.
+
+    Args:
+        request: The current request.
+        exc: The botocore ConnectionError raised by SDK calls.
+
+    Returns:
+        JSONResponse with 503 status.
+    """
+    message = str(exc)
+    log_error_details(message, status=503)
+    return JSONResponse(*format_http_error(request, 503, message, "server_error"))
+
+
 #: All exception handlers
 _EXCEPTION_HANDLERS: dict[
     type[Exception], Callable[[Request, Any], Awaitable[JSONResponse]]
 ] = {
     ApiError: handle_api_error,
     ClientError: handle_botocore_client_error,
+    BotocoreConnectionError: handle_botocore_connection_error,
     HTTPException: handle_http_exception,
 }
 

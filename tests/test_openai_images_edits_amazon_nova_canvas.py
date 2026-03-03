@@ -300,7 +300,7 @@ class TestAmazonNovaCanvasEditing:
                         {
                             "type": "image_url",
                             "image_url": {
-                                "url": f"data:image/jpeg;base64,{response.data[0].b64_json}"
+                                "url": f"data:image/png;base64,{response.data[0].b64_json}"
                             },
                         },
                     ],

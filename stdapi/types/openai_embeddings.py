@@ -4,6 +4,7 @@ from typing import Literal, Self
 
 from pydantic import AliasChoices, Field, model_validator
 
+from stdapi.input_file import InputFileUrl
 from stdapi.types import BaseModelRequestWithExtra, BaseModelResponse
 
 
@@ -60,11 +61,11 @@ class EmbeddingCreateParams(BaseModelRequestWithExtra):
     Validates unsupported values and combinations to match OpenAI behavior.
     """
 
-    input: str | list[str] = Field(
+    input: InputFileUrl | str | list[InputFileUrl | str] = Field(
         ...,
         description="Input text to embed, as a single string or an array of strings.\n"
-        "For multimodal models, non-text inputs can be passed as base64 data URI (`data:[<mediatype>][;base64],<data>`).\n"
-        "Some multimodal models also accept input passed as an S3 URL (`s3://bucket/key`) from a bucket in the same region.\n"
+        "For multimodal models, non-text inputs can be passed as a URL (`https://...`), "
+        "S3 URI (`s3://bucket/key`), or base64 data URI (`data:[<mediatype>][;base64],<data>`).\n"
         "To embed multiple inputs in a single request, "
         "pass an array of strings or array of token arrays.\n"
         "Token arrays are UNSUPPORTED on this implementation.",
@@ -109,7 +110,7 @@ class EmbeddingCreateParams(BaseModelRequestWithExtra):
         if (
             isinstance(self.input, list)
             and self.input
-            and not isinstance(self.input[0], str)
+            and not isinstance(self.input[0], (str, InputFileUrl))
         ):
             msg = "Token array inputs are not supported on this backend. Provide strings instead."
             raise ValueError(msg)

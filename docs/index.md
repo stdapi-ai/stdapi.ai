@@ -178,7 +178,7 @@ Use Claude, Nova, Llama, or any Bedrock model. Switch between models, regions, a
 <div class="grid cards" markdown>
 
 - :material-earth: __Multi-region Bedrock access__
-  <br>Automatic cross-region inference profile selection for optimal availability and pricing
+  <br>Automatic region routing and cross-region inference profile selection for optimal availability, quota management, and pricing
 
 - :material-star-settings: __Advanced model capabilities__
   <br>Reasoning modes (Claude 4.6+, Nova 2), prompt caching, guardrails, service tiers

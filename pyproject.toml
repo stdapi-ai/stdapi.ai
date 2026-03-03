@@ -114,7 +114,8 @@ extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Backgroun
 "tests/*.py" = [
     "S101", # assert
     "ARG002", # parametrize comments
-    "FBT001" # bool fixture
+    "FBT001", # bool fixture
+    "C901", # max complexity
 ]
 
 [tool.mypy]
@@ -136,9 +137,20 @@ warn_unused_ignores = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 addopts = [
-    "--strict-markers"
+    "--strict-markers",
+    "--dist=loadgroup",
 ]
-markers = ["expensive"]
+markers = [
+    "expensive",
+    "xdist_group: group tests to run on the same xdist worker",
+]
+filterwarnings = [
+    # pytestmark asyncio(loop_scope=...) on non-async tests is harmless
+    "ignore:The test.*is marked with.*asyncio.*but it is not an async function:pytest.PytestWarning",
+    # aiobotocore module-scoped fixture teardown on a different event loop leaves
+    # the aiohttp connector's _wait_for_close coroutine unawaited — harmless in tests
+    "ignore:coroutine '_wait_for_close' was never awaited:RuntimeWarning",
+]
 
 [tool.coverage.run]
 branch = true

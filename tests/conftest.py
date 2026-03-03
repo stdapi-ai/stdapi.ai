@@ -318,7 +318,7 @@ def openai_client(
         return OpenAI(
             base_url="http://testserver/v1",
             api_key=api_key,
-            max_retries=5,
+            max_retries=0,
             organization=_OPENAI_ORGANIZATION,
             http_client=test_client,
         )
@@ -330,7 +330,7 @@ def openai_client(
     # Remote server test
     return OpenAI(
         base_url=f"{request.config.getoption('--server-url').rstrip('/')}/v1",
-        max_retries=5,
+        max_retries=0,
         organization=_OPENAI_ORGANIZATION,
     )
 

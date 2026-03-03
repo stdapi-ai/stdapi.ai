@@ -1,6 +1,11 @@
 """Tokenizer."""
 
+from typing import TYPE_CHECKING
+
 from stdapi.config import SETTINGS
+
+if TYPE_CHECKING:
+    from stdapi.input_file import InputFile
 
 if SETTINGS.tokens_estimation:
     from asyncio import to_thread
@@ -8,7 +13,7 @@ if SETTINGS.tokens_estimation:
     from tiktoken import get_encoding
 
     def _estimate_token_count(
-        *strings: str | None,
+        *strings: str | InputFile | None,
         encoding: str = SETTINGS.tokens_estimation_default_encoding,
     ) -> int:
         """Estimate the number of tokens in the given strings.
@@ -23,12 +28,12 @@ if SETTINGS.tokens_estimation:
         encode = get_encoding(encoding).encode
         count = 0
         for string in strings:
-            if string:
+            if isinstance(string, str):
                 count += len(encode(string))
         return count
 
     async def estimate_token_count(
-        *strings: str | None,
+        *strings: str | InputFile | None,
         encoding: str = SETTINGS.tokens_estimation_default_encoding,
     ) -> int | None:
         """Estimate the number of tokens in the given strings.
@@ -47,7 +52,7 @@ else:
     # Estimation disabled
 
     async def estimate_token_count(
-        *strings: str | None,  # noqa: ARG001
+        *strings: str | InputFile | None,  # noqa: ARG001
         encoding: str = "",  # noqa: ARG001
     ) -> int | None:
         """Estimate the number of tokens in the given string.

@@ -10,12 +10,6 @@ from stdapi.types import BaseModelRequest, BaseModelResponse, JsonMapping
 NameStr = Annotated[
     str, StringConstraints(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
 ]
-UrlStr = Annotated[
-    str, StringConstraints(min_length=1, pattern=r"^(?:https?://|s3://|data:).+$")
-]
-Base64Str = Annotated[
-    str, StringConstraints(min_length=1, pattern=r"^[A-Za-z0-9+/=\s]+$")
-]
 
 # Repeated single-value literal aliases
 TextLiteral = Literal["text"]
@@ -26,10 +20,6 @@ Auto = Literal["auto"]
 
 #: Arbitrary metadata key/value mapping attached to requests.
 Metadata = dict[str, str]
-
-
-# Ref: openai.types.shared_params.function_parameters
-FunctionParameters = JsonMapping
 
 
 class _Strict(BaseModelRequest):

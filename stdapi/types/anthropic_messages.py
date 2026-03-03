@@ -4,14 +4,13 @@ from typing import Annotated, Literal
 
 from pydantic import AliasChoices, Field
 
+from stdapi.input_file import InputFile  # noqa: TC001
 from stdapi.types import (
     BaseModelRequest,
     BaseModelRequestWithExtra,
     BaseModelResponse,
     JsonMapping,
 )
-
-#: Stop reasons for the Messages API
 
 #: Ref: anthropic.types.stop_reason.StopReason
 StopReason = Literal[
@@ -287,7 +286,9 @@ class Base64ImageSource(BaseModelRequest):
     media_type: Literal["image/jpeg", "image/png", "image/gif", "image/webp"] = Field(
         description="Image media type."
     )
-    data: str = Field(description="Base64 encoded image data.")
+    data: InputFile = Field(
+        description="Base64 encoded image data (or data URI, S3 URI or URL)."
+    )
 
 
 # Ref: anthropic.types.url_image_source_param.URLImageSourceParam
@@ -295,7 +296,9 @@ class URLImageSource(BaseModelRequest):
     """URL image source for image content block."""
 
     type: Literal["url"] = Field(description="Image source type. Always `url`.")
-    url: str = Field(description="URL of the image.")
+    url: InputFile = Field(
+        description="URL of the image (or data URI, S3 URI or base64 encode string)."
+    )
 
 
 # Ref: anthropic.types.image_block_param.ImageBlockParam
@@ -322,7 +325,9 @@ class Base64PDFSource(BaseModelRequest):
     media_type: Literal["application/pdf"] = Field(
         description="Document media type. Only `application/pdf` is supported."
     )
-    data: str = Field(description="Base64 encoded document data.")
+    data: InputFile = Field(
+        description="Base64 encoded document data (or data URI, S3 URI or URL)."
+    )
 
 
 # Ref: anthropic.types.url_pdf_source_param.URLPDFSourceParam
@@ -330,7 +335,9 @@ class URLPDFSource(BaseModelRequest):
     """URL PDF source for document content block."""
 
     type: Literal["url"] = Field(description="Document source type. Always `url`.")
-    url: str = Field(description="URL of the PDF document.")
+    url: InputFile = Field(
+        description="URL of the PDF document (or data URI, S3 URI or base 64 encoded string)."
+    )
 
 
 # Ref: anthropic.types.plain_text_source_param.PlainTextSourceParam

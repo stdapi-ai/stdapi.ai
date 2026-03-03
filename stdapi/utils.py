@@ -5,33 +5,31 @@ from base64 import b32encode
 from binascii import Error as BinasciiError
 from contextlib import contextmanager
 from io import BytesIO
-from os.path import splitext
-from re import ASCII, Pattern
+from re import ASCII
 from re import compile as compile_regex
 from sys import stdout
-from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict, TypeVar
+from typing import TYPE_CHECKING, Literal, NotRequired, Protocol, TypedDict, TypeVar
+from urllib.parse import unquote
 from uuid import uuid7 as uuid
 
 from fastapi.exceptions import RequestValidationError
 from langcodes import Language
-from magic import from_buffer
 from PIL import Image
 from pybase64 import b64decode as _b64decode
 from pybase64 import b64encode as _b64encode
 from pydantic import JsonValue, ValidationError
 from pydantic_core import from_json, to_json
 
-from stdapi.api_errors import ApiError
-
 if TYPE_CHECKING:
-    from collections.abc import Buffer, Generator
+    from collections.abc import AsyncIterator, Buffer, Generator
 
-    from fastapi import UploadFile
+    class _AsyncReader(Protocol):
+        """Protocol for objects with an async ``read(size)`` method."""
+
+        async def read(self, size: int, /) -> bytes: ...
+
 
 T = TypeVar("T")
-
-#: Audio MIME type regex pattern
-AUDIO_MIME_PATTERN = compile_regex(r"^audio/")
 
 #: Application inference profile ARN regex matcher
 match_bedrock_app_profile_arn = compile_regex(
@@ -122,62 +120,6 @@ async def b64decode(
         raise ValueError(msg) from None
 
 
-async def b64decode_data_uri(
-    value: str, *, altchars: str | Buffer | None = None, validate: bool = False
-) -> bytes:
-    """Decode a base64 encoded data URI into bytes.
-
-    Args:
-        value: The base64 encoded URI to decode.
-        altchars: Optional string or buffer containing two
-            characters to replace '+' and '/' in the standard base64 alphabet.
-        validate: When set to True, input will be validated to ensure it
-            conforms to base64 encoding rules. Defaults to False.
-
-    Returns:
-        bytes: The decoded data in bytes.
-    """
-    view = memoryview(raise_if_empty(value).encode())
-    try:
-        return await b64decode(
-            view[view.tobytes().find(b",") + 1 :], altchars=altchars, validate=validate
-        )
-    finally:
-        view.release()
-
-
-async def b64decode_data_or_uri_with_mime(
-    value: str | None, *, altchars: str | Buffer | None = None, validate: bool = False
-) -> tuple[bytes, str]:
-    """Decodes a Base64 encoded string or a data URI with its MIME type.
-
-    This function handles decoding of standard Base64 encoded strings as well as
-    data URIs that include MIME type information. If the input is a data URI, the
-    MIME type is extracted and returned along with the decoded data. Otherwise,
-    the MIME type is derived from the decoded data.
-
-    Args:
-        value (str): The Base64 encoded string or data URI to decode.
-        altchars (str | Buffer | None, optional): A string or buffer containing the
-            alternative characters for '+' and '/' in the Base64 alphabet. Defaults
-            to None.
-        validate (bool, optional): If True, checks if the Base64 input is valid
-            before decoding. Defaults to False.
-
-    Returns:
-        tuple[bytes, str]: A tuple where the first element is the decoded data as
-        bytes, and the second element is the MIME type of the decoded data.
-    """
-    value = raise_if_empty(value)
-    match = _data_uri_matcher(value)
-    if match and match.group(1):
-        return await b64decode_data_uri(
-            value, altchars=altchars, validate=validate
-        ), match.group(1)
-    data = raise_if_empty(await b64decode(value, altchars=altchars, validate=validate))
-    return data, from_buffer(data, mime=True)
-
-
 async def b64encode(value: Buffer, altchars: str | Buffer | None = None) -> str:
     """Encodes a given binary data into a base64 encoded string.
 
@@ -198,21 +140,21 @@ async def b64encode(value: Buffer, altchars: str | Buffer | None = None) -> str:
     return (await to_thread(_b64encode, value, altchars=altchars)).decode()
 
 
-async def read_and_b64encode_file(file: UploadFile) -> str:
-    """Read an uploaded file and encode it to base64.
+def b64_decoded_len(value: str, prefix_len: int = 0) -> int:
+    """Calculate the length of the decoded base64 string.
 
     Args:
-        file: The uploaded file to read and encode.
+        value: The base64-encoded string whose decoded length needs to be calculated.
+        prefix_len: Prefix length to not count in the length calculation.
 
     Returns:
-        Base64-encoded string representation of the file contents.
+        The length of the decoded string.
     """
-    content = await file.read()
-    close_task = file.close()
-    try:
-        return await b64encode(content)
-    finally:
-        await close_task
+    return (
+        (n := len(value) - prefix_len) * 3 // 4
+        - (value[-1] == "=")
+        - (value[-2] == "=" if n > 1 else 0)
+    )
 
 
 #: PIL image formats
@@ -301,29 +243,6 @@ def _convert_base64_image(
     return _b64encode(image).decode(), width, height
 
 
-async def convert_image(
-    content: bytes,
-    output_format: Literal["jpeg", "webp", "png"],
-    compression: int = 100,
-) -> tuple[bytes, int, int]:
-    """Convert image from one format to another asynchronously.
-
-    Args:
-        content: Image data as bytes
-        output_format: Output format ("jpeg", "webp", "png")
-        compression: Compression quality (0-100, where 100 is highest quality)
-
-    Returns:
-        Converted image data as bytes, width, height.
-    """
-    return await to_thread(
-        _convert_image,
-        content=content,
-        output_format=output_format.upper(),  # type: ignore[arg-type]
-        compression=compression,
-    )
-
-
 async def convert_base64_image(
     content: str | Buffer,
     output_format: Literal["jpeg", "webp", "png"],
@@ -388,25 +307,6 @@ def stdout_write(value: JsonValue) -> None:
         raise
 
 
-def raise_if_empty[T](value: T | None) -> T:
-    """Raise if value is empty else return value.
-
-    Raises:
-        ValueError: If the provided `value` is None or evaluates to False.
-
-    Args:
-        value: The value to check for emptiness. Must not be None or an empty
-            value (e.g., empty list, string, etc.).
-
-    Returns:
-        The same `value` if it is not None or empty.
-    """
-    if not value:
-        msg = "Empty data"
-        raise ValueError(msg)
-    return value
-
-
 # data:[<mediatype>][;base64],<data>
 _DATA_URI_PATTERN = compile_regex(
     r"^data:"
@@ -419,43 +319,16 @@ _DATA_URI_PATTERN = compile_regex(
 _data_uri_matcher = _DATA_URI_PATTERN.match
 
 
-def is_data_uri(string: str) -> bool:
-    """Check if a string is a data URI.
-
-    Args:
-        string: The string to check
-
-    Returns:
-        bool: True if the string is a data URI.
-    """
-    return _data_uri_matcher(string) is not None
-
-
-def get_data_uri_type(string: str) -> str:
-    """Return the media type of data URI or plain text.
-
-    Args:
-        string: The string to check
-
-    Returns:
-        Media type.
-    """
-    match = _data_uri_matcher(string)
-    if match and match.group(1):
-        return match.group(1)
-    return "text/plain"
-
-
 def get_data_uri_data(string: str) -> str:
     """Return the base64 data of data URI or a base64 encoded string.
 
     Args:
-        string: The string to check
+        string: The string to check.
 
     Returns:
-        Media type.
+        Raw base64 content with data URI prefix stripped if present.
     """
-    return string.split(",", 1)[-1] if is_data_uri(string) else string
+    return string.split(",", 1)[-1] if _data_uri_matcher(string) else string
 
 
 def hide_security_details(status: int, message: str) -> str:
@@ -475,122 +348,101 @@ def hide_security_details(status: int, message: str) -> str:
     return message
 
 
-def guess_media_type(filepath: str) -> tuple[Literal["video", "audio", "image"], str]:
-    """Guess the media type from a file path based on its extension.
+#: RFC 6266 / RFC 5987 Content-Disposition filename patterns.
+_CD_FILENAME_STAR_RE = compile_regex(
+    r"""filename\*\s*=\s*(?:[A-Za-z0-9_-]+'')?([^;\s]+)""", ASCII
+)
+_CD_FILENAME_RE = compile_regex(
+    r"""filename\s*=\s*"([^"\\]*)"|filename\s*=\s*([^\s;]+)"""
+)
 
-    Can be useful if the file cannot be accessed directly and only the file path is known.
-    Guess based on a common list of media types.
+
+def parse_content_disposition_filename(header: str) -> str:
+    """Extract a filename from a ``Content-Disposition`` header value.
+
+    Prefers ``filename*`` (RFC 5987 extended notation) over plain ``filename``.
+    URL-decodes the ``filename*`` value if present.
 
     Args:
-        filepath: Path to the media file
+        header: The raw ``Content-Disposition`` header value.
 
     Returns:
-        str: "video", "audio", or "image", file extension.
-
-    Raises:
-        ValueError: If the file type cannot be determined
+        The extracted filename, or an empty string if none is found.
     """
-    extension = splitext(filepath)[1].lower()  # noqa: PTH122
-    if not extension:
-        msg = f"A file extension is required for file: {filepath}"
-        raise ValueError(msg)
-    if extension in {
-        "mp4",
-        "avi",
-        "mov",
-        "mkv",
-        "flv",
-        "wmv",
-        "webm",
-        "m4v",
-        "mpg",
-        "mpeg",
-        "3gp",
-        "ogv",
-        "mts",
-        "m2ts",
-        "ts",
-        "vob",
-    }:
-        return "video", extension
-    if extension in {
-        "mp3",
-        "wav",
-        "flac",
-        "aac",
-        "ogg",
-        "wma",
-        "m4a",
-        "opus",
-        "aiff",
-        "ape",
-        "alac",
-        "pcm",
-        "dsd",
-        "amr",
-        "au",
-        "mid",
-        "midi",
-    }:
-        return "audio", extension
-    if extension in {
-        "jpg",
-        "jpeg",
-        "png",
-        "gif",
-        "bmp",
-        "tiff",
-        "tif",
-        "webp",
-        "svg",
-        "ico",
-        "heic",
-        "heif",
-        "raw",
-        "cr2",
-        "nef",
-        "arw",
-        "dng",
-    }:
-        return "image", extension
-    msg = f"Unsupported media type for file: {filepath}"
-    raise ValueError(msg)
+    if match := _CD_FILENAME_STAR_RE.search(header):
+        return unquote(match.group(1))
+    if match := _CD_FILENAME_RE.search(header):
+        return match.group(1) or match.group(2) or ""
+    return ""
 
 
-def get_base64_decoded_size(value: str) -> int:
-    """Compute the decoded size of base64 data without actually decoding it.
+async def buffered_chunks(
+    chunks: AsyncIterator[bytes], chunk_size: int
+) -> AsyncIterator[bytes]:
+    """Buffer an async byte stream into chunks of at least *chunk_size*.
 
-    This function calculates the size of the decoded data by analyzing the base64
-    string length and padding, avoiding the memory overhead of actual decoding.
+    Accumulates incoming bytes in a ``bytearray`` and yields a ``bytes``
+    object each time the buffer reaches *chunk_size*.  Any leftover bytes
+    are yielded at the end.
 
     Args:
-        value: Base64-encoded string or URI.
+        chunks: Async iterator of arbitrarily-sized byte fragments.
+        chunk_size: Minimum number of bytes per yielded chunk (except
+            possibly the last).
 
-    Returns:
-        The size in bytes of the decoded data.
+    Yields:
+        ``bytes`` objects of at least *chunk_size* (last may be smaller).
     """
-    prefix_length = value.find(",") if value.startswith("data:") else 0
-    padding = 0
-    for i in range(len(value) - 1, -1, -1):
-        if value[i] == "=":
-            padding += 1
-        else:
-            break
-    return (len(value) * 3) // 4 - padding - prefix_length
+    buf = bytearray()
+    async for chunk in chunks:
+        buf += chunk
+        if len(buf) >= chunk_size:
+            yield bytes(buf)
+            buf = bytearray()
+    if buf:
+        yield bytes(buf)
 
 
-def get_and_validate_mime(content: bytes, mime_pattern: Pattern[str]) -> str:
-    """Validate MIME type of content against a regex pattern.
+async def chain_async_iterators[T](*iterators: AsyncIterator[T]) -> AsyncIterator[T]:
+    """Chain multiple async iterators into a single async iterator.
 
     Args:
-        content: Binary content to check.
-        mime_pattern: Compiled regex pattern (e.g., AUDIO_MIME_PATTERN).
+        *iterators: Async iterators to chain together.
 
-    Raises:
-        ApiError: If MIME type doesn't match the pattern.
+    Yields:
+        Items from each iterator in order.
     """
-    mime = from_buffer(content, mime=True)
-    if not mime_pattern.match(mime):
-        msg = f"Unsupported input file format: {mime}"
-        raise ApiError(msg)
-    return mime
+    for it in iterators:
+        async for item in it:
+            yield item
+
+
+async def async_iter[T](*values: T) -> AsyncIterator[T]:
+    """Wrap one or more values into an async iterator.
+
+    Args:
+        *values: Values to yield.
+
+    Yields:
+        Each value in order.
+    """
+    for value in values:
+        yield value
+
+
+async def read_chunks(reader: _AsyncReader, chunk_size: int) -> AsyncIterator[bytes]:
+    """Yield byte chunks from an async reader.
+
+    Reads from *reader* by calling its ``.read(chunk_size)`` method
+    until an empty ``bytes`` result is returned.
+
+    Args:
+        reader: Any object with an async ``read(size)`` method
+            (e.g. ``aiohttp.StreamReader``, ``starlette.UploadFile``).
+        chunk_size: Number of bytes to request per read.
+
+    Yields:
+        Non-empty ``bytes`` chunks.
+    """
+    while chunk := await reader.read(chunk_size):
+        yield chunk
