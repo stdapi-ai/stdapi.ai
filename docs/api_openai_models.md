@@ -45,6 +45,9 @@ Discover and list available AWS Bedrock models across all configured regions thr
 - **Detailed ownership**: `owned_by` field shows provider and region (e.g., `Amazon (AWS Bedrock us-east-1)`)
 - **Model-specific capabilities**: Modalities and context windows vary by model—consult AWS documentation for specifics
 
+!!! info "Created Date (`created`)"
+    The `created` field is a Unix timestamp (integer) representing the time at which the model was released. This value is sourced from the AWS Bedrock model lifecycle metadata (`startOfLifeTime`). If the release date is not available from AWS Bedrock, it defaults to `0` (Unix epoch, January 1, 1970).
+
 ## Try It Now
 
 **List all available models:**

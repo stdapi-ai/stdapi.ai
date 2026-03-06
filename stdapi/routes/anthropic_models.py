@@ -9,7 +9,6 @@ Functions:
 """
 
 from asyncio import Lock
-from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path, Query
@@ -35,9 +34,6 @@ if SETTINGS.anthropic_routes_prefix != SETTINGS.openai_routes_prefix:
     _ALL_MODELS: list[ModelInfo] = []
     _ALL_MODELS_LOCK = Lock()
 
-    #: Default model timestamp
-    _TIMESTAMP = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-
     def format_bedrock_model_to_anthropic(model: ModelDetails) -> ModelInfo:
         """Format a Bedrock model to Anthropic API model format.
 
@@ -48,7 +44,14 @@ if SETTINGS.anthropic_routes_prefix != SETTINGS.openai_routes_prefix:
             ModelInfo object formatted according to Anthropic API specification
         """
         return ModelInfo(
-            id=model.id, created_at=_TIMESTAMP, display_name=model.name, type="model"
+            id=model.id,
+            created_at=(
+                model.start_of_life_time.strftime("%Y-%m-%dT%H:%M:%SZ")
+                if model.start_of_life_time
+                else "1970-01-01T00:00:00Z"
+            ),
+            display_name=model.name,
+            type="model",
         )
 
     @router.get(

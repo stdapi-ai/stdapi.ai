@@ -1,7 +1,6 @@
 """OpenAI-compatible Models API implementation using AWS Bedrock."""
 
 from asyncio import Lock
-from time import time
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path
@@ -27,9 +26,6 @@ router = APIRouter(
 _ALL_MODELS: list[Model] = []
 _ALL_MODELS_LOCK = Lock()
 
-#: Default model timestamp
-_TIMESTAMP = int(time())
-
 
 class ModelsResponse(BaseModel):
     """Response for the /v1/models endpoint following OpenAI API specification.
@@ -53,7 +49,9 @@ def format_bedrock_model_to_openai(model: ModelDetails) -> Model:
     return Model(
         id=model.id,
         object="model",
-        created=_TIMESTAMP,
+        created=(
+            int(model.start_of_life_time.timestamp()) if model.start_of_life_time else 0
+        ),
         owned_by=f"{model.provider} ({model.service} {model.region})",
     )
 

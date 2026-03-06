@@ -54,7 +54,7 @@ class TestModels:
             assert isinstance(model.id, str)
             assert len(model.id) > 0
             assert isinstance(model.created, int)
-            assert model.created > 0
+            assert model.created >= 0
             assert isinstance(model.owned_by, str)
 
     def test_list_models_response_structure_validation(
@@ -87,7 +87,7 @@ class TestModels:
             assert len(model.id) > 0
             assert model.object == "model"
             assert isinstance(model.created, int)
-            assert model.created > 0
+            assert model.created >= 0
             assert isinstance(model.owned_by, str)
 
             # Optional fields validation (if present)
@@ -133,7 +133,7 @@ class TestModels:
         assert model.id == test_model_id
         assert model.object == "model"
         assert isinstance(model.created, int)
-        assert model.created > 0
+        assert model.created >= 0
         assert isinstance(model.owned_by, str)
 
     def test_model_filtering_and_availability(self, openai_client: OpenAI) -> None:
@@ -223,12 +223,12 @@ class TestModels:
         # Validate creation timestamps
         for model in response.data:
             assert isinstance(model.created, int)
-            assert model.created > 0
+            assert model.created >= 0
 
-            # Timestamps should be reasonable (after 2020, before far future)
+            # Timestamps should be 0 (epoch, unknown) or reasonable (after 2020, before far future)
             # 1577836800 = Jan 1, 2020 UTC
             # 2147483647 = Max 32-bit signed int (year 2038)
-            assert 1577836800 < model.created < 2147483647
+            assert model.created == 0 or 1577836800 < model.created < 2147483647
 
     def test_invalid_model_retrieval_error(self, openai_client: OpenAI) -> None:
         """Test error handling for invalid model ID retrieval.

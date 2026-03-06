@@ -52,6 +52,9 @@ Discover and list available AWS Bedrock chat models through an Anthropic-compati
 - **Model IDs**: Uses AWS Bedrock model identifiers (e.g., `anthropic.claude-haiku-4-5-20251001-v1:0`) instead of Anthropic model names
 - **Extended catalog**: Includes all AWS Bedrock models (Claude, Nova, Llama, etc.), not just Anthropic models
 
+!!! info "Created Date (`created_at`)"
+    The `created_at` field is an RFC 3339 datetime string representing the time at which the model was released. This value is sourced from the AWS Bedrock model lifecycle metadata (`startOfLifeTime`). If the release date is not available from AWS Bedrock, it defaults to the Unix epoch (`"1970-01-01T00:00:00Z"`).
+
 ## Try It Now
 
 **List all available models:**

@@ -131,6 +131,10 @@ class ModelDetails(BaseModel):
     output_modalities: list[str]
     response_streaming: bool = False
     legacy: bool = False
+    start_of_life_time: AwareDatetime | None = None
+    end_of_life_time: AwareDatetime | None = None
+    legacy_time: AwareDatetime | None = None
+    public_extended_access_time: AwareDatetime | None = None
     inference_profile: str | None = None
     aliases: list[str] | None = None
 
@@ -496,6 +500,12 @@ async def _get_bedrock_models_from_region(region: str) -> list[ModelDetails]:
             response_streaming=model.get("responseStreamingSupported", False),
             inference_profile=profiles.get(model["modelId"]),
             legacy=model["modelLifecycle"]["status"] == "LEGACY",
+            start_of_life_time=model["modelLifecycle"].get("startOfLifeTime"),
+            end_of_life_time=model["modelLifecycle"].get("endOfLifeTime"),
+            legacy_time=model["modelLifecycle"].get("legacyTime"),
+            public_extended_access_time=model["modelLifecycle"].get(
+                "publicExtendedAccessTime"
+            ),
         )
         for model in foundation_models["modelSummaries"]
         if (
