@@ -16,7 +16,12 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 
 from stdapi.api_errors import ApiError
-from stdapi.api_providers import format_http_error, get_request_id_header
+from stdapi.api_providers import (
+    format_http_error,
+    get_request_id_header,
+    set_log_fields,
+    set_response_headers,
+)
 from stdapi.auth import initialize_authentication
 from stdapi.aws import AWSConnectionManager, initialize_aws_account_info
 from stdapi.aws_bedrock import (
@@ -32,14 +37,12 @@ from stdapi.models.audio.amazon_polly import initialize_polly_models
 from stdapi.models.audio.amazon_transcribe import initialize_transcribe_models
 from stdapi.monitoring import (
     LOGGING_PATHS_IGNORE,
-    REQUEST_HEADERS,
     EventLog,
     log_error_details,
     log_request_event,
     otel_manager,
     write_log_event,
 )
-from stdapi.openai import set_openai_headers
 from stdapi.routes import discover_routers
 from stdapi.server import SERVER_NAME, SERVER_VERSION
 from stdapi.utils import hide_security_details
@@ -225,13 +228,13 @@ async def _middleware(
         response = await call_next(request)
     else:
         with log_request_event(request) as log:
-            REQUEST_HEADERS.set(request.headers)
             set_guardrail_configuration(request.headers)
             set_performance_configuration(request.headers)
             response = await call_next(request)
             log["status_code"] = response.status_code
             response.headers[get_request_id_header(request)] = log["id"]
-        set_openai_headers(request, response, log["id"], log["execution_time_ms"])
+            set_log_fields(request, log)
+        set_response_headers(request, response, log["execution_time_ms"])
     response.headers["server"] = "stdapi.ai"
     return response
 

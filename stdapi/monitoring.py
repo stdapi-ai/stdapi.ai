@@ -23,7 +23,6 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator
 
     from pydantic.main import IncEx
-    from starlette.datastructures import Headers
     from types_aiobotocore_meteringmarketplace.type_defs import (
         RegisterUsageResultTypeDef,
     )
@@ -101,9 +100,6 @@ REQUEST_TIME: ContextVar[AwareDatetime] = ContextVar("request_time")
 #: Request log dict
 REQUEST_LOG: ContextVar[EventLog] = ContextVar("request_log")
 
-#: Request HTTP headers
-REQUEST_HEADERS: ContextVar[Headers] = ContextVar("request_headers")
-
 #: HTTP request object
 REQUEST: ContextVar[Request] = ContextVar("request")
 
@@ -166,22 +162,21 @@ def log_request_event(request: Request) -> Generator[EventLog]:
     Args:
         request: A `Request` object representing the HTTP request.
     """
-    request_id = webuuid()
-    REQUEST_ID.set(request_id)
-    request_time = SETTINGS.now()
-    REQUEST_TIME.set(request_time)
-    REQUEST.set(request)
-    log = EventLog(
-        type="request",
-        level="info",
-        date=request_time,
-        server_id=SERVER_NAME,
-        server_version=SERVER_FULL_VERSION,
-        id=request_id,
-        method=request.method,  # type: ignore[typeddict-item]
-        path=request.url.path,
+    REQUEST_ID.set(request_id := webuuid())
+    request_time_token = REQUEST_TIME.set(request_time := SETTINGS.now())
+    request_log_token = REQUEST_LOG.set(
+        log := EventLog(
+            type="request",
+            level="info",
+            date=request_time,
+            server_id=SERVER_NAME,
+            server_version=SERVER_FULL_VERSION,
+            id=request_id,
+            method=request.method,  # type: ignore[typeddict-item]
+            path=request.url.path,
+        )
     )
-    REQUEST_LOG.set(log)
+    request_token = REQUEST.set(request)
     span_context = otel_manager.start_span(
         f"{request.method} {request.url.path}",
         attributes={
@@ -220,6 +215,9 @@ def log_request_event(request: Request) -> Generator[EventLog]:
         raise
     finally:
         log["execution_time_ms"] = (perf_counter_ns() - start) // 1000000
+        REQUEST.reset(request_token)
+        REQUEST_LOG.reset(request_log_token)
+        REQUEST_TIME.reset(request_time_token)
         if span_context:
             span_context.set_attribute("http.status_code", log.get("status_code", 200))
             span_context.set_attribute("duration_ms", log["execution_time_ms"])

@@ -23,11 +23,7 @@ from stdapi.config import SETTINGS
 from stdapi.models.chat import ChatModelBase
 from stdapi.models.chat._adapters import _anthropic_message as anthropic_adapter
 from stdapi.models.chat._adapters import _openai_chat_completion as openai_adapter
-from stdapi.monitoring import (
-    REQUEST_HEADERS,
-    log_request_sse_stream_event,
-    log_response_params,
-)
+from stdapi.monitoring import REQUEST, log_request_sse_stream_event, log_response_params
 from stdapi.types.anthropic_messages import ToolChoiceToolParam
 
 if TYPE_CHECKING:
@@ -357,7 +353,7 @@ class ChatModel(ChatModelBase[Any, Any]):
         """
         if not self.PASSTHROUGH_HEADERS:
             return {}
-        headers = REQUEST_HEADERS.get()
+        headers = REQUEST.get().headers
         return {
             field_name: transform(headers[header_name])
             for header_name, (field_name, transform) in self.PASSTHROUGH_HEADERS.items()

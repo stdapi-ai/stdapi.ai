@@ -2,10 +2,21 @@
 
 from typing import TYPE_CHECKING
 
-from stdapi.api_providers import FORMATTER_BY_TAG
+from stdapi.api_providers import (
+    FORMATTER_BY_TAG,
+    SET_LOG_FIELDS_BY_TAG,
+    SET_RESPONSE_HEADERS_BY_TAG,
+)
 
 if TYPE_CHECKING:
+    from fastapi import Request
+    from fastapi.responses import Response
+
+    from stdapi.monitoring import EventLog
     from stdapi.types import JsonMapping
+
+#: OpenAI request API header
+OPENAI_ORGANIZATION_HEADER = "OpenAI-Organization"
 
 #: Route tag
 TAG_OPENAI: str = "OpenAI"
@@ -44,3 +55,39 @@ def _format_error(
 
 
 FORMATTER_BY_TAG[TAG_OPENAI] = _format_error
+
+
+def set_openai_headers(
+    request: Request, response: Response, processing_ms: int
+) -> None:
+    """Attach OpenAI-compatible headers to all responses.
+
+    Adds:
+    - openai-processing-ms: processing time in milliseconds
+    - openai-version: OpenAI API version header.
+    - openai-organization: echo of incoming OpenAI-Organization header, if present
+
+    Args:
+        request: Incoming HTTP request.
+        response: Outgoing response object.
+        processing_ms: Processing time in milliseconds.
+    """
+    response.headers["openai-processing-ms"] = str(processing_ms)
+    response.headers["openai-version"] = "2020-10-01"
+    if org_id := request.headers.get(OPENAI_ORGANIZATION_HEADER):
+        response.headers["openai-organization"] = org_id
+
+
+def set_openai_log_fields(request: Request, log: EventLog) -> None:
+    """Sets the OpenAI-specific log fields based on the incoming request headers.
+
+    Args:
+        request: The incoming HTTP request object.
+        log: The event log dictionary.
+    """
+    if org_id := request.headers.get(OPENAI_ORGANIZATION_HEADER):
+        log["request_org_id"] = org_id
+
+
+SET_RESPONSE_HEADERS_BY_TAG[TAG_OPENAI] = set_openai_headers
+SET_LOG_FIELDS_BY_TAG[TAG_OPENAI] = set_openai_log_fields

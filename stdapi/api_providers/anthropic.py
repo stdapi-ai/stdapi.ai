@@ -2,7 +2,12 @@
 
 from typing import TYPE_CHECKING
 
-from stdapi.api_providers import FORMATTER_BY_TAG, REQUEST_ID_HEADER_BY_TAG
+from stdapi.api_providers import (
+    FORMATTER_BY_TAG,
+    REQUEST_ID_HEADER_BY_TAG,
+    SET_LOG_FIELDS_BY_TAG,
+    SET_RESPONSE_HEADERS_BY_TAG,
+)
 
 if TYPE_CHECKING:
     from stdapi.types import JsonMapping
@@ -50,3 +55,5 @@ def _format_error(
 
 REQUEST_ID_HEADER_BY_TAG[TAG_ANTHROPIC] = "request-id"
 FORMATTER_BY_TAG[TAG_ANTHROPIC] = _format_error
+SET_RESPONSE_HEADERS_BY_TAG[TAG_ANTHROPIC] = lambda *_: None
+SET_LOG_FIELDS_BY_TAG[TAG_ANTHROPIC] = lambda *_: None
