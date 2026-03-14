@@ -305,7 +305,7 @@ The Anthropic `web_search` tool is supported on models that declare web search a
 
 **Supported Models:**
 
-- ![Amazon Nova](styles/logo_amazon_nova.svg){ style="height: 1.2em; vertical-align: text-bottom;" } **Amazon Nova 2** (e.g., `amazon.nova-premier-v1:0`): Mapped to `nova_grounding`
+- ![Amazon Nova](styles/logo_amazon_nova.svg){ style="height: 1.2em; vertical-align: text-bottom;" } **Amazon Nova 2** (e.g., `amazon.nova-2-lite-v1:0`) and **Amazon Nova Premier** (`amazon.nova-premier-v1:0`): Mapped to `nova_grounding`
 
 **Usage:**
 
@@ -315,8 +315,7 @@ curl -X POST "$BASE/v1/messages" \
   -H "anthropic-version: 2023-06-01" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "amazon.nova-premier-v1:0",
-    "max_tokens": 2048,
+    "model": "amazon.nova-2-lite-v1:0",
     "messages": [
       {"role": "user", "content": "What are the latest news today?"}
     ],

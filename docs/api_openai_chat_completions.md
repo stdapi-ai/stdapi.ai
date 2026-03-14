@@ -376,9 +376,44 @@ When using web grounding, the API response includes `annotations` with URL citat
 - **OpenAI-Compatible**: Works seamlessly with standard tool calling patterns
 
 !!! warning "Model and Region Compatibility"
-    **Model**: Only Amazon Nova Premier (`amazon.nova-premier-v1:0`) supports the `systemTool_nova_grounding` tool.
+    **Model**: `systemTool_nova_grounding` is supported by Amazon Nova 2 models (e.g., `amazon.nova-2-lite-v1:0`) and Amazon Nova Premier (`amazon.nova-premier-v1:0`).
 
     **Region**: Web Grounding is only available in US regions.
+
+#### ![Amazon Nova](styles/logo_amazon_nova.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Nova Code Interpreter
+
+Amazon Nova Code Interpreter enables models to securely execute Python code in isolated sandbox environments.
+
+!!! info "Learn More"
+    [Amazon Nova Built-in Tools - User Guide](https://docs.aws.amazon.com/nova/latest/nova2-userguide/using-tools.html#builtin-tools)
+
+**Usage:**
+
+```bash
+curl -X POST "$BASE/v1/chat/completions" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "amazon.nova-2-lite-v1:0",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Calculate the first 10 Fibonacci numbers."
+      }
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "systemTool_nova_code_interpreter"
+        }
+      }
+    ]
+  }'
+```
+
+!!! warning "Model Compatibility"
+    `systemTool_nova_code_interpreter` is supported by Amazon Nova 2 models (e.g., `amazon.nova-2-lite-v1:0`).
 
 #### ![Claude](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Anthropic Claude Server Tools
 
