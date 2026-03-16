@@ -51,6 +51,9 @@ By the end of this guide, you'll have:
 **Testing locally?**
 - [**Local Development with Docker/Podman**](#option-c-local-development-with-dockerpodman) - Run the community AGPL image locally
 
+**Need help deploying?**
+- [**Managed Deployment Service**](https://aws.amazon.com/marketplace/pp/prodview-xknxzjgl7zi5s) - Let experts deploy stdapi.ai into your AWS account
+
 ---
 
 ### Option A: Terraform Module (Recommended)
