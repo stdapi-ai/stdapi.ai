@@ -389,6 +389,8 @@ async def _rebuild_and_log_stream[T](
                 async for chunk in stream:
                     yield chunk
 
+        except (ApiError, ClientError):
+            raise
         except Exception as exc:
             log["level"] = "critical"
             log.setdefault("error_detail", []).append("\n".join(format_exception(exc)))
