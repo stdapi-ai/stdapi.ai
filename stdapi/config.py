@@ -372,6 +372,29 @@ class _Settings(BaseSettings):
         default=True, description="If true, allow legacy Bedrock models to be used."
     )
 
+    aws_bedrock_deprecated_model_fallback: bool = Field(
+        default=True,
+        description=(
+            "If true, requests that use a deprecated model ID are transparently retried "
+            "with the recommended replacement model instead of returning a 404 error.\n\n"
+            "The replacement mapping is defined in stdapi/models/deprecation.py. "
+            "Disable this if you want deprecated model IDs to fail explicitly so "
+            "clients are forced to migrate."
+        ),
+    )
+
+    aws_bedrock_deprecated_models: dict[str, str] = Field(
+        default={},
+        description=(
+            "Additional deprecated model ID mappings, merged with the built-in deprecation registry at startup. "
+            "User-provided entries take precedence over built-in ones, so this can also be used to override "
+            "the fallback target of an already-defined deprecated model.\n\n"
+            "Keys are deprecated model IDs, values are the recommended replacement model IDs.\n\n"
+            "Reference: https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html\n\n"
+            "Example: {'my-old-model-v1': 'my-new-model-v2'}"
+        ),
+    )
+
     aws_bedrock_marketplace_auto_subscribe: bool = Field(
         default=True,
         description=(

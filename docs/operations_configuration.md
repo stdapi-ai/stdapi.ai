@@ -189,6 +189,8 @@ This section provides a quick reference of all available configuration options. 
 | [`AWS_BEDROCK_CROSS_REGION_INFERENCE_GLOBAL`](#cross-region-global)                               | `true`  | Allow global cross-region inference routing to any region worldwide (disable for GDPR compliance)  |
 | [`AWS_BEDROCK_MODEL_REGION_RESTRICT`](#bedrock-model-region-restrict)                             | `{}`    | Restrict a model to specific region(s) only (e.g. for region-specific features like Nova grounding) |
 | [`AWS_BEDROCK_LEGACY`](#bedrock-legacy)                                                           | `true`  | Allow usage of deprecated/legacy Bedrock models                                                    |
+| [`AWS_BEDROCK_DEPRECATED_MODEL_FALLBACK`](#bedrock-deprecated-model-fallback)                     | `true`  | Transparently reroute requests using a deprecated model ID to its recommended replacement           |
+| [`AWS_BEDROCK_DEPRECATED_MODELS`](#bedrock-deprecated-models)                                     | `{}`    | Additional deprecated model mappings merged with the built-in registry at startup                   |
 | [`AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE`](#bedrock-marketplace-auto-subscribe)                   | `true`  | Allow automatic subscription to new models in AWS Marketplace                                      |
 | [`AWS_BEDROCK_ALLOW_CROSS_REGION_INFERENCE_PROFILE_ARN`](#bedrock-allow-cross-region-profile-arn) | `false` | Allow users to pass cross-region inference profile ARNs directly as model IDs                      |
 | [`AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN`](#bedrock-allow-application-profile-arn)   | `false` | Allow users to pass application inference profile ARNs directly as model IDs                       |
@@ -921,6 +923,50 @@ export AWS_BEDROCK_MODEL_REGION_RESTRICT='{"amazon.nova-pro-v1:0": ["us-east-1"]
 
 ```bash
 export AWS_BEDROCK_LEGACY=true
+```
+
+#### `AWS_BEDROCK_DEPRECATED_MODEL_FALLBACK` { #bedrock-deprecated-model-fallback }
+
+:octicons-package-24: **Purpose**
+:   Transparently reroute requests using a deprecated model ID to its recommended replacement
+
+:octicons-database-24: **Type**
+:   Boolean
+
+:octicons-gear-24: **Default**
+:   `true`
+
+:octicons-workflow-24: **Behavior**
+:   When `true`, any request that specifies a deprecated model ID (as listed in the server's deprecation registry) is silently retried with the recommended replacement model. The replacement is fully re-evaluated — alias resolution, modality checks, and region routing all apply to the new model ID. When `false`, deprecated model IDs return a `404` error with a message indicating the replacement, forcing clients to migrate explicitly.
+
+```bash
+# Transparent fallback (default) — clients using old model IDs keep working
+export AWS_BEDROCK_DEPRECATED_MODEL_FALLBACK=true
+
+# Strict mode — deprecated model IDs return 404, clients must update their code
+export AWS_BEDROCK_DEPRECATED_MODEL_FALLBACK=false
+```
+
+#### `AWS_BEDROCK_DEPRECATED_MODELS` { #bedrock-deprecated-models }
+
+:octicons-package-24: **Purpose**
+:   Extend or override the built-in deprecated model registry with custom mappings
+
+:octicons-database-24: **Type**
+:   JSON object — `dict[str, str]`
+
+:octicons-gear-24: **Default**
+:   `{}`
+
+:octicons-workflow-24: **Behavior**
+:   Merged with the built-in registry at startup. User-provided entries take precedence over built-in ones — this means it can be used both to **add** new deprecated model mappings and to **override** the fallback target of an already-defined deprecated model. Effective only when [`AWS_BEDROCK_DEPRECATED_MODEL_FALLBACK`](#bedrock-deprecated-model-fallback) is `true`.
+
+:octicons-link-external-24: **Reference**
+:   [AWS Bedrock model lifecycle](https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html)
+
+```bash
+# Add a custom deprecated model and override an existing built-in mapping
+export AWS_BEDROCK_DEPRECATED_MODELS='{"my-old-model-v1": "my-new-model-v2", "amazon.titan-text-lite-v1": "amazon.nova-lite-v1:0"}'
 ```
 
 #### `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE` { #bedrock-marketplace-auto-subscribe }

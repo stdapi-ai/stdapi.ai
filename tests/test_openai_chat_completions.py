@@ -2843,3 +2843,26 @@ class TestChatCompletions:
         assert response.choices[0].finish_reason == "length"
         assert response.usage
         assert response.usage.completion_tokens <= max_tokens
+
+    def test_deprecated_model_fallback(
+        self, openai_client: OpenAI, use_official_api: bool
+    ) -> None:
+        """A deprecated model ID is transparently routed to its replacement.
+
+        Validates:
+            - Chat completion succeeds when using a deprecated model ID
+            - Response structure is valid (choices, content, finish_reason)
+        """
+        if use_official_api:
+            pytest.skip(
+                "Deprecated model fallback is not available on the official OpenAI API"
+            )
+
+        response = openai_client.chat.completions.create(
+            model="amazon.titan-text-lite-v1",
+            messages=[{"role": "user", "content": "Say hello."}],
+            max_tokens=16,
+        )
+        assert len(response.choices) > 0
+        assert response.choices[0].message.content
+        assert response.choices[0].finish_reason is not None

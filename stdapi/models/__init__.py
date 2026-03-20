@@ -32,7 +32,7 @@ from stdapi.aws_s3 import (
 from stdapi.config import SETTINGS
 from stdapi.input_file import get_s3_input_regions, resolve_all_bedrock_content_blocks
 from stdapi.models.deprecation import DEPRECATED_MODELS
-from stdapi.monitoring import REQUEST_ID, REQUEST_LOG
+from stdapi.monitoring import REQUEST_ID, REQUEST_LOG, log_error_details
 from stdapi.region_routing import REGION_ROUTER, ROUTING_RETRYABLE_CODES
 from stdapi.utils import match_bedrock_app_profile_arn, match_bedrock_prompt_router_arn
 
@@ -638,7 +638,9 @@ async def _get_bedrock_models_from_region(region: RegionName) -> list[ModelDetai
     """Fetch available foundation models from *region* and return filtered ``ModelDetails``.
 
     Models restricted via ``aws_bedrock_model_region_restrict`` to regions that exclude
-    *region* are dropped immediately.
+    *region* are dropped immediately. Models whose ``end_of_life_time`` falls before the
+    next scheduled cache refresh are also excluded, so a model that goes EOL between two
+    cache updates is proactively dropped rather than served until the next refresh.
 
     Args:
         region: AWS region to query.
@@ -651,6 +653,7 @@ async def _get_bedrock_models_from_region(region: RegionName) -> list[ModelDetai
         _get_inference_profiles(bedrock_client),
     )
     restrictions = SETTINGS.aws_bedrock_model_region_restrict
+    next_refresh = SETTINGS.now() + _CACHE["update_interval"]
     return [
         ModelDetails(
             id=model["modelId"],
@@ -673,6 +676,10 @@ async def _get_bedrock_models_from_region(region: RegionName) -> list[ModelDetai
         if (
             SETTINGS.aws_bedrock_legacy
             or (model["modelLifecycle"]["status"] != "LEGACY")
+        )
+        and (
+            (eol := model["modelLifecycle"].get("endOfLifeTime")) is None
+            or eol > next_refresh
         )
         and (
             (set(model["inferenceTypesSupported"]) & _INFERENCE_TYPES)
@@ -802,6 +809,50 @@ def _apply_user_profiles(all_models: dict[str, ModelDetails]) -> dict[str, str]:
         ):
             model.region = arn_match.group("region")  # type: ignore[assignment]
     return invalid_arn_mappings
+
+
+def _resolve_deprecated(
+    models: dict[str, ModelDetails], model_id: str
+) -> tuple[ModelDetails | None, str]:
+    """Follow the deprecation chain in *DEPRECATED_MODELS* until a live model is found.
+
+    Args:
+        models: The active models dict to look up against.
+        model_id: Starting (deprecated) model ID.
+
+    Returns:
+        ``(model, effective_id)`` — *model* is ``None`` if the chain is exhausted
+        without finding a live model. *effective_id* is the last ID tried.
+    """
+    seen = {model_id}
+    while replacement := DEPRECATED_MODELS.get(model_id):
+        if replacement in seen:
+            break  # cycle guard
+        seen.add(replacement)
+        model_id = replacement
+        if model := models.get(model_id):
+            return model, model_id
+    return None, model_id
+
+
+def _warn_model_lifecycle(model: ModelDetails, original_id: str, model_id: str) -> None:
+    """Emit a warning log entry if the resolved model is deprecated or legacy.
+
+    Args:
+        model: The resolved ``ModelDetails``.
+        original_id: The model ID originally requested by the caller.
+        model_id: The effective model ID after deprecation chain resolution.
+    """
+    if model_id != original_id:
+        warning = (
+            f"Model '{original_id}' is deprecated, routed to replacement '{model_id}'."
+        )
+    elif model.legacy:
+        eol = f" on {model.end_of_life_time.date()}" if model.end_of_life_time else ""
+        warning = f"Model '{model_id}' is legacy and will reach end-of-life{eol}. Please migrate to a supported model."
+    else:
+        return
+    log_error_details(warning, level="warning")
 
 
 def _populate_model_aliases(all_models: dict[str, ModelDetails]) -> None:
@@ -1270,6 +1321,10 @@ async def validate_model(
     Resolves aliases and ARNs, refreshes the cache on a miss, checks modality support,
     and records the model ID in the request log.
 
+    If the model is not found and is listed in :data:`~stdapi.models.deprecation.DEPRECATED_MODELS`,
+    and :attr:`~stdapi.config.Settings.aws_bedrock_deprecated_model_fallback` is enabled,
+    the lookup is transparently retried with the replacement model ID.
+
     Args:
         model_id: Model ID, alias, or ARN to validate.
         output_modality: Required output modality (e.g. ``"TEXT"``).
@@ -1285,6 +1340,7 @@ async def validate_model(
         ApiError: If the model does not support the requested modality.
     """
     model_id = resolve_model_alias(model_id)
+    original_id = model_id
     models = _MODELS if bedrock_only else _ALL_MODELS
     if model_id.startswith("arn:"):
         model = await _validate_model_from_arn(model_id)
@@ -1298,33 +1354,34 @@ async def validate_model(
     if model is None:
         await initialize_bedrock_models()
         async with _CACHE["access_lock"]:
-            try:
-                model = models[model_id]
-            except KeyError:
-                try:
-                    msg = (
-                        f"Model '{model_id}' not found. "
-                        f"This model is deprecated or pending deprecation, "
-                        f"please use '{DEPRECATED_MODELS[model_id]}' instead."
-                    )
-                except KeyError:
-                    msg = f"Model '{model_id}' not found."
-                model_ids = set(models)
-                if input_modality:
-                    model_ids &= (
-                        _MODELS_INPUT_MODALITY
-                        if bedrock_only
-                        else _ALL_MODELS_INPUT_MODALITY
-                    )[input_modality]
-                if output_modality:
-                    model_ids &= (
-                        _MODELS_OUTPUT_MODALITY
-                        if bedrock_only
-                        else _ALL_MODELS_OUTPUT_MODALITY
-                    )[output_modality]
-                raise UnsupportedModelError(
-                    msg, available_models=model_ids, status=error_status
-                ) from None
+            model = models.get(model_id)
+            if model is None and SETTINGS.aws_bedrock_deprecated_model_fallback:
+                model, model_id = _resolve_deprecated(models, model_id)
+
+        if model is None:
+            msg = (
+                f"Model '{original_id}' is deprecated; replacement model '{model_id}' not found."
+                if model_id != original_id
+                else f"Model '{model_id}' not found. This model is deprecated or pending deprecation, please use '{hint}' instead."
+                if (hint := DEPRECATED_MODELS.get(model_id))
+                else f"Model '{model_id}' not found."
+            )
+            model_ids = set(models)
+            if input_modality:
+                model_ids &= (
+                    _MODELS_INPUT_MODALITY
+                    if bedrock_only
+                    else _ALL_MODELS_INPUT_MODALITY
+                )[input_modality]
+            if output_modality:
+                model_ids &= (
+                    _MODELS_OUTPUT_MODALITY
+                    if bedrock_only
+                    else _ALL_MODELS_OUTPUT_MODALITY
+                )[output_modality]
+            raise UnsupportedModelError(
+                msg, available_models=model_ids, status=error_status
+            ) from None
 
     if output_modality and output_modality not in model.output_modalities:
         msg = f"Model '{model_id}' does not support {output_modality.lower()} output modality."
@@ -1334,6 +1391,7 @@ async def validate_model(
         raise ApiError(msg)
     log = REQUEST_LOG.get()
     log["model_id"] = model_id
+    _warn_model_lifecycle(model, original_id, model_id)
     return model
 
 

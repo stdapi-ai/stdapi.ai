@@ -255,37 +255,6 @@ class TestModels:
         assert error_body["code"] == "model_not_found"
         assert "model" in error_body["message"].lower()
 
-    def test_deprecated_model_retrieval_error(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
-        """Test error handling for deprecated model ID retrieval.
-
-        Validates proper error response for non-existent model IDs.
-
-        Args:
-            openai_client: OpenAI client instance for API calls
-            use_official_api: True is using official OpenAI API.
-
-        Validates:
-            - Correct HTTP status code (404)
-            - Proper error type ("invalid_request_error") and code ("model_not_found")
-            - Error message identifies model as invalid
-            - Consistent error response structure
-        """
-        if use_official_api:
-            pytest.skip("Not available on the official OpenAI API")
-
-        with pytest.raises(NotFoundError) as exc_info:
-            openai_client.models.retrieve("anthropic.claude-instant-v1")
-
-        error = exc_info.value
-        assert error.status_code == 404
-        error_body = error.body
-        assert isinstance(error_body, dict)
-        assert error_body["type"] == "invalid_request_error"
-        assert error_body["code"] == "model_not_found"
-        assert "deprecated" in error_body["message"].lower()
-
     def test_empty_model_id_retrieval_error(self, openai_client: OpenAI) -> None:
         """Test error handling for empty model ID.
 

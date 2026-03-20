@@ -1,7 +1,7 @@
 ---
 title: Resilience & Failover
 description: Configure automatic region routing and failover for AWS Bedrock invocations to handle quota limits, regional unavailability, and deprecated models with ordered, lowest-latency, or round-robin strategies.
-keywords: AWS Bedrock region routing, multi-region AI, quota management, automatic failover, region strategy, lowest latency, round robin, ordered routing, prompt caching, S3 region routing, cross-region S3 copy, model region restrict, deprecated models failover
+keywords: AWS Bedrock region routing, multi-region AI, quota management, automatic failover, region strategy, lowest latency, round robin, ordered routing, prompt caching, S3 region routing, cross-region S3 copy, model region restrict, deprecated models failover, deprecated model fallback
 ---
 
 # :material-directions-fork: Region Routing
@@ -255,6 +255,43 @@ Keys are Bedrock model IDs (or prefixes). Values are ordered lists of allowed re
 
 ---
 
+## :material-swap-horizontal: Deprecated Model Fallback
+
+When a client sends a request using a model ID that has been retired or superseded, stdapi.ai can transparently reroute it to the recommended replacement — no client changes needed.
+
+This is controlled by [`AWS_BEDROCK_DEPRECATED_MODEL_FALLBACK`](operations_configuration.md#bedrock-deprecated-model-fallback) (default: `true`).
+
+### How it works
+
+1. On a cache miss, the deprecation registry is consulted for a replacement.
+2. If the replacement is itself deprecated, the chain is followed until a live model is found or the chain ends.
+3. If a live replacement is found, the request proceeds with it. A **warning** is recorded in the request log and the log level is elevated to `warning` so the event is visible in monitoring.
+4. If no live model is found at the end of the chain, a `404` is returned naming both the original deprecated ID and the last replacement tried.
+
+### Legacy model warnings
+
+Using a **legacy** model (one AWS has scheduled for end-of-life) also emits a `warning`-level log entry, including the EOL date when known:
+
+```
+Model 'anthropic.claude-3-5-haiku-20241022-v1:0' is legacy and will reach end-of-life on 2026-06-19. Please migrate to a supported model.
+```
+
+Models whose EOL date falls within the current cache window are **proactively excluded** at cache refresh time, so they are never served to clients even if AWS has not yet removed them from the available models list.
+
+### Strict mode
+
+Set `AWS_BEDROCK_DEPRECATED_MODEL_FALLBACK=false` to disable the fallback. Requests using a deprecated model ID will fail with a `404` that includes the recommended replacement, forcing clients to update their code explicitly:
+
+```
+Model 'amazon.titan-text-lite-v1' is deprecated or pending deprecation, please use 'amazon.nova-lite-v1:0' instead.
+```
+
+### Extending the registry
+
+The built-in deprecation registry covers all models listed in the [AWS Bedrock model lifecycle](https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html). Use [`AWS_BEDROCK_DEPRECATED_MODELS`](operations_configuration.md#bedrock-deprecated-models) to add custom mappings or override existing ones.
+
+---
+
 ## :material-lightbulb-outline: Best Practices
 
 - :material-check: **Start with `ordered`** — It provides failover without sacrificing prompt caching.
@@ -266,3 +303,4 @@ Keys are Bedrock model IDs (or prefixes). Values are ordered lists of allowed re
 - :material-magnify: **Monitor `model_regions` in logs** — If one region consistently appears in error logs, consider adjusting its quota or removing it from the region list.
 - :material-bucket-outline: **Declare accepted buckets** — If your users provide S3 URLs from buckets outside the application's own buckets, add them to `AWS_S3_ACCEPTED_BUCKETS` so the router can resolve their region and convert HTTP URLs to S3 URIs.
 - :material-pin-outline: **Pin models when needed** — Use `AWS_BEDROCK_MODEL_REGION_RESTRICT` for models that have region-specific features (e.g. grounding) to guarantee those features are always available. The model will be restricted exclusively to the listed regions.
+- :material-swap-horizontal: **Plan for model deprecations** — Keep `AWS_BEDROCK_DEPRECATED_MODEL_FALLBACK=true` (the default) so clients survive AWS model retirements without downtime. Switch to `false` in environments where you want to enforce explicit client migrations.
