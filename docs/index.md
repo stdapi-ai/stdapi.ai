@@ -178,7 +178,7 @@ Use Claude, Nova, Llama, or any Bedrock model. Switch between models, regions, a
 <div class="grid cards" markdown>
 
 - :material-earth: __Multi-region Bedrock access__
-  <br>Automatic region routing and cross-region inference profile selection for optimal availability, quota management, and pricing
+  <br>Automatic region routing and failover across configured AWS regions. Each region has its own independent quota—adding regions multiplies your effective tokens-per-minute and daily limits proportionally
 
 - :material-star-settings: __Advanced model capabilities__
   <br>Reasoning modes (Claude 4.6+, Nova 2), prompt caching, guardrails, service tiers

@@ -8,6 +8,9 @@ keywords: AWS Bedrock region routing, multi-region AI, quota management, automat
 
 stdapi.ai can automatically distribute Bedrock requests across your configured AWS regions. When a region becomes temporarily unavailable or hits quota limits, requests are transparently routed to another region—no client changes needed.
 
+!!! tip "Multiply Your Effective Quota"
+    Each AWS region has its own independent quota. By configuring multiple regions, your effective quota scales proportionally — with 3 regions you get approximately **3× the tokens per minute and 3× the daily token limit** compared to a single-region setup.
+
 ## :material-information-outline: Overview
 
 Region routing activates when you have **two or more regions** in `AWS_BEDROCK_REGIONS`. The server tracks the health of each region per model and steers traffic away from regions that are returning errors.

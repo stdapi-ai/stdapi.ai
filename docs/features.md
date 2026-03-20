@@ -110,6 +110,7 @@ stdapi.ai is **engineered specifically for AWS**, unlocking advanced Bedrock fea
 ### Multi-Region Bedrock Access
 
 - **Configure multiple AWS regions** to access the widest selection of models and maximize availability
+- **Multiply your effective quota** — Each AWS region has its own independent quota; adding regions scales your tokens-per-minute and daily token limits proportionally (3 regions = ~3× the quota)
 - **Automatic cross-region inference profile selection** — stdapi.ai intelligently selects the best inference profile or falls back to direct model invocation
 - **Region-aware optimization** — Models are routed to the optimal region based on availability and your configuration
 
@@ -117,7 +118,7 @@ stdapi.ai is **engineered specifically for AWS**, unlocking advanced Bedrock fea
 
 stdapi.ai automatically handles service disruptions and model changes, with no client-side changes needed ([details](operations_resilience.md)):
 
-- **Automatic region routing** — Distribute requests across regions with ordered, lowest-latency, or round-robin strategies to handle quota limits and regional unavailability
+- **Automatic region routing** — Distribute requests across regions with ordered, lowest-latency, or round-robin strategies; automatically fails over on quota limits or regional unavailability
 - **Deprecated model failover** — Requests to deprecated or retired models are transparently redirected to their replacements
 
 ### Advanced Bedrock Features

@@ -6,13 +6,13 @@ keywords: stdapi.ai releases, AI gateway updates, AWS Bedrock features, API gate
 
 # Releases & Roadmap
 
-**stdapi.ai is under active development** with regular feature releases. Six major releases delivered since launch (v1.0-v1.6) with continuous improvements.
+**stdapi.ai is under active development** with regular feature releases. Seven major releases delivered since launch (v1.0-v1.7) with continuous improvements.
 
 ## ✨ Recent Releases
 
-See [Release History below](#release-history) for the full changelog of v1.6, v1.5, v1.4, v1.3, v1.2, v1.1, and v1.0 releases.
+See [Release History below](#release-history) for the full changelog of all releases.
 
-**Latest: v1.6** – Anthropic API Compatibility & Advanced Claude Capabilities (Anthropic Messages API, Claude server tools, token estimation, beta flag filtering)
+**Latest: v1.7** – Automatic Region Routing, Deprecated Model Fallback & Resilience Improvements (configurable region routing strategies, transparent deprecated model fallback, AI response timeout, SSE stream error handling)
 
 ---
 
@@ -139,6 +139,27 @@ The following features may be implemented in future releases based on community 
 ---
 
 ## 📋 Release History
+
+### v1.7.0 – Automatic Region Routing, Deprecated Model Fallback & Resilience Improvements
+
+The headline feature of v1.7 is **automatic multi-region routing**: stdapi.ai now intelligently distributes requests across your configured AWS regions, failing over automatically on quota limits or unavailability—and because each region carries its own independent quota, adding regions directly multiplies your effective tokens-per-minute and daily limits. Alongside this, deprecated model IDs are transparently redirected to their replacements so clients survive AWS model retirements without any code changes. This release also adds S3 URL support for file inputs across all relevant endpoints, a configurable AI response timeout, and memory efficiency improvements.
+
+#### Platform Features
+
+| Feature                                               | Description                                                                                                                                                                                                            |
+|-------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Automatic region routing with configurable strategies | Intelligently distributes Bedrock requests across configured AWS regions with automatic failover on quota limits or unavailability; supports `ordered`, `lowest_latency`, and `round_robin` strategies                 |
+| Deprecated model fallback                             | Transparently reroute deprecated model IDs to their replacements; extend or override the built-in mapping; warns on legacy model usage                                                                                 |
+| AI response timeout                                   | Configurable timeout for AI model responses to prevent indefinitely hanging requests                                                                                                                                   |
+| Expanded file input support                           | File inputs (images, documents, audio) now support S3 URLs in addition to HTTP URLs, data URIs, and plain base64 across all relevant endpoints; improves memory efficiency by releasing file data as early as possible |
+| Model lifecycle timestamps                            | Model created/updated timestamps now derived from lifecycle data (`startOfLifeTime`, `endOfLifeTime`)                                                                                                                  |
+
+#### Fixes
+
+- Fix SSE stream error handling in monitoring to handle specific API and AWS client errors gracefully
+- Fix audio MIME type detection failure when `libmagic`'s in-memory buffer path silently returns `application/octet-stream`; fall back to file-based detection to ensure correct format is sent to Bedrock
+
+---
 
 ### v1.6.0 – Anthropic API Compatibility & Advanced Claude Capabilities
 
