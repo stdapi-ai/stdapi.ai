@@ -7,7 +7,7 @@ from importlib import import_module
 from pkgutil import iter_modules
 from re import Pattern
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Never, TypedDict, TypeVar
 
 from botocore.exceptions import ClientError
 from botocore.exceptions import ConnectionError as BotocoreConnectionError
@@ -1308,6 +1308,51 @@ async def _open_invoke_stream(
     return _iter_invoke_stream(response["body"])
 
 
+def _raise_model_not_found(
+    models: dict[str, ModelDetails],
+    original_id: str,
+    model_id: str,
+    input_modality: str | None,
+    output_modality: str | None,
+    error_status: int | None,
+    *,
+    bedrock_only: bool,
+) -> Never:
+    """Raise :exc:`UnsupportedModelError` with an appropriate message.
+
+    Args:
+        models: Active models dict, used to build the set of available model IDs.
+        original_id: The model ID originally requested by the caller.
+        model_id: The effective model ID after deprecation chain resolution.
+        input_modality: Required input modality to filter available model IDs.
+        output_modality: Required output modality to filter available model IDs.
+        error_status: HTTP status code override for :exc:`UnsupportedModelError`.
+        bedrock_only: Whether to restrict modality index lookups to Bedrock models.
+
+    Raises:
+        UnsupportedModelError: Always.
+    """
+    if model_id != original_id:
+        if SETTINGS.aws_bedrock_deprecated_model_fallback:
+            msg = f"Model '{original_id}' is deprecated; replacement model '{model_id}' not found."
+        else:
+            msg = f"Model '{original_id}' not found. This model is deprecated or pending deprecation, please use '{model_id}' instead."
+    else:
+        msg = f"Model '{model_id}' not found."
+    model_ids = set(models)
+    if input_modality:
+        model_ids &= (
+            _MODELS_INPUT_MODALITY if bedrock_only else _ALL_MODELS_INPUT_MODALITY
+        ).get(input_modality, set())
+    if output_modality:
+        model_ids &= (
+            _MODELS_OUTPUT_MODALITY if bedrock_only else _ALL_MODELS_OUTPUT_MODALITY
+        ).get(output_modality, set())
+    raise UnsupportedModelError(
+        msg, available_models=model_ids, status=error_status
+    ) from None
+
+
 async def validate_model(
     model_id: str,
     output_modality: str | None = None,
@@ -1346,42 +1391,26 @@ async def validate_model(
         model = await _validate_model_from_arn(model_id)
     else:
         async with _CACHE["access_lock"]:
-            try:
-                model = models[model_id]
-            except KeyError:
-                model = None
+            model = models.get(model_id)
 
     if model is None:
         await initialize_bedrock_models()
         async with _CACHE["access_lock"]:
             model = models.get(model_id)
-            if model is None and SETTINGS.aws_bedrock_deprecated_model_fallback:
-                model, model_id = _resolve_deprecated(models, model_id)
-
+            if model is None:
+                fallback_model, model_id = _resolve_deprecated(models, model_id)
+                if SETTINGS.aws_bedrock_deprecated_model_fallback:
+                    model = fallback_model
         if model is None:
-            msg = (
-                f"Model '{original_id}' is deprecated; replacement model '{model_id}' not found."
-                if model_id != original_id
-                else f"Model '{model_id}' not found. This model is deprecated or pending deprecation, please use '{hint}' instead."
-                if (hint := DEPRECATED_MODELS.get(model_id))
-                else f"Model '{model_id}' not found."
+            _raise_model_not_found(
+                models,
+                original_id,
+                model_id,
+                input_modality,
+                output_modality,
+                error_status,
+                bedrock_only=bedrock_only,
             )
-            model_ids = set(models)
-            if input_modality:
-                model_ids &= (
-                    _MODELS_INPUT_MODALITY
-                    if bedrock_only
-                    else _ALL_MODELS_INPUT_MODALITY
-                )[input_modality]
-            if output_modality:
-                model_ids &= (
-                    _MODELS_OUTPUT_MODALITY
-                    if bedrock_only
-                    else _ALL_MODELS_OUTPUT_MODALITY
-                )[output_modality]
-            raise UnsupportedModelError(
-                msg, available_models=model_ids, status=error_status
-            ) from None
 
     if output_modality and output_modality not in model.output_modalities:
         msg = f"Model '{model_id}' does not support {output_modality.lower()} output modality."
