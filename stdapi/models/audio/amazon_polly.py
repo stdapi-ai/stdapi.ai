@@ -256,10 +256,13 @@ def _handle_polly_error(
     Args:
         model_id: model ID.
         voice_id: voice ID.
-        engine: Polly engine being used
+        engine: Polly engine being used.
+
+    Yields:
+        None
 
     Raises:
-        ApiError: With the appropriate error message and status code
+        ApiError: With the appropriate error message and status code.
 
     Usage:
         with _handle_polly_error(model_id, voice_id, engine):

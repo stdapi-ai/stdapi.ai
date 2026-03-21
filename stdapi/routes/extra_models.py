@@ -48,15 +48,18 @@ async def list_models(
         ),
     ] = None,
 ) -> list[ModelDetails]:
-    """Lists the currently available models.
+    """List the currently available models with extended metadata.
 
-    Returns a detailed list of currently available models.
+    Args:
+        input_modalities: Filter to models that accept these input modalities (e.g. TEXT, IMAGE).
+        output_modalities: Filter to models that produce these output modalities (e.g. TEXT, IMAGE).
 
     Returns:
-        Models list
+        Filtered and sorted list of model details.
 
     Raises:
-        ApiError: When unable to retrieve models from backend services (500)
+        ApiError: When an unknown modality filter is specified (400) or models cannot be
+            retrieved from backend services (500).
     """
     log_request_params(
         {"input_modalities": input_modalities, "output_modalities": output_modalities}

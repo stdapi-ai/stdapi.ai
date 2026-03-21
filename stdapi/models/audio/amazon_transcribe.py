@@ -207,10 +207,13 @@ def _handle_transcription_error(language: str | None) -> Generator[None]:
     """Context manager to handle transcription job start errors.
 
     Args:
-        language: Language code that may have caused the error
+        language: Language code that may have caused the error.
+
+    Yields:
+        None
 
     Raises:
-        ApiError: With appropriate error message
+        ApiError: With appropriate error message.
 
     Usage:
         with _handle_transcription_error(language):

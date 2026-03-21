@@ -358,6 +358,9 @@ def get_extra_model_parameters(
 def handle_bedrock_client_error() -> Generator[None]:
     """Translate Bedrock ``ClientError`` to an :class:`ApiError` with an appropriate HTTP status.
 
+    Yields:
+        None
+
     Raises:
         ApiError: For recognised error codes (model errors, S3 credential issues, etc.).
             Unrecognised errors are re-raised as-is.

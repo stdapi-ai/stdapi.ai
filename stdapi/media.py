@@ -137,10 +137,13 @@ async def encode_audio_stream(
 
 
 async def stream_body(stream: StreamReader) -> AsyncGenerator[bytes]:
-    """Convert Stream reader to async generator of bytes.
+    """Convert a StreamReader to an async generator of bytes.
 
     Args:
-        stream: Stream reader.
+        stream: Stream reader to consume.
+
+    Yields:
+        Raw bytes chunks read from the stream.
     """
     while True:
         chunk = await stream.read(_CHUNK_SIZE)

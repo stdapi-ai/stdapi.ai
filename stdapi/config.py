@@ -1099,10 +1099,10 @@ class _Settings(BaseSettings):
         return self
 
     def now(self) -> AwareDatetime:
-        """Returns the current date and time based on the specified timezone.
+        """Return the current date and time in the configured timezone.
 
         Returns:
-            datetime: The current date and time adjusted to the configured timezone.
+            Current timezone-aware datetime.
         """
         return datetime.now(self.timezone)
 

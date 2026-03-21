@@ -225,7 +225,7 @@ def _subtitle_parse_translated_html(
         List of translated text segments in original order
 
     Raises:
-        Exception: If unable to parse translated HTML
+        TranslationError: If a translated span tag cannot be parsed from the HTML response.
     """
     translated_segments = []
     for i in range(segment_count):

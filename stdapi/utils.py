@@ -46,12 +46,15 @@ match_bedrock_prompt_router_arn = compile_regex(
 def validation_error_handler() -> Generator[None]:
     """Context manager to convert Pydantic ValidationError to FastAPI RequestValidationError.
 
-    Usage:
-        with validation_error_handler():
-            model = MyModel(**data)
+    Yields:
+        None
 
     Raises:
         RequestValidationError: Converted from ValidationError with error details preserved.
+
+    Usage:
+        with validation_error_handler():
+            model = MyModel(**data)
     """
     try:
         yield

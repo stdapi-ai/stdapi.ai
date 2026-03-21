@@ -131,7 +131,27 @@ _DEFAULT: dict[str, type[ModelBase[Any, Any]]] = {}
 
 
 class ModelDetails(BaseModel):
-    """Model details and features."""
+    """Metadata and capability flags for a single Bedrock model.
+
+    Attributes:
+        id: Bedrock model identifier.
+        name: Human-readable model name.
+        provider: Model provider name (e.g. Anthropic, Amazon).
+        region: Primary AWS region where this model entry was discovered.
+        service: AWS service hosting the model.
+        input_modalities: Accepted input types (e.g. TEXT, IMAGE).
+        output_modalities: Produced output types (e.g. TEXT, IMAGE).
+        response_streaming: Whether the model supports streaming responses.
+        legacy: Whether the model is deprecated.
+        start_of_life_time: GA date, if known.
+        end_of_life_time: Deprecation date, if known.
+        legacy_time: Date the model was marked legacy, if known.
+        public_extended_access_time: Extended public-access end date, if known.
+        inference_profile: Default cross-region inference profile ARN, if any.
+        aliases: Alternative model IDs that resolve to this model.
+        available_regions: All regions where the model is accessible.
+        inference_profiles_by_region: Per-region inference profile ARNs.
+    """
 
     id: str
     name: str
@@ -644,6 +664,9 @@ async def _get_bedrock_models_from_region(region: RegionName) -> list[ModelDetai
 
     Args:
         region: AWS region to query.
+
+    Returns:
+        List of available model details for the given region.
     """
     bedrock_client: BedrockClient = get_client("bedrock", region)
 

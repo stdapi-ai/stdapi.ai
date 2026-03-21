@@ -58,13 +58,13 @@ if TYPE_CHECKING:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
-    """Manage FastAPI application lifespan with AWS connections.
+    """Manage FastAPI application lifespan: start AWS connections and initialize services.
 
     Args:
         _: The FastAPI application instance (unused).
 
-    Returns:
-        Async generator managing application startup and shutdown.
+    Yields:
+        None once startup is complete; shutdown runs after the yield.
     """
     start = time_ns()
     try:

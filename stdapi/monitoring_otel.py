@@ -70,39 +70,26 @@ class OpenTelemetryManager(_OpenTelemetryManager):
         self._tracer_provider.shutdown()
 
     def start_span(self, name: str, attributes: dict[str, str]) -> Span:
-        """Starts a new span with a given name and attributes.
-
-        This method initializes a new span within a tracing system using the
-        provided name and attributes. It uses the associated tracer to create
-        the span, leveraging its capabilities to manage and propagate
-        contextual information throughout a distributed system.
+        """Start a new tracing span.
 
         Args:
-            name: The name assigned to the span, typically representing
-                the operation or task being tracked.
-            attributes: A dictionary of key-value pairs
-                containing metadata associated with the span. These attributes
-                provide additional context about the operation.
+            name: Span name.
+            attributes: Key-value metadata for the span.
 
         Returns:
-            The newly created span instance if the tracer is
-            successfully able to start a span.
+            New span instance.
         """
         return self.tracer.start_span(name, attributes=attributes)
 
     @contextmanager
     def use_span(self, span: Span) -> Generator[None]:  # type: ignore[override]
-        """Provides a context manager to manage the usage of a given span.
-
-        The method ensures that the provided span is used as the active span within
-        a specific context. This can be useful in scenarios where a specific span's
-        lifetime needs to be explicitly controlled.
+        """Activate *span* as the current span within this context.
 
         Args:
-            span (Span): The span to be used within the context.
+            span: Span to activate.
 
         Yields:
-            None: The context in which the given span is active.
+            None
         """
         with use_span(span):
             yield None

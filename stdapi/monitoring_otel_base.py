@@ -25,21 +25,24 @@ class OpenTelemetryManager:
         """Flush OpenTelemetry tracing."""
 
     def start_span(self, name: str, attributes: dict[str, str]) -> Span | None:
-        """Starts a new span with a given name and attributes.
+        """Start a new tracing span.
 
         Args:
-            name: The name assigned to the span.
-            attributes: A dictionary of key-value pairs
+            name: Span name.
+            attributes: Key-value metadata for the span.
 
         Returns:
-            None
+            New span, or ``None`` when tracing is disabled.
         """
 
     @contextmanager
     def use_span(self, span: Span | None) -> Generator[None]:  # noqa: ARG002
-        """Use span.
+        """No-op context manager; active span management is handled by subclasses.
 
         Args:
-            span: The span to use.
+            span: Span to activate (ignored in this base implementation).
+
+        Yields:
+            None
         """
         yield None

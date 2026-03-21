@@ -58,7 +58,7 @@ ORDERED_BEDROCK_REGIONS: list[RegionName] = (
 class RegionState:
     """Health state of a single region, tracked per model for routing decisions.
 
-    Args:
+    Attributes:
         region: AWS region identifier this state belongs to.
         quota_blocked_until: Monotonic timestamp until which quota errors block this region.
         unavailable_until: Monotonic timestamp until which unavailability blocks this region.

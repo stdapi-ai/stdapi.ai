@@ -72,17 +72,16 @@ def _default_formatter(
     param: str | None = None,  # noqa: ARG001
     code: str | None = None,  # noqa: ARG001
 ) -> tuple[JsonMapping, int]:
-    """Formats error response with a given status, message, and optional parameter values.
+    """Format a minimal JSON error envelope.
 
     Args:
-        request: The incoming HTTP request object.
-        status: The HTTP status code for the error response.
-        message: The error message to include in the response.
-        param: An optional parameter indicating the specific input parameter related to the error. Defaults to None.
-        code: An optional code for further categorization of the error. Defaults to None.
+        status: HTTP status code.
+        message: Error message.
+        param: Input parameter related to the error, if any.
+        code: Error code for further categorization, if any.
 
     Returns:
-        A tuple containing the error response in JSON format and the corresponding HTTP status code.
+        A tuple of the JSON error body and the HTTP status code.
     """
     return {"error": message}, status
 

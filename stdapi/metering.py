@@ -32,12 +32,17 @@ SERVER_FULL_VERSION = f"{SERVER_VERSION}+{'p' if PRODUCT_CODE else 'c'}"
 
 
 async def register() -> RegisterUsageResultTypeDef | None:
-    """Register AWS Marketplace for the current host.
+    """Register this host with AWS Marketplace Metering.
 
-    For ECS, EKS & Fargate hosts running hourly billed products.
+    Applicable to ECS, EKS, and Fargate hosts running hourly-billed products.
 
-    Args:
-        config: Application configuration.
+    Returns:
+        Registration result from AWS Marketplace, or ``None`` when no product code is configured.
+
+    Raises:
+        NotEntitledError: If the account has no entitlement for the product.
+        UnsupportedPlatformError: If the platform or region does not support metering.
+        InvalidProductError: If the product code or public key version is invalid.
     """
     if PRODUCT_CODE:
         product_public_key_version = 1

@@ -55,13 +55,13 @@ else:
         *strings: str | InputFile | None,  # noqa: ARG001
         encoding: str = "",  # noqa: ARG001
     ) -> int | None:
-        """Estimate the number of tokens in the given string.
+        """No-op stub used when token estimation is disabled.
 
         Args:
-            strings: The strings to tokenize.
-            encoding: The encoding to use.
+            strings: Ignored.
+            encoding: Ignored.
 
         Returns:
-            The total number of tokens in all strings.
+            Always ``None``.
         """
         return None

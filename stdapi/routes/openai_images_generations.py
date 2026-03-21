@@ -62,20 +62,15 @@ async def stream_generator(
     job: ImageGenerationJobBase[Any],
     created: int,
 ) -> AsyncGenerator[JSONServerSentEvent]:
-    """Asynchronously generates a stream of server-sent events for image generation/editing.
-
-    This function consumes an image stream, processes its output, and delivers
-    JSON server-sent events to the caller.
+    """Stream server-sent events for an image generation or editing request.
 
     Args:
         image_stream: Async generator yielding image generation responses.
         job: The image generation/edit job containing metadata (dimensions, format, etc).
-        created: A timestamp representing the creation time for the events.
+        created: Unix timestamp used as the creation time for each event.
 
     Yields:
-        AsyncGenerator[JSONServerSentEvent, None]: An asynchronous generator that
-            yields server-sent events (JSONServerSentEvent) containing either
-            partial or final image data.
+        JSONServerSentEvent containing partial image data or the final completed image.
     """
     token_task = create_task(estimate_token_count(job.prompt)) if job.prompt else None
     indexes: dict[int, int] = {}

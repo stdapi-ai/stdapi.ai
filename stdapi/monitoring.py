@@ -166,7 +166,10 @@ def log_request_event(request: Request) -> Generator[EventLog]:
     """Context manager to log a request event with OpenTelemetry tracing.
 
     Args:
-        request: A `Request` object representing the HTTP request.
+        request: Incoming HTTP request.
+
+    Yields:
+        Mutable event log dict populated during the request lifetime.
     """
     REQUEST_ID.set(request_id := webuuid())
     request_time_token = REQUEST_TIME.set(request_time := SETTINGS.now())
@@ -328,8 +331,11 @@ def log_background_event(event: str, request_id: str) -> Generator[EventLog]:
     """Context manager to log a background event.
 
     Args:
-        event: Event type.
-        request_id: A string uniquely identifying the request.
+        event: Event type label.
+        request_id: Unique identifier for the associated request.
+
+    Yields:
+        Mutable event log dict populated during execution.
     """
     span_context = otel_manager.start_span(
         "background", attributes={"request.id": request_id, "server.id": SERVER_NAME}

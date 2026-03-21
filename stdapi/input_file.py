@@ -207,7 +207,7 @@ class _FileSource(ABC):
 
     @abstractmethod
     async def _resolve_metadata(self) -> None:
-        """Populate *meta* with content type and size minimizing data handling."""
+        """Detect and store content type and size on ``self``, minimizing data reads."""
 
     @abstractmethod
     async def _read(self) -> bytes:
@@ -1088,6 +1088,9 @@ class InputFile:
             filename: Filename for document blocks.
             context: Optional context string added to document blocks.
             citations_enabled: When True, enables citations on document blocks.
+
+        Returns:
+            Bedrock content block dict ready to embed in a messages request.
         """
         if content_type is None:
             content_type = await self.get_content_type()

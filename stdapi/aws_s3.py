@@ -191,14 +191,14 @@ async def put_object_and_get_url(body: bytes, content_type: str, filename: str) 
 
 
 async def get_bytes_from_s3(s3_bucket: str, s3_key: str) -> bytes:
-    """Retrieve and decode S3 object content as a string.
+    """Retrieve raw bytes from an S3 object.
 
     Args:
-        s3_bucket: Name of the S3 bucket containing the object
-        s3_key: Key (path) of the object within the S3 bucket
+        s3_bucket: Name of the S3 bucket containing the object.
+        s3_key: Key (path) of the object within the S3 bucket.
 
     Returns:
-        Decoded string content of the S3 object
+        Raw bytes content of the S3 object.
     """
     s3_client: S3Client = get_client("s3", BUCKET_TO_REGION.get(s3_bucket))
     return await (await s3_client.get_object(Bucket=s3_bucket, Key=s3_key))[

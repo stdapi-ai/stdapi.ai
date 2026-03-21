@@ -45,8 +45,9 @@ class ImageGenerationResponse(BaseModel):
     """Image generation response.
 
     Attributes:
-        images: base64 encoded image.
-        partial: true if partial image.
+        image: Base64-encoded image data.
+        partial: ``True`` if this is a partial (streaming) image.
+        index: Zero-based index of this image within the generation batch.
     """
 
     image: str
@@ -159,7 +160,7 @@ class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"]:
 
     @property
     def output_format(self) -> ImageOutputFormats:
-        """Final image quality."""
+        """Final output image format."""
         return self._output_format or self._response_output_format
 
     @staticmethod
@@ -184,6 +185,9 @@ class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"]:
         Args:
             mask: Mask parameter value (None or string).
             reason: Extra reason for validation failure.
+
+        Returns:
+            The validated mask string.
 
         Raises:
             ApiError: If mask requirement is not met.
@@ -213,17 +217,18 @@ class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"]:
             msg = '"style" parameter is not supported by this model.'
             raise ApiError(msg)
 
-    def _get_one_image_from_list(self, images: list[str]) -> str:
-        """Extracts a single image from the provided list of images.
+    @staticmethod
+    def _get_one_image_from_list(images: list[str]) -> str:
+        """Return the single image from a list, raising if there is not exactly one.
 
         Args:
-            images (list[str]): A list containing the image paths or identifiers.
+            images: List of base64-encoded image strings.
 
         Returns:
-            str: The single image path or identifier from the input list.
+            The single image string.
 
         Raises:
-            ApiError: If the provided list of images does not contain exactly one image.
+            ApiError: If the list does not contain exactly one image.
         """
         if len(images) != 1:
             msg = "Exactly one image must be provided."
@@ -408,10 +413,13 @@ class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"]:
     async def _ensure_image_output_format(
         self, response: Awaitable[ImageGenerationResponse] | ImageGenerationResponse
     ) -> ImageGenerationResponse:
-        """Ensures that the output format matches the desired format.
+        """Convert the image to the requested output format if needed.
 
         Args:
-            response: input image awaitable.
+            response: Awaitable or resolved image generation response.
+
+        Returns:
+            Image response with the correct output format applied.
         """
         # Get image
         image = (
@@ -513,6 +521,9 @@ class ImageModelBase[RequestT, ResponseT, ImageGenerationJobT](
             output_compression: Output compression.
             extra_params: Extra model parameters.
             is_url: If True, return image URL instead of base64 image.
+
+        Returns:
+            Configured image generation job instance.
         """
         return self.IMAGE_GENERATION_JOB_CLASS(  # type: ignore[call-arg]
             model=self,
