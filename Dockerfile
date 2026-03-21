@@ -5,7 +5,7 @@ FROM python:3-alpine AS builder
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     TIKTOKEN_CACHE_DIR=/opt/app/tiktoken/data
 
-RUN apk add --no-cache tzdata file && \
+RUN apk add --no-cache tzdata libmagic && \
     pip install uv -q --root-user-action ignore
 
 WORKDIR /opt
@@ -42,7 +42,7 @@ RUN AWS_DEFAULT_REGION=eu-west-3 python -c "import stdapi.main"
 
 FROM python:3-alpine
 
-RUN apk add --no-cache tzdata file ffmpeg && \
+RUN apk add --no-cache tzdata libmagic ffmpeg && \
     adduser -D -u 1000 nonroot && \
     ls -la /home
 
