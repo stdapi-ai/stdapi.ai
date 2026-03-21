@@ -173,13 +173,11 @@ class RegionRouter:
         now = monotonic()
 
         if error_code in _QUOTA_ERROR_CODES:
-            if state.quota_blocked_until > now:
-                # Still within a previous backoff window — escalate.
-                state.consecutive_quota_errors += 1
-            elif (now - state.last_quota_error_time) > _QUOTA_STALE_THRESHOLD:
+            if (now - state.last_quota_error_time) > _QUOTA_STALE_THRESHOLD:
                 # Last error was long ago — treat as fresh start.
                 state.consecutive_quota_errors = 1
             else:
+                # Either within a previous backoff window or a recent error — escalate.
                 state.consecutive_quota_errors += 1
             state.last_quota_error_time = now
             backoff = min(
