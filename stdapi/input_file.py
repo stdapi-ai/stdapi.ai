@@ -6,12 +6,13 @@ from contextvars import ContextVar
 from enum import IntEnum
 from re import IGNORECASE
 from re import compile as compile_regex
+from tempfile import NamedTemporaryFile
 from typing import TYPE_CHECKING, Literal, Self
 from urllib.parse import urlparse
 
 from aiohttp import ClientError as AIOHTTPClientError
 from aiohttp import ClientSession
-from magic import from_buffer as _magic_from_buffer
+from magic import from_buffer, from_file
 from pydantic_core.core_schema import (
     no_info_plain_validator_function,
     plain_serializer_function_ser_schema,
@@ -68,6 +69,31 @@ _B64_REPR_LIMIT: int = 24
 
 #: Number of bytes to read for magic-based MIME detection.
 _MAGIC_PREFIX_SIZE: int = 8192
+
+
+def _magic_detect(data: bytes) -> str:
+    """Detect the MIME type of *data*.
+
+    Prefers ``magic_buffer`` for performance.  When it returns the generic
+    ``application/octet-stream``, ``libmagic`` may have silently failed to
+    identify the content via its in-memory code path; the result is verified
+    by writing *data* to a temporary file and calling ``magic_file`` instead,
+    which uses a different internal path and is more reliable.  Both code
+    paths return the same value for genuinely unrecognised content.
+
+    Args:
+        data: Raw bytes to identify.
+
+    Returns:
+        MIME type string (e.g. ``"audio/mpeg"``).
+    """
+    if (mime := from_buffer(data, mime=True)) != "application/octet-stream":
+        return mime
+    with NamedTemporaryFile() as tmp:
+        tmp.write(data)
+        tmp.flush()
+        return from_file(tmp.name, mime=True)
+
 
 #: Number of base64 characters needed for magic-based MIME detection.
 _MAGIC_PREFIX_SIZE_BASE64 = ((_MAGIC_PREFIX_SIZE + 2) // 3) * 4
@@ -314,7 +340,7 @@ class _FileSource(ABC):
         """
         self._size = len(data)
         if not hasattr(self, "_content_type"):
-            self._content_type = _magic_from_buffer(data, mime=True)
+            self._content_type = _magic_detect(data)
 
 
 class _S3Source(_FileSource):
@@ -473,8 +499,8 @@ class _HttpSource(_FileSource):
                 async with session.get(self._url) as resp:
                     if resp.status not in (200, 206):
                         resp.raise_for_status()
-                    self._content_type = _magic_from_buffer(
-                        await resp.content.read(_MAGIC_PREFIX_SIZE), mime=True
+                    self._content_type = _magic_detect(
+                        await resp.content.read(_MAGIC_PREFIX_SIZE)
                     )
             except AIOHTTPClientError as error:
                 msg = f"Error downloading {self._url}: {error}"
@@ -638,8 +664,8 @@ class _Base64Source(_FileSource):
 
     async def _resolve_metadata(self) -> None:
         """Decode a prefix of the base64 string to detect content via magic."""
-        self._content_type = _magic_from_buffer(
-            await b64decode(self._value[:_MAGIC_PREFIX_SIZE_BASE64]), mime=True
+        self._content_type = _magic_detect(
+            await b64decode(self._value[:_MAGIC_PREFIX_SIZE_BASE64])
         )
         self._filename = None
         self._size = b64_decoded_len(self._value)
@@ -711,9 +737,7 @@ class _UploadSource(_FileSource):
         The file pointer is reset to the beginning afterwards so the full
         content can still be read.
         """
-        self._content_type = _magic_from_buffer(
-            await self._upload.read(_MAGIC_PREFIX_SIZE), mime=True
-        )
+        self._content_type = _magic_detect(await self._upload.read(_MAGIC_PREFIX_SIZE))
         self._filename = self._upload.filename or (
             parse_content_disposition_filename(
                 self._upload.headers.get("content-disposition", "")
