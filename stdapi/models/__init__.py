@@ -640,18 +640,21 @@ def _filter_inference_profiles(
         profiles: Output dict (model ID → profile ID) updated in-place.
         profiles_all: All discovered profile IDs per model ID.
     """
+    use_global = SETTINGS.aws_bedrock_cross_region_inference_global
     for model_id, profile_ids in profiles_all.items():
-        candidate_profile = ""
-        for profile_id in profile_ids:
-            if profile_id.startswith("global."):
-                if SETTINGS.aws_bedrock_cross_region_inference_global:
-                    profiles[model_id] = profile_id
-                    break
-                continue
-            candidate_profile = profile_id
-        else:
-            if candidate_profile:
-                profiles[model_id] = candidate_profile
+        if (
+            use_global
+            and (
+                profile := next(
+                    (pid for pid in profile_ids if pid.startswith("global.")), None
+                )
+            )
+        ) or (
+            profile := next(
+                (pid for pid in profile_ids if not pid.startswith("global.")), None
+            )
+        ):
+            profiles[model_id] = profile
 
 
 async def _get_bedrock_models_from_region(region: RegionName) -> list[ModelDetails]:
