@@ -151,10 +151,11 @@ class RegionRouter:
                 region
             )
 
-        if not usable:
-            return list(available_regions)
-
-        return self._order(model_id, usable) + blocked
+        return (
+            (self._order(model_id, usable) + blocked)
+            if usable
+            else self._order(model_id, blocked)
+        )
 
     def mark_error(self, model_id: str, region: str, error_code: str) -> None:
         """Applies a backoff penalty to a region based on the AWS error code received.
