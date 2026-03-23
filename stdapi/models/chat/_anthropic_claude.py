@@ -8,20 +8,84 @@ from stdapi.models.chat._default import ChatModel as _BaseChatModel
 from stdapi.monitoring import log_error_details
 
 if TYPE_CHECKING:
-    from types_aiobotocore_bedrock_runtime.type_defs import ToolConfigurationTypeDef
+    from types_aiobotocore_bedrock_runtime.type_defs import (
+        MessageTypeDef,
+        ToolConfigurationTypeDef,
+    )
 
-    from stdapi.types import JsonList, JsonMapping
-    from stdapi.types.anthropic_messages import ServerTools, ToolUnionParam
+    from stdapi.types import JsonMapping
+    from stdapi.types.anthropic_messages import ServerTools
 
+#: ``anthropic_beta`` flag for computer-use tools (2025-01-24 version)
+_BETA_COMPUTER_USE_2025 = "computer-use-2025-01-24"
 
-#: Fields excluded when serializing Anthropic tool params to the wire format
-_SERIALIZE_EXCLUDE_FIELDS: set[str] = {
-    "cache_control",
-    "defer_loading",
-    "input_examples",
-    "strict",
-    "allowed_callers",
+#: ``anthropic_beta`` flag for computer-use tools (2024-10-22 version)
+_BETA_COMPUTER_USE_2024 = "computer-use-2024-10-22"
+
+#: ``anthropic_beta`` flag for computer-use tools (2025-11-24 version)
+_BETA_COMPUTER_USE_2025_11 = "computer-use-2025-11-24"
+
+#: ``anthropic_beta`` flag for context management tools
+_BETA_CONTEXT_MANAGEMENT_2025 = "context-management-2025-06-27"
+
+#: Beta flags keyed by versioned tool type, taking precedence over name-based ``TOOL_BETA_FLAGS``.
+_VERSIONED_TYPE_BETA_FLAGS: dict[str, str] = {
+    "computer_20251124": _BETA_COMPUTER_USE_2025_11
 }
+
+#: Fields excluded when serialising Anthropic server tools
+_SERVER_TOOL_SERIALIZE_EXCLUDE: frozenset[str] = frozenset(
+    {"cache_control", "defer_loading", "input_examples", "strict", "allowed_callers"}
+)
+
+#: Claude server tool keys
+_SERVER_TOOL_KEYS = frozenset({"name", "type"})
+
+
+def _has_tool_result(bedrock_messages: list[MessageTypeDef]) -> bool:
+    """Return ``True`` if *bedrock_messages* contains any ``toolResult`` block.
+
+    Args:
+        bedrock_messages: Bedrock Converse message list.
+
+    Returns:
+        ``True`` when any message content block is a ``toolResult``.
+    """
+    return any(
+        "toolResult" in block
+        for msg in bedrock_messages
+        for block in (msg.get("content") or [])
+        if isinstance(block, dict)
+    )
+
+
+def _forward_tool_choice_to_additional_request_fields(
+    tool_choice: dict[str, object], additional_request_fields: JsonMapping
+) -> None:
+    """Convert a Bedrock ``toolChoice`` into Anthropic ``additionalModelRequestFields`` ``tool_choice`` format.
+
+    Called when all ``toolSpec`` stubs are removed from *tool_config* in
+    native-format mode so that the choice directive is not silently lost.
+    The Bedrock format uses a type-keyed wrapper dict (``{"any": {}}``);
+    the Anthropic ``additionalModelRequestFields`` format uses an explicit
+    ``"type"`` field (``{"type": "any"}``).
+
+    Only writes to *additional_request_fields* when ``tool_choice`` is not
+    already present (first-write wins).
+
+    Args:
+        tool_choice: Bedrock ``toolChoice`` dict extracted from ``toolConfig``.
+        additional_request_fields: Mutable ``additionalModelRequestFields`` dict to update.
+    """
+    if "tool_choice" in additional_request_fields:
+        return
+    match tool_choice:
+        case {"any": _}:
+            additional_request_fields["tool_choice"] = {"type": "any"}
+        case {"auto": _}:
+            additional_request_fields["tool_choice"] = {"type": "auto"}
+        case {"tool": {"name": str() as name}} if name:
+            additional_request_fields["tool_choice"] = {"type": "tool", "name": name}
 
 
 class AnthropicClaudeChatModel(_BaseChatModel):
@@ -34,81 +98,158 @@ class AnthropicClaudeChatModel(_BaseChatModel):
     )
     SIMPLIFIED_CACHE_MANAGEMENT = True
 
-    #: Required ``anthropic_beta`` flags per tool name.
+    #: Required ``anthropic_beta`` flag per Anthropic server tool canonical name.
     TOOL_BETA_FLAGS: ClassVar[MappingProxyType[ServerTools, str]]
 
-    def _req_configure_system_tools(
-        self,
-        tool_config: ToolConfigurationTypeDef | None,
-        system_tools: list[ToolUnionParam],
-        additional_request_fields: JsonMapping,
-    ) -> ToolConfigurationTypeDef | None:
-        """Configure Anthropic system tools via ``additionalModelRequestFields``.
+    #: Maps Claude server tool name to its versioned type (e.g. ``bash`` → ``bash_20250124``).
+    SERVER_TOOL_NAME_TO_TYPE: ClassVar[MappingProxyType[str, str]]
+
+    def _req_extract_server_tools(
+        self, tool_config: ToolConfigurationTypeDef | None
+    ) -> list[dict[str, object]]:
+        """Detect Claude server tools in *tool_config* by matching names against ``SERVER_TOOL_NAME_TO_TYPE``.
+
+        A ``toolSpec`` entry is a server tool when its ``name`` matches a key in
+        ``SERVER_TOOL_NAME_TO_TYPE``.  The versioned type is looked up from that
+        map.  Extra fields in ``inputSchema.json`` (e.g. ``display_width_px``)
+        become additional tool params, and the stub schema is reset to
+        ``{"type": "object"}`` so Bedrock accepts it in multi-turn mode.
 
         Args:
-            tool_config: Existing Bedrock tool configuration, or ``None``.
-            system_tools: List of Anthropic system tool params.
-            additional_request_fields: Mutable dict of additional request fields.
+            tool_config: Bedrock tool configuration before system tool promotion.
 
         Returns:
-            Unchanged tool configuration (system tools go via additionalModelRequestFields).
+            List of ``{"name": <tool_name>, "type": <versioned_type>, **extra_params}``
+            dicts.  Empty when *tool_config* is ``None`` or no entries match.
         """
-        serialized_tools: JsonList = additional_request_fields.get("tools", [])  # type: ignore[assignment]
-        serialized_tools.extend(
-            tool.model_dump(
-                mode="json", exclude_none=True, exclude=_SERIALIZE_EXCLUDE_FIELDS
-            )
-            for tool in system_tools
-        )
-        additional_request_fields["tools"] = serialized_tools
+        if not tool_config:
+            return []
+        server_tools: list[dict[str, object]] = []
+        for entry in tool_config["tools"]:
+            if not (
+                isinstance(entry, dict)
+                and isinstance(spec := entry.get("toolSpec"), dict)
+                and (tool_name := str(spec.get("name", "")))
+                in self.SERVER_TOOL_NAME_TO_TYPE
+            ):
+                continue
+            tool_type = self.SERVER_TOOL_NAME_TO_TYPE[tool_name]
+            json_params: dict[str, object] = (spec.get("inputSchema") or {}).get(
+                "json"
+            ) or {}  # type: ignore[assignment]
+            if (
+                extra := {
+                    k: v for k, v in json_params.items() if k not in _SERVER_TOOL_KEYS
+                }
+            ) and isinstance(input_schema := spec.get("inputSchema"), dict):
+                input_schema["json"] = {"type": "object"}
+            server_tools.append({"name": tool_name, "type": tool_type, **extra})
+        return server_tools
 
+    def _req_configure_tools(
+        self,
+        tool_config: ToolConfigurationTypeDef | None,
+        additional_request_fields: JsonMapping,
+        server_tools: list[dict[str, object]],
+        bedrock_messages: list[MessageTypeDef] | None = None,
+    ) -> None:
+        """Configure Claude server tools: native-format routing on Turn 1, stubs on Turn 2+, plus beta flags.
+
+        **Turn 1 — native Anthropic format** (no ``toolResult`` in history):
+        All server tools are moved to ``additionalModelRequestFields["tools"]``
+        in Anthropic native format so Claude receives the full tool configuration.
+        Their ``toolSpec`` stubs are removed from *tool_config*.
+
+        **Multi-turn stub mode** (``toolResult`` present in history):
+        Server tools remain as ``toolSpec`` stubs in *tool_config* (required by
+        Bedrock when ``toolResult`` blocks appear in message history).
+
+        ``anthropic_beta`` flags are injected in both cases.
+
+        Args:
+            tool_config: Bedrock tool configuration (mutable).  Stubs are removed
+                in Turn 1; dict is cleared when it becomes empty.
+            additional_request_fields: Mutable ``additionalModelRequestFields`` dict.
+            server_tools: Per-tool dicts — on the Anthropic route these are full
+                ``model_dump(exclude_none=True)`` dicts; on the OpenAI route they
+                contain ``{"name": tool_name, "type": versioned_type}`` plus
+                any extra params.
+            bedrock_messages: Translated Bedrock messages, used to detect
+                ``toolResult`` blocks.  ``None`` treated as empty (Turn 1).
+        """
+        if not server_tools:
+            return
+
+        if not _has_tool_result(bedrock_messages or []):
+            # Turn 1: move all server tools to additionalModelRequestFields native format.
+            native_tool_names = {t["name"] for t in server_tools}
+            existing_tools: list[dict[str, object]] = additional_request_fields.get(  # type: ignore[assignment]
+                "tools", []
+            )
+            additional_request_fields["tools"] = existing_tools + [  # type: ignore[assignment]
+                {k: v for k, v in t.items() if k not in _SERVER_TOOL_SERIALIZE_EXCLUDE}
+                for t in server_tools
+            ]
+
+            # Remove corresponding stubs from toolConfig.
+            if tool_config:
+                tool_config["tools"] = [
+                    entry
+                    for entry in tool_config["tools"]
+                    if not (
+                        isinstance(entry, dict)
+                        and isinstance(spec := entry.get("toolSpec"), dict)
+                        and spec.get("name") in native_tool_names
+                    )
+                ]
+                if not tool_config["tools"]:
+                    if tool_choice := tool_config.get("toolChoice"):
+                        _forward_tool_choice_to_additional_request_fields(
+                            tool_choice,  # type: ignore[arg-type]
+                            additional_request_fields,
+                        )
+                    tool_config.clear()  # type: ignore[attr-defined]
+
+        # Inject anthropic_beta flags for all server tools (both modes).
         if required_flags := {
             flag
-            for tool in system_tools
-            if (flag := self.TOOL_BETA_FLAGS.get(tool.name))  # type: ignore[call-overload]
-        }:
-            existing_flags: list[str] = additional_request_fields.get(  # type: ignore[assignment]
-                "anthropic_beta", []
+            for tool in server_tools
+            if (
+                flag := _VERSIONED_TYPE_BETA_FLAGS.get(str(tool.get("type", "")))
+                or self.TOOL_BETA_FLAGS.get(str(tool.get("name", "")))  # type: ignore[call-overload]
             )
-            if new_flags := required_flags - set(existing_flags):
-                additional_request_fields["anthropic_beta"] = existing_flags + list(
-                    new_flags
-                )
-
-        return tool_config
+        }:
+            existing: list[str] = additional_request_fields.get("anthropic_beta", [])  # type: ignore[assignment]
+            if new_flags := required_flags - set(existing):
+                additional_request_fields["anthropic_beta"] = existing + list(new_flags)  # type: ignore[assignment]
 
     def _prepare_additional_request_fields(
         self, additional_request_fields: JsonMapping
     ) -> JsonMapping:
-        """Merge passthrough headers and filter unsupported ``anthropic_beta`` flags.
-
-        Extends the base implementation to remove ``anthropic_beta`` flags
-        not supported by AWS Bedrock, preventing ``ValidationException`` errors.
+        """Filter unsupported ``anthropic_beta`` flags after merging passthrough headers.
 
         Args:
             additional_request_fields: Fields from request body and defaults.
 
         Returns:
-            The merged and filtered additional request fields.
+            Merged and filtered additional request fields.
         """
         additional_request_fields = super()._prepare_additional_request_fields(
             additional_request_fields
         )
-        if (
+        if not (
             SETTINGS.anthropic_beta_filter
             and "anthropic_beta" in additional_request_fields
         ):
-            original_flags: list[str] = additional_request_fields["anthropic_beta"]  # type: ignore[assignment]
-            rejected_flags = set(original_flags) - SETTINGS.anthropic_beta_allowlist
-            if rejected_flags:
-                log_error_details(
-                    f"Filtered unsupported anthropic_beta flags: {', '.join(rejected_flags)}",
-                    level="warning",
-                )
-            if allowed_flags := [
-                flag for flag in original_flags if flag not in rejected_flags
-            ]:
-                additional_request_fields["anthropic_beta"] = allowed_flags  # type: ignore[assignment]
+            return additional_request_fields
+        flags: list[str] = additional_request_fields["anthropic_beta"]  # type: ignore[assignment]
+        if rejected := set(flags) - SETTINGS.anthropic_beta_allowlist:
+            log_error_details(
+                f"Filtered unsupported anthropic_beta flags: {', '.join(rejected)}",
+                level="warning",
+            )
+            if allowed := [f for f in flags if f not in rejected]:
+                additional_request_fields["anthropic_beta"] = allowed  # type: ignore[assignment]
             else:
                 del additional_request_fields["anthropic_beta"]
         return additional_request_fields

@@ -51,7 +51,6 @@ Generate conversational AI responses with AWS Bedrock foundation models—includ
 | Legacy `function_call`                   |       :material-cog:{ .model-dep }       | Backward compatibility maintained                               |
 | Parallel tool calls                      |       :material-cog:{ .model-dep }       | Multiple tools in one turn                                      |
 | Disable Parallel tool calls              | :material-close-circle:{ .unsupported }  | Parallel tool calls are always on                               |
-| Non-function tool types                  | :material-close-circle:{ .unsupported }  | Only function tools supported                                   |
 | Server tools (`systemTool_*`)            | :material-plus-circle:{ .extra-feature } | Provider system tools and Claude server tools                   |
 | **Generation Control**                   |                                          |                                                                 |
 | `max_tokens` / `max_completion_tokens`   |   :material-check-circle:{ .success }    | Output length limits                                            |
@@ -293,13 +292,14 @@ Simply reference your S3 images using the `s3://` URI scheme in `image_url` fiel
 
 ### AWS Bedrock System Tools
 
-AWS Bedrock system tools are built-in capabilities that foundation models can use directly without requiring you to implement backend integrations. Access any AWS Bedrock system tool by adding the `systemTool_` prefix to its name—this works for current tools and any future system tools AWS releases.
+AWS Bedrock system tools are built-in capabilities that foundation models can use directly, without requiring you to implement backend integrations.
 
 **How to Use:**
 
-Add system tools to your `tools` array using the `systemTool_` prefix followed by the tool name. System tools don't require parameter definitions—just specify the tool name and the model will handle the rest.
+Add system tools to your `tools` array as normal. System tools don't require parameter definitions—just specify the tool name and the model will handle the rest.
 
-As AWS releases new system tools, simply use the same `systemTool_` prefix pattern to access them.
+!!! tip "Future-Proof Tool Declarations"
+    As AWS releases new system tools, use the same `systemTool_` prefix to declare them as system tools instead of standard tools.
 
 #### ![Amazon Nova](styles/logo_amazon_nova.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Nova Web Grounding
 
@@ -327,7 +327,7 @@ curl -X POST "$BASE/v1/chat/completions" \
       {
         "type": "function",
         "function": {
-          "name": "systemTool_nova_grounding"
+          "name": "nova_grounding"
         }
       }
     ]
@@ -376,7 +376,7 @@ When using web grounding, the API response includes `annotations` with URL citat
 - **OpenAI-Compatible**: Works seamlessly with standard tool calling patterns
 
 !!! warning "Model and Region Compatibility"
-    **Model**: `systemTool_nova_grounding` is supported by Amazon Nova 2 models (e.g., `amazon.nova-2-lite-v1:0`) and Amazon Nova Premier (`amazon.nova-premier-v1:0`).
+    **Model**: `nova_grounding` is supported by Amazon Nova 2 models (e.g., `amazon.nova-2-lite-v1:0`) and Amazon Nova Premier (`amazon.nova-premier-v1:0`).
 
     **Region**: Web Grounding is only available in US regions.
 
@@ -405,7 +405,7 @@ curl -X POST "$BASE/v1/chat/completions" \
       {
         "type": "function",
         "function": {
-          "name": "systemTool_nova_code_interpreter"
+          "name": "nova_code_interpreter"
         }
       }
     ]
@@ -413,20 +413,23 @@ curl -X POST "$BASE/v1/chat/completions" \
 ```
 
 !!! warning "Model Compatibility"
-    `systemTool_nova_code_interpreter` is supported by Amazon Nova 2 models (e.g., `amazon.nova-2-lite-v1:0`).
+    `nova_code_interpreter` is supported by Amazon Nova 2 models (e.g., `amazon.nova-2-lite-v1:0`).
 
 #### ![Claude](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Anthropic Claude Server Tools
 
-Anthropic Claude models support server-side tools (bash, text editor, computer use, memory) that are executed by the model provider. These tools use the same `systemTool_` prefix convention as other Bedrock system tools.
+Anthropic Claude models support server-side tools (bash, text editor, memory) that are executed by the model provider. Declare them using the standard OpenAI function tool format: set `type` to `"function"` and `function.name` to the tool name.
 
 **Supported Tools by Model:**
 
-| Tool | `systemTool_` Name | Claude 3.5 Sonnet v2 | Claude 3.7+ |
-|------|-------------------|:---------------------:|:-----------:|
-| Bash | `systemTool_bash_20250124` | :material-check-circle:{ .success } | :material-check-circle:{ .success } |
-| Text Editor | `systemTool_text_editor_20250124` | :material-check-circle:{ .success } | :material-check-circle:{ .success } |
-| Computer | `systemTool_computer_20250124` | :material-check-circle:{ .success } | :material-check-circle:{ .success } |
-| Memory | `systemTool_memory_20250818` | :material-close-circle:{ .unsupported } | :material-check-circle:{ .success } |
+| Tool | `function.name` | Claude 3.5 Sonnet v2 | Claude 3.7+ |
+|------|-----------------|:--------------------:|:-----------:|
+| Bash | `bash` | :material-check-circle:{ .success } | :material-check-circle:{ .success } |
+| Text Editor | `str_replace_based_edit_tool` | :material-check-circle:{ .success } | :material-check-circle:{ .success } |
+| Computer | `computer` | :material-close-circle:{ .unsupported } | :material-close-circle:{ .unsupported } |
+| Memory | `memory` | :material-close-circle:{ .unsupported } | :material-check-circle:{ .success } |
+
+!!! danger "Computer Use Not Supported"
+    The computer use workflow requires screenshots to be returned as images inside tool results. The OpenAI Chat Completions API does not support image content in `role: "tool"` messages, so the complete agent loop cannot be implemented. **`computer` is not usable via this route.**
 
 **Usage:**
 
@@ -440,33 +443,42 @@ curl -X POST "$BASE/v1/chat/completions" \
       {"role": "user", "content": "Run a Python script that prints hello world."}
     ],
     "tools": [
-      {"type": "function", "function": {"name": "systemTool_bash_20250124"}},
-      {"type": "function", "function": {"name": "systemTool_text_editor_20250124"}}
+      {"type": "function", "function": {"name": "bash"}},
+      {"type": "function", "function": {"name": "str_replace_based_edit_tool"}}
     ]
   }'
 ```
 
-**Versioned Tool Names:**
+**Tool Parameters:**
 
-Claude server tools require a versioned name specifying the API date (e.g., `systemTool_bash_20250124`). Use the full form `systemTool_<type>_<YYYYMMDD>`:
+Some Claude server tools accept additional configuration. Pass tool-specific parameters inside `function.parameters`:
 
-```json
-{
-  "tools": [
-    {"type": "function", "function": {"name": "systemTool_bash_20250124"}},
-    {"type": "function", "function": {"name": "systemTool_text_editor_20250728"}}
-  ]
-}
+```bash
+curl -X POST "$BASE/v1/chat/completions" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "messages": [
+      {"role": "user", "content": "Edit the file hello.py to print hello world."}
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "str_replace_based_edit_tool",
+          "parameters": {"type": "object", "max_characters": 5000}
+        }
+      }
+    ]
+  }'
 ```
 
 !!! tip "Beta Headers"
     Claude server tools require specific `anthropic-beta` flags, which are **automatically injected** — no manual header needed:
 
-    - `bash`, `text_editor`, `computer` → `computer-use-2024-10-22` (Claude 3.5) or `computer-use-2025-01-24` (Claude 3.7+)
-    - `memory` → `context-management-2025-06-27` (Claude 3.7-4.5)
-
-!!! note "Model Compatibility"
-    Requesting a server tool on a model that does not support it will return a `400 Bad Request` error. Non-Claude models do not support these tools; use model-specific system tools instead (e.g., `systemTool_nova_grounding` for Amazon Nova).
+    - `bash`, `str_replace_based_edit_tool` → `computer-use-2024-10-22` (Claude 3.5) or `computer-use-2025-01-24` (Claude 3.7+)
+    - `memory` → `context-management-2025-06-27` (Claude 3.7+)
 
 ### Provider-Specific Parameters
 

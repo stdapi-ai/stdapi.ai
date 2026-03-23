@@ -24,7 +24,7 @@ from stdapi.models.chat import ChatModelBase
 from stdapi.models.chat._adapters import _anthropic_message as anthropic_adapter
 from stdapi.models.chat._adapters import _openai_chat_completion as openai_adapter
 from stdapi.monitoring import REQUEST, log_request_sse_stream_event, log_response_params
-from stdapi.types.anthropic_messages import ToolChoiceToolParam
+from stdapi.types.anthropic_messages import ToolChoiceToolParam, ToolParam
 
 if TYPE_CHECKING:
     from types_aiobotocore_bedrock_runtime.literals import (
@@ -38,6 +38,7 @@ if TYPE_CHECKING:
         MessageTypeDef,
         SystemContentBlockTypeDef,
         ToolConfigurationTypeDef,
+        ToolTypeDef,
     )
 
     from stdapi.aws_bedrock import ConverseRequestBaseTypeDef
@@ -46,7 +47,6 @@ if TYPE_CHECKING:
         Message,
         MessageCreateParams,
         ServerTools,
-        ToolUnionParam,
     )
     from stdapi.types.openai_chat_completions import (
         ChatCompletion,
@@ -55,45 +55,48 @@ if TYPE_CHECKING:
     )
 
 
+#: Tool name prefix for the OpenAI route: ``systemTool_<name>`` → ``{"systemTool": {"name": "<name>"}}``.
+SYSTEM_TOOL_PREFIX: str = "systemTool_"
+
+
 class ChatModel(ChatModelBase[Any, Any]):
     """Default chat model using AWS Bedrock Converse API."""
 
-    #: Whether this model supports prompt caching
+    #: Prompt caching supported.
     PROMPT_CACHING_SUPPORTED: ClassVar[bool] = False
 
-    #: Whether this model supports tools prompt caching
+    #: Tool-list prompt caching supported.
     PROMPT_CACHING_TOOL_SUPPORTED: ClassVar[bool] = False
 
-    #: Whether this model supports system prompt
+    #: System prompt supported.
     SYSTEM_PROMPT_SUPPORTED: ClassVar[bool] = True
 
-    #: Maximum number of cache control blocks allowed (Bedrock limit for most models)
+    #: Maximum cache control blocks (Bedrock limit).
     MAX_CACHE_BLOCKS: ClassVar[int] = 4
 
-    #: Whether to use simplified cache management (automatic prefix checking)
+    #: Use simplified cache management (single checkpoint, Bedrock auto-lookback).
     SIMPLIFIED_CACHE_MANAGEMENT: ClassVar[bool] = False
 
-    #: Mapping of system tool names to Bedrock system tool configurations.
-    SUPPORTED_SYSTEM_TOOLS: ClassVar[MappingProxyType[ServerTools, str]] = (
+    #: Bedrock system tool names eligible for auto-promotion from ``toolSpec``.
+    SUPPORTED_SYSTEM_TOOLS: ClassVar[frozenset[str]] = frozenset()
+
+    #: Anthropic server tool name → Bedrock system tool name; Anthropic Messages route only.
+    ANTHROPIC_TOOL_NAME_MAP: ClassVar[MappingProxyType[ServerTools, str]] = (
         MappingProxyType({})
     )
 
     async def create_completion(
         self, request: CompletionCreateParams, completion_id: str, created: int
     ) -> ChatCompletion | EventSourceResponse:
-        """Creates a completion response for the given input parameters.
-
-        Either as a streaming response or a non-streaming one, based on the request
-        configuration. Delegates OpenAI-specific translation and formatting to the
-        OpenAI chat completion adapter.
+        """Handle a chat completion request via the OpenAI route.
 
         Args:
-            request: The parameters defining the completion request.
-            completion_id: A unique identifier for the completion request.
-            created: The timestamp indicating when the request was created.
+            request: OpenAI-format completion request.
+            completion_id: Unique identifier for the completion.
+            created: Unix timestamp of request creation.
 
         Returns:
-            Completed response or streaming event source response based on the configuration.
+            Completed response or streaming ``EventSourceResponse``.
         """
         await prefetch_all_content_types()
         bedrock_messages, system_blocks = await openai_adapter.map_messages(
@@ -104,18 +107,19 @@ class ChatModel(ChatModelBase[Any, Any]):
             inference_cfg,
             additional_request_fields,
             tool_config,
-            system_tools,
             bedrock_service_tier,
             openai_service_tier,
             choices_count,
         ) = openai_adapter.translate_request(request, self._model_id)
 
-        if system_tools:
-            tool_config = self._req_configure_system_tools(
-                tool_config=tool_config,
-                system_tools=system_tools,
-                additional_request_fields=additional_request_fields,
-            )
+        server_tools = self._req_extract_server_tools(tool_config)
+        tool_config = self._req_promote_system_tools(tool_config)
+        self._req_configure_tools(
+            tool_config=tool_config,
+            additional_request_fields=additional_request_fields,
+            server_tools=server_tools,
+            bedrock_messages=bedrock_messages,
+        )
 
         if request.reasoning_effort not in (None, "none") or request.enable_thinking:
             self._req_configure_reasoning(
@@ -176,17 +180,14 @@ class ChatModel(ChatModelBase[Any, Any]):
     async def create_message(
         self, request: MessageCreateParams, message_id: str
     ) -> Message | EventSourceResponse:
-        """Create a message using Anthropic Messages API format.
-
-        Translates the Anthropic request to Bedrock Converse, executes it,
-        and formats the response back to Anthropic format.
+        """Handle a message request via the Anthropic Messages route.
 
         Args:
-            request: Message creation request following Anthropic spec.
+            request: Anthropic-format message creation request.
             message_id: Stable identifier for the message.
 
         Returns:
-            Message when stream is False, EventSourceResponse when stream is True.
+            ``Message`` or streaming ``EventSourceResponse``.
         """
         await prefetch_all_content_types()
         (
@@ -199,20 +200,25 @@ class ChatModel(ChatModelBase[Any, Any]):
             prompt_caching,
             prompt_caching_ttl,
             output_config,
-            system_tools,
         ) = await anthropic_adapter.translate_request(
             request,
             self._model_id,
             prompt_caching_supported=self.PROMPT_CACHING_SUPPORTED,
             prompt_caching_tool_supported=self.PROMPT_CACHING_TOOL_SUPPORTED,
+            tool_name_map=self.ANTHROPIC_TOOL_NAME_MAP,
         )
 
-        if system_tools:
-            tool_config = self._req_configure_system_tools(
-                tool_config=tool_config,
-                system_tools=system_tools,
-                additional_request_fields=additional_request_fields,
-            )
+        tool_config = self._req_promote_system_tools(tool_config)
+        self._req_configure_tools(
+            tool_config=tool_config,
+            additional_request_fields=additional_request_fields,
+            server_tools=[
+                t.model_dump(exclude_none=True)
+                for t in (request.tools or ())
+                if not isinstance(t, ToolParam)
+            ],
+            bedrock_messages=bedrock_messages,
+        )
 
         if request.thinking is not None and request.thinking.type != "disabled":
             self._req_configure_reasoning(
@@ -383,19 +389,18 @@ class ChatModel(ChatModelBase[Any, Any]):
         budget_tokens: int | None = None,
         max_tokens: int | None = None,  # noqa: ARG002
     ) -> None:
-        """Configure reasoning parameters for the model.
+        """Raise when reasoning parameters are set (base: reasoning unsupported).
 
-        Default implementation raises an error. Models that support reasoning
-        must override this method.
+        Override this method in model subclasses that support reasoning.
 
         Args:
-            additional_request_fields: Request fields to modify with reasoning config.
-            reasoning_effort: The reasoning effort level.
-            budget_tokens: Optional token budget for reasoning.
-            max_tokens: Maximum number of tokens allowed for the model.
+            additional_request_fields: Unused in base; mutable in overrides.
+            reasoning_effort: Reasoning effort level.
+            budget_tokens: Explicit token budget for reasoning.
+            max_tokens: Unused in base; used by overrides to derive budget.
 
         Raises:
-            ApiError: If reasoning is not supported by this model.
+            ApiError: If *reasoning_effort* or *budget_tokens* is not ``None``.
         """
         if reasoning_effort is not None or budget_tokens is not None:
             msg = "Reasoning configuration is not supported for this model"
@@ -409,30 +414,20 @@ class ChatModel(ChatModelBase[Any, Any]):
         prompt_caching: set[PromptCaching] | frozenset[PromptCaching],
         prompt_caching_ttl: CacheTTLType | None,
     ) -> None:
-        """Enables explicit prompt caching for specified components including system blocks, tools, and messages.
+        """Append cache-point blocks to the requested components.
 
-        Note: This is for explicit cache breakpoints only. For automatic caching (top-level cache_control),
-        use _req_apply_automatic_caching instead.
+        Two modes depending on ``SIMPLIFIED_CACHE_MANAGEMENT``:
 
-        Supports two modes:
-        1. Simplified Cache Management (when SIMPLIFIED_CACHE_MANAGEMENT=True):
-           - Places a single cache checkpoint at the end of static content
-           - Bedrock automatically checks for cache hits at previous content block boundaries
-           - Looks back up to ~20 blocks from the checkpoint
-           - Ideal for most use cases with dynamic content
-
-        2. Multiple Cache Checkpoints (when SIMPLIFIED_CACHE_MANAGEMENT=False):
-           - Places cache checkpoints at each specified component (system, tools, messages)
-           - Respects MAX_CACHE_BLOCKS limit (default 4 for Claude models)
-           - Provides granular control over cache boundaries
-           - Best for content that changes at different frequencies
+        - ``True``: single checkpoint at the highest-priority component
+          (Bedrock auto-looks back ~20 blocks).
+        - ``False``: one checkpoint per component up to ``MAX_CACHE_BLOCKS``.
 
         Args:
-            system_blocks: System content blocks to append cache point to.
-            tool_config: Tool configuration to append cache point to.
-            bedrock_messages: Message list to append cache points to.
-            prompt_caching: Set of components where caching should be enabled.
-            prompt_caching_ttl: Prompt caching TTL configuration.
+            system_blocks: System content blocks list.
+            tool_config: Bedrock tool configuration.
+            bedrock_messages: Bedrock message list.
+            prompt_caching: Components to cache (``"system"``, ``"tools"``, ``"messages"``).
+            prompt_caching_ttl: Cache TTL, or ``None`` for the default.
         """
         if self.PROMPT_CACHING_SUPPORTED:
             cache_point: ContentBlockTypeDef = (
@@ -465,17 +460,16 @@ class ChatModel(ChatModelBase[Any, Any]):
         prompt_caching: set[PromptCaching] | frozenset[PromptCaching],
         cache_point: ContentBlockTypeDef,
     ) -> None:
-        """Apply simplified cache management with a single checkpoint at the end of static content.
+        """Place a single cache checkpoint at the highest-priority available location.
 
-        Places one cache checkpoint at the highest priority available location (messages > tools > system).
-        Bedrock automatically checks for cache hits at previous content block boundaries.
+        Priority order: messages > tools > system.
 
         Args:
-            system_blocks: System content blocks to append cache point to.
-            tool_config: Tool configuration to append cache point to.
-            bedrock_messages: Message list to append cache point to.
-            prompt_caching: Set of components where caching should be enabled.
-            cache_point: Cache point block to append.
+            system_blocks: System content blocks list.
+            tool_config: Bedrock tool configuration.
+            bedrock_messages: Bedrock message list.
+            prompt_caching: Requested cache components.
+            cache_point: Cache-point block to append.
         """
         if "messages" in prompt_caching and bedrock_messages:
             bedrock_messages[-1]["content"].append(cache_point)  # type: ignore[attr-defined]
@@ -496,17 +490,14 @@ class ChatModel(ChatModelBase[Any, Any]):
         prompt_caching: set[PromptCaching] | frozenset[PromptCaching],
         cache_point: ContentBlockTypeDef,
     ) -> None:
-        """Apply multiple cache checkpoints with granular control respecting MAX_CACHE_BLOCKS limit.
-
-        Places cache checkpoints at each specified component (system, tools, messages) up to the
-        MAX_CACHE_BLOCKS limit for fine-grained cache boundary control.
+        """Place one checkpoint per requested component up to ``MAX_CACHE_BLOCKS``.
 
         Args:
-            system_blocks: System content blocks to append cache point to.
-            tool_config: Tool configuration to append cache point to.
-            bedrock_messages: Message list to append cache points to.
-            prompt_caching: Set of components where caching should be enabled.
-            cache_point: Cache point block to append.
+            system_blocks: System content blocks list.
+            tool_config: Bedrock tool configuration.
+            bedrock_messages: Bedrock message list.
+            prompt_caching: Requested cache components.
+            cache_point: Cache-point block to append.
         """
         cache_blocks_used = 0
 
@@ -529,56 +520,103 @@ class ChatModel(ChatModelBase[Any, Any]):
             ]:
                 message["content"].append(cache_point)  # type: ignore[attr-defined]
 
-    def _req_configure_system_tools(
+    def _req_configure_tools(
         self,
         tool_config: ToolConfigurationTypeDef | None,
-        system_tools: list[ToolUnionParam],
-        additional_request_fields: JsonMapping,  # noqa: ARG002
+        additional_request_fields: JsonMapping,
+        server_tools: list[dict[str, object]],
+        bedrock_messages: list[MessageTypeDef] | None = None,
+    ) -> None:
+        """Apply model-specific tool configuration.  No-op by default.
+
+        Called after ``_req_promote_system_tools`` and ``_req_extract_server_tools``.
+        Override to inject required beta flags or apply other model-specific
+        transformations (e.g. Anthropic Claude injects ``anthropic_beta`` flags and
+        optionally moves server tools with extra params to ``additionalModelRequestFields``).
+
+        Args:
+            tool_config: Bedrock tool configuration after system tool promotion.
+                Mutable — subclasses may remove ``toolSpec`` stubs in-place.
+            additional_request_fields: Mutable additional request fields dict.
+            server_tools: Per-tool dicts.  On the OpenAI route these contain only
+                ``{"name": canonical_name}``; on the Anthropic route they are full
+                ``model_dump(exclude_none=True)`` dicts that may include extra params
+                (e.g. ``max_characters``, ``max_uses``) used for native-format routing.
+            bedrock_messages: Translated Bedrock message list, used to detect
+                ``toolResult`` blocks that require multi-turn stub mode on both
+                the OpenAI and Anthropic routes.  ``None`` disables native-format routing.
+        """
+
+    def _req_extract_server_tools(
+        self,
+        tool_config: ToolConfigurationTypeDef | None,  # noqa: ARG002
+    ) -> list[dict[str, object]]:
+        """Detect model-specific server tools in *tool_config*.
+
+        Scans ``toolSpec`` entries for versioned server tool type names and
+        returns ``{"name": canonical_name}`` dicts for beta flag injection.
+        Does **not** mutate *tool_config* — server tools remain in place so
+        Bedrock always has a ``toolConfig`` for multi-turn conversations.
+
+        Args:
+            tool_config: Bedrock tool configuration before system tool promotion.
+
+        Returns:
+            List of ``{"name": canonical_name}`` dicts for detected server
+            tools.  Empty list by default; overridden on Claude models.
+        """
+        return []
+
+    def _req_promote_system_tools(
+        self, tool_config: ToolConfigurationTypeDef | None
     ) -> ToolConfigurationTypeDef | None:
-        """Configure system tools for the Bedrock request.
+        """Promote eligible ``toolSpec`` entries to ``systemTool`` entries.
 
-        Validates that each system tool is supported by this model and adds
-        them to the Bedrock tool configuration as ``systemTool`` entries
-        inside ``toolConfig.tools[]``.
+        A ``toolSpec`` entry is promoted when its name starts with
+        ``SYSTEM_TOOL_PREFIX`` (``"systemTool_"``) or appears in
+        ``SUPPORTED_SYSTEM_TOOLS``.  Promoted entries move to the end of the
+        list; ``toolChoice`` is dropped when no regular entries remain.
 
-        Subclasses may override this to use a different mechanism (e.g.,
-        Anthropic Claude models inject tools via ``additionalModelRequestFields``).
+        This is the only place that emits ``{"systemTool": {"name": ...}}``.
 
         Args:
             tool_config: Existing Bedrock tool configuration, or ``None``.
-            system_tools: List of Anthropic system tool params.
-            additional_request_fields: Mutable dict of additional request fields
-                for the Bedrock Converse API. Subclasses may mutate this.
 
         Returns:
-            Updated Bedrock tool configuration with system tools added.
-
-        Raises:
-            ApiError: If a system tool is not supported by this model.
+            Updated tool configuration, or ``None`` if input was ``None``.
         """
         if tool_config is None:
-            tool_config = {"tools": []}
-        for tool in system_tools:
-            tool_name = getattr(tool, "name", None)
-            if tool_name is None or tool_name not in self.SUPPORTED_SYSTEM_TOOLS:
-                tool_type = getattr(tool, "type", type(tool).__name__)
-                msg = f"System tool '{tool_type}' is not supported by this model."
-                raise ApiError(msg)
-            tool_config["tools"].append(  # type: ignore[attr-defined]
-                {"systemTool": {"name": self.SUPPORTED_SYSTEM_TOOLS[tool_name]}}
-            )
+            return None
+        remaining: list[ToolTypeDef] = []
+        promoted: list[ToolTypeDef] = []
+        for entry in tool_config["tools"]:
+            spec = entry.get("toolSpec") if isinstance(entry, dict) else None
+            if not spec:
+                remaining.append(entry)
+                continue
+            name: str = spec.get("name", "")
+            if name.startswith(SYSTEM_TOOL_PREFIX):
+                promoted.append(
+                    {"systemTool": {"name": name.removeprefix(SYSTEM_TOOL_PREFIX)}}
+                )
+            elif name in self.SUPPORTED_SYSTEM_TOOLS:
+                promoted.append({"systemTool": {"name": name}})
+            else:
+                remaining.append(entry)
+        if not promoted:
+            return tool_config
+        tool_config["tools"] = remaining + promoted
+        if not remaining:
+            tool_config.pop("toolChoice", None)
         return tool_config
 
     @staticmethod
     def _validate_no_budget_tokens(budget_tokens: int | None) -> None:
-        """Validates that budget tokens are not provided.
-
-        Args:
-            budget_tokens: Budget tokens value to validate.
+        """Raise if *budget_tokens* is set (unsupported on this model).
 
         Raises:
-            ApiError: If budget tokens are provided.
+            ApiError: If *budget_tokens* is not ``None``.
         """
         if budget_tokens is not None:
-            msg = "This model do not support 'thinking_budget'. Use 'reasoning_effort' instead."
+            msg = "This model does not support 'thinking_budget'. Use 'reasoning_effort' instead."
             raise ApiError(msg)

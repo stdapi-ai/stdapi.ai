@@ -4,11 +4,13 @@ from re import compile as re_compile
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal
 
-from stdapi.models.chat._anthropic_claude import AnthropicClaudeChatModel
+from stdapi.models.chat._anthropic_claude import (
+    _BETA_COMPUTER_USE_2025,
+    _BETA_CONTEXT_MANAGEMENT_2025,
+    AnthropicClaudeChatModel,
+)
 
 if TYPE_CHECKING:
-    from pydantic import JsonValue
-
     from stdapi.models import ModelDetails
     from stdapi.types import JsonMapping
     from stdapi.types.openai_chat_completions import ReasoningEffort
@@ -16,7 +18,7 @@ if TYPE_CHECKING:
 # Anthropic reasoning effort values
 AnthropicReasoning = Literal["low", "medium", "high", "max"]
 
-#: OpenAI to Deepseek override
+#: OpenAI to Anthropic reasoning effort override
 _REASONING_OVERRIDE: dict[ReasoningEffort | None, AnthropicReasoning] = {
     "minimal": "low",
     "medium": "medium",
@@ -24,7 +26,7 @@ _REASONING_OVERRIDE: dict[ReasoningEffort | None, AnthropicReasoning] = {
     "xhigh": "max",
 }
 
-_REASONING_CONFIG: JsonValue = {"type": "adaptive"}
+_REASONING_CONFIG: dict[str, str] = {"type": "adaptive"}
 
 
 class ChatModel(AnthropicClaudeChatModel):
@@ -36,8 +38,20 @@ class ChatModel(AnthropicClaudeChatModel):
     _DATE_SUFFIX = re_compile(r"^(.+)-(\d{8})$")
     TOOL_BETA_FLAGS = MappingProxyType(
         {
-            "computer": "computer-use-2025-01-24",
-            "memory": "context-management-2025-06-27",
+            "bash": _BETA_COMPUTER_USE_2025,
+            "str_replace_editor": _BETA_COMPUTER_USE_2025,
+            "str_replace_based_edit_tool": _BETA_COMPUTER_USE_2025,
+            "computer": _BETA_COMPUTER_USE_2025,
+            "memory": _BETA_CONTEXT_MANAGEMENT_2025,
+        }
+    )
+    SERVER_TOOL_NAME_TO_TYPE = MappingProxyType(
+        {
+            "bash": "bash_20250124",
+            "str_replace_based_edit_tool": "text_editor_20250728",
+            "str_replace_editor": "text_editor_20250728",
+            "computer": "computer_20251124",
+            "memory": "memory_20250818",
         }
     )
 
@@ -96,7 +110,7 @@ class ChatModel(AnthropicClaudeChatModel):
                 "budget_tokens": budget_tokens,
             }
         else:
-            additional_request_fields["reasoning_config"] = _REASONING_CONFIG
+            additional_request_fields["reasoning_config"] = _REASONING_CONFIG  # type: ignore[assignment]
             if reasoning_effort:
                 additional_request_fields["output_config"] = {
                     "effort": _REASONING_OVERRIDE.get(reasoning_effort, "high")

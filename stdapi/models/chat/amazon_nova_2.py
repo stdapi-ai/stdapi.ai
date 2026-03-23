@@ -26,7 +26,8 @@ class ChatModel(_BaseChatModel):
 
     MATCHER = "amazon.nova-2-"
     PROMPT_CACHING_SUPPORTED = True
-    SUPPORTED_SYSTEM_TOOLS = MappingProxyType({"web_search": "nova_grounding"})
+    SUPPORTED_SYSTEM_TOOLS = frozenset({"nova_grounding"})
+    ANTHROPIC_TOOL_NAME_MAP = MappingProxyType({"web_search": "nova_grounding"})
 
     def _req_configure_reasoning(
         self,
@@ -35,18 +36,16 @@ class ChatModel(_BaseChatModel):
         budget_tokens: int | None = None,
         max_tokens: int | None = None,  # noqa: ARG002
     ) -> None:
-        """Configures the reasoning parameters for the system.
-
-        Setting up constraints and adaptive reasoning levels based on the provided efforts and budget.
+        """Configure Nova reasoning parameters.
 
         Args:
-            reasoning_effort: Specifies the level of reasoning effort
-                to be applied. If None, defaults to "high".
-            budget_tokens: Maximum number of tokens allowed in the budget. If None,
-                no restrictions are applied.
-            max_tokens: An optional argument, currently not used in the configuration.
-            additional_request_fields: A dictionary to include additional request
-                fields. This will be updated with the configured reasoning type and token budget.
+            additional_request_fields: Mutated with the ``reasoningConfig`` entry.
+            reasoning_effort: Effort level; defaults to ``"medium"`` when ``None``.
+            budget_tokens: Not supported; raises if set.
+            max_tokens: Unused.
+
+        Raises:
+            ApiError: If *budget_tokens* is not ``None``.
         """
         self._validate_no_budget_tokens(budget_tokens)
         additional_request_fields["reasoningConfig"] = {

@@ -1790,6 +1790,48 @@ class WebFetchToolParam(BaseModelRequest):
     )
 
 
+# Ref: anthropic.types.beta.beta_tool_computer_use_20241022_param.BetaToolComputerUse20241022Param
+# Ref: anthropic.types.beta.beta_tool_computer_use_20250124_param.BetaToolComputerUse20250124Param
+# Ref: anthropic.types.beta.beta_tool_computer_use_20251124_param.BetaToolComputerUse20251124Param
+class ToolComputerParam(BaseModelRequest):
+    """Computer use tool definition for GUI automation."""
+
+    type: str = Field(
+        pattern=r"^computer(?:_[0-9]{8})?$",
+        description="Tool type. Always ``computer_*``.",
+    )
+    name: Literal["computer"] = Field(
+        description="Name of the tool.  This is how the tool will be called by the model and in ``tool_use`` blocks."
+    )
+    display_width_px: int = Field(description="The width of the display in pixels.")
+    display_height_px: int = Field(description="The height of the display in pixels.")
+    display_number: int | None = Field(
+        default=None, description="The X11 display number (e.g. 0, 1) for the display."
+    )
+    cache_control: CacheControlEphemeralParam | None = Field(
+        default=None,
+        description="Create a cache control breakpoint at this content block.",
+    )
+    allowed_callers: list[AllowedCaller] | None = Field(
+        default=None, description="List of allowed callers for this tool."
+    )
+    defer_loading: bool | None = Field(
+        default=None,
+        description="If true, tool will not be included in initial system prompt.  Only loaded when returned via tool_reference from tool search.",
+    )
+    enable_zoom: bool | None = Field(
+        default=None,
+        description="Whether to enable an action to take a zoomed-in screenshot of the screen.  Added in ``computer_20251124``.",
+    )
+    input_examples: list[dict[str, object]] | None = Field(
+        default=None, description="Example inputs for the tool."
+    )
+    strict: bool | None = Field(
+        default=None,
+        description="When true, guarantees schema validation on tool names and inputs",
+    )
+
+
 # Ref: anthropic.types.tool_search_tool_bm25_20251119_param.ToolSearchToolBm25_20251119Param
 class ToolSearchToolBm25Param(BaseModelRequest):
     """Tool search tool BM25 parameter."""
@@ -1852,6 +1894,7 @@ ToolUnionParam = (
     ToolParam
     | ToolBashParam
     | ToolTextEditorParam
+    | ToolComputerParam
     | WebSearchToolParam
     | CodeExecutionToolParam
     | MemoryToolParam

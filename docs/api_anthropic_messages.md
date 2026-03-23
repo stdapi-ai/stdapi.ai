@@ -328,6 +328,36 @@ curl -X POST "$BASE/v1/messages" \
 !!! note "Model Compatibility"
     Requesting `web_search` on a model that does not support it will return a `400 Bad Request` error.
 
+#### Bedrock System Tools
+
+For models with Bedrock system tools not covered by automatic name mapping, pass a regular tool whose `name` starts with the `systemTool_` prefix. The prefix is stripped and the tool is forwarded to Bedrock as `{"systemTool": {"name": "<tool_name>"}}`.
+
+**Usage:**
+
+```bash
+curl -X POST "$BASE/v1/messages" \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "amazon.nova-premier-v1:0",
+    "max_tokens": 1024,
+    "messages": [
+      {"role": "user", "content": "What are the latest news today?"}
+    ],
+    "tools": [
+      {
+        "name": "systemTool_nova_grounding",
+        "description": "Web grounding",
+        "input_schema": {"type": "object"}
+      }
+    ]
+  }'
+```
+
+!!! tip "Future-Proof Tool Declarations"
+    As AWS releases new system tools, use the same `systemTool_` prefix to declare them directly without waiting for a specific automatic mapping to be added.
+
 #### ![Claude](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Claude Server Tools
 
 Anthropic Claude models support server-side tools that are executed by the model provider. These tools are passed through to Bedrock via `additionalModelRequestFields` in their native Anthropic JSON format.
@@ -337,7 +367,7 @@ Anthropic Claude models support server-side tools that are executed by the model
 | Tool | Claude 3.5 Sonnet v2 | Claude 3.7+ |
 |------|:---------------------:|:-----------:|
 | `bash` | :material-check-circle:{ .success } | :material-check-circle:{ .success } |
-| `text_editor` (`str_replace_editor`) | :material-check-circle:{ .success } | :material-check-circle:{ .success } |
+| `text_editor` (`str_replace_based_edit_tool`) | :material-check-circle:{ .success } | :material-check-circle:{ .success } |
 | `computer` | :material-check-circle:{ .success } | :material-check-circle:{ .success } |
 | `memory` | :material-close-circle:{ .unsupported } | :material-check-circle:{ .success } |
 
@@ -357,7 +387,7 @@ curl -X POST "$BASE/v1/messages" \
     ],
     "tools": [
       {"type": "bash_20250124", "name": "bash"},
-      {"type": "text_editor_20250124", "name": "str_replace_editor"}
+      {"type": "text_editor_20250728", "name": "str_replace_based_edit_tool"}
     ]
   }'
 ```
@@ -366,7 +396,7 @@ curl -X POST "$BASE/v1/messages" \
     Claude server tools require specific `anthropic-beta` flags on Bedrock. These flags are **automatically injected** when the corresponding server tools are included in the request — no manual header required:
 
     - `bash`, `text_editor`, `computer` → `computer-use-2024-10-22` (Claude 3.5) or `computer-use-2025-01-24` (Claude 3.7+)
-    - `memory` → `context-management-2025-06-27` (Claude 3.7-4.5)
+    - `memory` → `context-management-2025-06-27` (Claude 3.7+)
 
     You can still pass additional `anthropic-beta` flags via the HTTP header or request body for non-tool beta features (e.g., `output-128k-2025-02-19`).
 
@@ -378,7 +408,7 @@ curl -X POST "$BASE/v1/messages" \
 The following Anthropic server tools are **not supported** via Bedrock:
 
 - `code_execution` — Code execution sandbox
-- `web_search` — Web search (only available on Nova Premier via `nova_grounding`)
+- `web_search` — Web search (only available on Amazon Nova models via `nova_grounding`)
 - `web_fetch` — Web page fetching
 - `tool_search` — Tool search
 - `container_upload` — Container file upload

@@ -1,15 +1,18 @@
 """Pytest configuration and fixtures."""
 
+from __future__ import annotations
+
 import base64
 import sys
 from io import BytesIO
-from os import environ
+from os import environ, getenv
 from pathlib import Path
 from secrets import token_hex
 from typing import TYPE_CHECKING
 
 import pytest
 from aiobotocore.session import get_session
+from anthropic import Anthropic, AnthropicBedrock, BadRequestError, NotFoundError
 from dotenv import load_dotenv
 from openai import OpenAI
 from PIL import Image as PILImage
@@ -18,6 +21,8 @@ from starlette.testclient import TestClient
 
 if TYPE_CHECKING:
     from collections.abc import Generator
+
+    from pluggy import Result as _PluggyResult
 
 
 _loaded_env_file: str | None = None
@@ -69,6 +74,43 @@ def _load_env_profile() -> None:
 
 _load_env_profile()
 del _load_env_profile
+
+# ---------------------------------------------------------------------------
+# Early environment setup
+#
+# These vars must be set at module level — before pytest imports any test file
+# that may import stdapi modules at the top level (e.g. for unit tests).
+# stdapi.config.SETTINGS is a module-level singleton: the first import of
+# stdapi.config runs ``SETTINGS = _Settings()`` from whatever os.environ
+# values are present at that moment.  If we only set these inside the
+# test_client fixture, any test file that imports from stdapi at collection
+# time would see the defaults (api_key=None, allow_prompt_router=False).
+# ---------------------------------------------------------------------------
+
+#: Fixed API key shared by the test server and all test clients.
+_TEST_API_KEY: str = token_hex()
+
+environ.update(
+    {
+        # Authentication — must match the key used by the test clients.
+        "api_key": _TEST_API_KEY,
+        # Ensure all optional features are enabled so their tests can run.
+        "aws_bedrock_allow_application_inference_profile_arn": "true",
+        "aws_bedrock_allow_prompt_router_arn": "true",
+        # Ensure invalid inputs in tests are detected.
+        "strict_input_validation": "true",
+        # Enable all optional middlewares so their behaviour is tested.
+        "cors_allow_origins": '["*"]',
+        "enable_gzip": "true",
+        "enable_proxy_headers": "true",
+        "log_client_ip": "true",
+        "log_request_params": "true",
+        "model_cache_seconds": "10",
+        "otel_enabled": "true",
+        "tokens_estimation": "true",
+        "trusted_hosts": '["*"]',
+    }
+)
 
 # Model mappings for different test contexts
 MODEL_MAPPINGS = {
@@ -267,39 +309,18 @@ def image_generation_stream_model(models: dict[str, str]) -> str:
 
 @pytest.fixture(scope="session")
 def api_key() -> str:
-    """Returns a random API key to use for the test session with local clients."""
-    return token_hex()
+    """Returns the API key used for the test session with local clients."""
+    return _TEST_API_KEY
 
 
 @pytest.fixture(scope="session")
-def test_client(
-    request: pytest.FixtureRequest, api_key: str
-) -> Generator[TestClient | None]:
+def test_client(request: pytest.FixtureRequest) -> Generator[TestClient | None]:
     """Create a Starlette test client for local API testing."""
     if not request.config.getoption(
         "--use-official-api"
     ) and not request.config.getoption("--server-url"):
-        environ.update(
-            {
-                # Use FastAPI TestClient for local testing
-                "log_level": "info" if request.config.getoption("--info") else "error",
-                # Ensure invalid inputs in tests are detected
-                "strict_input_validation": "true",
-                # Ensure all optional middlewares and features are enabled
-                "api_key": api_key,
-                "cors_allow_origins": '["*"]',
-                "enable_gzip": "true",
-                "enable_proxy_headers": "true",
-                "log_client_ip": "true",
-                "log_request_params": "true",
-                "model_cache_seconds": "10",
-                "otel_enabled": "true",
-                "tokens_estimation": "true",
-                "trusted_hosts": '["*"]',
-                "aws_bedrock_allow_application_inference_profile_arn": "true",
-                "aws_bedrock_allow_prompt_router_arn": "true",
-            }
-        )
+        # log_level depends on a CLI flag, so it cannot be set at module level.
+        environ["log_level"] = "info" if request.config.getoption("--info") else "error"
         from stdapi.main import app  # noqa: PLC0415
 
         with TestClient(app) as test_client:
@@ -557,3 +578,139 @@ async def aws_account_id(aws_session_info: tuple[str, str]) -> str:
         str: AWS account ID.
     """
     return aws_session_info[1]
+
+
+# ---------------------------------------------------------------------------
+# Anthropic API fixtures (shared across Anthropic test modules)
+# ---------------------------------------------------------------------------
+
+#: Model mappings for Anthropic /v1/messages tests.
+ANTHROPIC_MODEL_MAPPINGS: dict[str, dict[str, str]] = {
+    "local": {
+        "chat": "anthropic.claude-haiku-4-5-20251001-v1:0",
+        "chat_vision": "anthropic.claude-haiku-4-5-20251001-v1:0",
+        "chat_reasoning": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "count_tokens": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+    },
+    "anthropic": {
+        "chat": "claude-haiku-4-5-20251001",
+        "chat_vision": "claude-haiku-4-5-20251001",
+        "chat_reasoning": "claude-sonnet-4-5-20250929",
+        "count_tokens": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+    },
+}
+ANTHROPIC_MODEL_MAPPINGS["bedrock"] = {
+    key: f"global.{value}" for key, value in ANTHROPIC_MODEL_MAPPINGS["local"].items()
+}
+ANTHROPIC_MODEL_MAPPINGS["bedrock"]["count_tokens"] = (
+    "anthropic.claude-3-5-sonnet-20240620-v1:0"
+)
+
+
+@pytest.fixture(scope="session")
+def use_anthropic_api(request: pytest.FixtureRequest) -> bool:
+    """Determine if we should use the official Anthropic API."""
+    return request.config.getoption("--use-official-api")  # type: ignore[no-any-return]
+
+
+@pytest.fixture(scope="session")
+def anthropic_models(use_anthropic_api: bool) -> dict[str, str]:
+    """Get Anthropic model mappings based on test target."""
+    return (
+        (
+            ANTHROPIC_MODEL_MAPPINGS["anthropic"]
+            if getenv("ANTHROPIC_API_KEY")
+            else ANTHROPIC_MODEL_MAPPINGS["bedrock"]
+        )
+        if use_anthropic_api
+        else ANTHROPIC_MODEL_MAPPINGS["local"]
+    )
+
+
+@pytest.fixture(scope="session")
+def anthropic_chat_model(anthropic_models: dict[str, str]) -> str:
+    """Provide the appropriate Anthropic chat model."""
+    return anthropic_models["chat"]
+
+
+@pytest.fixture(scope="session")
+def anthropic_chat_vision_model(anthropic_models: dict[str, str]) -> str:
+    """Provide the appropriate vision-capable Anthropic chat model."""
+    return anthropic_models["chat_vision"]
+
+
+@pytest.fixture(scope="session")
+def anthropic_chat_reasoning_model(anthropic_models: dict[str, str]) -> str:
+    """Provide the appropriate reasoning-capable Anthropic chat model."""
+    return anthropic_models["chat_reasoning"]
+
+
+@pytest.fixture(scope="session")
+def anthropic_count_tokens_model(anthropic_models: dict[str, str]) -> str:
+    """Provide the appropriate Anthropic model for count tokens testing."""
+    return anthropic_models["count_tokens"]
+
+
+@pytest.fixture(scope="session")
+def anthropic_client(
+    request: pytest.FixtureRequest, test_client: TestClient | None, api_key: str
+) -> Anthropic:
+    """Create an Anthropic client for either local or official API testing."""
+    if test_client:
+        return Anthropic(
+            base_url="http://testserver/anthropic/",
+            api_key=api_key,
+            max_retries=0,
+            http_client=test_client,
+        )
+    if request.config.getoption("--use-official-api"):
+        if getenv("ANTHROPIC_API_KEY"):
+            return Anthropic(max_retries=5)
+        return AnthropicBedrock(max_retries=5)  # type: ignore[return-value]
+    return Anthropic(
+        base_url=f"{request.config.getoption('--server-url').rstrip('/')}/anthropic/",
+        max_retries=0,
+        api_key=getenv("OPENAI_API_KEY"),
+    )
+
+
+@pytest.fixture(scope="session")
+def is_bedrock_direct(anthropic_client: Anthropic) -> bool:
+    """True when ``anthropic_client`` talks directly to AWS Bedrock (AnthropicBedrock).
+
+    Bedrock returns ``tool_use`` blocks (not ``server_tool_use``) for system tools
+    and does not support ``code_execution`` or ``web_fetch`` tool types.
+    """
+    return isinstance(anthropic_client, AnthropicBedrock)
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(
+    item: pytest.Item, call: pytest.CallInfo[None]
+) -> Generator[None, _PluggyResult[pytest.TestReport]]:
+    """Convert 'invalid model identifier' errors to xfail for cross-model tests.
+
+    When tests are parametrized over all Claude models, some Bedrock model IDs may
+    not exist in the cross-region inference catalog.  Rather than failing hard, those
+    tests are reported as ``xfail`` so the run stays informative without blocking CI.
+    """
+    outcome: _PluggyResult[pytest.TestReport] = yield
+    if call.when != "call":
+        return
+    report = outcome.get_result()
+    if not report.failed or call.excinfo is None:
+        return
+    exc = call.excinfo.value
+    if (
+        isinstance(exc, BadRequestError) and "model identifier is invalid" in str(exc)
+    ) or (isinstance(exc, NotFoundError) and "Legacy" in str(exc)):
+        pass
+    else:
+        return
+    if "test_anthropic_messages_anthropic_claude" not in getattr(
+        getattr(item, "module", None), "__name__", ""
+    ):
+        return
+    report.outcome = "xfailed"  # type: ignore[assignment]
+    report.wasxfail = f"model not available on this backend: {call.excinfo.value}"
+    report.longrepr = None

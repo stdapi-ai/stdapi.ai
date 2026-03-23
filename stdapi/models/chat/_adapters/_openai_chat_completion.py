@@ -21,12 +21,6 @@ from stdapi.aws_bedrock import (
 from stdapi.models.audio import synthesize_speech
 from stdapi.monitoring import log_response_params
 from stdapi.tokenizer import estimate_token_count
-from stdapi.types.anthropic_messages import (
-    MemoryToolParam,
-    ServerTools,
-    ToolBashParam,
-    ToolTextEditorParam,
-)
 from stdapi.types.openai import FunctionDefinition
 from stdapi.types.openai_chat_completions import (
     Annotation,
@@ -77,20 +71,16 @@ if TYPE_CHECKING:
         ConverseStreamOutputTypeDef,
         InferenceConfigurationTypeDef,
         MessageTypeDef,
-        ReasoningContentBlockUnionTypeDef,
         SystemContentBlockTypeDef,
-        SystemToolTypeDef,
         ToolChoiceTypeDef,
         ToolConfigurationTypeDef,
         ToolResultContentBlockUnionTypeDef,
-        ToolSpecificationTypeDef,
         ToolTypeDef,
         ToolUseBlockTypeDef,
     )
 
     from stdapi.aws_bedrock import PromptCaching
     from stdapi.types import JsonMapping
-    from stdapi.types.anthropic_messages import ToolUnionParam
     from stdapi.types.openai_chat_completions import (
         ChatCompletionAssistantMessageParam,
         ChatCompletionAudioParam,
@@ -106,11 +96,6 @@ if TYPE_CHECKING:
         ServiceTiers,
     )
 
-    #: Union of Anthropic server tool parameter classes used in tool mappings
-    type _AnthropicToolClass = type[
-        ToolBashParam | ToolTextEditorParam | MemoryToolParam
-    ]
-
 #: Bedrock stop reasons to OpenAI finish reasons mapping
 _FINISH_REASONS: dict[StopReasonType | None, FinishReason] = {
     "max_tokens": "length",
@@ -124,9 +109,6 @@ _FINISH_REASONS: dict[StopReasonType | None, FinishReason] = {
 
 #: Empty tool schema for Bedrock tool configuration
 _EMPTY_TOOL: dict[str, str] = {"type": "object"}
-
-#: Prefix for system-provided tool identifiers
-_SYSTEM_TOOL_PREFIX: str = "systemTool_"
 
 #: OpenAI services tiers to Bedrock mapping
 _SERVICES_TIERS: dict[ServiceTiers, ServiceTierTypeType] = {
@@ -153,29 +135,6 @@ _LEGACY_FUNCTION: ContextVar[bool] = ContextVar("legacy_function")
 
 #: Default output modalities when none specified
 DEFAULT_OUTPUT_MODALITIES: list[str] = ["text"]
-
-
-#: Versioned Anthropic tool name lookup: type prefix → (ParamClass, canonical_name)
-_ANTHROPIC_TOOL_PREFIXES: dict[str, tuple[_AnthropicToolClass, ServerTools]] = {
-    "bash": (ToolBashParam, "bash"),
-    "text_editor": (ToolTextEditorParam, "str_replace_editor"),
-    "memory": (MemoryToolParam, "memory"),
-}
-
-
-def _map_anthropic_tool_name(stripped: str) -> ToolUnionParam | None:
-    """Map a stripped ``systemTool_`` name to an Anthropic ``ToolUnionParam``.
-
-    Accepts versioned names with an 8-digit date suffix (``bash_20250124``).
-    Returns ``None`` for unknown names so the caller can fall back to the
-    regular Bedrock ``systemTool`` path.
-    """
-    for prefix, (cls, default_name) in _ANTHROPIC_TOOL_PREFIXES.items():
-        suffix = stripped.removeprefix(f"{prefix}_")
-        if suffix != stripped and len(suffix) == 8 and suffix.isdigit():
-            return cls(type=stripped, name=default_name)  # type: ignore[arg-type]
-
-    return None
 
 
 def map_bedrock_stop_reason(
@@ -242,38 +201,26 @@ def _map_tools(request: CompletionCreateParams) -> list[ChatCompletionToolUnionP
 
 
 def _map_tool_spec(
-    tool: ChatCompletionToolUnionParam,
-    tools: list[ToolTypeDef],
-    anthropic_system_tools: list[ToolUnionParam],
+    tool: ChatCompletionToolUnionParam, tools: list[ToolTypeDef]
 ) -> None:
-    """Map a tool spec to Bedrock tools or Anthropic server tools.
+    """Map a tool spec to a Bedrock ``toolSpec`` entry.
 
     Args:
         tool: The tool to be processed and mapped.
-        tools: Accumulator for regular Bedrock tool specifications.
-        anthropic_system_tools: Accumulator for Anthropic-native server tools.
+        tools: Accumulator for Bedrock tool specifications.
     """
-    tool_type = tool.type
-    if tool_type == "function":
-        function_tool: ChatCompletionFunctionToolParam = tool  # type: ignore[assignment]
-        function_spec = function_tool.function
-        name = function_spec.name
-        if name.startswith(_SYSTEM_TOOL_PREFIX) and not function_spec.parameters:
-            stripped: str = name.removeprefix(_SYSTEM_TOOL_PREFIX)
-            if anthropic_tool := _map_anthropic_tool_name(stripped):
-                anthropic_system_tools.append(anthropic_tool)
-            else:
-                system_tool: SystemToolTypeDef = {"name": stripped}
-                tools.append({"systemTool": system_tool})
-        else:
-            tool_spec: ToolSpecificationTypeDef = {
-                "name": function_spec.name,
-                "description": function_spec.description or tool_type,
-                "inputSchema": {"json": function_spec.parameters or _EMPTY_TOOL},
+    if tool.type == "function":
+        tools.append(
+            {
+                "toolSpec": {
+                    "name": tool.function.name,
+                    "description": tool.function.description or "function",
+                    "inputSchema": {"json": tool.function.parameters or _EMPTY_TOOL},
+                }
             }
-            tools.append({"toolSpec": tool_spec})
-    else:  # pragma: no cover
-        msg = f"Unsupported tool type '{tool_type}': {to_json(tool).decode()}"
+        )
+    else:
+        msg = f"Unsupported tool type '{tool.type}': {to_json(tool).decode()}"
         raise ApiError(msg)
 
 
@@ -342,26 +289,25 @@ def _map_function_call(
 
 def build_tool_config(
     request: CompletionCreateParams,
-) -> tuple[ToolConfigurationTypeDef | None, list[ToolUnionParam]]:
-    """Builds a configuration for tools based on the provided request.
+) -> ToolConfigurationTypeDef | None:
+    """Build a Bedrock tool configuration from an OpenAI request.
 
-    Separates Anthropic-native server tools (detected via the ``systemTool_``
-    prefix and matching a known Anthropic tool name) from regular Bedrock
-    tools.  Anthropic server tools are returned separately so the model
-    class can route them through ``_req_configure_system_tools``.
+    All function tools are mapped to ``toolSpec`` entries as-is.  System tool
+    routing (``systemTool_`` prefix stripping and ``SUPPORTED_SYSTEM_TOOLS``
+    auto-promotion) is handled at the model layer by
+    ``_req_configure_raw_system_tools`` and ``_req_promote_supported_system_tools``.
 
     Args:
         request: The request object containing the data to map and configure tools.
 
     Returns:
-        Tuple of (tool_config, anthropic_system_tools).
+        Bedrock tool configuration, or ``None`` if no tools are present.
     """
     tools: list[ToolTypeDef] = []
-    anthropic_system_tools: list[ToolUnionParam] = []
     for tool in _map_tools(request):
-        _map_tool_spec(tool, tools, anthropic_system_tools)
+        _map_tool_spec(tool, tools)
     if not tools:
-        return None, anthropic_system_tools
+        return None
 
     tool_config: ToolConfigurationTypeDef = {"tools": tools}
     tool_choice_bedrock = _map_tool_choice(request.tool_choice) or _map_function_call(
@@ -369,7 +315,7 @@ def build_tool_config(
     )
     if tool_choice_bedrock:
         tool_config["toolChoice"] = tool_choice_bedrock
-    return tool_config, anthropic_system_tools
+    return tool_config
 
 
 def translate_request(
@@ -378,7 +324,6 @@ def translate_request(
     InferenceConfigurationTypeDef,
     JsonMapping,
     ToolConfigurationTypeDef | None,
-    list[ToolUnionParam],
     ServiceTierTypeType | None,
     ServiceTiers | None,
     int,
@@ -395,7 +340,7 @@ def translate_request(
 
     Returns:
         Tuple of (inference_cfg, additional_request_fields, tool_config,
-        system_tools, bedrock_service_tier, openai_service_tier, choices_count).
+        bedrock_service_tier, openai_service_tier, choices_count).
     """
     max_tokens = request.max_completion_tokens or request.max_tokens
     additional_request_fields: JsonMapping = {}
@@ -416,14 +361,13 @@ def translate_request(
     )
 
     bedrock_service_tier, openai_service_tier = map_service_tier(request.service_tier)
-    tool_config, system_tools = build_tool_config(request)
+    tool_config = build_tool_config(request)
 
     _LEGACY_FUNCTION.set(request.functions is not None)
     return (
         inference_cfg,
         additional_request_fields,
         tool_config,
-        system_tools,
         bedrock_service_tier,
         openai_service_tier,
         request.n or 1,
@@ -539,79 +483,65 @@ def _build_tool_use_block(
     raise ApiError(msg)
 
 
-def _append_text_content_block(
-    content: str, content_blocks: list[ContentBlockTypeDef]
-) -> None:
-    """Adds a new content block to the list if content is provided.
-
-    Args:
-        content: The content string to be evaluated and added as a
-            content block if not empty.
-        content_blocks: The list of content blocks to which the new content block will be appended.
-    """
-    if content:
-        content_blocks.append({"text": content})
-
-
 def _map_assistant_content(
     content_blocks: list[ContentBlockTypeDef],
     message_param: ChatCompletionAssistantMessageParam,
 ) -> None:
-    """Maps the assistant message content into content block structures.
+    """Append text/refusal content blocks from an assistant message.
 
     Args:
-        content_blocks: The list of content blocks to append the message content to.
+        content_blocks: Mutable list to append blocks to.
         message_param: The assistant message.
 
     Raises:
-        ApiError: If the content part in `message_param` contains an unsupported
-            type.
+        ApiError: If a content part has an unsupported type.
     """
-    content = message_param.content
-    if content is not None:
-        if isinstance(content, str):
-            _append_text_content_block(content, content_blocks)
-        else:
-            for part in content:
-                match part:
-                    case ChatCompletionContentPartTextParam(text=text):
-                        _append_text_content_block(text, content_blocks)
-                    case ChatCompletionContentPartRefusalParam(refusal=refusal):
-                        _append_text_content_block(refusal, content_blocks)
-                    case _:  # pragma: no cover
-                        msg = f"Unsupported message type: {part}"
-                        raise ApiError(msg)
+    if (content := message_param.content) is None:
+        return
+    if isinstance(content, str):
+        if content:
+            content_blocks.append({"text": content})
+        return
+    for part in content:
+        match part:
+            case (
+                ChatCompletionContentPartTextParam(text=text)
+                | ChatCompletionContentPartRefusalParam(refusal=text)
+            ):
+                if text:
+                    content_blocks.append({"text": text})
+            case _:  # pragma: no cover
+                msg = f"Unsupported message type: {part}"
+                raise ApiError(msg)
 
 
 def _map_assistant_reasoning_content(
     content_blocks: list[ContentBlockTypeDef],
     message_param: ChatCompletionAssistantMessageParam,
 ) -> None:
-    """Maps the reasoning message content into content block structures.
+    """Append a reasoning content block from an assistant message.
 
     Args:
-        content_blocks: The list of content blocks to append the message content to.
+        content_blocks: Mutable list to append blocks to.
         message_param: The assistant message.
 
     Raises:
-        ApiError: If the content part in `message_param` contains an unsupported
-            type.
+        ApiError: If a reasoning content part has an unsupported type.
     """
-    reasoning_content = message_param.reasoning_content
-    if reasoning_content is not None:
-        reasoning_block: ReasoningContentBlockUnionTypeDef = {}
-        if isinstance(reasoning_content, str):
-            reasoning_block["reasoningText"] = {"text": reasoning_content}
-        else:
-            text: list[str] = []
-            for part in reasoning_content:
-                if isinstance(part, ChatCompletionContentPartTextParam):
-                    text.append(part.text)
-                else:  # pragma: no cover
-                    msg = f"Unsupported message type: {part}"
-                    raise ApiError(msg)
-            reasoning_block["reasoningText"] = {"text": "".join(text)}
-        content_blocks.append({"reasoningContent": reasoning_block})
+    if (reasoning_content := message_param.reasoning_content) is None:
+        return
+    if isinstance(reasoning_content, str):
+        text = reasoning_content
+    else:
+        parts: list[str] = []
+        for part in reasoning_content:
+            if isinstance(part, ChatCompletionContentPartTextParam):
+                parts.append(part.text)
+            else:  # pragma: no cover
+                msg = f"Unsupported message type: {part}"
+                raise ApiError(msg)
+        text = "".join(parts)
+    content_blocks.append({"reasoningContent": {"reasoningText": {"text": text}}})
 
 
 def _extract_assistant_blocks(
@@ -638,24 +568,16 @@ def _extract_assistant_blocks(
     _map_assistant_reasoning_content(content_blocks, message_param)
 
     # Tools and function calls must be at the end
-    tool_calls: list[ChatCompletionMessageToolCallUnion] = (
-        message_param.tool_calls if message_param.tool_calls is not None else []
-    )
-    for tool_call in tool_calls:
-        call_id = tool_call.id
+    for tool_call in message_param.tool_calls or []:
         if tool_call.type == "function":
-            function_tool = tool_call.function
-            name = function_tool.name
-            arguments = function_tool.arguments
+            name, arguments = tool_call.function.name, tool_call.function.arguments
         elif tool_call.type == "custom":
-            custom_tool = tool_call.custom
-            name = custom_tool.name
-            arguments = custom_tool.input
+            name, arguments = tool_call.custom.name, tool_call.custom.input
         else:  # pragma: no cover
             msg = f"Unsupported tool call type: {tool_call}"
             raise ApiError(msg)
         content_blocks.append(
-            _build_tool_use_block(name=name, arguments=arguments, call_id=call_id)
+            _build_tool_use_block(name=name, arguments=arguments, call_id=tool_call.id)
         )
 
     function_call = message_param.function_call
@@ -673,56 +595,46 @@ def _extract_assistant_blocks(
 
 
 def _parse_tool_content(text_content: str) -> ToolResultContentBlockUnionTypeDef:
-    """Parses the content of a tool's textual output to determine its structure.
-
-    The function attempts to parse the provided textual content as JSON. If it
-    succeeds, the JSON structure is returned. If the parsing fails, the content
-    is assumed to be plain text and is returned encapsulated in a dictionary.
+    """Parse tool text output, returning JSON if it is a JSON object, otherwise plain text.
 
     Args:
-        text_content: The textual content to be parsed.
+        text_content: Text content from a tool message.
 
     Returns:
-        A dictionary containing either the parsed JSON mapping or the original
-        text content.
+        ``{"json": ...}`` when the content is a JSON object, ``{"text": ...}`` otherwise.
     """
     try:
-        json_content = from_json(text_content)
+        if isinstance(json_content := from_json(text_content), dict):
+            return {"json": json_content}
     except ValueError:
-        return {"text": text_content}
-    else:
-        return (
-            {"json": json_content}
-            if isinstance(json_content, dict)
-            else {"text": text_content}
-        )
+        pass
+    return {"text": text_content}
 
 
-def _extract_tool_blocks(
+async def _extract_tool_blocks(
     message_param: ChatCompletionToolMessageParam,
 ) -> list[ContentBlockTypeDef]:
-    """Extracts tool blocks from the given message parameter.
+    """Convert a tool message to a Bedrock toolResult block.
 
     Args:
-        message_param: The message parameter containing tool invocation data, including
-            content and tool call ID.
+        message_param: Tool message containing content and tool call ID.
 
     Returns:
-        A list of structured content blocks extracted and formatted from the given
-        message parameter.
+        Single-element list with a ``toolResult`` content block.
     """
-    content_parts: list[ChatCompletionContentPartTextParam] = (
+    parts: list[
+        ChatCompletionContentPartTextParam | ChatCompletionContentPartImageParam
+    ] = (
         [ChatCompletionContentPartTextParam(text=message_param.content, type="text")]
         if isinstance(message_param.content, str)
-        else message_param.content
+        else list(message_param.content)
     )
-
-    content: list[ToolResultContentBlockUnionTypeDef] = []
-    for part in content_parts:
-        if part.type == "text":
-            text_content = part.text
-            content.append(_parse_tool_content(text_content))
-
+    content: list[ToolResultContentBlockUnionTypeDef] = [
+        await part.image_url.url.to_bedrock_content_block()  # type: ignore[misc]
+        if isinstance(part, ChatCompletionContentPartImageParam)
+        else _parse_tool_content(part.text)
+        for part in parts
+    ]
     return [
         {"toolResult": {"toolUseId": message_param.tool_call_id, "content": content}}
     ]
@@ -731,37 +643,33 @@ def _extract_tool_blocks(
 def _extract_function_blocks(
     message_param: ChatCompletionFunctionMessageParam,
 ) -> list[ContentBlockTypeDef]:
-    """Extracts function blocks from the given message parameter.
+    """Convert a legacy function message to a Bedrock toolResult block.
 
     Args:
-        message_param: A structured input parameter containing details about
-            the chat completion function message.
+        message_param: Legacy function message with name and content.
 
     Returns:
-        A list of structured content blocks with parsed tool results.
+        Single-element list with a ``toolResult`` content block.
     """
     _LEGACY_FUNCTION.set(True)
-    content: list[ToolResultContentBlockUnionTypeDef] = []
-    text_content = message_param.content
-    if text_content is not None:
-        content.append(_parse_tool_content(text_content))
+    content: list[ToolResultContentBlockUnionTypeDef] = (
+        [_parse_tool_content(message_param.content)]
+        if message_param.content is not None
+        else []
+    )
     return [{"toolResult": {"toolUseId": message_param.name, "content": content}}]
 
 
 async def map_messages(
     messages: list[ChatCompletionMessageParam],
 ) -> tuple[list[MessageTypeDef], list[SystemContentBlockTypeDef]]:
-    """Processes and maps a list of OpenAI message parameters into Bedrock structures.
-
-    One for chat messages and one for system content blocks. This is done by
-    categorizing and processing the input based on the role of each message and its content.
+    """Convert OpenAI message params into Bedrock messages and system blocks.
 
     Args:
-        messages: A list of message parameters to be processed.
+        messages: OpenAI message params to convert.
 
     Returns:
-        A tuple where the first element is a list of structured chat messages and
-        the second element is a list of extracted system content blocks.
+        Tuple of (bedrock_messages, system_blocks).
     """
     bedrock_messages: list[MessageTypeDef] = []
     system_blocks: list[SystemContentBlockTypeDef] = []
@@ -788,7 +696,7 @@ async def map_messages(
 
         if role_name == "tool":
             tool_msg: ChatCompletionToolMessageParam = message_param  # type: ignore[assignment]
-            content_blocks = _extract_tool_blocks(tool_msg)
+            content_blocks = await _extract_tool_blocks(tool_msg)
             if previous_role_name == "tool":
                 # All consecutive tool blocks must be merged
                 bedrock_messages[-1]["content"] += content_blocks  # type: ignore[operator]
@@ -809,13 +717,17 @@ async def map_messages(
 
 
 def parse_prompt_cache_key(prompt_cache_key: str | None) -> set[PromptCaching]:
-    """Parses and validates the given prompt cache key.
+    """Map a ``prompt_cache_key`` value to the set of cache components to enable.
+
+    A dot-separated string like ``"system.tools"`` enables specific components;
+    any unrecognised values are ignored.  A non-empty string with no recognisable
+    tokens enables all components (``PROMPT_CACHING``).
 
     Args:
-        prompt_cache_key: The cache key string to be parsed.
+        prompt_cache_key: Dot-separated cache component selector, or ``None``.
 
     Returns:
-        A set containing valid keys derived from the input `prompt_cache_key`.
+        Set of ``PromptCaching`` values to enable, or an empty set when caching is disabled.
     """
     if prompt_cache_key:
         return (
@@ -925,18 +837,21 @@ async def _get_or_generate_audio(
     created: int,
     index: int,
 ) -> ChatCompletionAudio:
-    """Handles the generation or retrieval of audio content.
+    """Return the audio output for a completion choice, generating it via TTS if absent.
+
+    If *contents* already contains an ``audio`` block (model-native audio), that
+    data is used directly.  Otherwise, the text is synthesised via TTS.
 
     Args:
-        audio_params: Configuration parameters for audio synthesis.
-        contents: A list of content blocks.
-        completion_id: A unique identifier for the completion task.
-        content: The text content used for synthesizing audio.
-        created: A timestamp indicating the creation time.
-        index: The position of this content block.
+        audio_params: Audio format and voice configuration.
+        contents: Bedrock output content blocks for this choice.
+        completion_id: Unique completion identifier.
+        content: Text to synthesise if no model audio is present.
+        created: Unix timestamp of the request.
+        index: Zero-based choice index.
 
     Returns:
-        ChatCompletionAudio with the generated or retrieved audio.
+        ChatCompletionAudio with the audio data.
     """
     for block in contents:
         if (audio := block.get("audio")) and (source := audio.get("source")):

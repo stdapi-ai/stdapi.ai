@@ -24,7 +24,6 @@ from stdapi.aws_bedrock import (
 )
 from stdapi.monitoring import log_response_params
 from stdapi.types.anthropic_messages import (
-    SERVER_TOOL_NAMES,
     Base64ImageSource,
     Base64PDFSource,
     CacheControlEphemeralParam,
@@ -58,7 +57,6 @@ from stdapi.types.anthropic_messages import (
     RedactedThinkingBlock,
     RedactedThinkingBlockParam,
     SearchResultBlockParam,
-    ServerToolUseBlock,
     ServerToolUseBlockParam,
     ServiceTiers,
     SignatureDelta,
@@ -76,6 +74,7 @@ from stdapi.types.anthropic_messages import (
     ToolChoiceNoneParam,
     ToolChoiceParam,
     ToolChoiceToolParam,
+    ToolComputerParam,
     ToolParam,
     ToolResultBlockParam,
     ToolSearchToolBm25Param,
@@ -94,7 +93,7 @@ from stdapi.types.anthropic_messages import (
 from stdapi.utils import b64decode, b64encode
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator
+    from collections.abc import AsyncGenerator, AsyncIterator, Mapping
 
     from types_aiobotocore_bedrock.literals import RegionName
     from types_aiobotocore_bedrock_runtime.literals import (
@@ -124,6 +123,7 @@ if TYPE_CHECKING:
     )
 
     from stdapi.types import JsonMapping
+    from stdapi.types.anthropic_messages import ServerTools
 
 
 def _build_cache_point(
@@ -437,6 +437,7 @@ def _map_tool_spec(tool: ToolUnionParam) -> ToolTypeDef | None:
             WebSearchToolParam()
             | ToolBashParam()
             | ToolTextEditorParam()
+            | ToolComputerParam()
             | CodeExecutionToolParam()
             | MemoryToolParam()
             | WebFetchToolParam()
@@ -475,36 +476,86 @@ def _map_tool_choice(tool_choice: ToolChoiceParam | None) -> ToolChoiceTypeDef |
             return None
 
 
+def _handle_system_tool(
+    tool: ToolUnionParam,
+    tool_list: list[ToolTypeDef],
+    *,
+    tool_name_map: Mapping[ServerTools, str] | None,
+) -> None:
+    """Append a ``toolSpec`` stub for an Anthropic server tool.
+
+    The Bedrock name is looked up via *tool_name_map* when provided, otherwise
+    ``tool.name`` is used verbatim.  The stub is later promoted to a Bedrock
+    ``systemTool`` entry by ``_req_promote_system_tools`` (non-Claude models),
+    or kept as a ``toolSpec`` entry in ``toolConfig`` by Claude models
+    (multi-turn stub mode: required so Bedrock accepts ``toolResult`` blocks in
+    multi-turn conversations).
+
+    Args:
+        tool: Anthropic server tool param.
+        tool_list: Mutable Bedrock tool list to append to.
+        tool_name_map: Anthropic → Bedrock name map.
+
+    Raises:
+        ApiError: If *tool_name_map* is provided and the tool name is absent.
+    """
+    if tool_name_map:
+        if tool.name not in tool_name_map:
+            tool_type = getattr(tool, "type", type(tool).__name__)
+            msg = f"Server tool '{tool_type}' is not supported by this model."
+            raise ApiError(msg)
+        bedrock_name: str = tool_name_map[tool.name]  # type: ignore[index]
+    else:
+        bedrock_name = tool.name
+    tool_list.append(
+        {
+            "toolSpec": {
+                "name": bedrock_name,
+                "description": bedrock_name,
+                "inputSchema": {"json": {"type": "object"}},
+            }
+        }
+    )
+
+
 def _build_tool_config(
     tools: list[ToolUnionParam] | None,
     tool_choice: ToolChoiceParam | None,
     *,
     allow_explicit_caching: bool = False,
-) -> tuple[ToolConfigurationTypeDef | None, list[ToolUnionParam]]:
+    tool_name_map: Mapping[ServerTools, str] | None = None,
+) -> ToolConfigurationTypeDef | None:
     """Build a Bedrock tool configuration from Anthropic tools and tool choice.
 
+    ``ToolParam`` entries become ``toolSpec`` entries; server tools become bare
+    ``toolSpec`` stubs for downstream handling by ``_req_promote_system_tools``
+    or ``_req_configure_tools``.
+
     Args:
-        tools: List of Anthropic tool params, or ``None``.
-        tool_choice: Anthropic tool choice param, or ``None``.
-        allow_explicit_caching: Whether to allow prompt caching for tools.
+        tools: Anthropic tool params, or ``None``.
+        tool_choice: Anthropic tool choice, or ``None``.
+        allow_explicit_caching: Append a cache-point after the last tool when a
+            tool carries ``cache_control``.
+        tool_name_map: Anthropic server tool name → Bedrock name translation map.
 
     Returns:
-        A 2-tuple of (Bedrock tool configuration dict or ``None``,
-        list of system tools extracted from the input).
+        Bedrock ``ToolConfigurationTypeDef``, or ``None`` when *tools* is empty.
+
+    Raises:
+        ApiError: If *tool_name_map* is provided and a server tool name is absent.
     """
     if not tools:
-        return None, []
+        return None
 
     tool_list: list[ToolTypeDef] = []
-    system_tools: list[ToolUnionParam] = []
     cache_control: CacheControlEphemeralParam | None = None
     for tool in tools:
         tool_bedrock = _map_tool_spec(tool)
         if tool_bedrock is None:
-            system_tools.append(tool)
+            _handle_system_tool(tool, tool_list, tool_name_map=tool_name_map)
             continue
         if hasattr(tool, "cache_control") and tool.cache_control:
-            cache_control = cache_control or tool.cache_control
+            cache_control = tool.cache_control or cache_control
         tool_list.append(tool_bedrock)
     if cache_control and allow_explicit_caching:
         tool_list.append(_build_cache_point(cache_control))  # type: ignore[arg-type]
@@ -514,7 +565,7 @@ def _build_tool_config(
         tool_config = {"tools": tool_list}
         if bedrock_tool_choice := _map_tool_choice(tool_choice):
             tool_config["toolChoice"] = bedrock_tool_choice
-    return tool_config, system_tools
+    return tool_config
 
 
 def _build_output_config(
@@ -548,6 +599,7 @@ async def translate_request(
     *,
     prompt_caching_supported: bool,
     prompt_caching_tool_supported: bool,
+    tool_name_map: Mapping[ServerTools, str] | None = None,
 ) -> tuple[
     list[MessageTypeDef],
     list[SystemContentBlockTypeDef],
@@ -558,7 +610,6 @@ async def translate_request(
     frozenset[PromptCaching] | None,
     CacheTTLType | None,
     JsonSchemaDefinitionTypeDef | None,
-    list[ToolUnionParam],
 ]:
     """Translate an Anthropic ``MessageCreateParams`` into Bedrock Converse inputs.
 
@@ -567,11 +618,14 @@ async def translate_request(
         model_id: Bedrock model identifier.
         prompt_caching_supported: True if prompt caching is supported by the model.
         prompt_caching_tool_supported: True if tool caching is supported by the model.
+        tool_name_map: Optional mapping from Anthropic canonical tool name to Bedrock
+            system tool name.  When provided, system tool names are translated to
+            Bedrock names before being added as ``toolSpec`` entries.
 
     Returns:
-        A 10-tuple of (messages, system blocks, inference config,
+        A 9-tuple of (messages, system blocks, inference config,
         additional request fields, tool config, service tier, automatic cache control,
-        automatic cache control ttl, output config, system tools).
+        automatic cache control ttl, output config).
     """
     if request.cache_control is None:
         allow_explicit_caching = prompt_caching_supported
@@ -585,10 +639,11 @@ async def translate_request(
         automatic_prompt_caching_ttl = request.cache_control.ttl
 
     additional_request_fields: JsonMapping = {}
-    tool_config, system_tools = _build_tool_config(
+    tool_config = _build_tool_config(
         request.tools,
         request.tool_choice,
         allow_explicit_caching=allow_explicit_caching and prompt_caching_tool_supported,
+        tool_name_map=tool_name_map,
     )
     return (
         await _map_messages(
@@ -613,7 +668,6 @@ async def translate_request(
         automatic_prompt_caching,
         automatic_prompt_caching_ttl,
         _build_output_config(request.output_config),
-        system_tools,
     )
 
 
@@ -749,12 +803,6 @@ async def _map_content_block_from_bedrock(  # noqa: PLR0911
     match block:
         case {"text": text}:
             return TextBlock(type="text", text=text)
-        case {"toolUse": {"toolUseId": id_, "name": name, "input": input_}} if (
-            name in SERVER_TOOL_NAMES
-        ):
-            return ServerToolUseBlock(
-                type="server_tool_use", id=f"toolu_{id_}", name=name, input=input_
-            )
         case {"toolUse": {"toolUseId": id_, "name": name, "input": input_}}:
             return ToolUseBlock(
                 type="tool_use", id=f"toolu_{id_}", name=name, input=input_
@@ -877,10 +925,6 @@ def _resolve_start_block(start: ContentBlockStartTypeDef) -> ContentBlock:
         Anthropic content block (text, tool_use, or thinking).
     """
     match start:
-        case {"toolUse": {"toolUseId": id_, "name": name}} if name in SERVER_TOOL_NAMES:
-            return ServerToolUseBlock(
-                type="server_tool_use", id=f"toolu_{id_}", name=name, input={}
-            )
         case {"toolUse": {"toolUseId": id_, "name": name}}:
             return ToolUseBlock(type="tool_use", id=f"toolu_{id_}", name=name, input={})
         case {"reasoningContent": _}:
@@ -1175,7 +1219,7 @@ async def count_tokens_via_bedrock(
     }
     if system_blocks := _map_system_blocks(request.system):
         req["system"] = system_blocks
-    tool_config, _system_tools = _build_tool_config(request.tools, request.tool_choice)
+    tool_config = _build_tool_config(request.tools, request.tool_choice)
     if tool_config:
         req["toolConfig"] = tool_config
 
