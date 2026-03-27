@@ -33,7 +33,7 @@ stdapi.ai is available under a dual-license model designed to support both open-
 
     ---
 
-    Production-ready for proprietary applications
+    Production-ready for proprietary applications — **14-day free trial included**
 
     **Best for:**
 
@@ -44,7 +44,7 @@ stdapi.ai is available under a dual-license model designed to support both open-
 
     **Includes:** Hardened container, security updates, production support
 
-    [:octicons-arrow-right-24: Get Started on AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo)
+    [:octicons-arrow-right-24: Start 14-Day Free Trial on AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo)
 
 </div>
 
@@ -130,15 +130,30 @@ Purchase and pay through AWS Marketplace. Consolidated billing with your existin
 
 ---
 
-## Getting Started with Commercial License
+## Your Path to Production
+
+A typical adoption path from evaluation to production:
+
+```mermaid
+%%{init: {'flowchart': {'htmlLabels': true}} }%%
+flowchart LR
+  eval["<strong>1. Evaluate</strong><br/>Docker Community<br/>(free, AGPL)"] --> trial["<strong>2. Trial</strong><br/>AWS Marketplace<br/>(14 days free)"]
+  trial --> prod["<strong>3. Production</strong><br/>Terraform deploy<br/>(pay-per-use)"]
+```
+
+| Step | What | Cost | License |
+|------|------|------|---------|
+| **Evaluate** | Run the community Docker image locally | Free | AGPL-3.0 |
+| **Trial** | Subscribe on AWS Marketplace and test in your AWS environment | Free for 14 days | Commercial |
+| **Production** | Deploy with Terraform — same config, swap container image | AWS pay-per-use | Commercial |
+
+No migration required between steps. Your Terraform configuration and application code remain the same.
 
 ### Quick Start (3 Steps)
 
-1. **Subscribe** - Visit [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo) and subscribe to stdapi.ai
-2. **Accept Contract** - Accept the AWS Marketplace Standard Contract during checkout
-3. **Deploy** - Use our Terraform module to deploy immediately with commercial rights activated
-
-**Free trial:** 14-day trial included. Test in your production environment risk-free.
+1. **Subscribe** — Visit [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo) and subscribe to stdapi.ai (14-day free trial included)
+2. **Accept Contract** — Accept the AWS Marketplace Standard Contract during checkout
+3. **Deploy** — Use the [Terraform module](operations_getting_started.md) to deploy immediately with commercial rights activated
 
 **Pricing:** Pay-per-use through AWS Marketplace. Consolidated with your AWS bill.
 
@@ -146,8 +161,8 @@ Purchase and pay through AWS Marketplace. Consolidated billing with your existin
 
 Once subscribed, access the hardened container image from AWS Marketplace ECR and deploy using:
 
-- **Terraform module** (recommended) - [See deployment guide](operations_getting_started.md#option-a-terraform-module-recommended)
-- **Manual ECS deployment** - [See manual setup](operations_getting_started.md#option-b-manual-ecs-deployment)
+- **Terraform module** (recommended) — [See Quick Start guide](operations_getting_started.md#quick-start)
+- **Manual ECS deployment** — [See manual setup](operations_deploy_advanced.md#manual-ecs-deployment)
 
 Your commercial license activates automatically upon deployment.
 

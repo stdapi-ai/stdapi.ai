@@ -11,7 +11,7 @@ Discover how to integrate stdapi.ai with popular AI applications and tools. stda
 **Why use stdapi.ai for integrations?**
 
 - **No code changes required** - Just update the API endpoint in your application settings
-- **Access 80+ models** - Claude 4.6+, Nova 2, Llama 4, DeepSeek v3.2, Stable Diffusion, and more
+- **Access 80+ models** - Claude 4.6+, Kimi K2, MiniMax M2.5, Qwen3, GLM 5, Nova 2, Llama 4, Stability AI, and more
 - **Enterprise data control** - All processing stays in your AWS account
 - **Pay-per-use pricing** - No subscriptions, pay only AWS Bedrock rates for actual usage
 - **AWS-native features** - Leverage prompt caching, reasoning modes, and guardrails through standard OpenAI and Anthropic APIs
@@ -108,9 +108,22 @@ Build self-directed AI agents that can plan, execute, and refine complex tasks a
 
 **What you can build:**
 
+- **Personal AI assistants** - Autonomous agents connected to messaging, email, and smart home
 - **Research agents** - Autonomous web research, data gathering, and analysis
 - **Multi-agent systems** - Collaborative agents for complex problem-solving
 - **Task automation** - Self-improving workflows that adapt to results
 - **Code agents** - Autonomous development and testing systems
 
-**Popular tools:** AutoGPT, BabyAGI, LangGraph, CrewAI, Semantic Kernel
+**Popular tools:** OpenClaw, AutoGPT, BabyAGI, LangGraph, CrewAI, Semantic Kernel
+
+---
+
+## :material-arrow-right: Ready to Get Started?
+
+<div class="grid cards" markdown>
+
+- :material-rocket-launch: [**Deploy to AWS**](operations_getting_started.md) — Production-ready in 5 minutes with Terraform (14-day free trial)
+- :material-docker: [**Try Locally with Docker**](operations_getting_started_local.md) — Free community image for development and testing
+- :material-book-open-variant: [**API Overview**](api_overview.md) — Endpoints, parameters, and usage examples
+
+</div>

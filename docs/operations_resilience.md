@@ -307,3 +307,15 @@ The built-in deprecation registry covers all models listed in the [AWS Bedrock m
 - :material-bucket-outline: **Declare accepted buckets** — If your users provide S3 URLs from buckets outside the application's own buckets, add them to `AWS_S3_ACCEPTED_BUCKETS` so the router can resolve their region and convert HTTP URLs to S3 URIs.
 - :material-pin-outline: **Pin models when needed** — Use `AWS_BEDROCK_MODEL_REGION_RESTRICT` for models that have region-specific features (e.g. grounding) to guarantee those features are always available. The model will be restricted exclusively to the listed regions.
 - :material-swap-horizontal: **Plan for model deprecations** — Keep `AWS_BEDROCK_DEPRECATED_MODEL_FALLBACK=true` (the default) so clients survive AWS model retirements without downtime. Switch to `false` in environments where you want to enforce explicit client migrations.
+
+---
+
+## :material-arrow-right: Next Steps
+
+<div class="grid cards" markdown>
+
+- :material-rocket-launch: [**Getting Started**](operations_getting_started.md) — Deploy to AWS with Terraform in 5 minutes
+- :material-server-network: [**Advanced Deployment**](operations_deploy_advanced.md) — Multi-region Terraform examples with resilience configured
+- :material-cog: [**Configuration Reference**](operations_configuration.md) — All routing and failover environment variables
+
+</div>

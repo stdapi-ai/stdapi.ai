@@ -259,3 +259,8 @@
 .green-check {
   color: #4caf50;
 }
+
+/* Center content (diagrams, etc.) */
+.center {
+  text-align: center;
+}

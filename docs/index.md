@@ -1,6 +1,6 @@
 ---
-title: stdapi.ai - OpenAI & Anthropic Compatible API Gateway for AWS Bedrock
-description: Run your favorite OpenAI and Anthropic-compatible apps on AWS Bedrock. Access 80+ models including Claude, Nova, Llama with enterprise compliance and pay-per-use pricing.
+title: stdapi.ai - OpenAI & Anthropic Compatible AI Gateway for AWS Bedrock
+description: Run your favorite OpenAI and Anthropic-compatible apps on AWS Bedrock. Access 80+ models including Claude, Kimi K2, MiniMax with enterprise compliance and pay-per-use pricing. 14-day free trial on AWS Marketplace.
 keywords: OpenAI API gateway, Anthropic API gateway, AWS Bedrock API, OpenAI compatible API, Anthropic compatible API, AWS AI gateway, OpenAI AWS integration, Anthropic AWS integration, enterprise AI API, AWS Bedrock integration, OpenAI alternative, Anthropic alternative, private AI deployment, HIPAA compliant AI
 hide:
   - toc
@@ -8,36 +8,37 @@ hide:
 ---
 
 <div class="hero hero--home" markdown>
-# OpenAI & Anthropic Compatible API Gateway for AWS Bedrock and AI services
+# Run OpenAI & Anthropic Apps on AWS Bedrock
 
-Run your favorite OpenAI and Anthropic-compatible applications on AWS Bedrock—works out of the box with any app or tool that supports the OpenAI or Anthropic APIs. Access 80+ models from Claude, Llama, Nova, and more with enterprise-grade privacy, compliance controls, and AWS pricing.
+Drop-in API gateway for AWS Bedrock and AI services. Your existing OpenAI and Anthropic applications work immediately—just change the base URL. Access 80+ models with enterprise privacy, compliance controls, and pay-per-use AWS pricing.
+
+**14-day free trial included — free for local development.**
 
 <div class="buttons" markdown>
-[Get started](operations_getting_started.md){ .md-button .md-button--primary }
-[View documentation](api_overview.md){ .md-button }
-[GitHub](https://github.com/stdapi-ai/stdapi.ai){ .md-button }
+[Start 14-Day Free Trial](operations_getting_started.md){ .md-button .md-button--primary }
+[Try Community Edition](operations_getting_started_local.md){ .md-button }
 </div>
 </div>
 
 <div class="grid cards" markdown>
 
-- :material-api: __Production-ready OpenAI & Anthropic API compatibility__
-  <br>Full support for chat, embeddings, images, audio (speech/transcription/translation), and more. Drop-in replacement for OpenAI and Anthropic SDKs—works with LangChain, Continue.dev, Open WebUI, n8n, Claude SDK, and 1000+ tools.
+- :material-swap-horizontal: __Change one line, access 80+ models__
+  <br>Drop-in replacement for OpenAI and Anthropic SDKs. Works with LangChain, Continue.dev, Open WebUI, n8n, OpenClaw, Claude SDK, and 1000+ tools—no code changes beyond the base URL.
+
+- :material-shield-lock: __Your data stays in your AWS account__
+  <br>All inference runs in your account. Data is never shared with model providers or used for training. Configure allowed regions for GDPR, HIPAA, and FedRAMP compliance.
+
+- :material-currency-usd-off: __Pay only for what you use__
+  <br>No subscriptions or monthly minimums. Pay AWS Bedrock rates directly with no markup from stdapi.ai. Pay only for what you actually use.
 
 - :material-aws: __Purpose-built for AWS Bedrock__
-  <br>Advanced features like prompt caching, reasoning modes, guardrails, prompt routers, and application inference profiles. Automatic region optimization and S3 integration included.
+  <br>Deep integration with prompt caching, reasoning modes, guardrails, service tiers, inference profiles, and prompt routers. Not a generic proxy—built to leverage every Bedrock feature.
 
-- :material-shield-lock: __Enterprise compliance & data sovereignty__
-  <br>Configure allowed AWS regions to meet your compliance requirements. All inference stays in your AWS account—data never shared with model providers or used for training.
+- :material-brain: __Claude, Kimi K2, MiniMax, and 80+ more__
+  <br>Claude 4.6+ (reasoning), Kimi K2, MiniMax M2.5, Qwen3, Llama 4, GLM 5, Nova 2, Stability AI, and more. Switch models instantly—no vendor lock-in.
 
-- :material-currency-usd-off: __AWS direct pricing, no markup__
-  <br>Pay-per-use pricing with no subscriptions. Pay only AWS Bedrock rates for exactly what you use—no monthly minimums or capacity commitments.
-
-- :material-brain: __Access to 80+ leading models__
-  <br>Claude 4.6+ (reasoning), Nova 2, Llama 4, DeepSeek v3.2, Stable Diffusion, Mistral, Gemini, and more. Switch models instantly from any compatible app—no vendor lock-in.
-
-- :material-monitor-dashboard: __Built-in observability & security__
-  <br>OpenTelemetry integration, detailed request logging, API keys in AWS Systems Manager. CORS, proxy headers, SSRF protection, and hardened container images.
+- :material-rocket-launch: __Deploy in 5 minutes__
+  <br>3 lines of Terraform for production on AWS. Or run Docker locally for development. Production-ready infrastructure with HTTPS, WAF, auto-scaling, and monitoring included.
 
 </div>
 
@@ -160,42 +161,98 @@ Run your favorite OpenAI and Anthropic-compatible applications on AWS Bedrock—
 
 ## How It Works
 
-**1. Deploy to AWS in minutes**
-Launch via Terraform module on ECS, or run the Docker image locally for development. Production-ready infrastructure included.
+<div class="center" markdown>
 
-**2. Point your application to stdapi.ai**
-Change only the `base_url` in your OpenAI client. All existing code, prompts, and workflows continue working.
-
-**3. Access AWS Bedrock models immediately**
-Use Claude, Nova, Llama, or any Bedrock model. Switch between models, regions, and providers without changing application code.
-
-**Zero lock-in:** Standard OpenAI API means you can switch back or to another provider anytime.
+```mermaid
+%%{init: {'flowchart': {'htmlLabels': true}} }%%
+flowchart LR
+  openai["<img src='styles/logo_openai.svg' style='height:64px;width:auto;vertical-align:middle;' /> OpenAI SDK Apps"] --> stdapi["<img src='styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai"]
+  anthropic["<img src='styles/logo_anthropic.svg' style='height:64px;width:auto;vertical-align:middle;' /> Anthropic SDK Apps"] --> stdapi
+  stdapi --> bedrock["<img src='styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Bedrock<br/>80+ models"]
+  stdapi --> services["<img src='styles/logo_amazon.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS AI Services<br/>Polly · Transcribe · Translate"]
+```
 
 </div>
 
-## Enterprise-Grade Features
+**1. Deploy to AWS with Terraform**
+
+```hcl
+module "stdapi_ai" {
+  source  = "stdapi-ai/stdapi-ai/aws"
+  version = "~> 1.0"
+}
+```
+
+!!! tip "Prefer a hands-off setup?"
+
+    A [managed deployment service](https://aws.amazon.com/marketplace/pp/prodview-xknxzjgl7zi5s) can deploy stdapi.ai into your AWS account — no Terraform required.
+
+**2. Point your application to stdapi.ai**
+
+=== "OpenAI SDK"
+
+    ```python
+    from openai import OpenAI
+
+    client = OpenAI(
+        api_key="your-api-key",
+        base_url="https://your-endpoint.com/v1"  # ← only change
+    )
+
+    response = client.chat.completions.create(
+        model="anthropic.claude-opus-4-6-v1",
+        messages=[{"role": "user", "content": "Hello!"}]
+    )
+    ```
+
+=== "Anthropic SDK"
+
+    ```python
+    from anthropic import Anthropic
+
+    client = Anthropic(
+        api_key="your-api-key",
+        base_url="https://your-endpoint.com/anthropic"  # ← only change
+    )
+
+    message = client.messages.create(
+        model="anthropic.claude-opus-4-6-v1",
+        messages=[{"role": "user", "content": "Hello!"}]
+    )
+    ```
+
+**3. Access any Bedrock model immediately**
+Use Claude, Kimi K2, MiniMax, or any Bedrock model. Switch between models, regions, and providers without changing application code.
+
+**Zero lock-in:** Standard OpenAI and Anthropic APIs mean you can switch back or to another provider anytime.
+
+</div>
+
+## Built for AWS
 
 <div class="grid cards" markdown>
 
-- :material-earth: __Multi-region Bedrock access__
-  <br>Automatic region routing and failover across configured AWS regions. Each region has its own independent quota—adding regions multiplies your effective tokens-per-minute and daily limits proportionally
+- :material-earth: __Multiply your quota across regions__
+  <br>Each AWS region has its own independent quota. Configure 3 regions and get **3x the tokens per minute** and 3x the daily limits. Automatic routing and failover—no client changes needed.
 
-- :material-star-settings: __Advanced model capabilities__
-  <br>Reasoning modes (Claude 4.6+, Nova 2), prompt caching, guardrails, service tiers
+- :material-star-settings: __Advanced Bedrock capabilities__
+  <br>Reasoning modes (Claude 4.6+, Nova 2), prompt caching, guardrails, service tiers, application inference profiles, and prompt routers—all through standard OpenAI API parameters.
 
-- :material-api: __Complete API coverage__
-  <br>Chat, embeddings, image generation/editing, audio speech/transcription/translation
+- :material-api: __Complete multi-modal API__
+  <br>Chat completions, embeddings, image generation/editing/variations, audio speech/transcription/translation. Every route maps OpenAI parameters to Bedrock equivalents.
 
-- :material-aws: __AWS AI services integration__
-  <br>Amazon Polly (TTS), Transcribe (STT with diarization), Translate—unified under OpenAI API
+- :material-aws: __Native AWS AI services__
+  <br>Amazon Polly (text-to-speech), Transcribe (speech-to-text with speaker diarization), Translate—all unified under OpenAI-compatible endpoints.
 
-- :material-chart-line: __Observability & debugging__
-  <br>OpenTelemetry, request/response logging, Swagger/ReDoc interfaces
+- :material-chart-line: __Full observability__
+  <br>OpenTelemetry integration for traces and metrics. Detailed request/response logging. Swagger and ReDoc API documentation served by the application.
 
-- :material-security: __Secure by default__
-  <br>API keys in Systems Manager, CORS controls, SSRF protection, hardened containers
+- :material-swap-horizontal: __Automatic deprecated model fallback__
+  <br>When AWS retires a model, requests are transparently redirected to its replacement. Your applications survive model deprecations without code changes.
 
 </div>
+
+[:octicons-arrow-right-24: See all features](features.md)
 
 ## Who Uses stdapi.ai
 
@@ -203,34 +260,67 @@ Use Claude, Nova, Llama, or any Bedrock model. Switch between models, regions, a
 
 - :material-server-network: __DevOps & Platform Teams__
   <br>Deploy Open WebUI, LibreChat, or custom chat interfaces for your organization. Unified API gateway for all AI services—no per-application AWS integration needed.
+  <br>[:octicons-arrow-right-24: Open WebUI guide](use_cases_openwebui.md) · [:octicons-arrow-right-24: All use cases](use_cases.md)
 
 - :material-code-braces: __Developers & AI Engineers__
   <br>Use Claude, Kimi K2 thinking, and Qwen Coder Next in VS Code (Continue.dev, Cline, Cursor), JetBrains IDEs, or any OpenAI-compatible tool. Test locally with Docker, deploy to production with Terraform.
+  <br>[:octicons-arrow-right-24: Coding assistants guide](use_cases_coding_assistants.md)
 
 - :material-robot: __Workflow Automation Teams__
   <br>Connect n8n, Make, Zapier, or custom automation to AWS Bedrock. Access 400+ integrations with enterprise-grade AI—all through one API endpoint.
+  <br>[:octicons-arrow-right-24: n8n integration guide](use_cases_n8n.md)
 
 - :material-domain: __Enterprises with Compliance Needs__
   <br>Meet data sovereignty requirements with region controls. GDPR, HIPAA, FedRAMP workloads supported through AWS Bedrock's compliance certifications.
 
 - :material-cash-multiple: __Cost-conscious Organizations__
-  <br>Switch from subscription-based AI services to pay-per-use AWS Bedrock pricing. Pay only for actual usage with no monthly commitments while accessing leading models (Claude, Stable Diffusion, Llama).
+  <br>Switch from subscription-based AI services to pay-per-use AWS Bedrock pricing. Pay only for actual usage with no monthly commitments while accessing leading models (Claude, Kimi K2, MiniMax, Qwen3).
 
 - :material-application-brackets: __Teams Migrating from OpenAI or Anthropic__
   <br>LangChain, LlamaIndex, Haystack, Claude SDK, or custom apps work immediately. Gradual migration supported—run both APIs in parallel during transition.
 
 </div>
 
+## Choose Your Edition
+
+<div class="grid cards" markdown>
+
+-   :material-scale-balance:{ .lg .middle } __Community Edition — Free & Open Source__
+
+    ---
+
+    **Best for:** Open-source projects, local development, testing, and evaluation.
+
+    - Full API compatibility and all features
+    - Community Docker image
+    - AGPL-3.0 license (source disclosure required for network use)
+
+    [:octicons-arrow-right-24: Run locally with Docker](operations_getting_started_local.md)
+
+-   :material-briefcase:{ .lg .middle } __Commercial Edition — AWS Marketplace__
+
+    ---
+
+    **Best for:** Internal tools, SaaS products, proprietary applications, production.
+
+    - **14-day free trial** — test in your environment risk-free
+    - Hardened container, security updates, commercial support
+    - No AGPL restrictions — keep your code and modifications private
+    - Terraform module for production-ready deployment in minutes
+    - Streamlined AWS billing
+
+    [:octicons-arrow-right-24: Start 14-Day Free Trial](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo)
+
+</div>
+
 <div class="cta-banner" markdown>
-<strong>Ready to get started?</strong>
+<strong>Ready to run 80+ AI models securely on AWS?</strong>
 <div class="buttons" markdown>
-[Start with Terraform](operations_getting_started.md){ .md-button .md-button--primary }
-[Try Docker locally](operations_getting_started.md){ .md-button }
-[AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo){ .md-button }
+[Start 14-Day Free Trial](operations_getting_started.md){ .md-button .md-button--primary }
+[Try Docker Locally](operations_getting_started_local.md){ .md-button }
 </div>
 
-**Community edition:** Free Docker image for local development<br>
-**Production:** Terraform module with ECS + hardened container (via AWS Marketplace)
+**Production:** Terraform module with ECS + hardened container via AWS Marketplace (14-day free trial)<br>
+**Community:** Free Docker image for local development and open-source projects (AGPL-3.0)
 
 </div>
-

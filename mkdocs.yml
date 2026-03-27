@@ -63,6 +63,8 @@ nav:
             - Models: api_anthropic_models.md
       - Operations:
           - Getting started: operations_getting_started.md
+          - Local Development: operations_getting_started_local.md
+          - Advanced Deployment: operations_deploy_advanced.md
           - Configuration: operations_configuration.md
           - Licensing: operations_licensing.md
           - Logging & Monitoring: operations_logging_monitoring.md
@@ -105,6 +107,8 @@ markdown_extensions:
           format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.highlight
   - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
   - pymdownx.emoji:
       emoji_index: !!python/name:material.extensions.emoji.twemoji
       emoji_generator: !!python/name:material.extensions.emoji.to_svg

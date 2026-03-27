@@ -289,8 +289,9 @@ A quick-reference checklist to find what you need at a glance:
 
 <div class="grid cards" markdown>
 
-- :material-rocket-launch: [**Get Started in Minutes**](operations_getting_started.md) — Deploy with Docker or Terraform on AWS
+- :material-rocket-launch: [**Get Started in Minutes**](operations_getting_started.md) — Deploy to AWS with Terraform or [run locally with Docker](operations_getting_started_local.md)
 - :material-book-open-variant: [**Explore the API**](api_overview.md) — Full API reference and examples
 - :material-puzzle: [**See Use Cases**](use_cases.md) — Open WebUI, n8n, coding assistants, and more
+- :material-aws: [**Start 14-Day Free Trial**](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo) — AWS Marketplace, no commitment
 
 </div>

@@ -54,7 +54,7 @@ flowchart LR
 ## ✅ Prerequisites
 
 !!! info "What You'll Need"
-    - ✓ **stdapi.ai deployed** - [See deployment guide](operations_getting_started.md) or [run locally with Docker](operations_getting_started.md#option-c-local-development-with-dockerpodman)
+    - ✓ **stdapi.ai deployed** - [See deployment guide](operations_getting_started.md) or [run locally with Docker](operations_getting_started_local.md)
     - ✓ **Your stdapi.ai URL** - e.g., `https://api.example.com` or `http://localhost:8000` for local
     - ✓ **Your API key** - From Terraform output or configuration (optional for local development)
     - ✓ **IDE with AI assistant** - VS Code, JetBrains, Cursor, or your preferred editor with an AI coding extension
@@ -84,14 +84,14 @@ Most AI coding assistants follow a similar configuration pattern. The exact menu
 
         API Key: YOUR_STDAPI_KEY
 
-        Model: anthropic.claude-sonnet-4-5-20250929-v1:0
+        Model: anthropic.claude-opus-4-6-v1
         (or select from detected models if available)
         ```
 
 !!! tip "Model Selection for Coding"
     **Recommended models for different tasks:**
 
-    - **Advanced reasoning & architecture**: `anthropic.claude-sonnet-4-5-20250929-v1:0` or Claude Opus
+    - **Advanced reasoning & architecture**: `anthropic.claude-opus-4-6-v1`
     - **Complex problem-solving**: Kimi K2 thinking models
     - **Specialized coding tasks**: `qwen2-coder-next-1-5-instruct-v1:0` (Qwen Coder Next)
     - **Fast completions**: Amazon Nova Micro or Nova Lite
@@ -99,7 +99,7 @@ Most AI coding assistants follow a similar configuration pattern. The exact menu
     **Configuration tips:**
 
     - **Auto-detect**: Some assistants query `/v1/models` and show a dropdown
-    - **Manual entry**: Use full Bedrock model ID (e.g., `anthropic.claude-sonnet-4-5-20250929-v1:0`)
+    - **Manual entry**: Use full Bedrock model ID (e.g., `anthropic.claude-opus-4-6-v1`)
     - **Multi-model setup**: Use fast, cheap models for secondary tasks (autocomplete, summaries) and powerful models for complex generation
 
 ### 💬 Chat Completions
@@ -192,7 +192,7 @@ Any tool using the Anthropic SDK or messages API can be configured the same way�
 stdapi.ai works well when running locally with Docker, making it ideal for your development environment.
 
 !!! tip "Running Locally"
-    For complete local deployment instructions, see the [Getting Started Guide](operations_getting_started.md).
+    For complete local deployment instructions, see the [Local Development Guide](operations_getting_started_local.md).
 
     **OpenAI-compatible tools:**
     ```

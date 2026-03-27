@@ -1,88 +1,30 @@
 ---
-title: Getting Started - Deploy AWS Bedrock OpenAI API Gateway
-description: Step-by-step guide to deploy stdapi.ai on AWS using Terraform or Docker. Set up OpenAI-compatible API access to AWS Bedrock models in minutes with enterprise security.
-keywords: deploy OpenAI gateway AWS, AWS Bedrock deployment, Terraform AWS AI, Docker OpenAI gateway, AWS API gateway setup, enterprise AI deployment, AWS Bedrock setup, OpenAI API hosting
+title: Getting Started - Deploy stdapi.ai on AWS
+description: Deploy stdapi.ai on AWS using Terraform in 5 minutes. Production-grade ECS Fargate deployment with HTTPS, WAF, auto-scaling, and monitoring. 14-day free trial on AWS Marketplace.
+keywords: deploy OpenAI gateway AWS, AWS Bedrock deployment, Terraform AWS AI, enterprise AI deployment, AWS Bedrock setup, OpenAI API hosting, production AI gateway, AWS ECS Fargate AI
 ---
 
-# Getting Started with stdapi.ai
+# Deploy stdapi.ai on AWS
 
-This guide will help you deploy stdapi.ai on AWS and make your first API call.
+Get a production-grade OpenAI-compatible AI gateway running on AWS in 5 minutes. Terraform handles everything — ECS Fargate, HTTPS, WAF, auto-scaling, and monitoring.
 
-## Why stdapi.ai?
+!!! tip "14-Day Free Trial"
+    The AWS Marketplace subscription includes a **14-day free trial**. Test the full production stack in your environment risk-free.
 
-stdapi.ai provides OpenAI-compatible access to AWS Bedrock and AWS AI services. Deploy your own AI API gateway on AWS infrastructure with complete data control and pay-per-use pricing.
-
-**Key benefits:**
-
-- **Drop-in OpenAI compatibility** - Works with existing OpenAI SDK code, LangChain, Continue.dev, Open WebUI, and 1000+ tools
-- **Deploy in minutes** - Pre-built Terraform modules with production-ready infrastructure
-- **Enterprise security** - Your data stays in your AWS account, zero vendor lock-in
-- **AWS-native features** - Prompt caching, reasoning modes, guardrails, cross-region inference profiles
-- **Pay only for usage** - No subscriptions. Pay AWS Bedrock rates directly for what you use
-- **Complete observability** - OpenTelemetry, CloudWatch alarms, detailed logging included
-
-## What You'll Accomplish
-
-By the end of this guide, you'll have:
-
-- A deployed stdapi.ai instance running on AWS
-- Successfully made your first API call using OpenAI SDKs
-- Infrastructure ready for building AI-powered applications
-
-## Deploy to Your AWS Account
-
-### Choose Your Deployment Path
-
-**New to stdapi.ai? Start here:**
-- [**Quick Start (3 lines of code)**](#example-1-quick-start) - Get running in 5 minutes
-
-**Already have AWS infrastructure?**
-- [**Integrate with Existing VPC/ALB**](#example-2-integration-with-existing-infrastructure) - Most cost-effective
-
-**Need production features?**
-- [**Production Deployment**](#example-3-production-deployment-fully-featured) - HTTPS, WAF, multi-region
-
-**Looking for ultra-low cost?**
-- [**Cost-Optimized Development**](#example-4-cost-optimized-deployment) - Scheduled Spot instances
-
-**Don't use Terraform?**
-- [**Manual ECS Deployment**](#option-b-manual-ecs-deployment) - Deploy the container directly
-
-**Testing locally?**
-- [**Local Development with Docker/Podman**](#option-c-local-development-with-dockerpodman) - Run the community AGPL image locally
-
-**Need help deploying?**
-- [**Managed Deployment Service**](https://aws.amazon.com/marketplace/pp/prodview-xknxzjgl7zi5s) - Let experts deploy stdapi.ai into your AWS account
+!!! info "Prefer a hands-off setup?"
+    A [managed deployment service](https://aws.amazon.com/marketplace/pp/prodview-xknxzjgl7zi5s) is available to deploy stdapi.ai into your AWS account.
 
 ---
 
-### Option A: Terraform Module (Recommended)
+## :material-rocket-launch: Quick Start
 
-The Terraform module provides production-ready infrastructure with minimal configuration.
+### Prerequisites
 
-**Advantages:**
-
-- Deploy with just 3 lines of code using sensible defaults
-- HTTPS, monitoring, auto-scaling, and security hardening included
-- CloudWatch alarms with anomaly detection and centralized logging
-- Optional WAF with AWS managed rules and KMS encryption
-- S3 lifecycle policies, auto-scaling controls, and Fargate Spot support
-- Version-controlled, repeatable deployments
-- Multi-region deployment support
-
-#### Prerequisites
-
-1. **Subscribe to stdapi.ai** on [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo) (Free trial available)
+1. **Subscribe to stdapi.ai** on [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo) (14-day free trial included)
 2. Install [Terraform](https://www.terraform.io/downloads) or [OpenTofu](https://opentofu.org/docs/intro/install/) >= 1.5
 3. Configure [AWS credentials](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html)
 
-#### Example 1: Quick Start
-
-The simplest production-ready deployment. Ideal for first-time users, testing, or getting started quickly.
-
-> **Ready-to-use example:** [getting_started_production](https://github.com/stdapi-ai/samples/tree/main/getting_started_production)
-
-**Deploy it:**
+### Deploy
 
 ```bash
 git clone https://github.com/stdapi-ai/samples.git
@@ -91,9 +33,9 @@ terraform init
 terraform apply
 ```
 
-**What you get:**
+That's it. In ~5 minutes you have:
 
-- Production-grade deployment with HTTPS and auto-generated domain
+- Production-grade ECS Fargate deployment with HTTPS
 - WAF protection with rate limiting
 - CloudWatch alarms and monitoring
 - Auto-scaling and API key authentication
@@ -103,7 +45,8 @@ terraform apply
 ```mermaid
 %%{init: {'flowchart': {'htmlLabels': true}} }%%
 flowchart LR
-  app["<img src='../styles/logo_openai.svg' style='height:64px;width:auto;vertical-align:middle;' /> Your App<br/>(OpenAI SDK)"] -->|HTTPS| alb["<img src='../styles/logo_amazon_load_balancing.svg' style='height:64px;width:auto;vertical-align:middle;' /> ALB + WAF"]
+  openai["<img src='../styles/logo_openai.svg' style='height:64px;width:auto;vertical-align:middle;' /> OpenAI SDK"] -->|HTTPS| alb["<img src='../styles/logo_amazon_load_balancing.svg' style='height:64px;width:auto;vertical-align:middle;' /> ALB + WAF"]
+  anthropic["<img src='../styles/logo_anthropic.svg' style='height:64px;width:auto;vertical-align:middle;' /> Anthropic SDK"] -->|HTTPS| alb
   alb --> ecs["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai<br/>ECS Fargate"]
   ecs --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Bedrock"]
   ecs --> polly["<img src='../styles/logo_amazon_polly.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Polly"]
@@ -112,7 +55,7 @@ flowchart LR
   ecs --> cloudwatch["<img src='../styles/logo_amazon_cloudwatch.svg' style='height:64px;width:auto;vertical-align:middle;' /> CloudWatch"]
 ```
 
-**Get your credentials:**
+### Get Your Credentials
 
 ```bash
 terraform output -raw api_key
@@ -120,925 +63,66 @@ terraform output api_endpoint
 terraform output docs_url
 ```
 
-**First deployment?** This example provides a complete, secure setup ready for testing and production use.
-
-**Cost optimization:** Deploy into existing VPC/ALB infrastructure to significantly reduce costs. See Example 2 for cost-efficient deployment.
+!!! tip "Ready-to-use Terraform example on GitHub"
+    :material-map-marker: **Single region** — [getting_started_production](https://github.com/stdapi-ai/samples/tree/main/getting_started_production)
 
 ---
 
-#### Example 2: Integration with Existing Infrastructure
+## :material-check-circle: Make Your First API Call
 
-Deploy stdapi.ai into your existing VPC and network infrastructure for maximum cost efficiency.
+stdapi.ai is compatible with both OpenAI and Anthropic SDKs. If you've used either before, you already know how to use it.
 
-```hcl
-module "stdapi_ai" {
-  source  = "stdapi-ai/stdapi-ai/aws"
-  version = "~> 1.0"
+=== "OpenAI SDK"
 
-  # Use your existing network
-  subnet_ids = [
-    "subnet-xxx",  # Your existing private subnet 1
-    "subnet-yyy",  # Your existing private subnet 2
-  ]
-  security_group_id = "sg-zzz"  # Your existing security group
-}
-```
+    ```python
+    from openai import OpenAI
 
-**What you get:**
+    client = OpenAI(
+        api_key="your-api-key-here",           # From terraform output
+        base_url="https://your-endpoint/v1"    # From terraform output
+    )
 
-- Same ECS Fargate service as Example 1
-- Integrates with your existing VPC and networking
-- No additional NAT gateways or load balancers needed
-- Full monitoring and security features
+    response = client.chat.completions.create(
+        model="anthropic.claude-opus-4-6-v1",
+        messages=[{"role": "user", "content": "Hello! Tell me a joke."}]
+    )
 
-**How to connect to your ALB:**
-
-After deployment, add a target group pointing to port 8000:
-
-```hcl
-resource "aws_lb_target_group" "stdapi" {
-  name        = "stdapi-tg"
-  port        = 8000
-  protocol    = "HTTP"
-  vpc_id      = "vpc-xxxxx"
-  target_type = "ip"
-
-  health_check {
-    path = "/health"
-  }
-}
-```
-
-See the full integration example in the collapsed section below for complete ALB configuration.
-
-**Best value:** Significant cost reduction by reusing existing VPC, subnets, and load balancer infrastructure.
-
-??? example "📋 Full integration example with ALB, IAM policies, and advanced configuration"
-
-    **Complete integration configuration with all optional features:**
-
-    ```hcl
-    module "stdapi_ai_integrated" {
-      source  = "stdapi-ai/stdapi-ai/aws"
-      version = "~> 1.0"
-
-      name_prefix = "my-stdapi-integrated"
-
-      # Use existing network infrastructure
-      subnet_ids = [
-        "subnet-0123456789abcdef0",
-        "subnet-0123456789abcdef1",
-        "subnet-0123456789abcdef2"
-      ]
-      security_group_id = "sg-0123456789abcdef0"
-
-      # Optional: Reuse existing S3 bucket
-      aws_s3_bucket = "my-existing-s3-bucket"
-
-      # Optional: Service Discovery for private communication
-      service_discovery_dns_namespace_id = "ns-xxxxx"
-      service_discovery_dns_name         = "stdapi"
-
-      # Optional: Use existing Secrets Manager secret for API key
-      api_key_secretsmanager_secret = "my-api-keys"
-      api_key_secretsmanager_key    = "stdapi_key"
-
-      # Optional: Attach custom IAM policies
-      ecs_task_role_policy_arns = [
-        aws_iam_policy.custom_s3_access.arn,
-        aws_iam_policy.api_key_secrets_access.arn
-      ]
-
-      # Monitoring
-      container_insight = "enhanced"
-      alarms_enabled    = true
-      sns_topic_arn     = "arn:aws:sns:us-east-1:123456789012:alerts"
-    }
-
-    # Example: Custom IAM policy for additional S3 bucket access
-    data "aws_iam_policy_document" "custom_s3_access" {
-      statement {
-        sid    = "S3BucketAccess"
-        effect = "Allow"
-        actions = [
-          "s3:GetObject",
-          "s3:PutObject",
-          "s3:DeleteObject"
-        ]
-        resources = ["arn:aws:s3:::my-existing-s3-bucket/*"]
-      }
-
-      statement {
-        sid    = "KMSEncryptionForS3"
-        effect = "Allow"
-        actions = [
-          "kms:Decrypt",
-          "kms:GenerateDataKey"
-        ]
-        resources = ["arn:aws:kms:us-east-1:123456789012:key/your-s3-bucket-kms-key-id"]
-        condition {
-          test     = "StringEquals"
-          variable = "kms:ViaService"
-          values   = ["s3.us-east-1.amazonaws.com"]
-        }
-      }
-    }
-
-    resource "aws_iam_policy" "custom_s3_access" {
-      name        = "stdapi-custom-s3-access"
-      description = "Custom S3 access for stdapi.ai integration"
-      policy      = data.aws_iam_policy_document.custom_s3_access.json
-    }
-
-    # Example: IAM policy for API key access from Secrets Manager
-    # Required when using api_key_secretsmanager_secret parameter
-    data "aws_iam_policy_document" "api_key_secrets_access" {
-      statement {
-        sid       = "SecretsManagerAccess"
-        effect    = "Allow"
-        actions   = ["secretsmanager:GetSecretValue"]
-        resources = ["arn:aws:secretsmanager:us-east-1:123456789012:secret:my-api-keys-*"]
-      }
-
-      statement {
-        sid       = "KMSDecryptionForSecretsManager"
-        effect    = "Allow"
-        actions   = ["kms:Decrypt"]
-        resources = ["arn:aws:kms:us-east-1:123456789012:key/your-kms-key-id"]
-        condition {
-          test     = "StringEquals"
-          variable = "kms:ViaService"
-          values   = ["secretsmanager.us-east-1.amazonaws.com"]
-        }
-      }
-    }
-
-    resource "aws_iam_policy" "api_key_secrets_access" {
-      name        = "stdapi-api-key-secrets-access"
-      description = "Access to Secrets Manager for stdapi.ai API key"
-      policy      = data.aws_iam_policy_document.api_key_secrets_access.json
-    }
-
-    # Alternative: IAM policy for API key access from SSM Parameter Store
-    # Use this when using api_key_ssm_parameter instead of Secrets Manager
-    data "aws_iam_policy_document" "api_key_ssm_access" {
-      statement {
-        sid       = "SSMParameterAccess"
-        effect    = "Allow"
-        actions   = ["ssm:GetParameter"]
-        resources = ["arn:aws:ssm:us-east-1:123456789012:parameter/stdapi/api-key"]
-      }
-
-      statement {
-        sid       = "KMSDecryptionForSSM"
-        effect    = "Allow"
-        actions   = ["kms:Decrypt"]
-        resources = ["arn:aws:kms:us-east-1:123456789012:key/your-kms-key-id"]
-        condition {
-          test     = "StringEquals"
-          variable = "kms:ViaService"
-          values   = ["ssm.us-east-1.amazonaws.com"]
-        }
-      }
-    }
-
-    resource "aws_iam_policy" "api_key_ssm_access" {
-      name        = "stdapi-api-key-ssm-access"
-      description = "Access to SSM Parameter Store for stdapi.ai API key"
-      policy      = data.aws_iam_policy_document.api_key_ssm_access.json
-    }
-
-    # Outputs for integration
-    output "ecs_service_info" {
-      description = "ECS service details for connecting your resources"
-      value       = {
-        cluster_name      = module.stdapi_ai_integrated.ecs_cluster_name
-        service_name      = module.stdapi_ai_integrated.ecs_service_name
-        security_group_id = module.stdapi_ai_integrated.security_group_id
-        port              = module.stdapi_ai_integrated.port
-        service_discovery = module.stdapi_ai_integrated.service_discovery_service_name
-      }
-    }
-
-    output "integration_resources" {
-      description = "Resources for connecting stdapi.ai to your infrastructure"
-      value       = {
-        s3_bucket_id = module.stdapi_ai_integrated.bucket_id
-        kms_key_arn  = module.stdapi_ai_integrated.kms_key_arn
-        log_groups   = module.stdapi_ai_integrated.cloudwatch_log_groups_names
-      }
-    }
+    print(response.choices[0].message.content)
     ```
 
-    **Manual integration steps:**
+=== "Anthropic SDK"
 
-    1. **Configure your ALB target group** to point to the ECS service:
-       ```hcl
-       resource "aws_lb_target_group" "stdapi" {
-         name        = "my-stdapi-tg"
-         port        = 8000
-         protocol    = "HTTP"
-         vpc_id      = "vpc-xxxxx"
-         target_type = "ip"
+    ```python
+    from anthropic import Anthropic
 
-         health_check {
-           path                = "/health"
-           healthy_threshold   = 2
-           unhealthy_threshold = 3
-         }
-       }
+    client = Anthropic(
+        api_key="your-api-key-here",                  # From terraform output
+        base_url="https://your-endpoint/anthropic"    # From terraform output
+    )
 
-       # Attach to your existing ALB listener
-       resource "aws_lb_listener_rule" "stdapi" {
-         listener_arn = aws_lb_listener.existing.arn
-         priority     = 100
+    message = client.messages.create(
+        model="anthropic.claude-opus-4-6-v1",
+        messages=[{"role": "user", "content": "Hello! Tell me a joke."}]
+    )
 
-         action {
-           type             = "forward"
-           target_group_arn = aws_lb_target_group.stdapi.arn
-         }
-
-         condition {
-           path_pattern {
-             values = ["/v1/*"]
-           }
-         }
-       }
-       ```
-
-    2. **Update security groups** to allow traffic:
-       ```hcl
-       # Allow your ALB to reach stdapi.ai
-       resource "aws_security_group_rule" "alb_to_stdapi" {
-         type                     = "ingress"
-         from_port                = 8000
-         to_port                  = 8000
-         protocol                 = "tcp"
-         security_group_id        = module.stdapi_ai_integrated.security_group_id
-         source_security_group_id = var.your_alb_security_group_id
-       }
-       ```
-
-    3. **Access via Service Discovery** (optional):
-       ```python
-       # If service discovery is enabled, access via private DNS
-       client = OpenAI(
-           api_key="YOUR_API_KEY",
-           base_url="http://stdapi.your-namespace.local:8000/v1"
-       )
-       ```
-
-    **Use cases:**
-
-    - Connect to existing internal ALB
-    - Private API for internal microservices
-    - Connect to service mesh (App Mesh, Consul)
-    - Custom networking with VPN/Direct Connect
-    - Multi-account setups with PrivateLink
-    - Access additional AWS resources (S3 buckets, Secrets Manager, DynamoDB, etc.)
-
-    **Custom IAM policies use cases:**
-
-    - Grant access to additional S3 buckets beyond the default one
-    - **Access API keys from Secrets Manager or SSM Parameter Store** (required when using `api_key_ssm_parameter` or `api_key_secretsmanager_secret`)
-    - Read/write to DynamoDB tables for application state
-    - Access to custom KMS keys for encryption
-    - Cross-account resource access via IAM roles
-
-    **Important:** When using `api_key_secretsmanager_secret` or `api_key_ssm_parameter`, you must create and attach an IAM policy granting the ECS task access to the secret/parameter. The module does not automatically create these permissions.
-
----
-
-#### Example 3: Production Deployment (Fully Featured)
-
-Enterprise-ready deployment with HTTPS endpoints, WAF protection, auto-scaling, and comprehensive monitoring.
-
-**About regional S3 buckets:** The full production example below includes multi-region Bedrock support with regional S3 buckets. This is only required for Bedrock multimodal features (images, documents) across multiple regions. For most users, the simplified single-region setup is sufficient—see the example further down.
-
-??? example "📋 Full production example with multi-region Bedrock support"
-
-    ```hcl
-    # Main deployment
-    module "stdapi_ai" {
-      source  = "stdapi-ai/stdapi-ai/aws"
-      version = "~> 1.0"
-    
-      # Custom public domain with TLS
-      alb_domain_name   = "api.example.com"
-      alb_enabled       = true
-      alb_public        = true
-    
-      # AWS Bedrock region configuration
-      # Select regions to get available models in the order of preference
-      aws_bedrock_regions = [
-        "eu-west-3",
-        "eu-west-1",
-        "eu-central-1",
-        "eu-north-1"
-      ]
-      
-      # Regional buckets for Bedrock multimodal operations
-      # Required by some models and features, create one per extra region in aws_bedrock_regions
-      aws_s3_regional_buckets = merge(
-        module.bedrock_bucket_eu_west_1.regional_bucket_map,
-        module.bedrock_bucket_eu_central_1.regional_bucket_map,
-        module.bedrock_bucket_eu_north_1.regional_bucket_map,
-      )
-      aws_s3_buckets_kms_keys_arns = [
-        module.bedrock_bucket_eu_west_1.kms_key_arn,
-        module.bedrock_bucket_eu_central_1.kms_key_arn,
-        module.bedrock_bucket_eu_north_1.kms_key_arn,
-      ]
-      
-      # (Optional) In case of regional compliance requirements like GDPR,
-      # disable "global" cross-region inference to ensure everything is done in valid regions.
-      # Cross-region inference allows AWS Bedrock to route requests to different regions for better availability.
-      # In this example, cross-region inferences will be in EU regions only and comply with GDPR
-      aws_bedrock_cross_region_inference_global = false
-    
-      # AI services region extra configuration
-      # Required if a service or a feature is not available in your main region
-      # In this example, AWS Comprehend is not available on eu-west-3, so we use eu-west-1
-      aws_comprehend_region = "eu-west-1" 
-    
-      # Authentication (Recommended)
-      # Enable authentication by generating an API key that can be retrieved using the "api_key" module attribute.
-      api_key_create = true
-    
-      # Web Application Firewall (Recommended on public APIs when ALB is enabled)
-      alb_waf_enabled             = true
-      alb_waf_rate_limit          = 2000  # Requests per 5 minutes per IP
-      alb_waf_block_anonymous_ips = true
-    
-      # Monitoring & Alerts (Recommended to get alarms notifications)
-      alarms_enabled = true
-      sns_topic_arn  = "arn:aws:sns:eu-west-3:123456789012:alerts"
-    }
-    
-    # Get the API key (Generated with api_key_create = true)
-    
-    output "api_key" {
-      value     = module.stdapi_ai.api_key
-      sensitive = true
-    }
-    
-    # Main/default region provider
-    provider "aws" {
-      region = "eu-west-3"
-    }
-    
-    # Additional providers for regional Bedrock buckets
-    
-    provider "aws" {
-      alias  = "eu-central-1"
-      region = "eu-central-1"
-    }
-    
-    provider "aws" {
-      alias  = "eu-west-1"
-      region = "eu-west-1"
-    }
-    
-    provider "aws" {
-      alias  = "eu-north-1"
-      region = "eu-north-1"
-    }
-    
-    # Regional S3 buckets for Bedrock operations (optional but recommended)
-    module "bedrock_bucket_eu_west_1" {
-      source  = "stdapi-ai/stdapi-ai-s3-regional-bucket/aws"
-      version = "~> 1.0"
-    
-      providers = { aws = aws.eu-west-1 }
-      name_prefix = module.stdapi_ai.name_prefix
-      aws_s3_tmp_prefix = module.stdapi_ai.aws_s3_tmp_prefix
-      deletion_protection = module.stdapi_ai.deletion_protection
-    }
-    
-    module "bedrock_bucket_eu_central_1" {
-      source  = "stdapi-ai/stdapi-ai-s3-regional-bucket/aws"
-      version = "~> 1.0"
-    
-      providers = { aws = aws.eu-central-1 }
-      name_prefix = module.stdapi_ai.name_prefix
-      aws_s3_tmp_prefix = module.stdapi_ai.aws_s3_tmp_prefix
-      deletion_protection = module.stdapi_ai.deletion_protection
-    }
-    
-    module "bedrock_bucket_eu_north_1" {
-      source  = "stdapi-ai/stdapi-ai-s3-regional-bucket/aws"
-      version = "~> 1.0"
-    
-      providers = { aws = aws.eu-north-1 }
-      name_prefix = module.stdapi_ai.name_prefix
-      aws_s3_tmp_prefix = module.stdapi_ai.aws_s3_tmp_prefix
-      deletion_protection = module.stdapi_ai.deletion_protection
-    }
-    
+    print(message.content[0].text)
     ```
 
-**What you get:**
+**No API key configured?** stdapi.ai runs without authentication by default for quick testing. Add `api_key_create = true` to your Terraform config to enable it.
 
-- High-availability multi-AZ deployment (uses all available AZs in region)
-- HTTPS with automatic SSL certificate
-- WAF protection with AWS managed rules
-- 5 CloudWatch alarms (memory, health, CPU anomaly, capacity, error logs)
-- Auto-scaling 2-10 tasks based on load
-- S3 storage with lifecycle policies
-- Enhanced Container Insights
-- Regional S3 buckets for Bedrock multimodal operations in 3 regions
-
-```mermaid
-%%{init: {'flowchart': {'htmlLabels': true}} }%%
-flowchart LR
-  app["<img src='../styles/logo_openai.svg' style='height:64px;width:auto;vertical-align:middle;' /> Your App<br/>(OpenAI SDK)"] --> alb["<img src='../styles/logo_amazon_load_balancing.svg' style='height:64px;width:auto;vertical-align:middle;' /> ALB + WAF"]
-  alb --> ecs["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai<br/>ECS Fargate"]
-  ecs --> bedrock_primary["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Bedrock<br/>Region 1"]
-  bedrock_primary -.-|multiple regions| bedrock_region_n["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Bedrock<br/>Region N"]
-  ecs --> s3_primary["<img src='../styles/logo_amazon_s3.svg' style='height:64px;width:auto;vertical-align:middle;' /> Regional S3 Bucket<br/>Region 1"]
-  s3_primary -.-|multiple regions| s3_region_n["<img src='../styles/logo_amazon_s3.svg' style='height:64px;width:auto;vertical-align:middle;' /> Regional S3 Bucket<br/>Region N"]
-  ecs --> polly["<img src='../styles/logo_amazon_polly.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Polly"]
-  ecs --> transcribe["<img src='../styles/logo_amazon_transcribe.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Transcribe"]
-  ecs --> cloudwatch["<img src='../styles/logo_amazon_cloudwatch.svg' style='height:64px;width:auto;vertical-align:middle;' /> CloudWatch + Alarms"]
-```
-
-**Included features:**
-
-- HTTPS with automatic SSL certificates via ACM
-- WAF protection with AWS managed rules and rate limiting
-- Auto-scaling based on CPU, memory, and request count
-- CloudWatch alarms for monitoring
-- Multi-region support for AWS Bedrock operations
-- Pre-configured AWS best practices
-
-**Cost optimization:** Deploy into an existing VPC with existing ALB to significantly reduce infrastructure costs. See Example 2.
-
-**Deployment time:** ~5-10 minutes
-
-??? example "📋 Simplified production example (single region, no multi-region complexity)"
-
-    ```hcl
-    module "stdapi_ai" {
-      source  = "stdapi-ai/stdapi-ai/aws"
-      version = "~> 1.0"
-    
-      # HTTPS with your domain
-      alb_domain_name = "api.example.com"
-      alb_enabled     = true
-      alb_public      = true
-    
-      # Security
-      api_key_create              = true
-      alb_waf_enabled             = true
-      alb_waf_rate_limit          = 2000
-      alb_waf_block_anonymous_ips = true
-    
-      # Monitoring
-      alarms_enabled = true
-      sns_topic_arn  = "arn:aws:sns:us-east-1:123456789012:alerts"
-    }
-    
-    output "api_key" {
-      value     = module.stdapi_ai.api_key
-      sensitive = true
-    }
-    
-    output "api_endpoint" {
-      value = module.stdapi_ai.application_url
-    }
-    ```
-
-**Deploy and get your API key:**
-
-```bash
-terraform init
-terraform apply
-terraform output -raw api_key  # Copy this for API calls
-```
-
-Production-grade infrastructure with HTTPS, WAF protection, and monitoring without multi-region complexity.
-
-> **Ready-to-use examples on GitHub:**
-> - Single region: [getting_started_production](https://github.com/stdapi-ai/samples/tree/main/getting_started_production)
-> - Multi-region GDPR (EU): [getting_started_production_gdpr](https://github.com/stdapi-ai/samples/tree/main/getting_started_production_gdpr)
-> - Multi-region US: [getting_started_production_us](https://github.com/stdapi-ai/samples/tree/main/getting_started_production_us)
+**Available models:** All AWS Bedrock models available in your configured regions are automatically discovered and exposed.
 
 ---
 
-#### Example 4: Cost-Optimized Deployment
+## :material-arrow-right: Next Steps
 
-Cost-optimized deployment for development and non-critical workloads. Suitable for side projects and development environments.
+<div class="grid cards" markdown>
 
+- :material-book-open-variant: [**API Overview**](api_overview.md) — Endpoints, parameters, and usage examples
+- :material-cog: [**Configuration**](operations_configuration.md) — All environment variables and options
+- :material-server-network: [**Advanced Deployment**](operations_deploy_advanced.md) — VPC integration, multi-region, cost optimization, manual ECS
+- :material-directions-fork: [**Resilience & Failover**](operations_resilience.md) — Multi-region routing and quota multiplication
+- :material-puzzle: [**Use Cases**](use_cases.md) — Open WebUI, n8n, coding assistants, and more
+- :material-scale-balance: [**Licensing**](operations_licensing.md) — AGPL vs commercial options
 
-??? example "📋 Low cost deployment"
-
-    ```hcl
-    module "stdapi_ai_cost_optimized" {
-      source  = "stdapi-ai/stdapi-ai/aws"
-      version = "~> 1.0"
-    
-      # Aggressive Auto-scaling with Fargate spot
-      autoscaling_enabled            = true
-      autoscaling_min_capacity       = 1
-      autoscaling_max_capacity       = 3
-      autoscaling_cpu_target_percent = 85
-      autoscaling_scale_in_cooldown  = 60   # Scale down quickly
-      autoscaling_scale_out_cooldown = 120
-      autoscaling_spot_percent       = 100  # Use 100% Spot pricing (~70% discount)
-    
-      # Schedule: Stop at 7 PM, start at 8 AM on weekdays (UTC)
-      autoscaling_schedule_stop  = "cron(0 19 ? * MON-FRI *)"
-      autoscaling_schedule_start = "cron(0 8 ? * MON-FRI *)"
-    
-      # Use Existing Subnets and security group (no VPC creation)
-      subnet_ids = [
-        "subnet-0123456789abcdef0",  # Your existing private subnet 1
-        "subnet-0123456789abcdef1",  # Your existing private subnet 2
-        "subnet-0123456789abcdef2"   # Your existing private subnet 3
-      ]
-      security_group_id = "sg-0123456789abcdef0"
-    
-      # Minimal Monitoring & Logging
-      container_insight                 = "disabled"  # Disable Container Insights
-      vpc_flow_log_enabled              = false       # Disable VPC Flow Logs
-      cloudwatch_logs_retention_in_days = 7           # Reduce log retention to 7 days
-    }
-    ```
-
-**What you get:**
-
-- Fargate Spot for significant cost reduction
-- Minimal resources (0.25 vCPU ARM64, 512 MiB)
-- Reuse existing VPC infrastructure
-- Automated scheduling (runs 8 AM-7 PM weekdays only in UTC)
-- Minimal logging (7-day retention, no Container Insights, no VPC Flow Logs)
-- S3 Intelligent-Tiering for storage optimization
-
-**Trade-offs:** Spot interruptions possible, minimal observability, scheduled availability only
-
----
-
-#### Outputs
-
-After deployment, access critical information:
-
-```hcl
-output "api_endpoint" {
-  value = module.stdapi_ai_prod.alb_dns_name
-}
-```
-
-**Available outputs for all deployment scenarios:**
-
-**Networking & Load Balancing:**
-
-- `alb_dns_name` - ALB endpoint (if enabled)
-- `alb_arn` - ALB ARN for AWS integrations
-- `alb_security_group_id` - ALB security group
-- `alb_target_group_arn` - Target group for custom listeners
-- `application_url` - Full URL (https://domain or http://alb)
-
-**ECS Service:**
-
-- `ecs_cluster_name` - Cluster name for AWS CLI/SDK
-- `ecs_service_name` - Service name for management
-- `security_group_id` - Security group for ingress rules
-- `service_discovery_service_name` - Private DNS name (if enabled)
-- `port` - Container port exposed by the application
-
-**Storage & Encryption:**
-
-- `bucket_id` - S3 bucket for application data
-- `bucket_arn` - S3 bucket ARN
-- `kms_key_id` - KMS key for encryption
-- `kms_key_arn` - KMS ARN for IAM policies
-
-**Security:**
-
-- `waf_web_acl_id` - WAF ACL ID (if enabled)
-- `waf_web_acl_arn` - WAF ACL ARN (if enabled)
-
-For the complete list of outputs, see [stdapi-ai/terraform-aws-stdapi-ai/outputs.tf](https://github.com/stdapi-ai/terraform-aws-stdapi-ai/outputs.tf).
-
----
-
-### Option B: Manual ECS Deployment
-
-If you prefer not to use Terraform or need a custom deployment, you can deploy the stdapi.ai container image directly to AWS ECS after subscribing to the AWS Marketplace listing.
-
-#### Prerequisites
-
-1. **Subscribe to stdapi.ai** on [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo) (Free trial available)
-2. Set up an ECS cluster (Fargate or EC2)
-3. Configure networking (VPC, subnets, security groups)
-4. Set up IAM roles with appropriate permissions
-
-#### Container Image
-
-After subscribing, the container image is available from AWS Marketplace ECR:
-
-```
-709825985650.dkr.ecr.us-east-1.amazonaws.com/j-goutin/stdapi.ai:<version>
-```
-
-```mermaid
-%%{init: {'flowchart': {'htmlLabels': true}} }%%
-flowchart LR
-  app["<img src='../styles/logo_openai.svg' style='height:64px;width:auto;vertical-align:middle;' /> Your App<br/>(OpenAI SDK)"] --> alb["<img src='../styles/logo_amazon_load_balancing.svg' style='height:64px;width:auto;vertical-align:middle;' /> Your ALB/NLB"]
-  alb --> ecs["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai<br/>ECS (Fargate/EC2)"]
-  ecr["<img src='../styles/logo_amazon_marketplace.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Marketplace ECR"] --> ecs
-  ecs --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Bedrock"]
-  ecs --> polly["<img src='../styles/logo_amazon_polly.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Polly"]
-  ecs --> transcribe["<img src='../styles/logo_amazon_transcribe.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Transcribe"]
-  ecs --> s3["<img src='../styles/logo_amazon_s3.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS S3"]
-```
-
-#### ECS Task Definition Example
-
-```json
-{
-  "family": "stdapi-ai-task-definition",
-  "networkMode": "awsvpc",
-  "requiresCompatibilities": ["FARGATE"],
-  "cpu": "256",
-  "memory": "512",
-  "executionRoleArn": "arn:aws:iam::{account-id}:role/{execution-role-name}",
-  "taskRoleArn": "arn:aws:iam::{account-id}:role/{task-role-name}",
-  "runtimePlatform": {
-    "cpuArchitecture": "ARM64",
-    "operatingSystemFamily": "LINUX"
-  },
-  "containerDefinitions": [
-    {
-      "name": "main",
-      "image": "709825985650.dkr.ecr.us-east-1.amazonaws.com/j-goutin/stdapi.ai:1.0.1-arm64",
-      "essential": true,
-      "readonlyRootFilesystem": true,
-      "portMappings": [
-        {
-          "containerPort": 8000,
-          "protocol": "tcp",
-          "name": "http"
-        }
-      ],
-      "environment": [
-        {
-          "name": "AWS_S3_BUCKET",
-          "value": "{your-s3-bucket-name}"
-        },
-        {
-          "name": "AWS_BEDROCK_REGIONS",
-          "value": "us-east-1,us-west-2"
-        }
-      ],
-      "mountPoints": [
-        {
-          "sourceVolume": "temp",
-          "containerPath": "/tmp"
-        }
-      ],
-      "healthCheck": {
-        "command": [
-          "CMD",
-          "python3",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"
-        ],
-        "interval": 30,
-        "timeout": 5,
-        "retries": 3,
-        "startPeriod": 30
-      },
-      "linuxParameters": {
-        "capabilities": {
-          "drop": ["ALL"]
-        }
-      },
-      "logConfiguration": {
-        "logDriver": "awslogs",
-        "options": {
-          "awslogs-group": "/ecs/stdapi-ai",
-          "awslogs-region": "{region}",
-          "awslogs-stream-prefix": "stdapi-ai"
-        }
-      }
-    }
-  ],
-  "volumes": [
-    {
-      "name": "temp"
-    }
-  ]
-}
-```
-
-**Note:** This is a minimal example. For production, configure:
-
-- Environment variables (see [Configuration](operations_configuration.md))
-- Health checks
-- IAM task roles for AWS service access
-- Load balancer integration
-- Auto-scaling policies
-- CloudWatch monitoring
-
-**Recommendation:** Use the Terraform module (Option A) for a complete, production-ready deployment with all best practices included.
-
----
-
-### Option C: Local Development with Docker/Podman
-
-For local testing and development, you can use the community AGPL container image.
-
-#### Community AGPL Container Image
-
-The community version is available as a public container image:
-
-```
-ghcr.io/stdapi-ai/stdapi.ai-community:latest
-```
-
-This image is released under the AGPL-3.0 license and is suitable for testing, development, and non-commercial use.
-
-**Building from source:** If you prefer to build the image yourself, see the [Dockerfile](https://github.com/stdapi-ai/stdapi.ai/blob/main/Dockerfile). However, we recommend using the prebuilt image for simplicity and convenience.
-
-**Note:** The container runs using [Granian](https://github.com/emmett-framework/granian), a high-performance Python ASGI server. This means Granian environment variables are supported for configuring the server (e.g., `GRANIAN_PORT`, `GRANIAN_WORKERS`, etc.). This applies to both community and AWS Marketplace container images.
-
-#### Running Locally with Docker or Podman
-
-**Basic example:**
-
-```bash
-docker run --rm -p 8000:8000 \
-  -e AWS_BEDROCK_REGIONS=eu-west-3,eu-central-1,eu-west-1 \
-  -e ENABLE_DOCS=true \
-  ghcr.io/stdapi-ai/stdapi.ai-community:latest
-```
-
-**With AWS credentials (after `aws sso login`):**
-
-```bash
-docker run --rm -p 8000:8000 \
-  -v ~/.aws:/home/nonroot/.aws:ro \
-  -e AWS_BEDROCK_REGIONS=eu-west-3,eu-central-1,eu-west-1 \
-  -e ENABLE_DOCS=true \
-  ghcr.io/stdapi-ai/stdapi.ai-community:latest
-```
-
-Alternatively, you can pass AWS credentials as environment variables instead of mounting the `.aws` directory:
-
-```bash
-docker run --rm -p 8000:8000 \
-  -e AWS_ACCESS_KEY_ID=your-access-key-id \
-  -e AWS_SECRET_ACCESS_KEY=your-secret-access-key \
-  -e AWS_SESSION_TOKEN=your-session-token \
-  -e AWS_BEDROCK_REGIONS=eu-west-3,eu-central-1,eu-west-1 \
-  -e ENABLE_DOCS=true \
-  ghcr.io/stdapi-ai/stdapi.ai-community:latest
-```
-
-**On Fedora/RHEL systems with SELinux (Podman):**
-
-If you encounter permission denied errors when mounting volumes with Podman, add the `:z` SELinux label to the volume mount and use `--userns=keep-id` to preserve user ID mapping:
-
-```bash
-podman run --rm -p 8000:8000 \
-  --userns=keep-id \
-  -v ~/.aws:/home/nonroot/.aws:ro,z \
-  -e AWS_BEDROCK_REGIONS=eu-west-3,eu-central-1,eu-west-1 \
-  -e ENABLE_DOCS=true \
-  ghcr.io/stdapi-ai/stdapi.ai-community:latest
-```
-
-The `:z` flag tells Podman to relabel the files with a private unshared label that only allows the container to access them. Alternatively, use `:Z` for a shared label if multiple containers need to access the same volume. The `--userns=keep-id` flag is specific to Podman and ensures that your host user ID is mapped to the container's user, avoiding permission issues with mounted volumes.
-
-**What you get:**
-
-- stdapi.ai running locally on http://localhost:8000
-- Access to AWS Bedrock models in the specified regions
-- Interactive API documentation at http://localhost:8000/docs
-- Perfect for local development and testing
-
-```mermaid
-%%{init: {'flowchart': {'htmlLabels': true}} }%%
-flowchart LR
-  app["<img src='../styles/logo_openai.svg' style='height:64px;width:auto;vertical-align:middle;' /> Your App<br/>(OpenAI SDK)"] --> local["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai (community)<br/>Docker/Podman"]
-  local --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Bedrock"]
-  local --> polly["<img src='../styles/logo_amazon_polly.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Polly"]
-  local --> transcribe["<img src='../styles/logo_amazon_transcribe.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Transcribe"]
-  local --> s3["<img src='../styles/logo_amazon_s3.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS S3"]
-```
-
-**Environment variables:**
-
-- `AWS_BEDROCK_REGIONS` - Comma-separated list of AWS regions (e.g., `eu-west-3,eu-central-1,eu-west-1`)
-- `ENABLE_DOCS` - Enable interactive API documentation at `/docs` (default: false)
-- See [Configuration](operations_configuration.md) for all available options
-
-**Note:** The local container uses your AWS credentials from `~/.aws` (mounted to `/home/nonroot/.aws` inside the container) to access Bedrock services. Make sure you've authenticated with `aws sso login` or configured your credentials using `aws configure` before running the container.
-
-**Testing the API:**
-
-```bash
-# Check health
-curl http://localhost:8000/health
-
-# List available models
-curl http://localhost:8000/v1/models
-
-# Make a chat completion request
-curl http://localhost:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
-    "messages": [{"role": "user", "content": "Hello!"}]
-  }'
-```
-
-**Important:** This is the community AGPL version suitable for testing and development. For production deployments, we recommend the AWS Marketplace container image which includes:
-
-- Security hardening and enhanced security features
-- Performance improvements and optimizations
-- Commercial licensing and enterprise support
-- Production-ready configurations
-
-See [Option A: Terraform Module](#option-a-terraform-module-recommended) or [Licensing](operations_licensing.md) for more information.
-
----
-
-## Make Your First API Call
-
-stdapi.ai is OpenAI-compatible. If you've used OpenAI before, you already know how to use it.
-
-### Step 1: Get your endpoint and API key
-
-```bash
-# Get your endpoint URL
-terraform output application_url
-
-# Get your API key (if you enabled api_key_create=true)
-terraform output -raw api_key
-```
-
-### Step 2: Make your first call
-
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    api_key="your-api-key-here",           # From terraform output
-    base_url="https://your-url-here/v1"    # From terraform output
-)
-
-# That's it! Use it exactly like OpenAI
-response = client.chat.completions.create(
-    model="anthropic.claude-sonnet-4-5-20250929-v1:0",
-    messages=[{"role": "user", "content": "Hello! Tell me a joke."}]
-)
-
-print(response.choices[0].message.content)
-```
-
-**No API key configured?** By default, stdapi.ai runs without authentication for quick testing. Add `api_key_create = true` to your Terraform config to enable authentication.
-
-**Available models:** All AWS Bedrock models available in your region are supported.
-
-You're now running your own AI infrastructure on AWS.
-
-## Next Steps
-
-- [API overview](api_overview.md) – Available endpoints and usage
-- [Configuration](operations_configuration.md) – Customize your deployment
-- [Licensing](operations_licensing.md) – Dual licensing options (AGPL and commercial)
-- [Roadmap](roadmap.md) – Upcoming features and compatibility
-
-## Troubleshooting
-
-### VPC Endpoint Error: "couldn't find resource" for AWS Comprehend
-
-**Error message:**
-
-```
-Error: reading EC2 VPC Endpoint Services: couldn't find resource
-
-  with module.stdapi_ai.module.vpc.data.aws_vpc_endpoint_service.netdev_vpce_interface["comprehend"],
-  on module-stdapi-ai/module-vpc/network_devices.tf line 175, in data "aws_vpc_endpoint_service" "netdev_vpce_interface":
- 175: data "aws_vpc_endpoint_service" "netdev_vpce_interface" {
-```
-
-**Cause:** AWS Comprehend is not available as a VPC endpoint service in your current region. Not all AWS services have VPC endpoints in all regions.
-
-**Solution:** Set the `aws_comprehend_region` variable in your Terraform module configuration to specify a region where Comprehend is available:
-
-```hcl
-module "stdapi_ai" {
-  source  = "stdapi-ai/stdapi-ai/aws"
-  version = "~> 1.0"
-
-  name_prefix = "my-stdapi"
-
-  # Set Comprehend to use a different region
-  aws_comprehend_region = "us-east-1"  # or another region where Comprehend is available
-}
-```
-
-Common regions with Comprehend support: `us-east-1`, `us-west-2`, `eu-west-1`, `eu-central-1`
+</div>
