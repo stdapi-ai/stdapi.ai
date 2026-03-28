@@ -116,10 +116,12 @@ stdapi.ai is **engineered specifically for AWS**, unlocking advanced Bedrock fea
 
 ### Resilience & Failover
 
-stdapi.ai automatically handles service disruptions and model changes, with no client-side changes needed ([details](operations_resilience.md)):
+stdapi.ai automatically handles service disruptions and model changes, with no client-side changes needed:
 
 - **Automatic region routing** — Distribute requests across regions with ordered, lowest-latency, or round-robin strategies; automatically fails over on quota limits or regional unavailability
 - **Deprecated model failover** — Requests to deprecated or retired models are transparently redirected to their replacements
+
+[:octicons-arrow-right-24: Resilience & Failover](operations_resilience.md)
 
 ### Advanced Bedrock Features
 
@@ -165,6 +167,8 @@ stdapi.ai gives you **full control over where your data is processed**, making i
 
 !!! info "AWS Bedrock Privacy Defaults"
     AWS Bedrock provides strong privacy guarantees by default: inference data is not shared with model providers and is not used for model training. stdapi.ai inherits and preserves these protections.
+
+[:octicons-arrow-right-24: Data Sovereignty & Compliance](operations_compliance.md)
 
 ---
 
