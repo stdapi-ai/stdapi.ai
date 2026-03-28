@@ -122,6 +122,7 @@ stdapi.ai is compatible with both OpenAI and Anthropic SDKs. If you've used eith
 - :material-cog: [**Configuration**](operations_configuration.md) — All environment variables and options
 - :material-server-network: [**Advanced Deployment**](operations_deploy_advanced.md) — VPC integration, multi-region, cost optimization, manual ECS
 - :material-directions-fork: [**Resilience & Failover**](operations_resilience.md) — Multi-region routing and quota multiplication
+- :material-shield-lock: [**Data Sovereignty & Compliance**](operations_compliance.md) — GDPR-compliant region configuration
 - :material-puzzle: [**Use Cases**](use_cases.md) — Open WebUI, n8n, coding assistants, and more
 - :material-scale-balance: [**Licensing**](operations_licensing.md) — AGPL vs commercial options
 

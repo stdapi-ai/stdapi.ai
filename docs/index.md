@@ -234,6 +234,7 @@ Use Claude, Kimi K2, MiniMax, or any Bedrock model. Switch between models, regio
 
 - :material-earth: __Multiply your quota across regions__
   <br>Each AWS region has its own independent quota. Configure 3 regions and get **3x the tokens per minute** and 3x the daily limits. Automatic routing and failover—no client changes needed.
+  <br>[:octicons-arrow-right-24: Resilience & Failover](operations_resilience.md)
 
 - :material-star-settings: __Advanced Bedrock capabilities__
   <br>Reasoning modes (Claude 4.6+, Nova 2), prompt caching, guardrails, service tiers, application inference profiles, and prompt routers—all through standard OpenAI API parameters.
@@ -271,7 +272,8 @@ Use Claude, Kimi K2, MiniMax, or any Bedrock model. Switch between models, regio
   <br>[:octicons-arrow-right-24: n8n integration guide](use_cases_n8n.md)
 
 - :material-domain: __Enterprises with Compliance Needs__
-  <br>Meet data sovereignty requirements with region controls. GDPR, HIPAA, FedRAMP workloads supported through AWS Bedrock's compliance certifications.
+  <br>Meet data sovereignty requirements with region controls. GDPR, HIPAA, FedRAMP workloads supported through AWS Bedrock's compliance certifications. CLOUD Act and FISA 702 risk mitigated through customer-managed encryption.
+  <br>[:octicons-arrow-right-24: Data Sovereignty & Compliance](operations_compliance.md)
 
 - :material-cash-multiple: __Cost-conscious Organizations__
   <br>Switch from subscription-based AI services to pay-per-use AWS Bedrock pricing. Pay only for actual usage with no monthly commitments while accessing leading models (Claude, Kimi K2, MiniMax, Qwen3).

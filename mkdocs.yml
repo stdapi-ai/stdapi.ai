@@ -69,6 +69,7 @@ nav:
           - Licensing: operations_licensing.md
           - Logging & Monitoring: operations_logging_monitoring.md
           - Resilience & Failover: operations_resilience.md
+          - Data Sovereignty & Compliance: operations_compliance.md
       - Use cases:
           - Overview: use_cases.md
           - OpenWebUI integration: use_cases_openwebui.md
