@@ -181,6 +181,24 @@ Create or edit `~/.claude/claude.json`:
 !!! tip "Beta Flag Compatibility"
     stdapi.ai automatically filters unsupported `anthropic_beta` flags, so Claude Code works without needing `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`. Bedrock-supported flags (like `Interleaved-thinking-2025-05-14` and `token-efficient-tools-2025-02-19`) are preserved while unsupported ones are silently removed. See [`ANTHROPIC_BETA_FILTER`](operations_configuration.md#anthropic-beta-filter) and [`ANTHROPIC_BETA_ALLOWLIST`](operations_configuration.md#anthropic-beta-allowlist) for details.
 
+!!! tip "Using Non-Claude Models"
+    Claude Code is optimized for Claude models and may be incompatible with some non-Claude models. For the best experience, use Claude Code with stdapi.ai and Claude models. If you need to use non-Claude models (e.g., Kimi K2, Qwen Coder), some Claude-specific features may not be supported. Two common issues to address:
+
+    - **Prompt caching** — Claude Code sends `cache_control` headers that can cause errors on models that support prompt caching but handle it differently (e.g., AWS Nova, Qwen). Set `DISABLE_PROMPT_CACHING=1` to suppress these headers.
+    - **Extended thinking** — If the model does not support thinking/reasoning configuration, set `MAX_THINKING_TOKENS=0` to disable it.
+
+    ```json
+    {
+      "env": {
+        "ANTHROPIC_AUTH_TOKEN": "YOUR_API_KEY",
+        "ANTHROPIC_BASE_URL": "https://YOUR_STDAPI_URL/anthropic",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "amazon.nova-2-lite-v1:0",
+        "MAX_THINKING_TOKENS": "0",
+        "DISABLE_PROMPT_CACHING": "1"
+      }
+    }
+    ```
+
 ### Other Anthropic-Compatible Tools
 
 Any tool using the Anthropic SDK or messages API can be configured the same way—set the `ANTHROPIC_BASE_URL` to `https://YOUR_STDAPI_URL/anthropic` and `ANTHROPIC_API_KEY` (or equivalent) to your stdapi.ai API key.
