@@ -38,12 +38,15 @@ if TYPE_CHECKING:
         MessageTypeDef,
         SystemContentBlockTypeDef,
         ToolConfigurationTypeDef,
+        ToolResultContentBlockOutputTypeDef,
         ToolTypeDef,
     )
 
     from stdapi.aws_bedrock import ConverseRequestBaseTypeDef
     from stdapi.types import JsonMapping
     from stdapi.types.anthropic_messages import (
+        ContentBlock,
+        ContentBlockParam,
         Message,
         MessageCreateParams,
         ServerTools,
@@ -206,6 +209,7 @@ class ChatModel(ChatModelBase[Any, Any]):
             prompt_caching_supported=self.PROMPT_CACHING_SUPPORTED,
             prompt_caching_tool_supported=self.PROMPT_CACHING_TOOL_SUPPORTED,
             tool_name_map=self.ANTHROPIC_TOOL_NAME_MAP,
+            req_map_content_block=self._req_map_content_block,
         )
 
         tool_config = self._req_promote_system_tools(tool_config)
@@ -262,6 +266,8 @@ class ChatModel(ChatModelBase[Any, Any]):
                         request.model,
                         (await self.converse_stream(bedrock_request))["stream"],
                         forced_tool,
+                        self._resp_stream_map_tool_use,
+                        self._resp_stream_map_tool_result,
                     )
                 )
             )
@@ -275,6 +281,8 @@ class ChatModel(ChatModelBase[Any, Any]):
                 message_id,
                 request.model,
                 forced_tool,
+                self._resp_map_tool_result,
+                self._resp_map_tool_use,
             )
         )
 
@@ -406,6 +414,79 @@ class ChatModel(ChatModelBase[Any, Any]):
             msg = "Reasoning configuration is not supported for this model"
             raise ApiError(msg)
 
+    def _resp_map_tool_result(
+        self,
+        tool_use_id: str,
+        bedrock_tool_name: str,
+        content_items: list[ToolResultContentBlockOutputTypeDef],
+    ) -> list[ContentBlock] | None:
+        """Map a Bedrock toolResult block to zero or more Anthropic content blocks.
+
+        Args:
+            tool_use_id: The raw ``toolUseId`` from the Bedrock ``toolResult`` block.
+            bedrock_tool_name: The Bedrock-side tool name (e.g. ``"nova_code_interpreter"``).
+            content_items: The full content list from the Bedrock ``toolResult`` block.
+
+        Returns:
+            A list of Anthropic content blocks  or ``None`` to drop the result.
+        """
+
+    def _resp_map_tool_use(
+        self, tool_use_id: str, bedrock_tool_name: str, tool_input: JsonMapping
+    ) -> ContentBlock | None:
+        """Map a Bedrock toolUse block to an Anthropic content block.
+
+        Args:
+            tool_use_id: The raw ``toolUseId`` from the Bedrock ``toolUse`` block.
+            bedrock_tool_name: The Bedrock-side tool name.
+            tool_input: The tool input dict from the Bedrock ``toolUse`` block.
+
+        Returns:
+            An Anthropic content block, or ``None`` to use the default mapping.
+        """
+
+    def _req_map_content_block(
+        self, block: ContentBlockParam
+    ) -> ContentBlockTypeDef | None:
+        """Map an Anthropic request content block to a Bedrock content block.
+
+        Args:
+            block: An Anthropic content block param from the request messages.
+
+        Returns:
+            A Bedrock content block dict, or ``None`` to use the default mapping.
+        """
+
+    def _resp_stream_map_tool_use(
+        self, tool_use_id: str, bedrock_tool_name: str
+    ) -> ContentBlock | None:
+        """Map a Bedrock streaming ``toolUse`` start to an Anthropic content block.
+
+        Args:
+            tool_use_id: The raw ``toolUseId`` from the Bedrock ``contentBlockStart``.
+            bedrock_tool_name: The Bedrock-side tool name.
+
+        Returns:
+            An Anthropic content block for the stream start event, or ``None`` to
+            use the default mapping.
+        """
+
+    def _resp_stream_map_tool_result(
+        self, tool_use_id: str, result_type: str, content_items: list[Any]
+    ) -> ContentBlock | None:
+        """Map a buffered Bedrock streaming ``toolResult`` to an Anthropic content block.
+
+        Args:
+            tool_use_id: The raw ``toolUseId`` from the Bedrock ``contentBlockStart``.
+            result_type: The Bedrock result type string (e.g.
+                ``"nova_code_interpreter_result"``).
+            content_items: The accumulated content item dicts from all
+                ``contentBlockDelta`` events for this block.
+
+        Returns:
+            An Anthropic content block to emit, or ``None`` to discard the block.
+        """
+
     def _req_enable_prompt_caching(
         self,
         system_blocks: list[SystemContentBlockTypeDef],
@@ -524,7 +605,7 @@ class ChatModel(ChatModelBase[Any, Any]):
         self,
         tool_config: ToolConfigurationTypeDef | None,
         additional_request_fields: JsonMapping,
-        server_tools: list[dict[str, object]],
+        server_tools: list[JsonMapping],
         bedrock_messages: list[MessageTypeDef] | None = None,
     ) -> None:
         """Apply model-specific tool configuration.  No-op by default.
@@ -550,7 +631,7 @@ class ChatModel(ChatModelBase[Any, Any]):
     def _req_extract_server_tools(
         self,
         tool_config: ToolConfigurationTypeDef | None,  # noqa: ARG002
-    ) -> list[dict[str, object]]:
+    ) -> list[JsonMapping]:
         """Detect model-specific server tools in *tool_config*.
 
         Scans ``toolSpec`` entries for versioned server tool type names and

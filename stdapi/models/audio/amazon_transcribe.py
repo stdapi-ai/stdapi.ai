@@ -191,10 +191,7 @@ def _build_transcription_job_params(
 
     if response_format in SUBTITLE_FORMATS:
         # AWS Transcribe will create subtitle file at: {s3_prefix}{job_id}/output.{format}
-        job_params["Subtitles"] = {
-            "Formats": [response_format],  # type: ignore[list-item]
-            "OutputStartIndex": 1,
-        }
+        job_params["Subtitles"] = {"Formats": [response_format], "OutputStartIndex": 1}
 
     elif response_format == "diarized_json":
         job_params["Settings"] = {"ShowSpeakerLabels": True, "MaxSpeakerLabels": 10}

@@ -106,7 +106,7 @@ class AnthropicClaudeChatModel(_BaseChatModel):
 
     def _req_extract_server_tools(
         self, tool_config: ToolConfigurationTypeDef | None
-    ) -> list[dict[str, object]]:
+    ) -> list[JsonMapping]:
         """Detect Claude server tools in *tool_config* by matching names against ``SERVER_TOOL_NAME_TO_TYPE``.
 
         A ``toolSpec`` entry is a server tool when its ``name`` matches a key in
@@ -124,7 +124,7 @@ class AnthropicClaudeChatModel(_BaseChatModel):
         """
         if not tool_config:
             return []
-        server_tools: list[dict[str, object]] = []
+        server_tools: list[JsonMapping] = []
         for entry in tool_config["tools"]:
             if not (
                 isinstance(entry, dict)
@@ -134,9 +134,7 @@ class AnthropicClaudeChatModel(_BaseChatModel):
             ):
                 continue
             tool_type = self.SERVER_TOOL_NAME_TO_TYPE[tool_name]
-            json_params: dict[str, object] = (spec.get("inputSchema") or {}).get(
-                "json"
-            ) or {}  # type: ignore[assignment]
+            json_params: JsonMapping = (spec.get("inputSchema") or {}).get("json") or {}  # type: ignore[assignment]
             if (
                 extra := {
                     k: v for k, v in json_params.items() if k not in _SERVER_TOOL_KEYS
@@ -150,7 +148,7 @@ class AnthropicClaudeChatModel(_BaseChatModel):
         self,
         tool_config: ToolConfigurationTypeDef | None,
         additional_request_fields: JsonMapping,
-        server_tools: list[dict[str, object]],
+        server_tools: list[JsonMapping],
         bedrock_messages: list[MessageTypeDef] | None = None,
     ) -> None:
         """Configure Claude server tools: native-format routing on Turn 1, stubs on Turn 2+, plus beta flags.
@@ -182,13 +180,17 @@ class AnthropicClaudeChatModel(_BaseChatModel):
 
         if not _has_tool_result(bedrock_messages or []):
             # Turn 1: move all server tools to additionalModelRequestFields native format.
-            native_tool_names = {t["name"] for t in server_tools}
-            existing_tools: list[dict[str, object]] = additional_request_fields.get(  # type: ignore[assignment]
+            native_tool_names = {tool["name"] for tool in server_tools}
+            existing_tools: list[JsonMapping] = additional_request_fields.get(  # type: ignore[assignment]
                 "tools", []
             )
             additional_request_fields["tools"] = existing_tools + [  # type: ignore[assignment]
-                {k: v for k, v in t.items() if k not in _SERVER_TOOL_SERIALIZE_EXCLUDE}
-                for t in server_tools
+                {
+                    k: v
+                    for k, v in tool.items()
+                    if k not in _SERVER_TOOL_SERIALIZE_EXCLUDE
+                }
+                for tool in server_tools
             ]
 
             # Remove corresponding stubs from toolConfig.

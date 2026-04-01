@@ -301,7 +301,17 @@ Add system tools to your `tools` array as normal. System tools don't require par
 !!! tip "Future-Proof Tool Declarations"
     As AWS releases new system tools, use the same `systemTool_` prefix to declare them as system tools instead of standard tools.
 
-#### ![Amazon Nova](styles/logo_amazon_nova.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Nova Web Grounding
+#### ![Amazon Nova](styles/logo_amazon_nova.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Nova Tools
+
+| Tool | `function.name` | Amazon Nova 2 | Amazon Nova Premier | API Support |
+|------|-----------------|:-------------:|:-------------------:|:-----------:|
+| Web Grounding | `nova_grounding` | :material-check-circle:{ .success } | :material-check-circle:{ .success } | :material-check-circle:{ .success } |
+| Code Interpreter | `nova_code_interpreter` | :material-check-circle:{ .success } | :material-close-circle:{ .unsupported } | :material-close-circle:{ .unsupported } |
+
+!!! danger "Code Interpreter Not Compatible"
+    **`nova_code_interpreter` cannot be used via this API.** The code execution result cannot be surfaced in the OpenAI Chat Completions response format.
+
+##### Web Grounding
 
 Amazon Nova Web Grounding enables models to search the web for current information, helping answer questions requiring real-time data like news, weather, product availability, or recent events. The model automatically determines when to use web grounding based on the user's query.
 
@@ -375,45 +385,8 @@ When using web grounding, the API response includes `annotations` with URL citat
 - **Enhanced Accuracy**: Reduce hallucinations with real-time information retrieval
 - **OpenAI-Compatible**: Works seamlessly with standard tool calling patterns
 
-!!! warning "Model and Region Compatibility"
-    **Model**: `nova_grounding` is supported by Amazon Nova 2 models (e.g., `amazon.nova-2-lite-v1:0`) and Amazon Nova Premier (`amazon.nova-premier-v1:0`).
-
-    **Region**: Web Grounding is only available in US regions.
-
-#### ![Amazon Nova](styles/logo_amazon_nova.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Nova Code Interpreter
-
-Amazon Nova Code Interpreter enables models to securely execute Python code in isolated sandbox environments.
-
-!!! info "Learn More"
-    [Amazon Nova Built-in Tools - User Guide](https://docs.aws.amazon.com/nova/latest/nova2-userguide/using-tools.html#builtin-tools)
-
-**Usage:**
-
-```bash
-curl -X POST "$BASE/v1/chat/completions" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "amazon.nova-2-lite-v1:0",
-    "messages": [
-      {
-        "role": "user",
-        "content": "Calculate the first 10 Fibonacci numbers."
-      }
-    ],
-    "tools": [
-      {
-        "type": "function",
-        "function": {
-          "name": "nova_code_interpreter"
-        }
-      }
-    ]
-  }'
-```
-
-!!! warning "Model Compatibility"
-    `nova_code_interpreter` is supported by Amazon Nova 2 models (e.g., `amazon.nova-2-lite-v1:0`).
+!!! warning "Region Compatibility"
+    Web Grounding is only available in US regions.
 
 #### ![Claude](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Anthropic Claude Server Tools
 

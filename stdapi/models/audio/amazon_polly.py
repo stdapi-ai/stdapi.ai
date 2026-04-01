@@ -175,7 +175,7 @@ async def _select_voice(
         Voice ID and optional language code.
     """
     if voice in _VOICES_DESCRIPTIONS:
-        return voice, None  # type: ignore[return-value]
+        return voice, None
 
     try:
         gender: GenderType = "Female" if OPENAI_VOICES_FEMALE[voice] else "Male"
@@ -223,7 +223,7 @@ async def _detect_language(text: str) -> LanguageCodeType:
                 max(response["Languages"], key=lambda x: x["Score"])["LanguageCode"]
             )
             if language in _VOICES_BY_LANGUAGE:
-                return language  # type: ignore[return-value]
+                return language
         return "en-US"
     return SETTINGS.default_tts_language  # type: ignore[return-value]
 

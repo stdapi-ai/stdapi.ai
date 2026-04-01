@@ -6,6 +6,7 @@ close to Bedrock's native format, so many mappings are near 1:1.
 """
 
 import re
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from pydantic_core import to_json
@@ -93,7 +94,7 @@ from stdapi.types.anthropic_messages import (
 from stdapi.utils import b64decode, b64encode
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator, Mapping
+    from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
 
     from types_aiobotocore_bedrock.literals import RegionName
     from types_aiobotocore_bedrock_runtime.literals import (
@@ -107,10 +108,12 @@ if TYPE_CHECKING:
         ContentBlockOutputTypeDef,
         ContentBlockStartEventTypeDef,
         ContentBlockStartTypeDef,
+        ContentBlockStopEventTypeDef,
         ContentBlockTypeDef,
         ConverseStreamOutputTypeDef,
         ConverseTokensRequestTypeDef,
         CountTokensResponseTypeDef,
+        DocumentBlockTypeDef,
         InferenceConfigurationTypeDef,
         JsonSchemaDefinitionTypeDef,
         MessageTypeDef,
@@ -119,6 +122,7 @@ if TYPE_CHECKING:
         ToolChoiceTypeDef,
         ToolConfigurationTypeDef,
         ToolResultBlockTypeDef,
+        ToolResultContentBlockOutputTypeDef,
         ToolTypeDef,
     )
 
@@ -298,7 +302,7 @@ async def _map_document_to_bedrock(block: DocumentBlockParam) -> ContentBlockTyp
         case _:  # pragma: no cover
             msg = f"Unsupported document source type: {type(block.source)}"
             raise ApiError(msg)
-    doc: dict[str, object] = {
+    doc: DocumentBlockTypeDef = {
         "name": doc_name,
         "format": "txt",
         "source": {"bytes": doc_bytes},
@@ -307,7 +311,25 @@ async def _map_document_to_bedrock(block: DocumentBlockParam) -> ContentBlockTyp
         doc["context"] = block.context
     if block.citations and block.citations.enabled:
         doc["citations"] = {"enabled": True}
-    return {"document": doc}  # type: ignore[typeddict-item]
+    return {"document": doc}
+
+
+def _map_thinking_to_bedrock(
+    thinking: str, signature: str | None
+) -> ContentBlockTypeDef:
+    """Map a ThinkingBlockParam to a Bedrock reasoningContent block.
+
+    Args:
+        thinking: The thinking text content.
+        signature: Optional signature for the reasoning block.
+
+    Returns:
+        Bedrock content block dict with ``reasoningContent``.
+    """
+    reasoning_text: ReasoningTextBlockTypeDef = {"text": thinking}
+    if signature:
+        reasoning_text["signature"] = signature
+    return {"reasoningContent": {"reasoningText": reasoning_text}}
 
 
 async def _map_content_block_to_bedrock(  # noqa: PLR0911
@@ -342,10 +364,15 @@ async def _map_content_block_to_bedrock(  # noqa: PLR0911
                     "content": [{"text": b.text} for b in sr_blocks if b.text],
                 }
             }
-        case (
-            ToolUseBlockParam(id=id_, name=name, input=input_)
-            | ServerToolUseBlockParam(id=id_, name=name, input=input_)
-        ):
+        case ServerToolUseBlockParam(id=id_, name=name, input=input_):
+            return {
+                "toolUse": {
+                    "toolUseId": f"tooluse_{id_.removeprefix('srvtoolu_')}",
+                    "name": name,
+                    "input": input_,
+                }
+            }
+        case ToolUseBlockParam(id=id_, name=name, input=input_):
             return {
                 "toolUse": {
                     "toolUseId": id_.removeprefix("toolu_"),
@@ -356,10 +383,7 @@ async def _map_content_block_to_bedrock(  # noqa: PLR0911
         case ToolResultBlockParam():
             return await _map_tool_result_to_bedrock(block)
         case ThinkingBlockParam(thinking=thinking, signature=signature):
-            reasoning_text: ReasoningTextBlockTypeDef = {"text": thinking}
-            if signature:
-                reasoning_text["signature"] = signature
-            return {"reasoningContent": {"reasoningText": reasoning_text}}
+            return _map_thinking_to_bedrock(thinking, signature)
         case RedactedThinkingBlockParam():
             return None
         case _:
@@ -370,13 +394,21 @@ async def _map_content_block_to_bedrock(  # noqa: PLR0911
 
 
 async def _map_messages(
-    messages: list[MessageParam], *, allow_explicit_caching: bool = False
+    messages: list[MessageParam],
+    *,
+    allow_explicit_caching: bool = False,
+    req_map_content_block: Callable[[ContentBlockParam], ContentBlockTypeDef | None]
+    | None = None,
 ) -> list[MessageTypeDef]:
     """Convert a list of Anthropic messages to Bedrock messages.
 
     Args:
         messages: Anthropic message params.
         allow_explicit_caching: Whether to allow explicit prompt caching for messages.
+        req_map_content_block: Optional model-specific callback for content block
+            translation.  Called before the default mapper; return a
+            ``ContentBlockTypeDef`` to use that result, or ``None`` to fall
+            back to ``_map_content_block_to_bedrock``.
 
     Returns:
         List of Bedrock message dicts.
@@ -390,6 +422,11 @@ async def _map_messages(
                 content = []
                 for block in msg.content:
                     if (
+                        req_map_content_block is not None
+                        and (override := req_map_content_block(block)) is not None
+                    ):
+                        content.append(override)
+                    elif (
                         converted := await _map_content_block_to_bedrock(block)
                     ) is not None:
                         content.append(converted)
@@ -600,6 +637,8 @@ async def translate_request(
     prompt_caching_supported: bool,
     prompt_caching_tool_supported: bool,
     tool_name_map: Mapping[ServerTools, str] | None = None,
+    req_map_content_block: Callable[[ContentBlockParam], ContentBlockTypeDef | None]
+    | None = None,
 ) -> tuple[
     list[MessageTypeDef],
     list[SystemContentBlockTypeDef],
@@ -621,6 +660,8 @@ async def translate_request(
         tool_name_map: Optional mapping from Anthropic canonical tool name to Bedrock
             system tool name.  When provided, system tool names are translated to
             Bedrock names before being added as ``toolSpec`` entries.
+        req_map_content_block: Optional model-specific callback for content block
+            translation.  Passed through to ``_map_messages``.
 
     Returns:
         A 9-tuple of (messages, system blocks, inference config,
@@ -647,7 +688,9 @@ async def translate_request(
     )
     return (
         await _map_messages(
-            request.messages, allow_explicit_caching=allow_explicit_caching
+            request.messages,
+            allow_explicit_caching=allow_explicit_caching,
+            req_map_content_block=req_map_content_block,
         ),
         _map_system_blocks(
             request.system, allow_explicit_caching=allow_explicit_caching
@@ -801,7 +844,7 @@ async def _map_content_block_from_bedrock(  # noqa: PLR0911
         Anthropic content block, or ``None`` if the block type is unrecognized.
     """
     match block:
-        case {"text": text}:
+        case {"text": text} if text:
             return TextBlock(type="text", text=text)
         case {"toolUse": {"toolUseId": id_, "name": name, "input": input_}}:
             return ToolUseBlock(
@@ -832,6 +875,11 @@ async def format_response(
     message_id: str,
     model_id: str,
     forced_tool: str | None,
+    resp_map_tool_result: Callable[
+        [str, str, list[ToolResultContentBlockOutputTypeDef]], list[ContentBlock] | None
+    ],
+    resp_map_tool_use: Callable[[str, str, JsonMapping], ContentBlock | None]
+    | None = None,
 ) -> Message:
     """Format a Bedrock Converse response as an Anthropic ``Message``.
 
@@ -842,15 +890,52 @@ async def format_response(
         message_id: Unique message identifier.
         model_id: Model identifier to echo back in the response.
         forced_tool: When set, only tool_use blocks with this name are kept.
+        resp_map_tool_result: Callable that maps a Bedrock ``toolResult`` block to
+            zero or more Anthropic content blocks.  Receives the raw ``toolUseId``,
+            the Bedrock tool name, and the full content items list from the
+            ``toolResult`` block.
+        resp_map_tool_use: Optional callable that maps a Bedrock ``toolUse`` block to
+            an Anthropic content block.  Receives the raw ``toolUseId``, the Bedrock
+            tool name, and the tool input dict.  Return ``None`` to fall back to the
+            default ``_map_content_block_from_bedrock`` mapping.
 
     Returns:
         Anthropic Message object.
     """
-    content_blocks = [
-        mapped
-        for block in contents
-        if (mapped := await _map_content_block_from_bedrock(block)) is not None
-    ]
+    # toolUseId → Bedrock tool name; populated as toolUse blocks are encountered
+    # so that subsequent toolResult blocks can be resolved to a tool name.
+    tool_use_id_to_name: dict[str, str] = {}
+    content_blocks: list[ContentBlock] = []
+
+    for block in contents:
+        match block:
+            case {"toolUse": {"toolUseId": id_, "name": name}}:
+                tool_use_id_to_name[id_] = name
+                if resp_map_tool_use is not None:
+                    tool_input: JsonMapping = block["toolUse"].get("input", {})
+                    override = resp_map_tool_use(id_, name, tool_input)
+                else:
+                    override = None
+                if override is not None:
+                    content_blocks.append(override)
+                elif (
+                    mapped := await _map_content_block_from_bedrock(block)
+                ) is not None:
+                    content_blocks.append(mapped)
+            case {"toolResult": tool_result}:
+                id_ = tool_result.get("toolUseId", "")
+                content_items: list[ToolResultContentBlockOutputTypeDef] = (
+                    tool_result.get("content") or []
+                )
+                content_blocks.extend(
+                    resp_map_tool_result(
+                        id_, tool_use_id_to_name.get(id_, ""), content_items
+                    )
+                    or ()
+                )
+            case _:
+                if (mapped := await _map_content_block_from_bedrock(block)) is not None:
+                    content_blocks.append(mapped)
 
     if forced_tool is not None:
         content_blocks = [
@@ -1075,93 +1160,292 @@ def _is_suppressed_tool(content_block: ContentBlock, forced_tool: str | None) ->
     )
 
 
-async def _handle_block_start(
-    start_block: ContentBlockStartEventTypeDef,
+def _handle_block_start(
+    start: ContentBlockStartTypeDef,
     forced_tool: str | None,
-    seen: set[int],
-    suppressed: set[int],
-) -> JSONServerSentEvent | None:
-    """Handle a ``contentBlockStart`` Bedrock event.
+    resp_stream_map_tool_use: Callable[[str, str], ContentBlock | None] | None = None,
+) -> ContentBlock | None:
+    """Resolve a ``contentBlockStart`` ``start`` payload to a ContentBlock.
 
     Args:
-        start_block: Raw Bedrock contentBlockStart payload.
-        forced_tool: Tool name filter; blocks for other tools are suppressed.
-        seen: Set of content block indices already started.
-        suppressed: Set of content block indices being suppressed.
+        start: The ``start`` field of a Bedrock ``contentBlockStart`` event.
+        forced_tool: Tool name filter; blocks for other tools return ``None``.
+        resp_stream_map_tool_use: Optional model-specific callback that maps a
+            Bedrock ``toolUse`` start to an Anthropic content block.  Receives the
+            raw ``toolUseId`` and Bedrock tool name; return ``None`` to use the
+            default ``_resolve_start_block`` mapping.
 
     Returns:
-        A ``content_block_start`` SSE event, or ``None`` if the block is suppressed.
+        The resolved ContentBlock, or ``None`` if the block should be suppressed.
     """
-    index = start_block["contentBlockIndex"]
-    content_block = _resolve_start_block(start_block["start"])
+    content_block: ContentBlock | None = None
+    if resp_stream_map_tool_use is not None and "toolUse" in start:
+        tool_use = start["toolUse"]
+        content_block = resp_stream_map_tool_use(
+            tool_use["toolUseId"], tool_use["name"]
+        )
+    if content_block is None:
+        content_block = _resolve_start_block(start)
     if _is_suppressed_tool(content_block, forced_tool):
-        suppressed.add(index)
         return None
-    seen.add(index)
-    return _make_block_start_event(index, content_block)
+    return content_block
 
 
-async def _handle_block_delta(
-    delta_block: ContentBlockDeltaEventTypeDef, seen: set[int], suppressed: set[int]
-) -> AsyncGenerator[JSONServerSentEvent]:
-    """Handle a ``contentBlockDelta`` Bedrock event.
+@dataclass(slots=True)
+class _StreamState:
+    """Mutable state shared across the :func:`_process_stream_events` event loop.
+
+    Attributes:
+        next_index: Next Anthropic block index to assign.
+        current_index: Index assigned to the block currently in
+            progress, or ``None`` when no block is open.
+        current_suppressed: ``True`` when the current block is being dropped.
+        pending_results: Buffered ``toolResult`` data keyed by Bedrock block
+            index; filled from ``contentBlockDelta`` events and consumed on
+            ``contentBlockStop``.
+    """
+
+    next_index: int = 0
+    current_index: int | None = None
+    current_suppressed: bool = False
+    pending_results: dict[int, dict[str, Any]] = field(default_factory=dict)
+
+
+def _process_content_block_start(
+    start_block: ContentBlockStartEventTypeDef,
+    state: _StreamState,
+    forced_tool: str | None,
+    resp_stream_map_tool_use: Callable[[str, str], ContentBlock | None] | None,
+) -> list[JSONServerSentEvent]:
+    """Handle a ``contentBlockStart`` event, updating *state* in place.
+
+    ``toolResult`` blocks (model-internal results such as ``nova_code_interpreter``)
+    are registered in :attr:`_StreamState.pending_results` for later assembly;
+    all other blocks are resolved to an Anthropic :class:`ContentBlock` immediately.
 
     Args:
-        delta_block: Raw Bedrock contentBlockDelta payload.
-        seen: Set of content block indices already started.
-        suppressed: Set of content block indices being suppressed.
+        start_block: The ``contentBlockStart`` value from the Bedrock stream event.
+        state: Shared stream state; mutated in place.
+        forced_tool: Tool name filter for block suppression.
+        resp_stream_map_tool_use: Optional model-specific ``toolUse`` mapper.
 
-    Yields:
-        Zero, one, or two SSE events (synthetic start + delta).
+    Returns:
+        SSE events to emit (zero or one ``content_block_start`` event).
     """
-    index = delta_block["contentBlockIndex"]
-    if index in suppressed:
-        return
+    bedrock_index: int = start_block["contentBlockIndex"]
+    start = start_block["start"]
+    if "toolResult" in start:
+        tool_result = start["toolResult"]
+        state.pending_results[bedrock_index] = {
+            "toolUseId": tool_result["toolUseId"],
+            "result_type": tool_result.get("type", ""),
+            "content_items": [],
+        }
+        return []
+    if content_block := _handle_block_start(
+        start, forced_tool, resp_stream_map_tool_use
+    ):
+        state.current_suppressed = False
+        state.current_index = state.next_index
+        state.next_index += 1
+        return [_make_block_start_event(state.current_index, content_block)]
+    state.current_suppressed = True
+    state.current_index = None
+    return []
+
+
+def _process_content_block_delta(
+    delta_block: ContentBlockDeltaEventTypeDef, state: _StreamState
+) -> list[JSONServerSentEvent]:
+    """Handle a ``contentBlockDelta`` event, updating *state* in place.
+
+    Accumulates payload into the pending buffer when the delta belongs to a
+    buffered ``toolResult`` block.  For regular blocks, emits a delta SSE event,
+    or synthesises a ``content_block_start`` when there was no prior start event.
+
+    Args:
+        delta_block: The ``contentBlockDelta`` value from the Bedrock stream event.
+        state: Shared stream state; mutated in place.
+
+    Returns:
+        SSE events to emit (zero, one, or two events).
+    """
+    bedrock_index: int = delta_block["contentBlockIndex"]
     delta = delta_block["delta"]
-    if index not in seen:
-        seen.add(index)
-        yield _make_block_start_event(index, _synthesize_block_from_delta(delta))
-    if delta_event := _map_delta(index, delta):
-        yield delta_event
+    if bedrock_index in state.pending_results:
+        if "toolResult" in delta:
+            state.pending_results[bedrock_index]["content_items"].extend(
+                delta["toolResult"]
+            )
+        return []
+    if state.current_index is not None:
+        if delta_event := _map_delta(state.current_index, delta):
+            return [delta_event]
+        return []
+    if not state.current_suppressed:
+        # First delta for a block with no preceding contentBlockStart.
+        # Suppress if empty text (e.g. Nova's empty preamble block).
+        if delta == {"text": ""}:
+            state.current_suppressed = True
+            return []
+        state.current_index = state.next_index
+        state.next_index += 1
+        events: list[JSONServerSentEvent] = [
+            _make_block_start_event(
+                state.current_index, _synthesize_block_from_delta(delta)
+            )
+        ]
+        if delta_event := _map_delta(state.current_index, delta):
+            events.append(delta_event)
+        return events
+    return []
+
+
+def _process_content_block_stop(
+    stop_block: ContentBlockStopEventTypeDef,
+    state: _StreamState,
+    resp_stream_map_tool_result: Callable[[str, str, list[Any]], ContentBlock | None]
+    | None,
+) -> list[JSONServerSentEvent]:
+    """Handle a ``contentBlockStop`` event, updating *state* in place.
+
+    For pending ``toolResult`` blocks, translates and emits the complete block via
+    *resp_stream_map_tool_result* (if set) and discards it silently otherwise.
+    For regular blocks, closes the open Anthropic block or clears the suppression flag.
+
+    Args:
+        stop_block: The ``contentBlockStop`` value from the Bedrock stream event.
+        state: Shared stream state; mutated in place.
+        resp_stream_map_tool_result: Optional model-specific ``toolResult`` mapper.
+
+    Returns:
+        SSE events to emit (zero, one, or two events).
+    """
+    bedrock_index: int = stop_block["contentBlockIndex"]
+    if bedrock_index in state.pending_results:
+        info = state.pending_results.pop(bedrock_index)
+        if (
+            resp_stream_map_tool_result is not None
+            and (
+                content_block := resp_stream_map_tool_result(
+                    info["toolUseId"], info["result_type"], info["content_items"]
+                )
+            )
+            is not None
+        ):
+            anthropic_index = state.next_index
+            state.next_index += 1
+            return [
+                _make_block_start_event(anthropic_index, content_block),
+                _make_block_stop_event(anthropic_index),
+            ]
+        return []
+    if state.current_suppressed:
+        state.current_suppressed = False
+        return []
+    if state.current_index is not None:
+        index = state.current_index
+        state.current_index = None
+        return [_make_block_stop_event(index)]
+    return []
 
 
 async def _process_stream_events(
-    stream: AsyncIterator[ConverseStreamOutputTypeDef], forced_tool: str | None
+    stream: AsyncIterator[ConverseStreamOutputTypeDef],
+    forced_tool: str | None,
+    resp_stream_map_tool_use: Callable[[str, str], ContentBlock | None] | None = None,
+    resp_stream_map_tool_result: Callable[[str, str, list[Any]], ContentBlock | None]
+    | None = None,
 ) -> AsyncGenerator[JSONServerSentEvent]:
     """Process Bedrock stream events and yield Anthropic SSE events.
 
-    Handles ``contentBlockStart``, ``contentBlockDelta``, ``contentBlockStop``,
-    ``messageStop``, and ``metadata`` events, yielding corresponding Anthropic
-    SSE events.
+    **Why blocks are reindexed**
+
+    The Anthropic SDK accumulates streamed blocks into a list and uses
+    ``content[event.index]`` as a direct list position — index 0 maps to
+    ``content[0]``, index 1 to ``content[1]``, etc.  Bedrock assigns its own
+    block indices that may not be sequential after suppression, so this
+    function emits all blocks with sequential Anthropic indices (0, 1, 2, …),
+    consuming a new index only when a block is actually emitted.
+
+    **Why some blocks are skipped**
+
+    Two situations cause a Bedrock block to be dropped entirely:
+
+    1. *Empty text preamble* — some models (e.g. Nova) send an empty ``text``
+       delta for block 0 with no preceding ``contentBlockStart``.  A block
+       whose very first delta is ``{"text": ""}`` is silently discarded.
+    2. *forced_tool filter* — when a single tool is forced, ``toolUse`` blocks
+       for other tools are suppressed.
+
+    **Why toolResult blocks are buffered**
+
+    Bedrock sends model-internal tool results (e.g. ``nova_code_interpreter``)
+    as a ``toolResult`` block in the same turn as the ``toolUse`` block.  The
+    gateway must translate these to a ``CodeExecutionToolResultBlock`` (or
+    similar) and emit them inline.  The block is buffered until
+    ``contentBlockStop`` so the full JSON payload is available before
+    translation, and the Anthropic index is assigned only at emit time —
+    avoiding gaps if the callback returns ``None``.
+
+    **Concrete example: Nova code_interpreter**
+
+    Bedrock raw stream for a ``nova_code_interpreter`` invocation::
+
+        [0] contentBlockDelta  delta={"text": ""}           ← empty preamble, skip
+        [1] contentBlockStart  start={"toolUse": {...}}
+        [1] contentBlockDelta  delta={"toolUse": {"input": "..."}}
+        [1] contentBlockStop
+        [2] contentBlockStart  start={"toolResult": {...}}  ← buffer until stop
+        [2] contentBlockDelta  delta={"toolResult": [{...}]}
+        [2] contentBlockStop
+        [3] contentBlockDelta  delta={"text": "Result: 27"} ← no contentBlockStart
+        [3] contentBlockStop
+
+    Anthropic SSE output (sequential indices 0, 1, 2)::
+
+        content_block_start  index=0  ServerToolUseBlock(name="code_execution")
+        content_block_delta  index=0  InputJSONDelta(...)
+        content_block_stop   index=0
+        content_block_start  index=1  CodeExecutionToolResultBlock(stdout="27")
+        content_block_stop   index=1
+        content_block_start  index=2  TextBlock(text="")         ← synthesized start
+        content_block_delta  index=2  TextDelta("Result: 27")
+        content_block_stop   index=2
 
     Args:
         stream: Async iterator of Bedrock stream events.
         forced_tool: When set, tool_use blocks for other tools are suppressed.
+        resp_stream_map_tool_use: Optional model-specific callback for ``toolUse``
+            start blocks.  Receives the raw ``toolUseId`` and Bedrock tool name;
+            return ``None`` to use the default mapping.
+        resp_stream_map_tool_result: Optional model-specific callback for
+            ``toolResult`` blocks.  Receives the raw ``toolUseId``, the Bedrock
+            result type string, and the accumulated content items list; return
+            ``None`` to discard the result block silently.
 
     Yields:
         Anthropic SSE events, finishing with a ``message_delta`` event.
     """
     stop_reason: StopReason | None = None
     usage_data: dict[str, int] = {}
-    seen: set[int] = set()
-    suppressed: set[int] = set()
+    state = _StreamState()
 
     async for event in stream:
         match event:
             case {"contentBlockStart": start_block}:
-                if sse := await _handle_block_start(
-                    start_block, forced_tool, seen, suppressed
+                for sse in _process_content_block_start(
+                    start_block, state, forced_tool, resp_stream_map_tool_use
                 ):
                     yield sse
             case {"contentBlockDelta": delta_block}:
-                async for sse in _handle_block_delta(delta_block, seen, suppressed):
+                for sse in _process_content_block_delta(delta_block, state):
                     yield sse
             case {"contentBlockStop": stop_block}:
-                index = stop_block["contentBlockIndex"]
-                if index in suppressed:
-                    suppressed.discard(index)
-                else:
-                    yield _make_block_stop_event(index)
+                for sse in _process_content_block_stop(
+                    stop_block, state, resp_stream_map_tool_result
+                ):
+                    yield sse
             case {"messageStop": message_stop}:
                 stop_reason = _map_stop_reason(message_stop["stopReason"])
             case {"metadata": metadata}:
@@ -1175,6 +1459,9 @@ async def format_stream(
     model_id: str,
     stream: AsyncIterator[ConverseStreamOutputTypeDef],
     forced_tool: str | None,
+    resp_stream_map_tool_use: Callable[[str, str], ContentBlock | None] | None = None,
+    resp_stream_map_tool_result: Callable[[str, str, list[Any]], ContentBlock | None]
+    | None = None,
 ) -> AsyncGenerator[JSONServerSentEvent]:
     """Convert a Bedrock Converse stream into Anthropic SSE events.
 
@@ -1183,12 +1470,21 @@ async def format_stream(
         model_id: Model identifier to echo back in the response.
         stream: Async iterator of Bedrock stream events.
         forced_tool: When set, tool_use blocks for other tools are suppressed.
+        resp_stream_map_tool_use: Optional model-specific callback for ``toolUse``
+            start blocks.  Passed through to ``_process_stream_events``.
+        resp_stream_map_tool_result: Optional model-specific callback for
+            ``toolResult`` blocks.  Passed through to ``_process_stream_events``.
 
     Yields:
         JSON server-sent events in Anthropic streaming format.
     """
     yield _make_message_start_event(message_id, model_id)
-    async for event in _process_stream_events(stream, forced_tool):
+    async for event in _process_stream_events(
+        stream,
+        forced_tool,
+        resp_stream_map_tool_use=resp_stream_map_tool_use,
+        resp_stream_map_tool_result=resp_stream_map_tool_result,
+    ):
         yield event
     yield JSONServerSentEvent(
         data=RawMessageStopEvent(type="message_stop").model_dump(

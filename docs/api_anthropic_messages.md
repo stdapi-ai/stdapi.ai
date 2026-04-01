@@ -299,13 +299,16 @@ Enable `citations` on document blocks to get precise source references in respon
 
 Server tools are built-in capabilities that foundation models can use directly without requiring you to implement backend integrations. Different model providers support different server tools through their native tool formats.
 
-#### Web Search Tool
+#### ![Amazon Nova](styles/logo_amazon_nova.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Nova Tools
+
+| Tool | Anthropic Tool Name | Amazon Nova 2 | Amazon Nova Premier |
+|------|---------------------|:-------------:|:-------------------:|
+| Web Grounding | `web_search` | :material-check-circle:{ .success } | :material-check-circle:{ .success } |
+| Code Interpreter | `code_execution` | :material-check-circle:{ .success } | :material-close-circle:{ .unsupported } |
+
+##### Web Grounding
 
 The Anthropic `web_search` tool is supported on models that declare web search as a system tool. When you include a `web_search` tool in your request, it is automatically mapped to the model's native system tool (e.g., `nova_grounding` for Amazon Nova 2 models).
-
-**Supported Models:**
-
-- ![Amazon Nova](styles/logo_amazon_nova.svg){ style="height: 1.2em; vertical-align: text-bottom;" } **Amazon Nova 2** (e.g., `amazon.nova-2-lite-v1:0`) and **Amazon Nova Premier** (`amazon.nova-premier-v1:0`): Mapped to `nova_grounding`
 
 **Usage:**
 
@@ -327,6 +330,34 @@ curl -X POST "$BASE/v1/messages" \
 
 !!! note "Model Compatibility"
     Requesting `web_search` on a model that does not support it will return a `400 Bad Request` error.
+
+##### Code Interpreter
+
+Amazon Nova Code Interpreter enables models to securely execute Python code in isolated sandbox environments. Enable it by passing a `code_execution` tool, which is automatically mapped to the model's native `nova_code_interpreter` system tool.
+
+!!! info "Learn More"
+    [Amazon Nova Built-in Tools - User Guide](https://docs.aws.amazon.com/nova/latest/nova2-userguide/using-tools.html#builtin-tools)
+
+**Usage:**
+
+```bash
+curl -X POST "$BASE/v1/messages" \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "amazon.nova-2-lite-v1:0",
+    "messages": [
+      {"role": "user", "content": "Calculate the first 10 Fibonacci numbers."}
+    ],
+    "tools": [
+      {"type": "code_execution_20250522", "name": "code_execution"}
+    ]
+  }'
+```
+
+!!! note "Model Compatibility"
+    Requesting `code_execution` on a model that does not support it will return a `400 Bad Request` error.
 
 #### Bedrock System Tools
 
