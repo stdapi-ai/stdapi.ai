@@ -1133,7 +1133,9 @@ def _suppress_system_tool_event(
     """
     if block_start := event.get("contentBlockStart"):
         start = block_start["start"]
-        if (tool_use := start.get("toolUse")) and tool_use.get("name") in suppress_tool_names:
+        if (tool_use := start.get("toolUse")) and tool_use.get(
+            "name"
+        ) in suppress_tool_names:
             suppressed_indices.add(block_start["contentBlockIndex"])
             return True
     elif block_delta := event.get("contentBlockDelta"):

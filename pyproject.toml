@@ -142,6 +142,7 @@ addopts = [
 ]
 markers = [
     "expensive",
+    "agentic",
     "xdist_group: group tests to run on the same xdist worker",
 ]
 filterwarnings = [

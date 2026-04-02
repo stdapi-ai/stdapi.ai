@@ -1367,13 +1367,12 @@ def _raise_model_not_found(
     Raises:
         UnsupportedModelError: Always.
     """
+    detail: str | None = None
     if model_id != original_id:
         if SETTINGS.aws_bedrock_deprecated_model_fallback:
-            msg = f"Model '{original_id}' is deprecated; replacement model '{model_id}' not found."
+            detail = f"Model '{original_id}' is deprecated; replacement model '{model_id}' is also not found."
         else:
-            msg = f"Model '{original_id}' not found. This model is deprecated or pending deprecation, please use '{model_id}' instead."
-    else:
-        msg = f"Model '{model_id}' not found."
+            detail = f"This model is deprecated or pending deprecation, please use '{model_id}' instead."
     model_ids = set(models)
     if input_modality:
         model_ids &= (
@@ -1384,7 +1383,7 @@ def _raise_model_not_found(
             _MODELS_OUTPUT_MODALITY if bedrock_only else _ALL_MODELS_OUTPUT_MODALITY
         ).get(output_modality, set())
     raise UnsupportedModelError(
-        msg, available_models=model_ids, status=error_status
+        original_id, available_models=model_ids, detail=detail, status=error_status
     ) from None
 
 

@@ -351,7 +351,7 @@ async def _map_content_block_to_bedrock(  # noqa: PLR0911
     """
     match block:
         case TextBlockParam(text=text):
-            return {"text": text}
+            return {"text": text} if text else None
         case ImageBlockParam(source=source):
             return await _map_image_to_bedrock(source)
         case DocumentBlockParam():
@@ -1254,6 +1254,18 @@ def _process_content_block_start(
     return []
 
 
+def _emit_synthesized_block(
+    index: int, delta: ContentBlockDeltaTypeDef
+) -> list[JSONServerSentEvent]:
+    """Synthesize a ``content_block_start`` + optional delta event for *index*."""
+    events: list[JSONServerSentEvent] = [
+        _make_block_start_event(index, _synthesize_block_from_delta(delta))
+    ]
+    if delta_event := _map_delta(index, delta):
+        events.append(delta_event)
+    return events
+
+
 def _process_content_block_delta(
     delta_block: ContentBlockDeltaEventTypeDef, state: _StreamState
 ) -> list[JSONServerSentEvent]:
@@ -1282,23 +1294,20 @@ def _process_content_block_delta(
         if delta_event := _map_delta(state.current_index, delta):
             return [delta_event]
         return []
-    if not state.current_suppressed:
-        # First delta for a block with no preceding contentBlockStart.
-        # Suppress if empty text (e.g. Nova's empty preamble block).
-        if delta == {"text": ""}:
-            state.current_suppressed = True
-            return []
-        state.current_index = state.next_index
-        state.next_index += 1
-        events: list[JSONServerSentEvent] = [
-            _make_block_start_event(
-                state.current_index, _synthesize_block_from_delta(delta)
-            )
-        ]
-        if delta_event := _map_delta(state.current_index, delta):
-            events.append(delta_event)
-        return events
-    return []
+    # Empty delta: stay suppressed (or start suppression). The block is only
+    # truly discarded if contentBlockStop arrives while still deferred (Nova-style
+    # preamble). Non-empty arrivals in the same block (DeepSeek V3, Gemma) are
+    # handled below by falling through to synthesize the start event.
+    if delta == {"text": ""}:
+        state.current_suppressed = True
+        return []
+    # Non-empty delta with no active block: synthesize a content_block_start now.
+    # If we were suppressed (deferred on an empty first delta), un-suppress first.
+    if state.current_suppressed:
+        state.current_suppressed = False
+    state.current_index = state.next_index
+    state.next_index += 1
+    return _emit_synthesized_block(state.current_index, delta)
 
 
 def _process_content_block_stop(
@@ -1373,8 +1382,12 @@ async def _process_stream_events(
     Two situations cause a Bedrock block to be dropped entirely:
 
     1. *Empty text preamble* — some models (e.g. Nova) send an empty ``text``
-       delta for block 0 with no preceding ``contentBlockStart``.  A block
-       whose very first delta is ``{"text": ""}`` is silently discarded.
+       delta for block 0 with no preceding ``contentBlockStart``, and the block
+       contains no further content.  A block whose first delta is ``{"text": ""}``
+       and that receives no subsequent non-empty delta before ``contentBlockStop``
+       is silently discarded.  Models like DeepSeek V3 and Gemma also send an
+       empty initial delta but follow it with real content in the same block; those
+       blocks are correctly surfaced once the first non-empty delta arrives.
     2. *forced_tool filter* — when a single tool is forced, ``toolUse`` blocks
        for other tools are suppressed.
 

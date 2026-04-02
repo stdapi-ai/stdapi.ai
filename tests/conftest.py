@@ -183,6 +183,9 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="Run compute/cost/time expensive tests",
     )
     parser.addoption(
+        "--agentic", action="store_true", default=False, help="Run agentic tests"
+    )
+    parser.addoption(
         "--info",
         action="store_true",
         default=False,
@@ -208,6 +211,11 @@ def pytest_collection_modifyitems(
         )
         for item in items:
             if item.get_closest_marker("expensive"):
+                item.add_marker(skip_marker)
+    if not config.getoption("--agentic"):
+        skip_marker = pytest.mark.skip(reason="Need --agentic option to run this test")
+        for item in items:
+            if item.get_closest_marker("agentic"):
                 item.add_marker(skip_marker)
 
 

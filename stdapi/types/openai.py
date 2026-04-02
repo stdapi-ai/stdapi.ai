@@ -1,15 +1,10 @@
 """Local OpenAI-compatible common types."""
 
-from typing import Annotated, Literal
+from typing import Literal
 
-from pydantic import ConfigDict, Field, StringConstraints
+from pydantic import ConfigDict, Field
 
 from stdapi.types import BaseModelRequest, BaseModelResponse, JsonMapping
-
-# Constrained string aliases
-NameStr = Annotated[
-    str, StringConstraints(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
-]
 
 # Repeated single-value literal aliases
 TextLiteral = Literal["text"]
@@ -41,7 +36,7 @@ class _Strict(BaseModelRequest):
 class LegacyFunction(BaseModelRequest):
     """Legacy function definition (deprecated in favor of tools)."""
 
-    name: NameStr = Field(description="The name of the function to be called.")
+    name: str = Field(description="The name of the function to be called.")
     description: str | None = Field(
         default=None,
         description="A description of what the function does, used by the model to choose when and how to call the function.",
@@ -86,7 +81,7 @@ class JSONSchema(_Strict):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    name: NameStr = Field(
+    name: str = Field(
         description=(
             "The name of the response format. Must be a-z, A-Z, 0-9, or contain underscores and dashes, with a maximum length of 64."
         )

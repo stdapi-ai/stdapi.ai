@@ -44,6 +44,7 @@ class UnsupportedModelError(ApiError):
         model: str,
         available_models: Iterable[str] | None = None,
         *,
+        detail: str | None = None,
         status: int | None = None,
     ) -> None:
         """Create an unsupported model error with optional alternatives.
@@ -52,6 +53,8 @@ class UnsupportedModelError(ApiError):
             model: The requested model identifier that is unsupported or not accessible.
             available_models: Optional iterable of available model identifiers to include
                 in the error message to guide clients toward valid choices.
+            detail: Optional extra context (e.g. deprecation info) appended after the
+                standard "does not exist" sentence.
             status: Optional HTTP status code override.  When ``None`` the
                 class-level default (404) is used.
         """
@@ -60,8 +63,9 @@ class UnsupportedModelError(ApiError):
             if available_models
             else ""
         )
+        extra = f" {detail}" if detail else ""
         super().__init__(
-            f"The model `{model}` does not exist or you do not have access to it.{models}",
+            f"The model `{model}` does not exist or you do not have access to it.{extra}{models}",
             status=status,
         )
 

@@ -455,7 +455,11 @@ class ChatModel(ChatModelBase[Any, Any]):
             An Anthropic content block, or ``None`` to use the default mapping.
         """
         if anthropic_name := next(
-            (k for k, v in self.ANTHROPIC_TOOL_NAME_MAP.items() if v == bedrock_tool_name),
+            (
+                k
+                for k, v in self.ANTHROPIC_TOOL_NAME_MAP.items()
+                if v == bedrock_tool_name
+            ),
             None,
         ):
             return ServerToolUseBlock(
@@ -510,7 +514,11 @@ class ChatModel(ChatModelBase[Any, Any]):
             use the default mapping.
         """
         if anthropic_name := next(
-            (k for k, v in self.ANTHROPIC_TOOL_NAME_MAP.items() if v == bedrock_tool_name),
+            (
+                k
+                for k, v in self.ANTHROPIC_TOOL_NAME_MAP.items()
+                if v == bedrock_tool_name
+            ),
             None,
         ):
             return ServerToolUseBlock(
