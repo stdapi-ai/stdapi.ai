@@ -9,7 +9,6 @@ from stdapi.types.anthropic_messages import (
     CodeExecutionResultBlockParam,
     CodeExecutionToolResultBlock,
     CodeExecutionToolResultBlockParam,
-    ServerToolUseBlock,
 )
 
 if TYPE_CHECKING:
@@ -129,33 +128,13 @@ class ChatModel(_BaseChatModel):
             return [self._build_code_execution_result(tool_use_id, content_items)]
         return None
 
-    def _resp_map_tool_use(
-        self, tool_use_id: str, bedrock_tool_name: str, tool_input: JsonMapping
-    ) -> ContentBlock | None:
-        """Map a Bedrock Nova toolUse block to an Anthropic content block.
-
-        Args:
-            tool_use_id: The raw ``toolUseId`` from the Bedrock ``toolUse`` block.
-            bedrock_tool_name: The Bedrock-side tool name.
-            tool_input: The tool input dict from the Bedrock ``toolUse`` block.
-
-        Returns:
-            A ``ServerToolUseBlock`` for ``nova_code_interpreter``, or the
-            base-class result for unknown tools.
-        """
-        if bedrock_tool_name == "nova_code_interpreter":
-            return ServerToolUseBlock(
-                type="server_tool_use",
-                id=f"srvtoolu_{tool_use_id.removeprefix('tooluse_')}",
-                name="code_execution",
-                input=tool_input,
-            )
-        return None
-
     def _req_map_content_block(
         self, block: ContentBlockParam
     ) -> ContentBlockTypeDef | None:
         """Map Nova-specific Anthropic request blocks to Bedrock content blocks.
+
+        Handles ``CodeExecutionToolResultBlockParam`` blocks; delegates
+        ``ServerToolUseBlockParam`` mapping to the base class via ``super()``.
 
         Args:
             block: An Anthropic content block param from the request messages.
@@ -186,29 +165,7 @@ class ChatModel(_BaseChatModel):
                     "status": status,
                 }
             }
-        return None
-
-    def _resp_stream_map_tool_use(
-        self, tool_use_id: str, bedrock_tool_name: str
-    ) -> ContentBlock | None:
-        """Map a Bedrock streaming ``toolUse`` start to an Anthropic content block.
-
-        Args:
-            tool_use_id: The raw ``toolUseId`` from the Bedrock ``contentBlockStart``.
-            bedrock_tool_name: The Bedrock-side tool name.
-
-        Returns:
-            A ``ServerToolUseBlock`` for ``nova_code_interpreter``, or ``None``
-            for unknown tools.
-        """
-        if bedrock_tool_name == "nova_code_interpreter":
-            return ServerToolUseBlock(
-                type="server_tool_use",
-                id=f"srvtoolu_{tool_use_id.removeprefix('tooluse_')}",
-                name="code_execution",
-                input={},
-            )
-        return None
+        return super()._req_map_content_block(block)
 
     def _resp_stream_map_tool_result(
         self, tool_use_id: str, result_type: str, content_items: list[Any]

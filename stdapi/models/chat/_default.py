@@ -24,7 +24,12 @@ from stdapi.models.chat import ChatModelBase
 from stdapi.models.chat._adapters import _anthropic_message as anthropic_adapter
 from stdapi.models.chat._adapters import _openai_chat_completion as openai_adapter
 from stdapi.monitoring import REQUEST, log_request_sse_stream_event, log_response_params
-from stdapi.types.anthropic_messages import ToolChoiceToolParam, ToolParam
+from stdapi.types.anthropic_messages import (
+    ServerToolUseBlock,
+    ServerToolUseBlockParam,
+    ToolChoiceToolParam,
+    ToolParam,
+)
 
 if TYPE_CHECKING:
     from types_aiobotocore_bedrock_runtime.literals import (
@@ -165,6 +170,7 @@ class ChatModel(ChatModelBase[Any, Any]):
                             request.stream_options is not None
                             and request.stream_options.include_usage is True
                         ),
+                        suppress_tool_names=self.SUPPORTED_SYSTEM_TOOLS or None,
                     )
                 )
             )
@@ -178,6 +184,7 @@ class ChatModel(ChatModelBase[Any, Any]):
             openai_service_tier,
             request.audio,
             request.modalities or openai_adapter.DEFAULT_OUTPUT_MODALITIES,  # type: ignore[arg-type]
+            self.SUPPORTED_SYSTEM_TOOLS or None,
         )
 
     async def create_message(
@@ -436,6 +443,9 @@ class ChatModel(ChatModelBase[Any, Any]):
     ) -> ContentBlock | None:
         """Map a Bedrock toolUse block to an Anthropic content block.
 
+        Uses ``ANTHROPIC_TOOL_NAME_MAP`` (inverted) to translate Bedrock tool names to
+        Anthropic ``server_tool_use`` block names.  Returns ``None`` for unmapped tools.
+
         Args:
             tool_use_id: The raw ``toolUseId`` from the Bedrock ``toolUse`` block.
             bedrock_tool_name: The Bedrock-side tool name.
@@ -444,11 +454,26 @@ class ChatModel(ChatModelBase[Any, Any]):
         Returns:
             An Anthropic content block, or ``None`` to use the default mapping.
         """
+        if anthropic_name := next(
+            (k for k, v in self.ANTHROPIC_TOOL_NAME_MAP.items() if v == bedrock_tool_name),
+            None,
+        ):
+            return ServerToolUseBlock(
+                type="server_tool_use",
+                id=f"srvtoolu_{tool_use_id.removeprefix('tooluse_')}",
+                name=anthropic_name,
+                input=tool_input,
+            )
+        return None
 
     def _req_map_content_block(
         self, block: ContentBlockParam
     ) -> ContentBlockTypeDef | None:
         """Map an Anthropic request content block to a Bedrock content block.
+
+        Maps ``ServerToolUseBlockParam`` blocks whose ``name`` appears in
+        ``ANTHROPIC_TOOL_NAME_MAP`` to Bedrock ``toolUse`` blocks.  Returns ``None``
+        for all other block types (use the default adapter mapping).
 
         Args:
             block: An Anthropic content block param from the request messages.
@@ -456,11 +481,25 @@ class ChatModel(ChatModelBase[Any, Any]):
         Returns:
             A Bedrock content block dict, or ``None`` to use the default mapping.
         """
+        if isinstance(block, ServerToolUseBlockParam) and (
+            bedrock_name := self.ANTHROPIC_TOOL_NAME_MAP.get(block.name)  # type: ignore[call-overload]
+        ):
+            return {
+                "toolUse": {
+                    "toolUseId": f"tooluse_{block.id.removeprefix('srvtoolu_')}",
+                    "name": bedrock_name,
+                    "input": block.input,
+                }
+            }
+        return None
 
     def _resp_stream_map_tool_use(
         self, tool_use_id: str, bedrock_tool_name: str
     ) -> ContentBlock | None:
         """Map a Bedrock streaming ``toolUse`` start to an Anthropic content block.
+
+        Uses ``ANTHROPIC_TOOL_NAME_MAP`` (inverted) to translate Bedrock tool names to
+        Anthropic ``server_tool_use`` block names.  Returns ``None`` for unmapped tools.
 
         Args:
             tool_use_id: The raw ``toolUseId`` from the Bedrock ``contentBlockStart``.
@@ -470,6 +509,17 @@ class ChatModel(ChatModelBase[Any, Any]):
             An Anthropic content block for the stream start event, or ``None`` to
             use the default mapping.
         """
+        if anthropic_name := next(
+            (k for k, v in self.ANTHROPIC_TOOL_NAME_MAP.items() if v == bedrock_tool_name),
+            None,
+        ):
+            return ServerToolUseBlock(
+                type="server_tool_use",
+                id=f"srvtoolu_{tool_use_id.removeprefix('tooluse_')}",
+                name=anthropic_name,
+                input={},
+            )
+        return None
 
     def _resp_stream_map_tool_result(
         self, tool_use_id: str, result_type: str, content_items: list[Any]

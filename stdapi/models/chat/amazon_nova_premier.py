@@ -12,3 +12,4 @@ class ChatModel(_BaseChatModel):
     PROMPT_CACHING_SUPPORTED = True
     SUPPORTED_SYSTEM_TOOLS = frozenset({"nova_grounding"})
     ANTHROPIC_TOOL_NAME_MAP = MappingProxyType({"web_search": "nova_grounding"})
+

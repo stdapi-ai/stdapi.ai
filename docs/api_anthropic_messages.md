@@ -328,6 +328,18 @@ curl -X POST "$BASE/v1/messages" \
   }'
 ```
 
+!!! warning "Region Compatibility"
+    Web grounding is only available in US AWS Bedrock regions. To ensure all requests are routed to a US region, restrict the model using [`AWS_BEDROCK_MODEL_REGION_RESTRICT`](operations_configuration.md#bedrock-model-region-restrict):
+
+    ```bash
+    export AWS_BEDROCK_MODEL_REGION_RESTRICT='{"amazon.nova-": ["us-east-1"]}'
+    ```
+
+**Limitations:**
+
+- **No citation text in response blocks**: Unlike native Anthropic `web_search`, the `server_tool_use` content block does not include `cited_text` or `encrypted_index` fields. Web search results are reflected only through the text content of the response.
+- **No streaming citation data**: Citation information is not emitted in streaming events. The `server_tool_use` block is streamed as a start event with empty input — no citation delta is produced.
+
 !!! note "Model Compatibility"
     Requesting `web_search` on a model that does not support it will return a `400 Bad Request` error.
 

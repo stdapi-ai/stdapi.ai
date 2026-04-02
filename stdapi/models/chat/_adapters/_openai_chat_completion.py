@@ -799,13 +799,18 @@ def extract_citations(
 
 
 def extract_tool_calls(
-    contents: list[ContentBlockOutputTypeDef], *, legacy_function: bool
+    contents: list[ContentBlockOutputTypeDef],
+    *,
+    legacy_function: bool,
+    suppress_tool_names: frozenset[str] | None = None,
 ) -> tuple[list[ChatCompletionMessageToolCallUnion] | None, FunctionCall | None]:
     """Extracts tool calls and function calls from conversation response content.
 
     Args:
         contents: A list of content blocks containing response data.
         legacy_function: Whether to return a single legacy-style function call.
+        suppress_tool_names: Optional set of Bedrock tool names to exclude from
+            the returned tool_calls (e.g. system tools handled server-side).
 
     Returns:
         Tuple of (tool_calls, function_call).
@@ -815,6 +820,8 @@ def extract_tool_calls(
         if "toolUse" not in content:
             continue
         tool_use = content["toolUse"]
+        if suppress_tool_names and tool_use["name"] in suppress_tool_names:
+            continue
         function = FunctionCall(
             name=tool_use["name"], arguments=to_json(tool_use["input"]).decode()
         )
@@ -886,6 +893,7 @@ async def format_response(
     service_tier: ServiceTiers | None,
     audio_params: ChatCompletionAudioParam | None,
     modalities: list[OutputModalities],
+    suppress_tool_names: frozenset[str] | None = None,
 ) -> ChatCompletion:
     """Format Bedrock Converse responses as an OpenAI ChatCompletion.
 
@@ -897,6 +905,8 @@ async def format_response(
         service_tier: Optional tier of service for the request.
         audio_params: Optional parameters for audio generation.
         modalities: List of output modalities such as text or audio.
+        suppress_tool_names: Optional set of Bedrock tool names to exclude
+            from the returned tool_calls (e.g. system tools handled server-side).
 
     Returns:
         A structured ChatCompletion response.
@@ -914,7 +924,9 @@ async def format_response(
         cached_tokens += response["usage"].get("cacheReadInputTokens", 0)
         message = response["output"]["message"]["content"]
         tool_calls, function_call = extract_tool_calls(
-            message, legacy_function=legacy_function
+            message,
+            legacy_function=legacy_function,
+            suppress_tool_names=suppress_tool_names,
         )
         content, reasoning_content = extract_output_text(message)
         annotations = extract_citations(message)
@@ -1103,6 +1115,37 @@ def _stream_extract_usage_from_metadata(
     return completion_usage
 
 
+def _suppress_system_tool_event(
+    event: ConverseStreamOutputTypeDef,
+    suppress_tool_names: frozenset[str],
+    suppressed_indices: set[int],
+) -> bool:
+    """Return True and update *suppressed_indices* when *event* belongs to a suppressed tool.
+
+    Args:
+        event: A Bedrock stream event dict.
+        suppress_tool_names: Bedrock tool names whose stream events should be dropped.
+        suppressed_indices: Mutable set of content block indices currently suppressed;
+            updated in place.
+
+    Returns:
+        ``True`` when the event should be silently skipped by the caller.
+    """
+    if block_start := event.get("contentBlockStart"):
+        start = block_start["start"]
+        if (tool_use := start.get("toolUse")) and tool_use.get("name") in suppress_tool_names:
+            suppressed_indices.add(block_start["contentBlockIndex"])
+            return True
+    elif block_delta := event.get("contentBlockDelta"):
+        if block_delta["contentBlockIndex"] in suppressed_indices:
+            return True
+    elif block_stop := event.get("contentBlockStop"):
+        if (idx := block_stop["contentBlockIndex"]) in suppressed_indices:
+            suppressed_indices.discard(idx)
+            return True
+    return False
+
+
 async def format_stream(
     completion_id: str,
     created: int,
@@ -1111,6 +1154,7 @@ async def format_stream(
     service_tier: ServiceTiers | None,
     *,
     include_usage: bool = False,
+    suppress_tool_names: frozenset[str] | None = None,
 ) -> AsyncGenerator[JSONServerSentEvent]:
     """Stream Bedrock Converse events as OpenAI ChatCompletionChunk SSE events.
 
@@ -1121,6 +1165,9 @@ async def format_stream(
         stream: Pre-opened Bedrock ConverseStream event iterator.
         service_tier: Service tier being used.
         include_usage: Whether to include usage information.
+        suppress_tool_names: Optional set of Bedrock tool names whose
+            contentBlockStart/contentBlockDelta/contentBlockStop events are
+            silently dropped (e.g. system tools handled server-side).
 
     Yields:
         JSONServerSentEvent containing the formatted response payload.
@@ -1141,7 +1188,12 @@ async def format_stream(
     legacy_function = _LEGACY_FUNCTION.get()
     end_state = False
     chunk: ChatCompletionChunk | None = None
+    suppressed_indices: set[int] = set()
     async for event in stream:
+        if suppress_tool_names and _suppress_system_tool_event(
+            event, suppress_tool_names, suppressed_indices
+        ):
+            continue
         chunk, end = _stream_delta_chunk(
             completion_id,
             created,

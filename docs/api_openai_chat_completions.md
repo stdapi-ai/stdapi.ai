@@ -369,24 +369,18 @@ When using web grounding, the API response includes `annotations` with URL citat
 ```
 
 !!! note "Streaming Mode"
-    Citations are only available in non-streaming responses. The OpenAI API does not support annotations in streaming mode.
+    URL citation `annotations` are only available in non-streaming responses.
 
-**Use Cases:**
+**Limitations:**
 
-- **Current Events**: Get up-to-date information about news, weather, stock prices, or sports scores
-- **Dynamic Data**: Query information that changes frequently like AWS service availability or product prices
-- **Verification**: Cross-reference facts with current web sources for improved accuracy
-- **Knowledge Extension**: Supplement model training data with real-time information
-
-**Benefits:**
-
-- **Zero Integration**: No need to implement or maintain web search APIs
-- **Automatic Invocation**: Models intelligently decide when to use web grounding
-- **Enhanced Accuracy**: Reduce hallucinations with real-time information retrieval
-- **OpenAI-Compatible**: Works seamlessly with standard tool calling patterns
+- **No streaming citations**: URL citation `annotations` are not emitted in streaming responses.
 
 !!! warning "Region Compatibility"
-    Web Grounding is only available in US regions.
+    Web Grounding is only available in US AWS Bedrock regions. To ensure all requests are routed to a US region, restrict the model using [`AWS_BEDROCK_MODEL_REGION_RESTRICT`](operations_configuration.md#bedrock-model-region-restrict):
+
+    ```bash
+    export AWS_BEDROCK_MODEL_REGION_RESTRICT='{"amazon.nova-": ["us-east-1"]}'
+    ```
 
 #### ![Claude](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Anthropic Claude Server Tools
 

@@ -19,7 +19,11 @@ Run with::
 from typing import TYPE_CHECKING
 
 import pytest
-from anthropic.types import CodeExecutionResultBlock, CodeExecutionToolResultBlock
+from anthropic.types import (
+    CodeExecutionResultBlock,
+    CodeExecutionToolResultBlock,
+    ServerToolUseBlock,
+)
 
 if TYPE_CHECKING:
     from anthropic import Anthropic
@@ -27,10 +31,20 @@ if TYPE_CHECKING:
 #: Nova 2 Lite — smallest Nova 2 model, sufficient for code execution tests.
 _NOVA_2_LITE = "amazon.nova-2-lite-v1:0"
 
+#: Nova Premier — US-region only; no ``global.`` cross-region profile, so it always
+#: routes via a ``us.`` inference profile.  Required for ``nova_grounding`` tests.
+_NOVA_PREMIER = "amazon.nova-premier-v1:0"
+
 #: code_execution tool definition (Anthropic canonical format).
 _CODE_EXECUTION_TOOL: dict[str, object] = {
     "type": "code_execution_20250522",
     "name": "code_execution",
+}
+
+#: web_search tool definition (Anthropic canonical format).
+_WEB_SEARCH_TOOL: dict[str, object] = {
+    "type": "web_search_20250305",
+    "name": "web_search",
 }
 
 
@@ -387,3 +401,174 @@ class TestCodeExecutionToolStreaming:
         assert isinstance(res2, CodeExecutionToolResultBlock)
         assert res2.tool_use_id == inv2.id
         assert "46656" in _result_stdout(res2)
+
+
+# ===========================================================================
+# web_search / nova_grounding
+# ===========================================================================
+
+
+class TestWebSearchTool:
+    """Tests for the ``web_search`` tool (nova_grounding) on Amazon Nova.
+
+    Uses Nova Premier because ``nova_grounding`` requires a US-region Bedrock endpoint
+    and Nova Premier has no ``global.`` cross-region profile (US-only), ensuring it
+    always routes via a ``us.`` inference profile.  Nova 2 models with a ``global.``
+    profile would receive a 400 error because nova_grounding is not supported there.
+
+    The gateway must translate the Bedrock ``toolUse`` response to a
+    ``ServerToolUseBlock(name="web_search", id="srvtoolu_...")`` and suppress the
+    empty Bedrock ``toolResult`` block.  No ``tool_use`` block should be emitted.
+    """
+
+    @pytest.mark.expensive
+    def test_web_search_surfaces_server_tool_use_block(
+        self, anthropic_client: Anthropic, use_official_api: bool
+    ) -> None:
+        """Successful web search produces a ``server_tool_use`` block.
+
+        Validates:
+            - Response contains a ``server_tool_use`` block with ``name == "web_search"``
+            - ``id`` has the ``srvtoolu_`` prefix
+            - No plain ``tool_use`` block is present (nova_grounding not leaked)
+            - ``stop_reason`` is ``"end_turn"``
+        """
+        if use_official_api:
+            pytest.skip("nova_grounding is only available on AWS Bedrock")
+
+        response = anthropic_client.messages.create(
+            model=_NOVA_PREMIER,
+            max_tokens=1024,
+            messages=[
+                {"role": "user", "content": "What is the current version of Python?"}
+            ],
+            tools=[_WEB_SEARCH_TOOL],  # type: ignore[list-item]
+        )
+
+        block_types = {b.type for b in response.content}
+        assert "server_tool_use" in block_types, (
+            f"Expected server_tool_use block, got: {block_types}"
+        )
+        assert "tool_use" not in block_types, (
+            f"nova_grounding must not leak as tool_use, got: {block_types}"
+        )
+
+        invocation = next(b for b in response.content if b.type == "server_tool_use")
+        assert isinstance(invocation, ServerToolUseBlock)
+        assert invocation.name == "web_search", (
+            f"Expected name='web_search', got: {invocation.name!r}"
+        )
+        assert invocation.id.startswith("srvtoolu_"), (
+            f"Expected srvtoolu_ prefix, got: {invocation.id!r}"
+        )
+        assert response.stop_reason == "end_turn"
+
+    @pytest.mark.expensive
+    def test_web_search_streaming_surfaces_server_tool_use_block(
+        self, anthropic_client: Anthropic, use_official_api: bool
+    ) -> None:
+        """Streaming web search produces a ``server_tool_use`` block.
+
+        Validates:
+            - At least one ``content_block_start`` event with type ``server_tool_use``
+              (the model may invoke the tool multiple times non-deterministically)
+            - ``name == "web_search"`` and ``srvtoolu_`` id prefix on each start event
+            - Accumulated final message also contains ``server_tool_use``
+            - No ``tool_use`` block in the accumulated message
+        """
+        if use_official_api:
+            pytest.skip("nova_grounding is only available on AWS Bedrock")
+
+        with anthropic_client.messages.stream(
+            model=_NOVA_PREMIER,
+            max_tokens=1024,
+            messages=[
+                {"role": "user", "content": "What is the current version of Python?"}
+            ],
+            tools=[_WEB_SEARCH_TOOL],  # type: ignore[list-item]
+        ) as stream:
+            server_tool_starts = [
+                event.content_block
+                for event in stream
+                if event.type == "content_block_start"
+                and event.content_block.type == "server_tool_use"
+            ]
+            msg = stream.get_final_message()
+
+        block_types = {b.type for b in msg.content}
+        assert "server_tool_use" in block_types, (
+            f"Expected server_tool_use in final message, got: {block_types}"
+        )
+        assert "tool_use" not in block_types, (
+            f"nova_grounding must not leak as tool_use, got: {block_types}"
+        )
+
+        assert len(server_tool_starts) >= 1, (
+            f"Expected at least one server_tool_use start, got {len(server_tool_starts)}"
+        )
+        start_block = server_tool_starts[0]
+        assert isinstance(start_block, ServerToolUseBlock)
+        assert start_block.name == "web_search", (
+            f"Expected name='web_search', got: {start_block.name!r}"
+        )
+        assert start_block.id.startswith("srvtoolu_"), (
+            f"Expected srvtoolu_ prefix, got: {start_block.id!r}"
+        )
+
+    @pytest.mark.expensive
+    def test_web_search_multi_turn(
+        self, anthropic_client: Anthropic, use_official_api: bool
+    ) -> None:
+        """Multi-turn conversation with web_search works end-to-end.
+
+        Validates:
+            - Turn 1: response has a ``server_tool_use`` block with ``srvtoolu_`` id
+            - Turn 2: passing Turn 1 content (which includes ``ServerToolUseBlock``)
+              as assistant history succeeds — gateway correctly remaps ``srvtoolu_``
+              ids back to ``nova_grounding`` toolUseIds for Bedrock
+            - Turn 2: response also has a ``server_tool_use`` block
+        """
+        if use_official_api:
+            pytest.skip("nova_grounding is only available on AWS Bedrock")
+
+        # ── Turn 1 ──────────────────────────────────────────────────────────
+        resp1 = anthropic_client.messages.create(
+            model=_NOVA_PREMIER,
+            max_tokens=1024,
+            messages=[
+                {"role": "user", "content": "What is the current Python version?"}
+            ],
+            tools=[_WEB_SEARCH_TOOL],  # type: ignore[list-item]
+        )
+
+        block_types1 = {b.type for b in resp1.content}
+        assert "server_tool_use" in block_types1, (
+            f"Turn 1: expected server_tool_use, got: {block_types1}"
+        )
+        inv1 = next(b for b in resp1.content if b.type == "server_tool_use")
+        assert inv1.id.startswith("srvtoolu_"), (
+            f"Turn 1: expected srvtoolu_ prefix, got: {inv1.id!r}"
+        )
+
+        # ── Turn 2 ──────────────────────────────────────────────────────────
+        # resp1.content contains ServerToolUseBlock objects; the gateway must
+        # translate them back to nova_grounding toolUse blocks for Bedrock.
+        resp2 = anthropic_client.messages.create(
+            model=_NOVA_PREMIER,
+            max_tokens=1024,
+            messages=[
+                {"role": "user", "content": "What is the current Python version?"},
+                {"role": "assistant", "content": resp1.content},
+                {"role": "user", "content": "And what about Node.js?"},
+            ],
+            tools=[_WEB_SEARCH_TOOL],  # type: ignore[list-item]
+        )
+
+        block_types2 = {b.type for b in resp2.content}
+        assert "server_tool_use" in block_types2, (
+            f"Turn 2: expected server_tool_use, got: {block_types2}"
+        )
+        inv2 = next(b for b in resp2.content if b.type == "server_tool_use")
+        assert inv2.id.startswith("srvtoolu_"), (
+            f"Turn 2: expected srvtoolu_ prefix, got: {inv2.id!r}"
+        )
