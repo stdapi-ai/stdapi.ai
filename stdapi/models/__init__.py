@@ -636,14 +636,23 @@ def _filter_inference_profiles(
     Prefers the ``global.`` prefix profile when ``aws_bedrock_cross_region_inference_global``
     is enabled; otherwise picks the first non-global candidate.
 
+    Models that have an ``aws_bedrock_model_region_restrict`` entry are always
+    assigned a non-global profile: a global profile would route requests
+    worldwide, bypassing the configured region restriction.
+
     Args:
         profiles: Output dict (model ID → profile ID) updated in-place.
         profiles_all: All discovered profile IDs per model ID.
     """
     use_global = SETTINGS.aws_bedrock_cross_region_inference_global
+    restrictions = SETTINGS.aws_bedrock_model_region_restrict
     for model_id, profile_ids in profiles_all.items():
+        model_restricted = restrictions.get(model_id) is not None or any(
+            model_id.startswith(k) for k in restrictions
+        )
         if (
             use_global
+            and not model_restricted
             and (
                 profile := next(
                     (pid for pid in profile_ids if pid.startswith("global.")), None
