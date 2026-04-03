@@ -371,36 +371,6 @@ curl -X POST "$BASE/v1/messages" \
 !!! note "Model Compatibility"
     Requesting `code_execution` on a model that does not support it will return a `400 Bad Request` error.
 
-#### Bedrock System Tools
-
-For models with Bedrock system tools not covered by automatic name mapping, pass a regular tool whose `name` starts with the `systemTool_` prefix. The prefix is stripped and the tool is forwarded to Bedrock as `{"systemTool": {"name": "<tool_name>"}}`.
-
-**Usage:**
-
-```bash
-curl -X POST "$BASE/v1/messages" \
-  -H "x-api-key: $ANTHROPIC_API_KEY" \
-  -H "anthropic-version: 2023-06-01" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "amazon.nova-premier-v1:0",
-    "max_tokens": 1024,
-    "messages": [
-      {"role": "user", "content": "What are the latest news today?"}
-    ],
-    "tools": [
-      {
-        "name": "systemTool_nova_grounding",
-        "description": "Web grounding",
-        "input_schema": {"type": "object"}
-      }
-    ]
-  }'
-```
-
-!!! tip "Future-Proof Tool Declarations"
-    As AWS releases new system tools, use the same `systemTool_` prefix to declare them directly without waiting for a specific automatic mapping to be added.
-
 #### ![Claude](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Claude Server Tools
 
 Anthropic Claude models support server-side tools that are executed by the model provider. These tools are passed through to Bedrock via `additionalModelRequestFields` in their native Anthropic JSON format.

@@ -63,10 +63,6 @@ if TYPE_CHECKING:
     )
 
 
-#: Tool name prefix for the OpenAI route: ``systemTool_<name>`` → ``{"systemTool": {"name": "<name>"}}``.
-SYSTEM_TOOL_PREFIX: str = "systemTool_"
-
-
 class ChatModel(ChatModelBase[Any, Any]):
     """Default chat model using AWS Bedrock Converse API."""
 
@@ -719,8 +715,7 @@ class ChatModel(ChatModelBase[Any, Any]):
     ) -> ToolConfigurationTypeDef | None:
         """Promote eligible ``toolSpec`` entries to ``systemTool`` entries.
 
-        A ``toolSpec`` entry is promoted when its name starts with
-        ``SYSTEM_TOOL_PREFIX`` (``"systemTool_"``) or appears in
+        A ``toolSpec`` entry is promoted when its name appears in
         ``SUPPORTED_SYSTEM_TOOLS``.  Promoted entries move to the end of the
         list; ``toolChoice`` is dropped when no regular entries remain.
 
@@ -742,11 +737,7 @@ class ChatModel(ChatModelBase[Any, Any]):
                 remaining.append(entry)
                 continue
             name: str = spec.get("name", "")
-            if name.startswith(SYSTEM_TOOL_PREFIX):
-                promoted.append(
-                    {"systemTool": {"name": name.removeprefix(SYSTEM_TOOL_PREFIX)}}
-                )
-            elif name in self.SUPPORTED_SYSTEM_TOOLS:
+            if name in self.SUPPORTED_SYSTEM_TOOLS:
                 promoted.append({"systemTool": {"name": name}})
             else:
                 remaining.append(entry)

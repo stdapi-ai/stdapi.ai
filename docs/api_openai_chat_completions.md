@@ -51,7 +51,7 @@ Generate conversational AI responses with AWS Bedrock foundation models—includ
 | Legacy `function_call`                   |       :material-cog:{ .model-dep }       | Backward compatibility maintained                               |
 | Parallel tool calls                      |       :material-cog:{ .model-dep }       | Multiple tools in one turn                                      |
 | Disable Parallel tool calls              | :material-close-circle:{ .unsupported }  | Parallel tool calls are always on                               |
-| Server tools (`systemTool_*`)            | :material-plus-circle:{ .extra-feature } | Provider system tools and Claude server tools                   |
+| Server tools                             | :material-plus-circle:{ .extra-feature } | Provider system tools and Claude server tools                   |
 | **Generation Control**                   |                                          |                                                                 |
 | `max_tokens` / `max_completion_tokens`   |   :material-check-circle:{ .success }    | Output length limits                                            |
 | `temperature`                            |       :material-cog:{ .model-dep }       | Mapped to Bedrock inference params                              |
@@ -298,9 +298,6 @@ AWS Bedrock system tools are built-in capabilities that foundation models can us
 **How to Use:**
 
 Add system tools to your `tools` array as normal. System tools don't require parameter definitions—just specify the tool name and the model will handle the rest.
-
-!!! tip "Future-Proof Tool Declarations"
-    As AWS releases new system tools, use the same `systemTool_` prefix to declare them as system tools instead of standard tools.
 
 #### ![Amazon Nova](styles/logo_amazon_nova.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Nova Tools
 

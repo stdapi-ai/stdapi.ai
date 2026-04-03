@@ -1601,58 +1601,6 @@ class TestAnthropicClaudeChatCompletions:
         msg = resp.choices[0].message
         assert msg.role == "assistant"
 
-    def test_claude_server_tool_via_system_tool_prefix_rejected(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
-        """``systemTool_bash_20250124`` is NOT intercepted and is rejected by Claude.
-
-        The ``systemTool_`` prefix is reserved for raw Bedrock system tools.
-        ``_req_extract_server_tools`` does not intercept ``systemTool_`` prefixed
-        names, so ``systemTool_bash_20250124`` becomes a raw
-        ``{"systemTool": {"name": "bash_20250124"}}`` entry in ``toolConfig``,
-        which Claude rejects.
-        """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
-
-        with pytest.raises(BadRequestError) as exc_info:
-            openai_client.chat.completions.create(
-                model=_CLAUDE_CHEAP,
-                messages=[{"role": "user", "content": "Say hello in one word."}],
-                tools=[
-                    {
-                        "type": "function",
-                        "function": {"name": "systemTool_bash_20250124"},
-                    }
-                ],
-                max_completion_tokens=4096,
-            )
-        assert exc_info.value.status_code == 400
-
-    @pytest.mark.expensive
-    def test_system_tool_unsupported_on_model_that_does_not_support_it(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
-        """systemTool_ entries on a model that does not support system tools raise a BadRequestError.
-
-        The ``systemTool_`` prefix always produces a raw Bedrock ``systemTool`` entry.
-        Bedrock rejects system tools for models that do not support them.
-        """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
-
-        with pytest.raises(BadRequestError) as exc_info:
-            openai_client.chat.completions.create(
-                model=_NON_CLAUDE_MODEL,
-                messages=[{"role": "user", "content": "Say hello."}],
-                tools=[{"type": "function", "function": {"name": "systemTool_bash"}}],
-            )
-        error = exc_info.value
-        assert error.status_code == 400
-        error_body = error.body
-        assert isinstance(error_body, dict)
-        assert error_body["type"] == "invalid_request_error"
-
     @pytest.mark.expensive
     def test_reasoning_effort_medium(
         self, openai_client: OpenAI, use_official_api: bool
@@ -1681,34 +1629,6 @@ class TestAnthropicClaudeChatCompletions:
                 model=_NON_CLAUDE_MODEL,
                 messages=[{"role": "user", "content": "Reply with OK."}],
                 reasoning_effort="medium",
-            )
-        error = exc_info.value
-        assert error.status_code == 400
-        error_body = error.body
-        assert isinstance(error_body, dict)
-        assert error_body["type"] == "invalid_request_error"
-
-    def test_claude_unrecognised_system_tool_prefix_rejected(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
-        """systemTool_ names not matching a Claude server tool name are passed as raw Bedrock systemTool.
-
-        ``_req_extract_server_tools`` only intercepts known Claude server tool
-        names (``bash``, ``str_replace_based_edit_tool``, ``computer``, ``memory``).
-        Unrecognised names (e.g. ``nonexistent``) still produce a raw Bedrock
-        ``{"systemTool": {"name": "nonexistent"}}`` entry, which Claude rejects.
-        """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
-
-        with pytest.raises(BadRequestError) as exc_info:
-            openai_client.chat.completions.create(
-                model=_CLAUDE_CHEAP,
-                messages=[{"role": "user", "content": "Say hello."}],
-                tools=[
-                    {"type": "function", "function": {"name": "systemTool_nonexistent"}}
-                ],
-                max_completion_tokens=4096,
             )
         error = exc_info.value
         assert error.status_code == 400

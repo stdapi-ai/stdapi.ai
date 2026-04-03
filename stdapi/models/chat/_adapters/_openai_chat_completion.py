@@ -299,9 +299,8 @@ def build_tool_config(
     """Build a Bedrock tool configuration from an OpenAI request.
 
     All function tools are mapped to ``toolSpec`` entries as-is.  System tool
-    routing (``systemTool_`` prefix stripping and ``SUPPORTED_SYSTEM_TOOLS``
-    auto-promotion) is handled at the model layer by
-    ``_req_configure_raw_system_tools`` and ``_req_promote_supported_system_tools``.
+    routing (``SUPPORTED_SYSTEM_TOOLS`` auto-promotion) is handled at the model
+    layer by ``_req_promote_system_tools``.
 
     Args:
         request: The request object containing the data to map and configure tools.

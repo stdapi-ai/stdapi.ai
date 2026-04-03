@@ -21,9 +21,8 @@ NOVA_ALL = ("amazon.nova-2-lite-v1:0",)
 #: Nova Premier model — only available in US regions, where nova_grounding is supported.
 _NOVA_PREMIER = "amazon.nova-premier-v1:0"
 
-#: Tool definition for nova_grounding via the ``systemTool_`` prefix convention.
 _GROUNDING_TOOL: list[dict[str, object]] = [
-    {"type": "function", "function": {"name": "systemTool_nova_grounding"}}
+    {"type": "function", "function": {"name": "nova_grounding"}}
 ]
 
 
@@ -67,28 +66,6 @@ class TestNovaChatCompletions:
             model=_NOVA_PREMIER,
             messages=[{"role": "user", "content": "What is today's date? Be concise."}],
             tools=[{"type": "function", "function": {"name": "nova_grounding"}}],
-        )
-        assert len(resp.choices) >= 1
-        assert resp.choices[0].message.role == "assistant"
-
-    def test_system_tool_prefix_still_works_for_nova_grounding(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
-        """``systemTool_nova_grounding`` is also accepted via the explicit prefix path.
-
-        The ``systemTool_`` prefix unconditionally promotes the entry to a raw Bedrock
-        ``systemTool`` via ``_req_promote_system_tools``, independent of
-        ``SUPPORTED_SYSTEM_TOOLS``.  Uses Nova Premier because ``nova_grounding`` is only
-        supported in US regions where Nova Premier is available.
-        """
-        if use_official_api:
-            pytest.skip("Amazon Nova is not supported on the official API")
-        resp = openai_client.chat.completions.create(
-            model=_NOVA_PREMIER,
-            messages=[{"role": "user", "content": "What is today's date? Be concise."}],
-            tools=[
-                {"type": "function", "function": {"name": "systemTool_nova_grounding"}}
-            ],
         )
         assert len(resp.choices) >= 1
         assert resp.choices[0].message.role == "assistant"
