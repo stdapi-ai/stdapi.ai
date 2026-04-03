@@ -9,7 +9,7 @@ from stdapi.utils import webuuid
 SERVER_ID = webuuid()
 
 #: Unique server full name (replaced on ECS at startup)
-SERVER_NAME = f"{gethostname()}-{getpid()}-{SERVER_ID}"
+SERVER_NAME = f"{gethostname()[:128]}-{getpid()}-{SERVER_ID}"
 
 #: Server version
 SERVER_VERSION = "1.7.0"

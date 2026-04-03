@@ -1445,6 +1445,14 @@ These permissions are mandatory for stdapi.ai to discover and invoke Bedrock mod
       "Resource": "*"
     },
     {
+      "Sid": "BedrockAsyncInvokeTagging",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:TagResource"
+      ],
+      "Resource": "arn:aws:bedrock:*:*:async-invoke/*"
+    },
+    {
       "Sid": "BedrockModelDiscovery",
       "Effect": "Allow",
       "Action": [
@@ -1610,6 +1618,14 @@ Required for transcribing audio files using Amazon Transcribe.
       "Resource": "*"
     },
     {
+      "Sid": "TranscribeTagging",
+      "Effect": "Allow",
+      "Action": [
+        "transcribe:TagResource"
+      ],
+      "Resource": "arn:aws:transcribe:*:*:transcription-job/*"
+    },
+    {
       "Sid": "TranscribeS3Storage",
       "Effect": "Allow",
       "Action": [
@@ -1745,6 +1761,14 @@ Required if you configure API authentication. See [Authentication](#authenticati
           "Resource": "*"
         },
         {
+          "Sid": "BedrockAsyncInvokeTagging",
+          "Effect": "Allow",
+          "Action": [
+            "bedrock:TagResource"
+          ],
+          "Resource": "arn:aws:bedrock:*:*:async-invoke/*"
+        },
+        {
           "Sid": "BedrockModelDiscovery",
           "Effect": "Allow",
           "Action": [
@@ -1787,6 +1811,14 @@ Required if you configure API authentication. See [Authentication](#authenticati
             "bedrock:InvokeTool"
           ],
           "Resource": "*"
+        },
+        {
+          "Sid": "BedrockAsyncInvokeTagging",
+          "Effect": "Allow",
+          "Action": [
+            "bedrock:TagResource"
+          ],
+          "Resource": "arn:aws:bedrock:*:*:async-invoke/*"
         },
         {
           "Sid": "BedrockModelDiscovery",
@@ -1842,7 +1874,7 @@ Required if you configure API authentication. See [Authentication](#authenticati
 
 | Feature                                         | Required Permissions                                                                                                                                       | Configuration                                                                |
 |-------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------|
-| **Bedrock Models (Invoke)**                     | `bedrock:CountTokens`<br>`bedrock:InvokeModel`<br>`bedrock:InvokeModelWithResponseStream`<br>`bedrock:InvokeTool`                                          | Always required                                                              |
+| **Bedrock Models (Invoke)**                     | `bedrock:CountTokens`<br>`bedrock:InvokeModel`<br>`bedrock:InvokeModelWithResponseStream`<br>`bedrock:InvokeTool`<br>`bedrock:TagResource` (on `arn:aws:bedrock:*:*:async-invoke/*`)                                          | Always required                                                              |
 | **Bedrock Models (Discovery)**                  | `bedrock:ListFoundationModels`<br>`bedrock:GetFoundationModelAvailability`<br>`bedrock:ListProvisionedModelThroughputs`<br>`bedrock:ListInferenceProfiles` | Always required                                                              |
 | **Bedrock Marketplace Auto-Subscribe**          | `aws-marketplace:Subscribe`<br>`aws-marketplace:ViewSubscriptions`                                                                                         | `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE=true` (default)                      |
 | **Bedrock Inference Profiles & Prompt Routers** | `bedrock:GetInferenceProfile`<br>`bedrock:GetPromptRouter`                                                                                                 | `AWS_BEDROCK_ALLOW_*_ARN=true` or `AWS_BEDROCK_MODEL_ARN_MAPPING` configured |
@@ -1850,7 +1882,7 @@ Required if you configure API authentication. See [Authentication](#authenticati
 | **File Storage**                                | `s3:PutObject`<br>`s3:GetObject`<br>`s3:DeleteObject`                                                                                                      | `AWS_S3_BUCKET`                                                              |
 | **KMS Encrypted S3 Buckets**                    | `kms:Decrypt`<br>`kms:GenerateDataKey`<br>with `kms:ViaService` condition                                                                                  | If S3 buckets use KMS encryption                                             |
 | **Text-to-Speech**                              | `polly:SynthesizeSpeech`<br>`polly:DescribeVoices`                                                                                                         | `AWS_POLLY_REGION`                                                           |
-| **Speech-to-Text**                              | `transcribe:StartTranscriptionJob`<br>`transcribe:GetTranscriptionJob`<br>`transcribe:DeleteTranscriptionJob`<br>`s3:PutObject` (transcribe bucket)        | `AWS_TRANSCRIBE_REGION`<br>`AWS_TRANSCRIBE_S3_BUCKET`                        |
+| **Speech-to-Text**                              | `transcribe:StartTranscriptionJob`<br>`transcribe:GetTranscriptionJob`<br>`transcribe:DeleteTranscriptionJob`<br>`transcribe:TagResource` (on `arn:aws:transcribe:*:*:transcription-job/*`)<br>`s3:PutObject` (transcribe bucket)        | `AWS_TRANSCRIBE_REGION`<br>`AWS_TRANSCRIBE_S3_BUCKET`                        |
 | **Language Detection**                          | `comprehend:DetectDominantLanguage`                                                                                                                        | `AWS_COMPREHEND_REGION`                                                      |
 | **Translation**                                 | `translate:TranslateText`                                                                                                                                  | `AWS_TRANSLATE_REGION`                                                       |
 | **SSM Parameter Store**                         | `ssm:GetParameter`<br>`kms:Decrypt` (if encrypted)                                                                                                         | `API_KEY_SSM_PARAMETER`                                                      |

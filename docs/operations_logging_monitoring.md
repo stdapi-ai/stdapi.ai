@@ -294,6 +294,28 @@ refer to the official AWS documentation for more information.
 - Correlation: Service logs won’t include StdAPI `x-request-id`. Correlate by time window, region, model/voice/job identifiers, and volume. Use StdAPI `model_id`, `voice_id`, and `execution_time_ms` to narrow windows.
 - AWS Bedrock Invocation logging (optional): Export invocation metadata and, if enabled, content to CloudWatch Logs/S3/Firehose. Treat prompts/completions as sensitive; manage retention and KMS.
 
+### Bedrock Request Metadata and Tags
+
+stdapi.ai automatically injects correlation context into every Bedrock API call, enabling you to join stdapi.ai logs with Bedrock invocation logs.
+
+**Converse and ConverseStream** (`requestMetadata`):
+
+| Key                    | Value               | Description                                                                                                                      |
+|:-----------------------|:--------------------|:---------------------------------------------------------------------------------------------------------------------------------|
+| `stdapi-ai.request_id` | Request UUID        | Matches the `id` field in stdapi.ai logs and the `x-request-id` response header                                                  |
+| `stdapi-ai.server_id`  | Instance identifier | Matches the `server_id` field in stdapi.ai logs                                                                                  |
+| `stdapi-ai.user_id`    | User identifier     | Present only when the client supplies a user ID (e.g. `user` field in OpenAI requests, `metadata.user_id` in Anthropic requests) |
+
+**StartAsyncInvoke** (same keys passed as `tags`):
+
+Same three keys (`stdapi-ai.request_id`, `stdapi-ai.server_id`, `stdapi-ai.user_id`) are attached as resource tags on the async invocation job.
+
+!!! note "Security"
+    Any `requestMetadata` key starting with `stdapi-ai.` that is passed by the client is silently dropped before the Bedrock call. Only values set by stdapi.ai itself are forwarded under that prefix.
+
+!!! tip "Correlating with Bedrock Invocation Logs"
+    When [Bedrock model invocation logging](https://docs.aws.amazon.com/bedrock/latest/userguide/model-invocation-logging.html) is enabled, the `requestMetadata` fields are included in the invocation log records. Filter by `requestMetadata.stdapi-ai\.request_id` in CloudWatch Logs Insights to join a Bedrock invocation log entry with its corresponding stdapi.ai request event.
+
 ## :material-wrench: Troubleshooting Checklist
 
 - No logs visible: Ensure you are reading container STDOUT. On ECS/Kubernetes, verify the log driver and retention.

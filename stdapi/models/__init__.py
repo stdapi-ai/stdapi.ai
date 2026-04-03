@@ -6,6 +6,7 @@ from functools import cached_property
 from importlib import import_module
 from pkgutil import iter_modules
 from re import Pattern
+from re import compile as re_compile
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Never, TypedDict, TypeVar
 
@@ -15,6 +16,7 @@ from pydantic import AwareDatetime, BaseModel, JsonValue
 from pydantic_core import from_json, to_json
 
 import stdapi.region_routing as _region_routing
+from stdapi import server
 from stdapi.api_errors import ApiError, UnsupportedModelError
 from stdapi.aws import get_client
 from stdapi.aws_bedrock import (
@@ -425,6 +427,10 @@ class ModelBase[RequestT, ResponseT]:
                             "s3Uri": f"s3://{s3_bucket_name}/{SETTINGS.aws_s3_tmp_prefix}{REQUEST_ID.get()}/"
                         }
                     },
+                    tags=[
+                        {"key": k, "value": v}
+                        for k, v in build_stdapi_metadata().items()
+                    ],
                 )
             )["invocationArn"]
 
@@ -1616,6 +1622,59 @@ async def _wait_for_async_invocation_completion(
         await sleep(0.5)
 
 
+_STDAPI_METADATA_PREFIX = "stdapi-ai."
+
+# Inverse of the Bedrock requestMetadata value pattern [a-zA-Z0-9\s:_@$#=/+,-.]{0,256}
+_STDAPI_METADATA_VALUE_INVALID = re_compile(r"[^a-zA-Z0-9\s:_@$#=/+,.\-]")
+
+
+def build_stdapi_metadata(existing: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Build Bedrock requestMetadata with ``stdapi-ai.`` keys injected.
+
+    Drops any key starting with ``stdapi-ai.`` from *existing* to prevent
+    caller spoofing, then injects the current request context.
+
+    Args:
+        existing: Caller-supplied metadata from the request body, if any.
+
+    Returns:
+        Merged metadata dict with ``stdapi-ai.*`` keys always set.
+    """
+    metadata = {
+        k: v
+        for k, v in (existing or {}).items()
+        if not k.startswith(_STDAPI_METADATA_PREFIX)
+    }
+    metadata["stdapi-ai.request_id"] = REQUEST_ID.get()
+    metadata["stdapi-ai.server_id"] = server.SERVER_NAME
+    if (user_id := REQUEST_LOG.get().get("request_user_id")) and (
+        user_id := _STDAPI_METADATA_VALUE_INVALID.sub("", user_id)[:256]
+    ):
+        metadata["stdapi-ai.user_id"] = user_id
+    return metadata
+
+
+async def _prepare_converse_request_for_region(
+    model_id: str, request: ConverseRequestBaseTypeDef, region: RegionName
+) -> None:
+    """Prepare a Converse request in-place for *region*.
+
+    Sets the effective region, resolves pending S3 content blocks, injects
+    ``modelId``, and injects ``stdapi-ai.*`` metadata.
+
+    Args:
+        model_id: Bedrock model identifier.
+        request: Converse request payload to mutate.
+        region: AWS region to target.
+    """
+    _set_effective_region(region)
+    await resolve_all_bedrock_content_blocks(region)
+    request["modelId"] = (await get_model_details(model_id)).get_id_for_region(
+        region, inference_profile=True
+    )
+    request["requestMetadata"] = build_stdapi_metadata(request.get("requestMetadata"))
+
+
 async def _converse(
     model_id: str,
     request: ConverseRequestBaseTypeDef,
@@ -1624,8 +1683,6 @@ async def _converse(
     single_region: bool,
 ) -> ConverseResponseTypeDef:
     """Call the Bedrock Converse API and return the response.
-
-    Resolves pending S3 content blocks for *region* and injects ``modelId`` before calling.
 
     Args:
         model_id: Bedrock model identifier.
@@ -1636,11 +1693,7 @@ async def _converse(
     Returns:
         Bedrock Converse response.
     """
-    _set_effective_region(region)
-    await resolve_all_bedrock_content_blocks(region)
-    request["modelId"] = (await get_model_details(model_id)).get_id_for_region(
-        region, inference_profile=True
-    )
+    await _prepare_converse_request_for_region(model_id, request, region)
     with handle_bedrock_client_error():
         return await bedrock_client(region, single_region=single_region).converse(
             **request
@@ -1656,8 +1709,7 @@ async def _converse_stream(
 ) -> ConverseStreamResponseTypeDef:
     """Open the Bedrock ConverseStream API and return the event-stream response.
 
-    Resolves pending S3 content blocks for *region* and injects ``modelId`` before calling.
-    Once the stream is open, no further failover is possible.
+    Failover is possible until the stream opens; once open, the region is locked.
 
     Args:
         model_id: Bedrock model identifier.
@@ -1668,11 +1720,7 @@ async def _converse_stream(
     Returns:
         Bedrock ConverseStream response containing the event stream.
     """
-    _set_effective_region(region)
-    await resolve_all_bedrock_content_blocks(region)
-    request["modelId"] = (await get_model_details(model_id)).get_id_for_region(
-        region, inference_profile=True
-    )
+    await _prepare_converse_request_for_region(model_id, request, region)
     with handle_bedrock_client_error():
         return await bedrock_client(
             region, single_region=single_region

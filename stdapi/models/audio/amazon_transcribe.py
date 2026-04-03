@@ -20,6 +20,7 @@ from stdapi.models import (
     EXTRA_MODELS_INPUT_MODALITY,
     EXTRA_MODELS_OUTPUT_MODALITY,
     ModelDetails,
+    build_stdapi_metadata,
 )
 from stdapi.models.audio import AudioModelBase
 from stdapi.monitoring import REQUEST_ID, log_error_details, log_response_params
@@ -182,6 +183,7 @@ def _build_transcription_job_params(
         "Media": {"MediaFileUri": f"s3://{s3_bucket}/{s3_prefix}{job_id}/input"},
         "OutputBucketName": s3_bucket,
         "OutputKey": f"{s3_prefix}{job_id}/output.json",
+        "Tags": [{"Key": k, "Value": v} for k, v in build_stdapi_metadata().items()],
     }
 
     if language:
