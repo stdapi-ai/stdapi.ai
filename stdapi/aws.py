@@ -3,21 +3,27 @@
 from contextlib import AsyncExitStack
 from logging import getLogger
 from os import environ
-from typing import TYPE_CHECKING, Any, Self, TypeVar
+from typing import TYPE_CHECKING, Any, NotRequired, Self, TypedDict, TypeVar
 
 from aiobotocore.config import AioConfig
-from aiohttp import ClientError, ClientSession, ClientTimeout
+from aiohttp import ClientSession, ClientTimeout
 
+from stdapi import server
 from stdapi.config import AWS_REGION, AWS_SESSION, SETTINGS
-from stdapi.server import USER_AGENT
 
 if TYPE_CHECKING:
     from types import TracebackType
 
     from types_aiobotocore_bedrock.literals import RegionName
 
-#: AWS account information (populated during startup)
-AWS_ACCOUNT_INFO: dict[str, str] = {}
+    class AwsEnvironment(TypedDict):
+        """AWS environment."""
+
+        account_id: NotRequired[str]
+
+
+#: AWS environment information (populated during startup)
+AWS_ENVIRONMENT: AwsEnvironment = {}
 
 #: Cached AWS service clients keyed by (service, region)
 _CLIENTS: dict[str, dict[RegionName, Any]] = {}
@@ -30,7 +36,7 @@ _RETRIES = {
 
 #: Default configuration — used by all services including bedrock-runtime
 CONFIG = AioConfig(
-    user_agent=USER_AGENT,
+    user_agent=server.USER_AGENT,
     retries=_RETRIES,
     max_pool_connections=SETTINGS.aws_max_pool_connections,
     parameter_validation=False,
@@ -40,7 +46,7 @@ CONFIG = AioConfig(
 
 #: No-retry configuration — used when the application retry loop manages failover across regions
 CONFIG_NO_RETRY = AioConfig(
-    user_agent=USER_AGENT,
+    user_agent=server.USER_AGENT,
     retries={
         "max_attempts": 1,
         "mode": "adaptive" if SETTINGS.aws_adaptive_retry else "standard",
@@ -82,7 +88,7 @@ class AWSConnectionManager:
         }:
             if service == "s3.accelerate":
                 config = AioConfig(
-                    user_agent=USER_AGENT,
+                    user_agent=server.USER_AGENT,
                     retries=_RETRIES,
                     max_pool_connections=SETTINGS.aws_max_pool_connections,
                     parameter_validation=False,
@@ -167,25 +173,25 @@ async def initialize_aws_account_info() -> None:
     try:
         metadata_path = environ["ECS_CONTAINER_METADATA_URI_V4"]
     except KeyError:
-        # Not running in ECS
-        pass
+        async with AWS_SESSION.create_client(
+            "sts",
+            config=AioConfig(user_agent=server.USER_AGENT, parameter_validation=False),
+            region_name=AWS_REGION,
+        ) as sts_client:
+            AWS_ENVIRONMENT["account_id"] = (await sts_client.get_caller_identity())[
+                "Account"
+            ]
     else:
-        try:
-            async with (
-                ClientSession(timeout=ClientTimeout(total=2, connect=1)) as session,
-                session.get(f"http://169.254.170.2{metadata_path}/task") as resp,
-            ):
+        async with ClientSession(
+            headers=server.HTTP_CLIENT_HEADERS,
+            timeout=ClientTimeout(total=2, connect=1),
+        ) as session:
+            async with session.get(metadata_path) as resp:
+                resp.raise_for_status()
+                container_name = (await resp.json())["Name"]
+            async with session.get(f"{metadata_path}/task") as resp:
                 resp.raise_for_status()
                 parts = (await resp.json())["TaskARN"].split(":")
-                AWS_ACCOUNT_INFO["account_id"] = parts[4]
-                AWS_ACCOUNT_INFO["task_id"] = parts[5].split("/")[-1]
-                return
-        except OSError, ClientError:
-            pass
-
-    async with AWS_SESSION.create_client(
-        "sts", config=CONFIG, region_name=AWS_REGION
-    ) as sts_client:
-        AWS_ACCOUNT_INFO["account_id"] = (await sts_client.get_caller_identity())[
-            "Account"
-        ]
+                AWS_ENVIRONMENT["account_id"] = parts[4]
+                task_id = parts[5].split("/")[-1]
+        server.SERVER_NAME = f"{task_id}-{container_name}-{server.SERVER_ID}"

@@ -11,12 +11,12 @@ from fastapi import Request  # noqa: TC002
 from pydantic import AwareDatetime, BaseModel, JsonValue
 from sse_starlette import JSONServerSentEvent
 
+from stdapi import server
 from stdapi.api_errors import ApiError
 from stdapi.api_providers import format_http_error
 from stdapi.aws_bedrock import AWS_ERROR_MAP
 from stdapi.config import SETTINGS, LogLevel
 from stdapi.metering import SERVER_FULL_VERSION
-from stdapi.server import SERVER_NAME
 from stdapi.utils import hide_security_details, stdout_write, webuuid
 
 if TYPE_CHECKING:
@@ -178,7 +178,7 @@ def log_request_event(request: Request) -> Generator[EventLog]:
             type="request",
             level="info",
             date=request_time,
-            server_id=SERVER_NAME,
+            server_id=server.SERVER_NAME,
             server_version=SERVER_FULL_VERSION,
             id=request_id,
             method=request.method,  # type: ignore[typeddict-item]
@@ -195,7 +195,7 @@ def log_request_event(request: Request) -> Generator[EventLog]:
             "http.host": request.url.hostname or "localhost",
             "http.target": request.url.path,
             "request.id": request_id,
-            "server.id": SERVER_NAME,
+            "server.id": server.SERVER_NAME,
         },
     )
     with suppress(KeyError):
@@ -338,13 +338,14 @@ def log_background_event(event: str, request_id: str) -> Generator[EventLog]:
         Mutable event log dict populated during execution.
     """
     span_context = otel_manager.start_span(
-        "background", attributes={"request.id": request_id, "server.id": SERVER_NAME}
+        "background",
+        attributes={"request.id": request_id, "server.id": server.SERVER_NAME},
     )
     log = EventLog(
         type="background",
         level="info",
         date=SETTINGS.now(),
-        server_id=SERVER_NAME,
+        server_id=server.SERVER_NAME,
         server_version=SERVER_FULL_VERSION,
         id=request_id,
         event=event,
@@ -385,13 +386,13 @@ async def _rebuild_and_log_stream[T](
 
         span_context = otel_manager.start_span(
             "request_stream",
-            attributes={"request.id": request_id, "server.id": SERVER_NAME},
+            attributes={"request.id": request_id, "server.id": server.SERVER_NAME},
         )
         log = EventLog(
             type="request_stream",
             level="info",
             date=SETTINGS.now(),
-            server_id=SERVER_NAME,
+            server_id=server.SERVER_NAME,
             server_version=SERVER_FULL_VERSION,
             id=request_id,
         )

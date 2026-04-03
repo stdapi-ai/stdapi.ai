@@ -8,7 +8,7 @@ from asyncio import create_task, gather
 from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
 
 from stdapi.api_errors import ApiError
-from stdapi.aws import AWS_ACCOUNT_INFO
+from stdapi.aws import AWS_ENVIRONMENT
 from stdapi.aws_bedrock import BEDROCK_BODY_SIZE_LIMIT
 from stdapi.aws_s3 import S3Object
 from stdapi.input_file import InputFileUrl, prefetch_all_content_types
@@ -494,7 +494,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         return (
             _MediaSource(
                 s3Location=_MediaSourceS3Location(
-                    uri=value.uri, bucketOwner=AWS_ACCOUNT_INFO["account_id"]
+                    uri=value.uri, bucketOwner=AWS_ENVIRONMENT["account_id"]
                 )
             )
             if isinstance(value, S3Object)

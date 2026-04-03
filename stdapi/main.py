@@ -17,6 +17,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from starlette.background import BackgroundTask
 
+from stdapi import server
 from stdapi.api_errors import ApiError
 from stdapi.api_providers import (
     format_http_error,
@@ -48,7 +49,7 @@ from stdapi.monitoring import (
 )
 from stdapi.region_routing import measure_region_latencies
 from stdapi.routes import discover_routers
-from stdapi.server import SERVER_NAME, SERVER_VERSION
+from stdapi.server import SERVER_VERSION
 from stdapi.utils import hide_security_details
 
 if TYPE_CHECKING:
@@ -87,7 +88,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
             )
         ):
             span_context = otel_manager.start_span(
-                "Application start", attributes={"server.id": SERVER_NAME}
+                "Application start", attributes={"server.id": server.SERVER_NAME}
             )
             with otel_manager.use_span(span_context):
                 region_latencies = await measure_region_latencies()
@@ -109,7 +110,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                 type="start",
                 level="info",
                 date=SETTINGS.now(),
-                server_id=SERVER_NAME,
+                server_id=server.SERVER_NAME,
                 server_version=SERVER_FULL_VERSION,
                 server_start_time_ms=(time_ns() - start) // 1000000,
             )
@@ -152,7 +153,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                 type="start",
                 level="error",
                 date=SETTINGS.now(),
-                server_id=SERVER_NAME,
+                server_id=server.SERVER_NAME,
                 server_version=SERVER_FULL_VERSION,
                 error_detail=[f"{type(exception).__name__}: {exception}"],
             )
@@ -164,7 +165,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                 type="start",
                 level="critical",
                 date=SETTINGS.now(),
-                server_id=SERVER_NAME,
+                server_id=server.SERVER_NAME,
                 server_version=SERVER_FULL_VERSION,
                 error_detail=["\n".join(format_exception(exception))],
             )
@@ -176,7 +177,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                 type="stop",
                 level="info",
                 date=SETTINGS.now(),
-                server_id=SERVER_NAME,
+                server_id=server.SERVER_NAME,
                 server_version=SERVER_FULL_VERSION,
                 server_uptime_ms=(time_ns() - start) // 1000000,
             )

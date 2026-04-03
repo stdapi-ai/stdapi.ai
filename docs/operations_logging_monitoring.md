@@ -95,28 +95,28 @@ stdapi.ai emits five kinds of JSON events (one per line):
 
 Each event shares core fields and may add type‑specific ones.
 
-|                                     Field | Applies to                          | Description                                                        |
-|------------------------------------------:|:------------------------------------|:-------------------------------------------------------------------|
-|                                    `type` | all                                 | One of `start`, `stop`, `request`, `request_stream`, `background`  |
-|                                   `level` | all                                 | `info`, `warning`, `error`, `critical` (controlled by `LOG_LEVEL`) |
-|                                    `date` | all                                 | RFC3339, timezone‑aware timestamp                                  |
-|                               `server_id` | all                                 | Instance identifier                                                |
-|                            `error_detail` | all                                 | Optional list of formatted exception strings                       |
-|                                      `id` | request, request_stream, background | Correlation ID (also returned as `x-request-id`)                   |
-|                       `execution_time_ms` | request, request_stream, background | Duration of the handled block                                      |
-|                                  `method` | request                             | HTTP method                                                        |
-|                                    `path` | request                             | Request path                                                       |
-|                             `status_code` | request                             | Final HTTP status code                                             |
-|                               `client_ip` | request                             | Client IP address (if `LOG_CLIENT_IP=true`)                        |
-|                       `client_user_agent` | request                             | When provided by client                                            |
-|                                `model_id` | request                             | Targeted model (if applicable)                                     |
-|                                `voice_id` | request                             | TTS voice (if applicable)                                          |
-|       `request_user_id`, `request_org_id` | request                             | Propagated identifiers (if applicable)                             |
-|                          `request_params` | request                             | Sanitized request payload (if `LOG_REQUEST_PARAMS=true`)           |
-|                        `request_response` | request                             | Sanitized response payload (if `LOG_REQUEST_PARAMS=true`)          |
-|                                   `event` | background                          | Background operation name                                          |
-| `server_start_time_ms`, `server_warnings` | start                               | Startup metrics and warnings                                       |
-|                        `server_uptime_ms` | stop                                | Uptime at shutdown                                                 |
+|                                     Field | Applies to                          | Description                                                                                 |
+|------------------------------------------:|:------------------------------------|:--------------------------------------------------------------------------------------------|
+|                                    `type` | all                                 | One of `start`, `stop`, `request`, `request_stream`, `background`                           |
+|                                   `level` | all                                 | `info`, `warning`, `error`, `critical` (controlled by `LOG_LEVEL`)                          |
+|                                    `date` | all                                 | RFC3339, timezone‑aware timestamp                                                           |
+|                               `server_id` | all                                 | Instance identifier — on ECS: `task_id-container_name-uuid`; elsewhere: `hostname-pid-uuid` |
+|                            `error_detail` | all                                 | Optional list of formatted exception strings                                                |
+|                                      `id` | request, request_stream, background | Correlation ID (also returned as `x-request-id`)                                            |
+|                       `execution_time_ms` | request, request_stream, background | Duration of the handled block                                                               |
+|                                  `method` | request                             | HTTP method                                                                                 |
+|                                    `path` | request                             | Request path                                                                                |
+|                             `status_code` | request                             | Final HTTP status code                                                                      |
+|                               `client_ip` | request                             | Client IP address (if `LOG_CLIENT_IP=true`)                                                 |
+|                       `client_user_agent` | request                             | When provided by client                                                                     |
+|                                `model_id` | request                             | Targeted model (if applicable)                                                              |
+|                                `voice_id` | request                             | TTS voice (if applicable)                                                                   |
+|       `request_user_id`, `request_org_id` | request                             | Propagated identifiers (if applicable)                                                      |
+|                          `request_params` | request                             | Sanitized request payload (if `LOG_REQUEST_PARAMS=true`)                                    |
+|                        `request_response` | request                             | Sanitized response payload (if `LOG_REQUEST_PARAMS=true`)                                   |
+|                                   `event` | background                          | Background operation name                                                                   |
+| `server_start_time_ms`, `server_warnings` | start                               | Startup metrics and warnings                                                                |
+|                        `server_uptime_ms` | stop                                | Uptime at shutdown                                                                          |
 
 !!! note "Understanding warnings and errors"
     - For `request` events, default log levels are derived from the final HTTP status: 4xx → `warning`, 5xx → `error`. Unexpected server crashes (like HTTP 500) may appear as `critical`.
