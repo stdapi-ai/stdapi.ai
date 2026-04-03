@@ -4,20 +4,20 @@ description: Complete API documentation for stdapi.ai OpenAI and Anthropic compa
 keywords: OpenAI API documentation, Anthropic API documentation, AWS Bedrock API reference, OpenAI SDK compatibility, Anthropic SDK compatibility, chat completions API, messages API, embeddings API, image generation API, audio API AWS, OpenAI compatible endpoints, Anthropic compatible endpoints
 ---
 
-# API Overview
+# :material-api: API Overview
 
 stdapi.ai provides OpenAI and Anthropic compatible APIs backed by AWS Bedrock and AWS AI services. Any application that works with OpenAI or Anthropic works with stdapi.ai by simply changing the API endpoint.
 
-## Interactive Documentation
+## :material-book-open-variant: Interactive Documentation
 
 stdapi.ai provides multiple interfaces for exploring and testing the API—choose the one that fits your workflow:
 
-### 📚 Documentation Resources
+### :material-book-open-variant: Documentation Resources
 
 * **[Complete API Reference](api_reference.md)** – In-depth guides for every endpoint with parameter details
 * **[OpenAPI Specification](openapi.yml)** – Full machine-readable schema for integration and tooling
 
-### 🎮 Live API Playground
+### :material-play-circle: Live API Playground
 
 **When running the server**, access these interactive interfaces (can be enabled via [configuration options](operations_configuration.md)):
 
@@ -27,7 +27,7 @@ stdapi.ai provides multiple interfaces for exploring and testing the API—choos
 | **ReDoc**          | `http://localhost/redoc`        | Reading and searching through clean, organized documentation                   |
 | **OpenAPI Schema** | `http://localhost/openapi.json` | Generating client code or importing into API tools like Postman                |
 
-## Supported Endpoints
+## :material-api: Supported Endpoints
 
 ### ![OpenAI](styles/logo_openai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } OpenAI-Compatible API
 
@@ -49,7 +49,7 @@ stdapi.ai provides multiple interfaces for exploring and testing the API—choos
 |---------------|------------------------------|---------------------------------------------------------------|----------------------------------------------|
 | **💬 Messages** | `POST /anthropic/v1/messages` | Multi-modal conversations with text, images, video, documents | [Messages →](api_anthropic_messages.md)      |
 
-## Using stdapi.ai
+## :material-connection: Using stdapi.ai
 
 stdapi.ai is a **drop-in replacement** for both OpenAI and Anthropic APIs. Any application that works with either provider—chatbots, coding assistants, automation tools, custom scripts—works with stdapi.ai by simply changing the API base URL.
 
@@ -73,22 +73,18 @@ That's it. Your application continues to work without any code changes—just po
 
 Your Anthropic SDK applications continue to work without any code changes—just point them to stdapi.ai instead of Anthropic.
 
-## Next Steps
+## :material-arrow-right: Next Steps
 
-**Explore the OpenAI-Compatible API:**
+<div class="grid cards" markdown>
 
-- [Chat Completions](api_openai_chat_completions.md) - Conversational AI with multi-modal support
-- [Images](api_openai_images_generations.md) - Generation, edits, and variations
-- [Audio](api_openai_audio_speech.md) - Text-to-speech, transcription, and translation
-- [Embeddings](api_openai_embeddings.md) - Vector embeddings for search and RAG
-- [Models](api_openai_models.md) - List and discover available models
+- :material-chat: [**Chat Completions**](api_openai_chat_completions.md) — Conversational AI with multi-modal support
+- :material-image: [**Images**](api_openai_images_generations.md) — Generation, edits, and variations
+- :material-music: [**Audio**](api_openai_audio_speech.md) — Text-to-speech, transcription, and translation
+- :material-vector-polyline: [**Embeddings**](api_openai_embeddings.md) — Vector embeddings for search and RAG
+- :material-format-list-bulleted: [**Models**](api_openai_models.md) — List and discover available models
+- :material-message: [**Messages**](api_anthropic_messages.md) — Anthropic-compatible conversational AI with tool calling
+- :material-check-all: [**Features**](features.md) — Full capabilities and AWS integrations
+- :material-rocket-launch: [**Getting Started**](operations_getting_started.md) — Deploy to AWS with Terraform
+- :material-puzzle: [**Use Cases**](use_cases.md) — Integration examples with popular tools
 
-**Explore the Anthropic-Compatible API:**
-
-- [Messages](api_anthropic_messages.md) - Conversational AI with multi-modal support and tool calling
-
-**Learn more:**
-
-- [Features](features.md) - Full capabilities and AWS integrations
-- [Getting Started](operations_getting_started.md) - Deploy to AWS with Terraform
-- [Use Cases](use_cases.md) - Integration examples with popular tools
+</div>

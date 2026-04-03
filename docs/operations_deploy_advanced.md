@@ -4,7 +4,7 @@ description: Advanced deployment configurations for stdapi.ai including VPC inte
 keywords: stdapi.ai deployment, Terraform advanced, AWS ECS deployment, multi-region AI gateway, cost-optimized AI, VPC integration, production deployment, AWS Bedrock multi-region
 ---
 
-# Advanced Deployment
+# :material-server-network: Advanced Deployment
 
 This page covers deployment scenarios beyond the [Quick Start](operations_getting_started.md). Use these when you need to integrate with existing infrastructure, deploy multi-region, optimize costs, or deploy without Terraform.
 
@@ -739,3 +739,14 @@ module "stdapi_ai" {
 ```
 
 Common regions with Comprehend support: `us-east-1`, `us-west-2`, `eu-west-1`, `eu-central-1`
+
+## :material-arrow-right: Next Steps
+
+<div class="grid cards" markdown>
+
+- :material-rocket-launch: [**Getting Started**](operations_getting_started.md) — Standard deployment with Terraform
+- :material-directions-fork: [**Resilience & Failover**](operations_resilience.md) — Multi-region routing and infrastructure resilience
+- :material-cog: [**Configuration Reference**](operations_configuration.md) — Complete list of environment variables
+- :material-scale-balance: [**Compliance**](operations_compliance.md) — Security and compliance requirements
+
+</div>

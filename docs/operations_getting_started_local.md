@@ -4,7 +4,7 @@ description: Run stdapi.ai locally with Docker or Podman for development, testin
 keywords: Docker OpenAI gateway, local AI development, Podman AI gateway, free OpenAI alternative, local AWS Bedrock, Docker AI API, community AI gateway, AGPL AI gateway
 ---
 
-# Local Development with Docker/Podman
+# :material-docker: Local Development with Docker/Podman
 
 Run stdapi.ai locally for development, testing, and evaluation using the free community container image (AGPL-3.0). Full API compatibility — the same endpoints and features as the production deployment.
 

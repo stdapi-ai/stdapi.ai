@@ -6,7 +6,7 @@ hide:
   - navigation
 ---
 
-# Features — AI Gateway for AWS Bedrock
+# :material-check-all: Features — AI Gateway for AWS Bedrock
 
 stdapi.ai is an **AI gateway purpose-built for AWS**. It brings full OpenAI and Anthropic API compatibility to AWS Bedrock and AWS AI services, so your team can use their favorite OpenAI and Anthropic-powered applications—ChatGPT-compatible UIs, Claude-compatible tools, coding assistants, automation platforms—on AWS infrastructure with zero friction.
 

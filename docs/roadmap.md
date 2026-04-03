@@ -4,11 +4,11 @@ description: stdapi.ai release history and upcoming features. Track regular upda
 keywords: stdapi.ai releases, AI gateway updates, AWS Bedrock features, API gateway roadmap, software changelog, active development, new AI features, product updates
 ---
 
-# Releases & Roadmap
+# :material-timeline: Releases & Roadmap
 
 **stdapi.ai is under active development** with regular feature releases. Seven major releases delivered since launch (v1.0-v1.7) with continuous improvements.
 
-## ✨ Recent Releases
+## :material-tag-multiple: Recent Releases
 
 See [Release History below](#release-history) for the full changelog of all releases.
 
@@ -16,13 +16,13 @@ See [Release History below](#release-history) for the full changelog of all rele
 
 ---
 
-## 🚀 Planned Features
+## :material-rocket-launch: Planned Features
 
 The following features may be implemented in future releases based on community demand and feedback. Implementation priority is determined by user requests and use case requirements.
 
 **Want a feature?** Submit feedback on [GitHub Issues](https://github.com/stdapi-ai/stdapi.ai/issues).
 
-### 💬 Chat Completions
+### :material-chat: Chat Completions
 
 | Provider                                                                                 | Endpoint/Feature                             | AWS Backend                                                                                                            |
 |------------------------------------------------------------------------------------------|----------------------------------------------|------------------------------------------------------------------------------------------------------------------------|
@@ -33,26 +33,26 @@ The following features may be implemented in future releases based on community 
 | ![Cohere](styles/logo_cohere.svg){: style="height:20px;width:20px"} **Cohere**           | `/v1/chat`                                   | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
 | ![Qwen](styles/logo_qwen.svg){: style="height:20px;width:20px"} **Qwen**                 | `/v1/chat/completions` `translation_options` | ![Amazon Translate](styles/logo_amazon_translate.svg){: style="height:20px;width:20px"} Amazon Translate               |
 
-### 🌐 Translation
+### :material-translate: Translation
 
 | Provider  | Endpoint/Feature | AWS Backend                                                                                              |
 |-----------|------------------|----------------------------------------------------------------------------------------------------------|
 | **DeepL** | `/v2/translate`  | ![Amazon Translate](styles/logo_amazon_translate.svg){: style="height:20px;width:20px"} Amazon Translate |
 
-### 🧠 Embeddings
+### :material-vector-polyline: Embeddings
 
 | Provider                                                                       | Endpoint/Feature  | AWS Backend                                                                                                           |
 |--------------------------------------------------------------------------------|-------------------|-----------------------------------------------------------------------------------------------------------------------|
 | ![Ollama](styles/logo_ollama.svg){: style="height:20px;width:20px"} **Ollama** | `/api/embeddings` | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - embedding models |
 | ![Cohere](styles/logo_cohere.svg){: style="height:20px;width:20px"} **Cohere** | `/v1/embed`       | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - embedding models |
 
-### 🔍 Semantic Search & Ranking
+### :material-magnify: Semantic Search & Ranking
 
 | Provider                                                                       | Endpoint/Feature | AWS Backend                                                                                                        |
 |--------------------------------------------------------------------------------|------------------|--------------------------------------------------------------------------------------------------------------------|
 | ![Cohere](styles/logo_cohere.svg){: style="height:20px;width:20px"} **Cohere** | `/v1/rerank`     | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - rerank models |
 
-### 📋 Model Discovery
+### :material-format-list-bulleted: Model Discovery
 
 | Provider                                                                                        | Endpoint/Feature                                                   | AWS Backend                                                                                                        |
 |-------------------------------------------------------------------------------------------------|--------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------|
@@ -61,7 +61,7 @@ The following features may be implemented in future releases based on community 
 | ![Stability AI](styles/logo_stabilityai.svg){: style="height:20px;width:20px"} **Stability AI** | `/v1/engines/list`                                                 | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - model catalog |
 |                                                                                                 | Model selection wildcards (To automatically latest model versions) | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - model catalog |
 
-### 🎙️ Speech & Audio
+### :material-microphone: Speech & Audio
 
 | Provider                                                                       | Endpoint/Feature                      | AWS Backend                                                                                                                |
 |--------------------------------------------------------------------------------|---------------------------------------|----------------------------------------------------------------------------------------------------------------------------|
@@ -73,7 +73,7 @@ The following features may be implemented in future releases based on community 
 |                                                                                | Streaming transcription               | ![Amazon Transcribe](styles/logo_amazon_transcribe.svg){: style="height:20px;width:20px"} Amazon Transcribe - streaming    |
 |                                                                                | Custom vocabularies                   | ![Amazon Transcribe](styles/logo_amazon_transcribe.svg){: style="height:20px;width:20px"} Amazon Transcribe - custom vocab |
 
-### 🎨 Image Generation
+### :material-image: Image Generation
 
 | Provider                                                                                        | Endpoint/Feature                        | AWS Backend                                                                                                       |
 |-------------------------------------------------------------------------------------------------|-----------------------------------------|-------------------------------------------------------------------------------------------------------------------|
@@ -84,13 +84,13 @@ The following features may be implemented in future releases based on community 
 | ![Stability AI](styles/logo_stabilityai.svg){: style="height:20px;width:20px"} **Stability AI** | `/v2/stable-image/upscale`              | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - image models |
 | ![Stability AI](styles/logo_stabilityai.svg){: style="height:20px;width:20px"} **Stability AI** | `/v2/stable-image/edit`                 | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - image models |
 
-### 🎯 Model-Specific Features
+### :material-tune: Model-Specific Features
 
 | Provider | Endpoint/Feature               | AWS Backend                                                                                                             |
 |----------|--------------------------------|-------------------------------------------------------------------------------------------------------------------------|
 |          | Running Provisioned throughput | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - provisioned models |
 
-### 🤖 AWS Bedrock Advanced Features
+### :material-robot: AWS Bedrock Advanced Features
 
 | Provider                                                                       | Endpoint/Feature       | AWS Backend                                                                                                           |
 |--------------------------------------------------------------------------------|------------------------|-----------------------------------------------------------------------------------------------------------------------|
@@ -99,34 +99,34 @@ The following features may be implemented in future releases based on community 
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/evals`            | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - Model Evaluation |
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/fine_tuning/jobs` | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - custom models    |
 
-### 📦 Batch & Async Processing
+### :material-package-variant: Batch & Async Processing
 
 | Provider                                                                                | Endpoint/Feature                              | AWS Backend                                                                                                          |
 |-----------------------------------------------------------------------------------------|-----------------------------------------------|----------------------------------------------------------------------------------------------------------------------|
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**          | `/v1/batches`                                 | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - batch inference |
 | ![Anthropic](styles/logo_anthropic.svg){: style="height:20px;width:20px"} **Anthropic** | `/v1/messages/batches`                        | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - batch inference |
 
-### 🛡️ Content Safety & Moderation
+### :material-shield-check: Content Safety & Moderation
 
 | Provider                                                                       | Endpoint/Feature  | AWS Backend                                                                                                            |
 |--------------------------------------------------------------------------------|-------------------|------------------------------------------------------------------------------------------------------------------------|
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/moderations` | ![Amazon Comprehend](styles/logo_amazon_comprehend.svg){: style="height:20px;width:20px"} Amazon Comprehend - toxicity |
 
-### 📁 Files & Storage
+### :material-folder: Files & Storage
 
 | Provider                                                                                | Endpoint/Feature | AWS Backend                                                                         |
 |-----------------------------------------------------------------------------------------|------------------|-------------------------------------------------------------------------------------|
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**          | `/v1/files`      | ![Amazon S3](styles/logo_amazon_s3.svg){: style="height:20px;width:20px"} Amazon S3 |
 | ![Anthropic](styles/logo_anthropic.svg){: style="height:20px;width:20px"} **Anthropic** | `/v1/files`      | ![Amazon S3](styles/logo_amazon_s3.svg){: style="height:20px;width:20px"} Amazon S3 |
 
-### 📊 Usage & Analytics
+### :material-chart-bar: Usage & Analytics
 
 | Provider                                                                       | Endpoint/Feature         | AWS Backend                                                                                                 |
 |--------------------------------------------------------------------------------|--------------------------|-------------------------------------------------------------------------------------------------------------|
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/usage`              | ![Amazon CloudWatch](styles/logo_amazon_cloudwatch.svg){: style="height:20px;width:20px"} Amazon CloudWatch |
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/organization/usage` | ![Amazon CloudWatch](styles/logo_amazon_cloudwatch.svg){: style="height:20px;width:20px"} Amazon CloudWatch |
 
-### 🔐 Authentication & Access Control
+### :material-key: Authentication & Access Control
 
 | Provider | Endpoint/Feature      | AWS Backend                                                                                                          |
 |----------|-----------------------|----------------------------------------------------------------------------------------------------------------------|
@@ -138,7 +138,7 @@ The following features may be implemented in future releases based on community 
 
 ---
 
-## 📋 Release History
+## :material-history: Release History
 
 ### v1.7.0 – Automatic Region Routing, Deprecated Model Fallback & Resilience Improvements
 
@@ -165,13 +165,13 @@ The headline feature of v1.7 is **automatic multi-region routing**: stdapi.ai no
 
 Introduces a full Anthropic-compatible API layer, enabling direct use of the Anthropic SDK and Claude-native tools with AWS Bedrock. Adds Claude server tools support via OpenAI chat completions, token count estimation, automatic Anthropic beta flag filtering, and configurable route prefixes.
 
-#### 💬 Chat Completions
+#### :material-chat: Chat Completions
 
 | Provider                                                                       | Endpoint/Feature                                                                                                                     | AWS Backend                                                                                                   |
 |--------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------|
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/chat/completions` Claude server tools (`systemTool_bash`, `systemTool_text_editor`, `systemTool_computer`, `systemTool_memory`) | ![Claude](styles/logo_anthropic_claude.svg){: style="height:20px;width:20px"} Claude models on Amazon Bedrock |
 
-#### 💬 Messages (Anthropic-Compatible)
+#### :material-message: Messages (Anthropic-Compatible)
 
 | Provider                                                                                      | Endpoint/Feature                                          | AWS Backend                                                                                                          |
 |-----------------------------------------------------------------------------------------------|-----------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------|
@@ -180,7 +180,7 @@ Introduces a full Anthropic-compatible API layer, enabling direct use of the Ant
 | ![Claude](styles/logo_anthropic_claude.svg){: style="height:20px;width:20px"} **Claude**      | Claude server tools (bash, text editor, computer, memory) | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - Claude models   |
 | ![Amazon Nova](styles/logo_amazon_nova.svg){: style="height:20px;width:20px"} **Amazon Nova** | Web search tool (`web_search` → `nova_grounding`)         | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - Nova models     |
 
-#### 📋 Model Discovery (Anthropic-Compatible)
+#### :material-format-list-bulleted: Model Discovery (Anthropic-Compatible)
 
 | Provider                                                                                | Endpoint/Feature                              | AWS Backend                                                                                                        |
 |-----------------------------------------------------------------------------------------|-----------------------------------------------|--------------------------------------------------------------------------------------------------------------------|
@@ -203,7 +203,7 @@ Introduces a full Anthropic-compatible API layer, enabling direct use of the Ant
 
 Introduces advanced reasoning capabilities with Amazon Nova 2 and Anthropic Claude 4.6+ adaptive reasoning, enhanced system prompt handling for broader model compatibility.
 
-#### 💬 Chat Completions
+#### :material-chat: Chat Completions
 
 | Provider                                                                                      | Endpoint/Feature                              | AWS Backend                                                                                                            |
 |-----------------------------------------------------------------------------------------------|-----------------------------------------------|------------------------------------------------------------------------------------------------------------------------|
@@ -228,7 +228,7 @@ Introduces advanced reasoning capabilities with Amazon Nova 2 and Anthropic Clau
 
 Expands audio capabilities with Mistral Voxtral support, speaker diarization, audio formats for chat completions, and introduces prompt caching TTL and model aliasing for better OpenAI compatibility.
 
-#### 💬 Chat Completions
+#### :material-chat: Chat Completions
 
 | Provider                                                                       | Endpoint/Feature                                                     | AWS Backend                                                                                                            |
 |--------------------------------------------------------------------------------|----------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------|
@@ -236,7 +236,7 @@ Expands audio capabilities with Mistral Voxtral support, speaker diarization, au
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/chat/completions` extended Bedrock finish reasons mapping       | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock                     |
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | Prompt caching TTL support                                           | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - prompt caching    |
 
-#### 🎙️ Speech & Audio
+#### :material-microphone: Speech & Audio
 
 | Provider                                                                            | Endpoint/Feature                                  | AWS Backend                                                                                                            |
 |-------------------------------------------------------------------------------------|---------------------------------------------------|------------------------------------------------------------------------------------------------------------------------|
@@ -260,14 +260,14 @@ Expands audio capabilities with Mistral Voxtral support, speaker diarization, au
 
 Adds support for OpenAI's image editing and variation endpoints, enabling image manipulation capabilities backed by Amazon Bedrock. Includes maintenance updates for content block handling, tool call validation, streaming fixes, and TTS optimization.
 
-#### 🎨 Image Generation
+#### :material-image: Image Generation
 
 | Provider                                                                       | Endpoint/Feature        | AWS Backend                                                                                                       |
 |--------------------------------------------------------------------------------|-------------------------|-------------------------------------------------------------------------------------------------------------------|
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/images/edits`      | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - image models |
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/images/variations` | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - image models |
 
-#### 🎙️ Speech & Audio (v1.3.2)
+#### :material-microphone: Speech & Audio (v1.3.2)
 
 | Feature                        | Description                                                   |
 |--------------------------------|---------------------------------------------------------------|
@@ -304,7 +304,7 @@ Adds support for OpenAI's image editing and variation endpoints, enabling image 
 
 Introduces service tiers and latency headers for all Bedrock routes, Bedrock-specific system tools (Nova grounding), GPT5.2 API compatibility, configurable guardrail overrides, and Python 3.14 optimization.
 
-#### 💬 Chat Completions
+#### :material-chat: Chat Completions
 
 | Provider                                                                       | Endpoint/Feature                                                      | AWS Backend                                                                                                        |
 |--------------------------------------------------------------------------------|-----------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------|
@@ -312,7 +312,7 @@ Introduces service tiers and latency headers for all Bedrock routes, Bedrock-spe
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/chat/completions` Bedrock-specific system tools (Nova grounding) | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - system tools  |
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/chat/completions` GPT5.2 API update (`reasoning_effort=xhigh`)   |                                                                                                                    |
 
-#### 🛡️ Content Safety & Moderation
+#### :material-shield-check: Content Safety & Moderation
 
 | Feature                                         | AWS Backend                                                                                                   |
 |-------------------------------------------------|---------------------------------------------------------------------------------------------------------------|
@@ -336,14 +336,14 @@ Introduces service tiers and latency headers for all Bedrock routes, Bedrock-spe
 
 Expands multimodal embedding capabilities, adds prompt caching support, and introduces advanced routing with application inference profiles and prompt routers.
 
-#### 💬 Chat Completions
+#### :material-chat: Chat Completions
 
 | Provider                                                                       | Endpoint/Feature                                                    | AWS Backend                                                                                                         |
 |--------------------------------------------------------------------------------|---------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------|
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | Prompt caching `/v1/chat/completions` `prompt_cache_key`            | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - prompt caching |
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/chat/completions` GPT5.1 API update  (`reasoning_effort=none`) |                                                                                                                     |
 
-#### 🧠 Embeddings
+#### :material-vector-polyline: Embeddings
 
 | Provider                                                                                      | Endpoint/Feature                          | AWS Backend                                                                                        |
 |-----------------------------------------------------------------------------------------------|-------------------------------------------|----------------------------------------------------------------------------------------------------|
@@ -352,7 +352,7 @@ Expands multimodal embedding capabilities, adds prompt caching support, and intr
 | ![Amazon Nova](styles/logo_amazon_nova.svg){: style="height:20px;width:20px"} **Amazon Nova** | Multimodal embeddings models              |                                                                                                    |
 | ![Twelve Labs](styles/logo_twelvelabs.svg){: style="height:20px;width:20px"} **Twelve Labs**  | Marengo V3 models                         |                                                                                                    |
 
-#### 🎯 Advanced Routing
+#### :material-directions-fork: Advanced Routing
 
 | Feature                            | AWS Backend                                                                                                                         |
 |------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------|
@@ -372,7 +372,7 @@ Expands multimodal embedding capabilities, adds prompt caching support, and intr
 
 The initial release establishes core OpenAI API compatibility with AWS Bedrock backing.
 
-#### 💬 Chat Completions
+#### :material-chat: Chat Completions
 
 | Provider                                                                             | Endpoint/Feature                                   | AWS Backend                                                                                                            |
 |--------------------------------------------------------------------------------------|----------------------------------------------------|------------------------------------------------------------------------------------------------------------------------|
@@ -382,7 +382,7 @@ The initial release establishes core OpenAI API compatibility with AWS Bedrock b
 | ![Qwen](styles/logo_qwen.svg){: style="height:20px;width:20px"} **Qwen**             | `enable_thinking` + `thinking_budget` parameter    | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
 | ![Qwen](styles/logo_qwen.svg){: style="height:20px;width:20px"} **Qwen**             | `top_k` parameter                                  | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
 
-#### 🧠 Embeddings
+#### :material-vector-polyline: Embeddings
 
 | Provider                                                                                     | Endpoint/Feature      | AWS Backend                                                                                                           |
 |----------------------------------------------------------------------------------------------|-----------------------|-----------------------------------------------------------------------------------------------------------------------|
@@ -391,7 +391,7 @@ The initial release establishes core OpenAI API compatibility with AWS Bedrock b
 | ![Twelve Labs](styles/logo_twelvelabs.svg){: style="height:20px;width:20px"} **Twelve Labs** | Marengo V2  models    |                                                                                                                       |
 | ![Amazon](styles/logo_amazon.svg){: style="height:20px;width:20px"} **Amazon Titan**         | Embed V1 & V2  models |                                                                                                                       |
 
-#### 🎙️ Speech & Audio
+#### :material-microphone: Speech & Audio
 
 | Provider                                                                       | Endpoint/Feature           | AWS Backend                                                                                                                    |
 |--------------------------------------------------------------------------------|----------------------------|--------------------------------------------------------------------------------------------------------------------------------|
@@ -399,7 +399,7 @@ The initial release establishes core OpenAI API compatibility with AWS Bedrock b
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/audio/transcriptions` | ![Amazon Transcribe](styles/logo_amazon_transcribe.svg){: style="height:20px;width:20px"} Amazon Transcribe                    |
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/audio/translations`   | ![Amazon Transcribe](styles/logo_amazon_transcribe.svg){: style="height:20px;width:20px"} Amazon Transcribe + Amazon Translate |
 
-#### 🎨 Image Generation
+#### :material-image: Image Generation
 
 | Provider                                                                                        | Endpoint/Feature                        | AWS Backend                                                                                                       |
 |-------------------------------------------------------------------------------------------------|-----------------------------------------|-------------------------------------------------------------------------------------------------------------------|
@@ -408,7 +408,7 @@ The initial release establishes core OpenAI API compatibility with AWS Bedrock b
 | ![Amazon](styles/logo_amazon.svg){: style="height:20px;width:20px"} **Amazon Titan**            | Image Generator V1 & V2  models         |                                                                                                                   |
 | ![Stability AI](styles/logo_stabilityai.svg){: style="height:20px;width:20px"} **Stability AI** | Image Core, Ultra et SD3.5 Large models |                                                                                                                   |
 
-#### 📋 Model Discovery
+#### :material-format-list-bulleted: Model Discovery
 
 | Provider                                                                       | Endpoint/Feature | AWS Backend                                                                                                        |
 |--------------------------------------------------------------------------------|------------------|--------------------------------------------------------------------------------------------------------------------|
@@ -418,23 +418,23 @@ The initial release establishes core OpenAI API compatibility with AWS Bedrock b
 
 | Feature                                     | AWS Backend                                                                                                                                                                                                                                 |
 |---------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **🤖 Bedrock Features**                     |                                                                                                                                                                                                                                             |
+| **Bedrock Features**                     |                                                                                                                                                                                                                                             |
 | Content filtering and safety                | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock Guardrails                                                                                                                               |
 | Cross-region inference                      | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - global/regional                                                                                                                        |
 | Application inference profiles              | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - inference profiles                                                                                                                     |
 | Model parameters (temperature, top_p, etc.) | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - native parameters                                                                                                                      |
 | Multi-region failover                       | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - multi-region                                                                                                                           |
 | Bedrock guardrails                          | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock Guardrails                                                                                                                               |
-| **☁️ AWS Services**                         |                                                                                                                                                                                                                                             |
+| **AWS Services**                         |                                                                                                                                                                                                                                             |
 | File storage                                | ![Amazon S3](styles/logo_amazon_s3.svg){: style="height:20px;width:20px"} Amazon S3 - presigned URLs, Transfer Acceleration                                                                                                                 |
-| **🔐 Authentication**                       |                                                                                                                                                                                                                                             |
+| **Authentication**                       |                                                                                                                                                                                                                                             |
 | Static token authentication                 | ![AWS Systems Manager](styles/logo_amazon_systems_manager.svg){: style="height:20px;width:20px"} AWS SSM Parameter Store / ![AWS Secrets Manager](styles/logo_amazon_secrets_manager.svg){: style="height:20px;width:20px"} Secrets Manager |
 | Development mode (no auth)                  |                                                                                                                                                                                                                                             |
-| **📊 Observability**                        |                                                                                                                                                                                                                                             |
+| **Observability**                        |                                                                                                                                                                                                                                             |
 | Distributed tracing                         | ![AWS X-Ray](styles/logo_amazon_xray.svg){: style="height:20px;width:20px"} AWS X-Ray + OpenTelemetry                                                                                                                                       |
 | Structured logging                          | ![Amazon CloudWatch](styles/logo_amazon_cloudwatch.svg){: style="height:20px;width:20px"} Amazon CloudWatch (When running on ECS/EKS)                                                                                                       |
-| ❤Health check endpoint                      |                                                                                                                                                                                                                                             |
-| **🔒 HTTP/Security**                        |                                                                                                                                                                                                                                             |
+| Health check endpoint                      |                                                                                                                                                                                                                                             |
+| **HTTP/Security**                        |                                                                                                                                                                                                                                             |
 | CORS support                                |                                                                                                                                                                                                                                             |
 | Trusted host validation                     |                                                                                                                                                                                                                                             |
 | Proxy headers (X-Forwarded-*)               |                                                                                                                                                                                                                                             |

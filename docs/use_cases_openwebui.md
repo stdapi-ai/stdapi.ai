@@ -4,11 +4,11 @@ description: Deploy Open WebUI with AWS Bedrock using stdapi.ai. Complete setup 
 keywords: Open WebUI AWS, private ChatGPT, ChatGPT alternative, self-hosted ChatGPT, AWS Bedrock ChatGPT, enterprise chat interface, RAG chatbot AWS, multi-modal chat
 ---
 
-# Open WebUI Integration
+# :material-chat: Open WebUI Integration
 
 Connect Open WebUI to stdapi.ai as an OpenAI-compatible backend. Access AWS Bedrock models through Open WebUI's chat interface—it works out of the box as a private ChatGPT alternative running on your AWS infrastructure.
 
-## About Open WebUI
+## :material-information-outline: About Open WebUI
 
 **🔗 Links:** [Website](https://openwebui.com/) | [GitHub](https://github.com/open-webui/open-webui) | [Documentation](https://docs.openwebui.com/)
 
@@ -23,7 +23,7 @@ Open WebUI is the leading open-source ChatGPT alternative. It provides a feature
 - **Extensible platform** - Plugins, custom functions, and community tools
 - **Complete privacy** - Self-hosted, all data stays in your infrastructure
 
-## Why Open WebUI + stdapi.ai?
+## :material-help-circle-outline: Why Open WebUI + stdapi.ai?
 
 <div class="grid cards" markdown>
 
@@ -53,7 +53,7 @@ flowchart LR
   stdapi --> polly["<img src='../styles/logo_amazon_polly.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Polly"]
 ```
 
-## ✅ Prerequisites
+## :material-check-circle: Prerequisites
 
 !!! info "What You'll Need"
     - ✓ **stdapi.ai deployed** - [See deployment guide](operations_getting_started.md)
@@ -63,11 +63,11 @@ flowchart LR
 
 ---
 
-## ⚙️ Configuration
+## :material-cog: Configuration
 
 Open WebUI is configured entirely through environment variables. The sections below focus on the stdapi.ai integration. Use the same stdapi.ai key for all `*_OPENAI_API_KEY` entries. For more details on Open WebUI settings, refer to the official [Open WebUI Environment Variable Configuration](https://docs.openwebui.com/getting-started/env-configuration/) documentation.
 
-### 💬 Core connection
+### :material-connection: Core Connection
 
 Enables: Chat completions and Open WebUI background tasks (titles, summarization).
 
@@ -80,7 +80,7 @@ Enables: Chat completions and Open WebUI background tasks (titles, summarization
 
 Use a fast, low-cost chat model for `TASK_MODEL_EXTERNAL`. Open WebUI calls `POST /v1/chat/completions` for chat and background tasks (see [Chat Completions API](api_openai_chat_completions.md)), so the model must be a text/chat-capable model from the correct family for your Bedrock region.
 
-### 📚 RAG embeddings
+### :material-database: RAG Embeddings
 
 Enables: Document ingestion and semantic search for RAG.
 
@@ -94,7 +94,7 @@ Enables: Document ingestion and semantic search for RAG.
 
 Pick any embedding model you prefer. Open WebUI calls `POST /v1/embeddings` (see [Embeddings API](api_openai_embeddings.md)), so the model must be an embeddings-capable model from the correct family.
 
-### 🎨 Image generation
+### :material-image: Image Generation
 
 Enables: Text-to-image creation inside chats.
 
@@ -109,7 +109,7 @@ Enables: Text-to-image creation inside chats.
 
 Choose any image generation model you prefer. Open WebUI calls `POST /v1/images/generations` (see [Images Generations API](api_openai_images_generations.md)), so the model must be an image-generation model from the correct family.
 
-### 🖼️ Image editing
+### :material-image-edit: Image Editing
 
 Use Open WebUI's image editor to upload an image and describe the change. Masking is not configured.
 
@@ -126,7 +126,7 @@ Enables: Image edits and transformations in the editor.
 
 Pick any image-editing model that supports edits without a mask. Open WebUI calls `POST /v1/images/edits` (see [Images Edits API](api_openai_images_edits.md)), so the model must be an image-editing model from the correct family.
 
-### 🎙️ Speech to text (STT)
+### :material-microphone: Speech to Text (STT)
 
 Enables: Voice input and audio transcription.
 
@@ -140,7 +140,7 @@ Enables: Voice input and audio transcription.
 
 Choose any STT model you prefer. Open WebUI calls `POST /v1/audio/transcriptions` (see [Audio Transcriptions API](api_openai_audio_transcriptions.md)), so the model must match the speech-to-text modality and family.
 
-### 🔊 Text to speech (TTS)
+### :material-volume-high: Text to Speech (TTS)
 
 Enables: Spoken responses from chat outputs.
 
@@ -158,7 +158,7 @@ Choose any TTS model you prefer. Open WebUI calls `POST /v1/audio/speech` (see [
     Open WebUI generates audio in small chunks, which makes language auto-detection inconsistent. Disable auto-detection by setting the stdapi.ai environment variable `DEFAULT_TTS_LANGUAGE` to a fixed language (for example, `en-US`).
 ---
 
-## 🚀 Terraform deployment
+## :material-rocket-launch: Terraform Deployment
 
 Deploy Open WebUI + stdapi.ai together with production infrastructure:
 
@@ -186,6 +186,17 @@ terraform apply
 
 ---
 
-## ⚠️ Known issues
+## :material-alert-outline: Known Issues
 
 Open WebUI may list all available models in the chat model selector, including models that do not support chat completions (Like image or embedding models). Disable incompatible models in the Open WebUI admin panel.
+
+## :material-arrow-right: Next Steps
+
+<div class="grid cards" markdown>
+
+- :material-rocket-launch: [**Getting Started**](operations_getting_started.md) — Deploy stdapi.ai to AWS with Terraform
+- :material-docker: [**Local Development**](operations_getting_started_local.md) — Run stdapi.ai locally with Docker
+- :material-puzzle: [**More Use Cases**](use_cases.md) — Explore other integrations and tools
+- :material-api: [**API Overview**](api_overview.md) — Explore supported endpoints
+
+</div>

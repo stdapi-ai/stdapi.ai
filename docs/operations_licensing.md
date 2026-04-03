@@ -4,9 +4,9 @@ description: stdapi.ai dual licensing explained. Choose AGPL-3.0 for open-source
 keywords: AGPL license, commercial AI license, open source AI gateway, AWS Marketplace software, dual licensing, proprietary AI software, enterprise AI license, production AI support
 ---
 
-# Licensing
+# :material-scale-balance: Licensing
 
-## Choose the License That Fits Your Business
+## :material-scale-balance: Choose the License That Fits Your Business
 
 stdapi.ai is available under a dual-license model designed to support both open-source communities and commercial enterprises:
 
@@ -50,7 +50,7 @@ stdapi.ai is available under a dual-license model designed to support both open-
 
 ---
 
-## Why Choose the Commercial License?
+## :material-briefcase-check: Why Choose the Commercial License?
 
 A commercial license through AWS Marketplace provides everything you need for production deployments:
 
@@ -74,7 +74,7 @@ Purchase and pay through AWS Marketplace. Consolidated billing with your existin
 
 ---
 
-## Commercial License Benefits
+## :material-check-all: Commercial License Benefits
 
 <div class="grid cards" markdown>
 
@@ -130,7 +130,7 @@ Purchase and pay through AWS Marketplace. Consolidated billing with your existin
 
 ---
 
-## Your Path to Production
+## :material-road-variant: Your Path to Production
 
 A typical adoption path from evaluation to production:
 
@@ -168,7 +168,7 @@ Your commercial license activates automatically upon deployment.
 
 ---
 
-## Frequently Asked Questions
+## :material-help-circle-outline: Frequently Asked Questions
 
 ??? question "Can I try before I buy?"
 
@@ -226,7 +226,7 @@ Your commercial license activates automatically upon deployment.
 
 ---
 
-## Questions?
+## :material-email-outline: Questions?
 
 Our team is available to help you choose the right licensing option for your use case.
 

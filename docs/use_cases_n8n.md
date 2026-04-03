@@ -4,11 +4,11 @@ description: Connect n8n workflows to AWS Bedrock using stdapi.ai. Automate busi
 keywords: n8n AI integration, workflow automation AI, no-code AI automation, AWS Bedrock workflows, business process automation, AI workflow tools, n8n AWS Bedrock, OpenAI n8n, Anthropic n8n
 ---
 
-# n8n Integration
+# :material-sitemap: n8n Integration
 
 Connect n8n automation workflows to AWS Bedrock models through stdapi.ai's OpenAI-compatible or Anthropic-compatible interfaces. Existing OpenAI and Anthropic templates from the n8n marketplace work out of the box—simply point them to your stdapi.ai instance and access AWS Bedrock models.
 
-## About n8n
+## :material-information-outline: About n8n
 
 **🔗 Links:** [Website](https://n8n.io/) | [GitHub](https://github.com/n8n-io/n8n) | [Documentation](https://docs.n8n.io/)
 
@@ -23,7 +23,7 @@ n8n is a powerful workflow automation platform that enables you to connect any a
 - **AI-native platform** - Built-in OpenAI nodes work instantly with AWS Bedrock via stdapi.ai
 - **Template marketplace** - Thousands of pre-built workflows ready to use
 
-## Why n8n + stdapi.ai?
+## :material-help-circle-outline: Why n8n + stdapi.ai?
 
 <div class="grid cards" markdown>
 
@@ -56,7 +56,7 @@ flowchart LR
   stdapi --> polly["<img src='../styles/logo_amazon_polly.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Polly"]
 ```
 
-## ✅ Prerequisites
+## :material-check-circle: Prerequisites
 
 !!! info "What You'll Need"
     - ✓ **stdapi.ai deployed** - [See deployment guide](operations_getting_started.md)
@@ -66,11 +66,11 @@ flowchart LR
 
 ---
 
-## ⚙️ Configuration
+## :material-cog: Configuration
 
 ### ![OpenAI](styles/logo_openai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } OpenAI Nodes
 
-#### 🔑 Set Up Your Credentials
+#### :material-key: Set Up Your Credentials
 
 The foundation of any n8n integration is configuring your API credentials. This one-time setup unlocks all AI capabilities.
 
@@ -89,11 +89,11 @@ The foundation of any n8n integration is configuring your API credentials. This 
 !!! tip "What This Does"
     By setting a custom Base URL, you redirect all OpenAI API calls to your stdapi.ai instance. n8n will use this credential to authenticate and route requests to Amazon Bedrock models instead of OpenAI's servers.
 
-#### 🔧 Configure Nodes
+#### :material-cog-outline: Configure Nodes
 
 For each node, first select the credentials you previously created in the node parameters. Then, select the model you want to use. If you want to use a model that is not listed, you can enter its ID as an expression in the `Model` parameter.
 
-#### 💬 Chat completions
+#### :material-chat-outline: Chat Completions
 
 Enables: Text generation and conversational AI in workflows.
 
@@ -105,7 +105,7 @@ Enables: Text generation and conversational AI in workflows.
 
     n8n calls `POST /v1/chat/completions` (see [Chat Completions API](api_openai_chat_completions.md)), so the model must be a text/chat-capable model from the correct family.
 
-#### 📚 Embeddings
+#### :material-database: Embeddings
 
 Enables: Vector embeddings for semantic search and RAG workflows.
 
@@ -116,7 +116,7 @@ Enables: Vector embeddings for semantic search and RAG workflows.
 
     n8n calls `POST /v1/embeddings` (see [Embeddings API](api_openai_embeddings.md)), so the model must be an embeddings-capable model from the correct family.
 
-#### 🎨 Image generation
+#### :material-image: Image Generation
 
 Enables: Text-to-image creation in workflows.
 
@@ -127,7 +127,7 @@ Enables: Text-to-image creation in workflows.
 
     n8n calls `POST /v1/images/generations` (see [Images Generations API](api_openai_images_generations.md)), so the model must be an image-generation model from the correct family.
 
-#### 🖼️ Image editing
+#### :material-image-edit: Image Editing
 
 Enables: Image transformation and editing in workflows.
 
@@ -138,7 +138,7 @@ Enables: Image transformation and editing in workflows.
 
     n8n calls `POST /v1/images/edits` (see [Images Edits API](api_openai_images_edits.md)), so the model must be an image-editing model from the correct family.
 
-#### 🔊 Audio generation (TTS)
+#### :material-volume-high: Audio Generation (TTS)
 
 Enables: Text-to-speech audio generation in workflows.
 
@@ -150,7 +150,7 @@ Enables: Text-to-speech audio generation in workflows.
 
     n8n calls `POST /v1/audio/speech` (see [Audio Speech API](api_openai_audio_speech.md)), so the model must match the text-to-speech modality and family.
 
-#### 🎤 Audio transcription (STT)
+#### :material-microphone: Audio Transcription (STT)
 
 Enables: Speech-to-text transcription in workflows.
 
@@ -162,7 +162,7 @@ Enables: Speech-to-text transcription in workflows.
 
     n8n calls `POST /v1/audio/transcriptions` (see [Audio Transcriptions API](api_openai_audio_transcriptions.md)), so the model must match the speech-to-text modality.
 
-#### ⚠️ Unsupported Nodes
+#### :material-alert-outline: Unsupported Nodes
 
 The following nodes are not yet supported:
 
@@ -174,7 +174,7 @@ The following nodes are not yet supported:
 
 ### ![Anthropic](styles/logo_anthropic.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Anthropic Nodes
 
-#### 🔑 Set Up Your Credentials
+#### :material-key: Set Up Your Credentials
 
 !!! example "Creating Your stdapi.ai Anthropic Credential"
     **In your n8n interface:**
@@ -191,11 +191,11 @@ The following nodes are not yet supported:
 !!! tip "Anthropic Base URL"
     By default, all Anthropic-compatible routes are prefixed with `/anthropic`, so the Base URL must end with `/anthropic`. You can customize this prefix using the `ANTHROPIC_ROUTES_PREFIX` configuration variable documented in [Operations Configuration](operations_configuration.md#anthropic-routes-prefix).
 
-#### 🔧 Configure Nodes
+#### :material-cog-outline: Configure Nodes
 
 For each node, first select the credentials you previously created in the node parameters. Then, select the model you want to use. The model can be selected directly in the `Model` parameter for all supported nodes.
 
-#### 💬 Chat completions
+#### :material-chat-outline: Chat Completions
 
 Enables: Text generation and conversational AI in workflows.
 
@@ -218,7 +218,7 @@ Enables: Text generation and conversational AI in workflows.
 
     n8n calls `POST /anthropic/v1/messages` (see [Anthropic Messages API](api_anthropic_messages.md)), so the model must be a text/chat-capable model from the correct family.
 
-#### 🖼️ Image analysis
+#### :material-image-search: Image Analysis
 
 Enables: Image understanding and analysis in workflows.
 
@@ -229,7 +229,7 @@ Enables: Image understanding and analysis in workflows.
 
     n8n calls `POST /anthropic/v1/messages` with image content (see [Anthropic Messages API](api_anthropic_messages.md)), so the model must support vision capabilities.
 
-#### 📄 Document analysis
+#### :material-file-document: Document Analysis
 
 Enables: Document understanding and extraction in workflows.
 
@@ -239,3 +239,14 @@ Enables: Document understanding and extraction in workflows.
     - Model can be selected directly in the `Model` parameter
 
     n8n calls `POST /anthropic/v1/messages` with document content (see [Anthropic Messages API](api_anthropic_messages.md)), so the model must support document processing capabilities.
+
+## :material-arrow-right: Next Steps
+
+<div class="grid cards" markdown>
+
+- :material-rocket-launch: [**Getting Started**](operations_getting_started.md) — Deploy stdapi.ai to AWS with Terraform
+- :material-docker: [**Local Development**](operations_getting_started_local.md) — Run stdapi.ai locally with Docker
+- :material-puzzle: [**More Use Cases**](use_cases.md) — Explore other integrations and tools
+- :material-api: [**API Overview**](api_overview.md) — Explore supported endpoints
+
+</div>

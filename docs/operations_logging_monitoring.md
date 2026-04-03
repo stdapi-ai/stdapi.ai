@@ -4,7 +4,7 @@ description: Production-grade observability for stdapi.ai with CloudWatch, Prome
 keywords: AWS CloudWatch logs, API monitoring, Prometheus metrics, OpenTelemetry, API observability, cost monitoring AWS, performance tracking, compliance logging
 ---
 
-# Logging and Monitoring
+# :material-chart-line: Logging and Monitoring
 
 stdapi.ai provides production-grade observability out of the box. Track request performance, debug issues, monitor costs, and ensure compliance with structured JSON logging and OpenTelemetry integration.
 
@@ -40,7 +40,7 @@ stdapi.ai emits structured JSON logs for every request, stream, and background t
 
 </div>
 
-## Quick start (2 minutes)
+## :material-rocket-launch: Quick Start
 
 Set these environment variables, then restart the service (see the [Configuration Guide](operations_configuration.md) for details):
 
@@ -79,7 +79,7 @@ export ENABLE_PROXY_HEADERS=true  # When behind ALB/CloudFront
 !!! tip "CloudWatch best practice"
     JSON to STDOUT is optimal for CloudWatch Logs Insights. In AWS ECS, the task’s log driver forwards container STDOUT to CloudWatch Logs automatically.
 
-## Event types
+## :material-format-list-bulleted: Event Types
 
 stdapi.ai emits five kinds of JSON events (one per line):
 
@@ -91,7 +91,7 @@ stdapi.ai emits five kinds of JSON events (one per line):
 | `request_stream` | Streaming segments (SSE/audio). Indicates streaming activity and duration.          |
 | `background`     | Background tasks correlated to the parent request.                                  |
 
-## Common fields
+## :material-table-column: Common Fields
 
 Each event shares core fields and may add type‑specific ones.
 
@@ -124,7 +124,7 @@ Each event shares core fields and may add type‑specific ones.
     - `server_warnings` (on the `start` event) often highlights missing configuration and features that have been disabled as a result (for example, no S3 bucket configured disables certain image/audio features).
     - `error_detail` (on any event) contains formatted exception traces and diagnostic hints, which frequently point to missing configuration, unavailable dependencies, or disabled features.
 
-## Correlating logs and traces
+## :material-link-variant: Correlating Logs and Traces
 
 - Group events by `id` to reconstruct a full request lifecycle (request → stream(s) → background).
 - The `x-request-id` response header exposes the same value so external systems can propagate correlation.
@@ -135,7 +135,7 @@ Each event shares core fields and may add type‑specific ones.
     - Do use `request_stream` durations to account for total user‑perceived latency.
     - Don’t generate your own request IDs for the same hop; prefer the provided one.
 
-## Reading the logs (what to look for)
+## :material-magnify: Reading the Logs
 
 - High latency: Inspect `execution_time_ms` on the `request` event. If the response was streamed, also sum `request_stream` durations. Combine with OTel spans to locate downstream delays (model provider, S3, etc.).
 - Errors: Look for `level=critical` and `error_detail` (formatted exceptions). With OTel, the span is marked error with attributes `error=true` and `error.message`.
@@ -150,7 +150,7 @@ Each event shares core fields and may add type‑specific ones.
 - Client identification: `client_user_agent` and optional `request_user_id` / `request_org_id` help tie requests to users.
 - Routing confirmation: `model_id` and `voice_id` confirm which provider/model/voice handled the request.
 
-## Controlling log verbosity
+## :material-filter: Controlling Log Verbosity
 
 The `LOG_LEVEL` environment variable controls which log events are written to STDOUT. Set it to filter out lower-severity events. For detailed configuration options, see the [Logging Level](operations_configuration.md#logging-level) section in the Configuration Guide.
 
@@ -170,7 +170,7 @@ export LOG_LEVEL=warning
 
     Additionally, infrastructure routes are automatically excluded from logging to reduce noise: `/docs`, `/favicon.ico`, `/health`, `/openapi.json`, `/redoc`.
 
-## OpenTelemetry integration
+## :material-graphql: OpenTelemetry Integration
 
 When `OTEL_ENABLED=true`:
 
@@ -181,7 +181,7 @@ When `OTEL_ENABLED=true`:
 
 For exporters and advanced setup, rely on standard OTel environment variables supported by your exporter/backend.
 
-## Example events
+## :material-code-json: Example Events
 
 __Example — Request with payload logging enabled__
 
@@ -246,7 +246,7 @@ __Example — Error with captured details__
 }
 ```
 
-## CloudWatch Logs Insights: ready‑to‑use queries
+## :material-text-search: CloudWatch Logs Insights Queries
 
 These examples assume JSON logs in CloudWatch Logs (default with ECS awslogs/awsfirelens). Adjust the log group and time range.
 
@@ -279,7 +279,7 @@ fields path, execution_time_ms
 | sort p95_ms desc
 ```
 
-## AWS service-level logs and metrics
+## :material-aws: AWS Service-Level Logs and Metrics
 
 Beyond stdapi.ai logs and OTel traces,
 use AWS-native signals from the underlying AI services to validate provider behavior,
@@ -294,9 +294,19 @@ refer to the official AWS documentation for more information.
 - Correlation: Service logs won’t include StdAPI `x-request-id`. Correlate by time window, region, model/voice/job identifiers, and volume. Use StdAPI `model_id`, `voice_id`, and `execution_time_ms` to narrow windows.
 - AWS Bedrock Invocation logging (optional): Export invocation metadata and, if enabled, content to CloudWatch Logs/S3/Firehose. Treat prompts/completions as sensitive; manage retention and KMS.
 
-## Troubleshooting checklist
+## :material-wrench: Troubleshooting Checklist
 
 - No logs visible: Ensure you are reading container STDOUT. On ECS/Kubernetes, verify the log driver and retention.
 - Missing `request_params`: Confirm `LOG_REQUEST_PARAMS=true` and restart after changing environment variables.
 - No traces: Verify `OTEL_ENABLED=true` and that exporters are configured and reachable.
 - Correlation missed: Ensure clients read and propagate `x-request-id` for multi‑hop requests.
+
+## :material-arrow-right: Next Steps
+
+<div class="grid cards" markdown>
+
+- :material-cog: [**Configuration Reference**](operations_configuration.md) — Complete list of environment variables including logging options
+- :material-chart-bar: [**Operations & Compliance**](operations_compliance.md) — Compliance-focused logging and audit requirements
+- :material-server-network: [**Advanced Deployment**](operations_deploy_advanced.md) — Production deployment with observability stack
+
+</div>

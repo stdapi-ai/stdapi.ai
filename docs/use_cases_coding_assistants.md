@@ -4,11 +4,11 @@ description: Connect Continue.dev, Cursor, Cline, Claude Code, and other AI codi
 keywords: AI coding assistant AWS, Continue.dev AWS Bedrock, Cursor AWS integration, VS Code AI AWS, AI pair programming, coding copilot AWS, IDE AI integration, private Copilot, Claude Code AWS Bedrock
 ---
 
-# AI Coding Assistants Integration
+# :material-code-braces: AI Coding Assistants Integration
 
 Connect your favorite AI coding assistants to AWS Bedrock models through stdapi.ai. Get intelligent code completions, chat assistance, and codebase understanding with powerful AWS models like Claude, Kimi K2 thinking, and Qwen Coder Next—no vendor lock-in required.
 
-## About AI Coding Assistants
+## :material-information-outline: About AI Coding Assistants
 
 AI coding assistants are IDE extensions and terminal tools that leverage large language models to enhance developer productivity. These tools provide real-time code completions, intelligent suggestions, natural language code generation, and interactive chat capabilities directly within your coding environment—acting as AI pair programmers that understand your codebase context.
 
@@ -23,7 +23,7 @@ AI coding assistants are IDE extensions and terminal tools that leverage large l
 - **Git integration** - Generate commit messages, review diffs
 - **Multi-language** - Support for Python, JavaScript, TypeScript, Go, Rust, Java, and more
 
-## Why AI Coding Assistants + stdapi.ai?
+## :material-help-circle-outline: Why AI Coding Assistants + stdapi.ai?
 
 <div class="grid cards" markdown>
 
@@ -51,7 +51,7 @@ flowchart LR
   stdapi --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Bedrock"]
 ```
 
-## ✅ Prerequisites
+## :material-check-circle: Prerequisites
 
 !!! info "What You'll Need"
     - ✓ **stdapi.ai deployed** - [See deployment guide](operations_getting_started.md) or [run locally with Docker](operations_getting_started_local.md)
@@ -67,7 +67,7 @@ flowchart LR
 
 Most IDE coding assistants use the OpenAI-compatible API. Configure them by pointing to stdapi.ai's `/v1` endpoint.
 
-### ⚙️ Configuration
+### :material-cog: Configuration
 
 Most AI coding assistants follow a similar configuration pattern. The exact menu location and field names may vary, but the core settings remain consistent.
 
@@ -102,7 +102,7 @@ Most AI coding assistants follow a similar configuration pattern. The exact menu
     - **Manual entry**: Use full Bedrock model ID (e.g., `anthropic.claude-opus-4-6-v1`)
     - **Multi-model setup**: Use fast, cheap models for secondary tasks (autocomplete, summaries) and powerful models for complex generation
 
-### 💬 Chat Completions
+### :material-chat-outline: Chat Completions
 
 All coding assistants use chat completions for interactive conversations, code generation, and explanations.
 
@@ -117,7 +117,7 @@ All coding assistants use chat completions for interactive conversations, code g
 
     The model must be a text/chat-capable model from the correct family for your Bedrock region.
 
-### 🛠️ Tool Calling Support
+### :material-tools: Tool Calling Support
 
 stdapi.ai fully supports tool calling (function calling) through the chat completions API, which is essential for autonomous and efficient coding agents.
 
@@ -132,7 +132,7 @@ stdapi.ai fully supports tool calling (function calling) through the chat comple
 
     Most modern autonomous agents like Cline or Junie rely heavily on tool calling to perform complex, multi-step coding tasks. stdapi.ai's tool calling support (see [Chat Completions API - Tool Calling](api_openai_chat_completions.md#feature-compatibility)) ensures these agents can work at their full potential with Amazon Bedrock models.
 
-### ⚡ Code Completions
+### :material-lightning-bolt: Code Completions
 
 Some coding assistants support dedicated code completion endpoints for real-time suggestions as you type.
 
@@ -157,7 +157,7 @@ Tools that use the Anthropic messages API natively can be connected to stdapi.ai
 
 Claude Code is Anthropic's agentic coding tool that runs in the terminal.
 
-#### ⚙️ Configuration
+#### :material-cog: Configuration
 
 Create or edit `~/.claude/claude.json`:
 
@@ -166,9 +166,9 @@ Create or edit `~/.claude/claude.json`:
   "env": {
     "ANTHROPIC_AUTH_TOKEN": "YOUR_API_KEY",
     "ANTHROPIC_BASE_URL": "https://YOUR_STDAPI_URL/anthropic",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-6",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-4-6",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-4-5"
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "anthropic.claude-opus-4-6-v1",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "anthropic.claude-sonnet-4-6",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "anthropic.claude-haiku-4-5-20251001-v1:0"
   }
 }
 ```
@@ -176,28 +176,136 @@ Create or edit `~/.claude/claude.json`:
 - Replace `YOUR_STDAPI_URL` with your stdapi.ai deployment URL (e.g., `https://api.example.com` or `http://localhost:8000` for local)
 - Replace `YOUR_API_KEY` with your stdapi.ai API key
 - The `/anthropic` path prefix is configured via the [`ANTHROPIC_ROUTES_PREFIX`](operations_configuration.md#anthropic-routes-prefix) setting (default: `/anthropic`)
-- The `ANTHROPIC_DEFAULT_*_MODEL` variables are optional—they let you map Claude model tiers to specific Bedrock model IDs
+- The `ANTHROPIC_DEFAULT_*_MODEL` variables pin each model tier to a specific Bedrock model ID — recommended for production stability. Without them, Claude Code resolves aliases (`opus`, `sonnet`, `haiku`) which may change when Anthropic releases new versions. stdapi.ai also accepts the short alias names (e.g. `claude-sonnet-4-6`) as a convenience.
 
 !!! tip "Beta Flag Compatibility"
     stdapi.ai automatically filters unsupported `anthropic_beta` flags, so Claude Code works without needing `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`. Bedrock-supported flags (like `Interleaved-thinking-2025-05-14` and `token-efficient-tools-2025-02-19`) are preserved while unsupported ones are silently removed. See [`ANTHROPIC_BETA_FILTER`](operations_configuration.md#anthropic-beta-filter) and [`ANTHROPIC_BETA_ALLOWLIST`](operations_configuration.md#anthropic-beta-allowlist) for details.
 
-!!! tip "Using Non-Claude Models"
-    Claude Code is optimized for Claude models and may be incompatible with some non-Claude models. For the best experience, use Claude Code with stdapi.ai and Claude models. If you need to use non-Claude models (e.g., Kimi K2, Qwen Coder), some Claude-specific features may not be supported. Two common issues to address:
+#### :material-brain: Effort-Based Reasoning
 
-    - **Prompt caching** — Claude Code sends `cache_control` headers that can cause errors on models that support prompt caching but handle it differently (e.g., AWS Nova, Qwen). Set `DISABLE_PROMPT_CACHING=1` to suppress these headers.
-    - **Extended thinking** — If the model does not support thinking/reasoning configuration, set `MAX_THINKING_TOKENS=0` to disable it.
+Claude Code supports [effort levels](https://code.claude.com/docs/en/model-config#adjust-effort-level) that control how much reasoning the model applies — lower effort is faster and cheaper; higher effort provides deeper thinking for complex tasks.
 
-    ```json
-    {
-      "env": {
-        "ANTHROPIC_AUTH_TOKEN": "YOUR_API_KEY",
-        "ANTHROPIC_BASE_URL": "https://YOUR_STDAPI_URL/anthropic",
-        "ANTHROPIC_DEFAULT_SONNET_MODEL": "amazon.nova-2-lite-v1:0",
-        "MAX_THINKING_TOKENS": "0",
-        "DISABLE_PROMPT_CACHING": "1"
-      }
-    }
-    ```
+**Supported models via stdapi.ai:**
+
+| Model | Effort levels | Notes |
+|---|---|---|
+| Claude Sonnet 4.6 / Opus 4.6 | `low` `medium` `high` `max` | Full adaptive reasoning; `max` is Opus-only |
+| Amazon Nova 2 | `low` `medium` `high` | Maps to `maxReasoningEffort` in Bedrock |
+| DeepSeek V3 | `low` `medium` `high` | Passed as a string literal to Bedrock |
+
+**Setting effort level:**
+
+```bash
+# Per session at launch
+claude --model sonnet --effort high
+
+# Persist across sessions (env var takes precedence over all other settings)
+export CLAUDE_CODE_EFFORT_LEVEL=high
+
+# Or add to claude.json
+```
+
+```json
+{
+  "effortLevel": "medium"
+}
+```
+
+During a session, use `/effort low`, `/effort medium`, `/effort high`, or `/effort max` to change levels on the fly.
+
+#### :material-key: Declaring Model Capabilities
+
+When you pin a non-Claude Bedrock model ID, Claude Code may not recognize it and will silently disable effort and thinking features. Use `ANTHROPIC_DEFAULT_*_MODEL_SUPPORTED_CAPABILITIES` to declare what the model actually supports:
+
+| Capability value | Enables |
+|---|---|
+| `effort` | Effort levels and the `/effort` command |
+| `max_effort` | The `max` effort level (Opus 4.6 only) |
+| `thinking` | Extended thinking blocks |
+| `adaptive_thinking` | Dynamic token budget allocation |
+| `interleaved_thinking` | Thinking between tool calls |
+
+**Example — Nova 2 with effort enabled:**
+
+```json
+{
+  "env": {
+    "ANTHROPIC_AUTH_TOKEN": "YOUR_API_KEY",
+    "ANTHROPIC_BASE_URL": "https://YOUR_STDAPI_URL/anthropic",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "amazon.nova-2-lite-v1:0",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME": "Nova 2 Lite",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES": "effort",
+    "DISABLE_PROMPT_CACHING": "1"
+  }
+}
+```
+
+**Example — Claude with full capabilities declared (e.g. for a Bedrock ARN or inference profile):**
+
+```json
+{
+  "env": {
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-opus",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME": "Opus via Bedrock",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES": "effort,max_effort,thinking,adaptive_thinking,interleaved_thinking"
+  }
+}
+```
+
+#### :material-robot: Using Non-Claude Models
+
+Claude Code is optimized for Claude models and enables reasoning by default. When routing non-Claude models through stdapi.ai, this can cause API errors if the model does not support reasoning parameters. Configure based on the model's capabilities:
+
+!!! warning "Reasoning Enabled by Default"
+    Claude Code sends reasoning parameters to the model by default. If the model does not support them, this causes an API error. Always configure reasoning support explicitly when using non-Claude models.
+
+**Models with effort support** (Nova 2, DeepSeek V3) — declare `effort` capability:
+
+```json
+{
+  "env": {
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "amazon.nova-2-lite-v1:0",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES": "effort",
+    "DISABLE_PROMPT_CACHING": "1"
+  }
+}
+```
+
+**Models without reasoning support** (Qwen, Kimi K2, Mistral, etc.) — disable all Claude-specific features:
+
+```json
+{
+  "env": {
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "moonshot.kimi-k2-instruct",
+    "DISABLE_PROMPT_CACHING": "1",
+    "MAX_THINKING_TOKENS": "0"
+  }
+}
+```
+
+!!! warning "`MAX_THINKING_TOKENS=0` disables all reasoning"
+    Setting `MAX_THINKING_TOKENS=0` disables **all** reasoning — including effort-mode thinking. Do **not** use it alongside `effort` capability; it suppresses the model's reasoning even when effort is declared.
+
+Common configuration issues with non-Claude models:
+
+- **Prompt caching** — Claude Code sends `cache_control` headers that can cause errors on models that handle caching differently. Set `DISABLE_PROMPT_CACHING=1` to suppress them.
+- **Extended thinking** — Claude Code enables reasoning by default. For models without any reasoning support, set `MAX_THINKING_TOKENS=0` to disable it entirely.
+
+#### :material-format-list-bulleted: Adding a Model to the Picker
+
+Use `ANTHROPIC_CUSTOM_MODEL_OPTION` to add a single custom entry to the `/model` picker without replacing the built-in aliases. Useful for testing a specific Bedrock model ID alongside the standard Claude tiers:
+
+```json
+{
+  "env": {
+    "ANTHROPIC_CUSTOM_MODEL_OPTION": "moonshot.kimi-k2-instruct",
+    "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME": "Kimi K2",
+    "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION": "Moonshot Kimi K2 via stdapi.ai"
+  }
+}
+```
+
+Claude Code skips validation for this model ID, so any Bedrock model ID accepted by stdapi.ai works here.
 
 ### Other Anthropic-Compatible Tools
 
@@ -205,7 +313,7 @@ Any tool using the Anthropic SDK or messages API can be configured the same way�
 
 ---
 
-## 🐳 Running stdapi.ai Locally
+## :material-docker: Running stdapi.ai Locally
 
 stdapi.ai works well when running locally with Docker, making it ideal for your development environment.
 
@@ -225,3 +333,14 @@ stdapi.ai works well when running locally with Docker, making it ideal for your 
     ```
 
 ---
+
+## :material-arrow-right: Next Steps
+
+<div class="grid cards" markdown>
+
+- :material-rocket-launch: [**Getting Started**](operations_getting_started.md) — Deploy stdapi.ai to AWS with Terraform
+- :material-docker: [**Local Development**](operations_getting_started_local.md) — Run stdapi.ai locally with Docker
+- :material-puzzle: [**More Use Cases**](use_cases.md) — Explore other integrations and tools
+- :material-cog: [**Configuration Reference**](operations_configuration.md) — Complete list of environment variables
+
+</div>

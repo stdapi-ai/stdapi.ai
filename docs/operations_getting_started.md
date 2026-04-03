@@ -4,7 +4,7 @@ description: Deploy stdapi.ai on AWS using Terraform in 5 minutes. Production-gr
 keywords: deploy OpenAI gateway AWS, AWS Bedrock deployment, Terraform AWS AI, enterprise AI deployment, AWS Bedrock setup, OpenAI API hosting, production AI gateway, AWS ECS Fargate AI
 ---
 
-# Deploy stdapi.ai on AWS
+# :material-rocket-launch: Deploy stdapi.ai on AWS
 
 Get a production-grade OpenAI-compatible AI gateway running on AWS in 5 minutes. Terraform handles everything — ECS Fargate, HTTPS, WAF, auto-scaling, and monitoring.
 
