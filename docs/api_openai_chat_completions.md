@@ -68,7 +68,7 @@ Generate conversational AI responses with AWS Bedrock foundation models—includ
 | `n` (multiple choices)                   |   :material-minus-circle:{ .partial }    | Generate multiple responses, not supported with streaming       |
 | `logprobs`                               | :material-close-circle:{ .unsupported }  | Log probabilities                                               |
 | `prediction`                             | :material-close-circle:{ .unsupported }  | Static predicted output content                                 |
-| `response_format`                        | :material-close-circle:{ .unsupported }  | Response format specification                                   |
+| `response_format`                        |       :material-cog:{ .model-dep }       | JSON object or JSON schema output                               |
 | `verbosity`                              | :material-close-circle:{ .unsupported }  | Model verbosity                                                 |
 | `web_search_options`                     | :material-close-circle:{ .unsupported }  | Web search tool                                                 |
 | `prompt_cache_key`                       |       :material-cog:{ .model-dep }       | Cache prompts to reduce costs and latency                       |
@@ -87,7 +87,8 @@ Generate conversational AI responses with AWS Bedrock foundation models—includ
 | Reasoning tokens                         |   :material-minus-circle:{ .partial }    | Estimated                                                       |
 | **Other**                                |                                          |                                                                 |
 | Service tiers                            |   :material-check-circle:{ .success }    | Mapped to Bedrock service tiers and latency options             |
-| `store` / `metadata`                     | :material-close-circle:{ .unsupported }  | OpenAI-specific features                                        |
+| `metadata`                               |   :material-check-circle:{ .success }    | Can be used to filter Bedrock invocation log.                   |
+| `store`                                  | :material-close-circle:{ .unsupported }  | OpenAI-specific storage feature                                 |
 | `safety_identifier` / `user`             |   :material-minus-circle:{ .partial }    | Logged                                                          |
 | Bedrock Guardrails                       | :material-plus-circle:{ .extra-feature } | Content safety policies                                         |
 

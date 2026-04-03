@@ -1208,9 +1208,7 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
     metadata: Metadata | None = Field(
         default=None,
         description="Set of key-value pairs that can be attached to an object.\n"
-        "This can be useful for storing additional information about the object in a "
-        "structured format.\n"
-        "UNSUPPORTED on this implementation.",
+        "This can be useful to filter invocation logs.",
     )
     modalities: list[OutputModalities] | None = Field(
         default=None,
@@ -1274,10 +1272,9 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
         description="An object specifying the format that the model must output.\n"
         'Setting to `{ "type": "json_schema", "json_schema": {...} }` enables Structured '
         "Outputs which ensures the model will match your supplied JSON schema.\n"
-        'Setting to `{ "type": "json_object" }` enables the older JSON mode, which '
+        'Setting to `{ "type": "json_object" }` enables JSON mode, which '
         "ensures the message the model generates is valid JSON. Using `json_schema` is "
-        "preferred for models that support it.\n"
-        "UNSUPPORTED on this implementation.",
+        "preferred for models that support it.",
     )
     safety_identifier: str | None = Field(
         default=None,
@@ -1452,9 +1449,7 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
     # Extra validations
     _UNSUPPORTED: ClassVar[set[str]] = {
         "logprobs",
-        "metadata",
         "prediction",
-        "response_format",
         "store",
         "verbosity",
         "web_search_options",

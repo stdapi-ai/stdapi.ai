@@ -1676,19 +1676,38 @@ class TestChatCompletions:
         assert isinstance(body, dict)
         assert body["type"] == "invalid_request_error"
 
-    def test_unsupported_response_format_error(
-        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
+    def test_response_format_json_object(
+        self, openai_client: OpenAI, chat_reasoning_model: str, use_official_api: bool
     ) -> None:
-        """response_format is unsupported; expect 400 (skip on OpenAI)."""
+        """response_format=json_object returns parseable JSON via Bedrock outputConfig (Claude only)."""
         if use_official_api:
-            pytest.skip("Unsupported fields are project-specific here")
-        with pytest.raises(BadRequestError) as exc_info:
-            openai_client.chat.completions.create(
-                model=chat_model,
-                messages=[{"role": "user", "content": "Hi"}],
-                response_format={"type": "json_object"},
+            pytest.skip(
+                "Bedrock outputConfig is not available on the official OpenAI API"
             )
-        assert exc_info.value.status_code == 400
+        schema = {
+            "type": "object",
+            "properties": {"status": {"type": "string"}},
+            "required": ["status"],
+            "additionalProperties": False,
+        }
+        response = openai_client.chat.completions.create(
+            model=chat_reasoning_model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": 'Reply with a JSON object containing a "status" key set to "ok".',
+                }
+            ],
+            response_format={
+                "type": "json_schema",
+                "json_schema": {"name": "status_response", "schema": schema},
+            },
+            max_completion_tokens=64,
+        )
+        content = response.choices[0].message.content
+        assert content
+        parsed = _json.loads(content)
+        assert parsed.get("status") == "ok"
 
     def test_unsupported_seed_error(
         self, openai_client: OpenAI, chat_model: str, use_official_api: bool
@@ -1757,19 +1776,6 @@ class TestChatCompletions:
                 model=chat_model,
                 messages=[{"role": "user", "content": "Hi"}],
                 prediction={"type": "content", "content": "abc"},
-            )
-
-    def test_unsupported_metadata_error(
-        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
-    ) -> None:
-        """Metadata is unsupported; expect 400 (skip on OpenAI)."""
-        if use_official_api:
-            pytest.skip("Unsupported fields are project-specific here")
-        with pytest.raises(BadRequestError):
-            openai_client.chat.completions.create(
-                model=chat_model,
-                messages=[{"role": "user", "content": "Hi"}],
-                metadata={"k": "v"},
             )
 
     def test_unsupported_top_logprobs_error(
@@ -2785,3 +2791,54 @@ class TestChatCompletions:
         assert len(response.choices) > 0
         assert response.choices[0].message.content
         assert response.choices[0].finish_reason is not None
+
+    def test_response_format_json_schema(
+        self, openai_client: OpenAI, chat_reasoning_model: str, use_official_api: bool
+    ) -> None:
+        """response_format=json_schema returns JSON conforming to the schema via Bedrock outputConfig (Claude only)."""
+        if use_official_api:
+            pytest.skip(
+                "Bedrock outputConfig is not available on the official OpenAI API"
+            )
+        schema = {
+            "type": "object",
+            "properties": {
+                "capital": {"type": "string"},
+                "country": {"type": "string"},
+            },
+            "required": ["capital", "country"],
+            "additionalProperties": False,
+        }
+        response = openai_client.chat.completions.create(
+            model=chat_reasoning_model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "What is the capital of France? Reply using the provided schema.",
+                }
+            ],
+            response_format={
+                "type": "json_schema",
+                "json_schema": {"name": "capital_info", "schema": schema},
+            },
+            max_completion_tokens=128,
+        )
+        content = response.choices[0].message.content
+        assert content
+        parsed = _json.loads(content)
+        assert "capital" in parsed
+        assert "country" in parsed
+
+    def test_metadata_accepted(
+        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
+    ) -> None:
+        """Metadata dict is forwarded as Bedrock requestMetadata without error."""
+        if use_official_api:
+            pytest.skip("requestMetadata is a Bedrock-specific feature")
+        response = openai_client.chat.completions.create(
+            model=chat_model,
+            messages=[{"role": "user", "content": "Say OK."}],
+            metadata={"test-key": "test-value", "session": "unit-test"},
+            max_completion_tokens=16,
+        )
+        assert response.choices[0].message.content

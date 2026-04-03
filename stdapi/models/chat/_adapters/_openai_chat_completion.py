@@ -21,7 +21,12 @@ from stdapi.aws_bedrock import (
 from stdapi.models.audio import synthesize_speech
 from stdapi.monitoring import log_response_params
 from stdapi.tokenizer import estimate_token_count
-from stdapi.types.openai import FunctionDefinition
+from stdapi.types.openai import (
+    FunctionDefinition,
+    ResponseFormatJSONObject,
+    ResponseFormatJSONSchema,
+    ResponseFormatText,
+)
 from stdapi.types.openai_chat_completions import (
     Annotation,
     AnnotationURLCitation,
@@ -70,6 +75,7 @@ if TYPE_CHECKING:
         ConverseResponseTypeDef,
         ConverseStreamOutputTypeDef,
         InferenceConfigurationTypeDef,
+        JsonSchemaDefinitionTypeDef,
         MessageTypeDef,
         SystemContentBlockTypeDef,
         ToolChoiceTypeDef,
@@ -318,6 +324,34 @@ def build_tool_config(
     return tool_config
 
 
+def build_output_config(
+    response_format: ResponseFormatText
+    | ResponseFormatJSONObject
+    | ResponseFormatJSONSchema
+    | None,
+) -> JsonSchemaDefinitionTypeDef | None:
+    """Convert an OpenAI ``response_format`` to a Bedrock outputConfig schema.
+
+    Args:
+        response_format: OpenAI response format specification.
+
+    Returns:
+        Bedrock JSON schema definition dict, or ``None`` for plain text format.
+    """
+    match response_format:
+        case None | ResponseFormatText():
+            return None
+        case ResponseFormatJSONObject():
+            return {"schema": "{}"}
+        case ResponseFormatJSONSchema(json_schema=js):
+            schema = js.schema_
+            return {
+                "schema": schema
+                if isinstance(schema, str)
+                else to_json(schema).decode()
+            }
+
+
 def translate_request(
     request: CompletionCreateParams, model_id: str
 ) -> tuple[
@@ -327,12 +361,15 @@ def translate_request(
     ServiceTierTypeType | None,
     ServiceTiers | None,
     int,
+    JsonSchemaDefinitionTypeDef | None,
+    dict[str, str] | None,
 ]:
     """Translate OpenAI-specific request parameters into Bedrock Converse inputs.
 
     Handles inference configuration, tool configuration, service tier mapping,
-    and prompt cache settings. Message mapping is handled separately by the
-    ChatModel since it requires async image/audio/file processing.
+    prompt cache settings, and response format (structured output).  Message
+    mapping is handled separately by the ChatModel since it requires async
+    image/audio/file processing.
 
     Args:
         request: OpenAI chat completion creation request.
@@ -340,7 +377,8 @@ def translate_request(
 
     Returns:
         Tuple of (inference_cfg, additional_request_fields, tool_config,
-        bedrock_service_tier, openai_service_tier, choices_count).
+        bedrock_service_tier, openai_service_tier, choices_count, output_config,
+        request_metadata).
     """
     max_tokens = request.max_completion_tokens or request.max_tokens
     additional_request_fields: JsonMapping = {}
@@ -371,6 +409,8 @@ def translate_request(
         bedrock_service_tier,
         openai_service_tier,
         request.n or 1,
+        build_output_config(request.response_format),
+        request.metadata or None,
     )
 
 

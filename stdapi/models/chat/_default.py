@@ -118,6 +118,8 @@ class ChatModel(ChatModelBase[Any, Any]):
             bedrock_service_tier,
             openai_service_tier,
             choices_count,
+            output_config,
+            request_metadata,
         ) = openai_adapter.translate_request(request, self._model_id)
 
         server_tools = self._req_extract_server_tools(tool_config)
@@ -156,6 +158,8 @@ class ChatModel(ChatModelBase[Any, Any]):
             tool_config=tool_config,
             additional_request_fields=additional_request_fields,
             service_tier=bedrock_service_tier,
+            output_config=output_config,
+            request_metadata=request_metadata,
         )
         if request.stream:
             return EventSourceResponse(
@@ -302,6 +306,7 @@ class ChatModel(ChatModelBase[Any, Any]):
         additional_request_fields: dict[str, Any],
         service_tier: ServiceTierTypeType | None,
         output_config: JsonSchemaDefinitionTypeDef | None = None,
+        request_metadata: dict[str, str] | None = None,
     ) -> ConverseRequestBaseTypeDef:
         """Build a Bedrock Converse request payload.
 
@@ -319,6 +324,7 @@ class ChatModel(ChatModelBase[Any, Any]):
             additional_request_fields: Additional request fields.
             service_tier: Service tier configuration.
             output_config: Optional Bedrock output JSON Schema configuration.
+            request_metadata: Optional key-value metadata forwarded as Bedrock ``requestMetadata``.
 
         Returns:
             Bedrock Converse request payload with ``modelId`` set to an empty
@@ -351,6 +357,8 @@ class ChatModel(ChatModelBase[Any, Any]):
                     "structure": {"jsonSchema": output_config},
                 }
             }
+        if request_metadata:
+            request["requestMetadata"] = request_metadata
         with suppress(LookupError):
             request["guardrailConfig"] = GUARDTRAIL_CONFIG_VAR.get()
         return request
