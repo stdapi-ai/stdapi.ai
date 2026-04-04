@@ -6,13 +6,13 @@ keywords: stdapi.ai releases, AI gateway updates, AWS Bedrock features, API gate
 
 # :material-timeline: Releases & Roadmap
 
-**stdapi.ai is under active development** with regular feature releases. Seven major releases delivered since launch (v1.0-v1.7) with continuous improvements.
+**stdapi.ai is under active development** with regular feature releases. Eight major releases delivered since launch (v1.0-v1.8) with continuous improvements.
 
 ## :material-tag-multiple: Recent Releases
 
 See [Release History below](#release-history) for the full changelog of all releases.
 
-**Latest: v1.7** – Automatic Region Routing, Deprecated Model Fallback & Resilience Improvements (configurable region routing strategies, transparent deprecated model fallback, AI response timeout, SSE stream error handling)
+**Latest: v1.8** – Broader Model Compatibility & Structured Output (structured response formats, metadata forwarding, improved tool handling across models, Nova Code Interpreter global support, region routing reliability)
 
 ---
 
@@ -140,6 +140,50 @@ The following features may be implemented in future releases based on community 
 
 ## :material-history: Release History
 
+### v1.8.0 – Broader Model Compatibility & Structured Output
+
+This release focuses on improving reliability and compatibility across a wide variety of models. Structured response formats (JSON object and JSON schema) are now supported on OpenAI chat completions, and request metadata can be forwarded to Bedrock. Tool handling has been significantly improved—both for model-specific system tools and for Amazon Nova's grounding tool, including multi-turn support. Region routing is now more robust, correctly enforcing non-global inference profiles for region-restricted models and handling edge cases gracefully.
+
+!!! warning "New Required IAM Permissions"
+    v1.8.0 requires two new IAM permissions to attach request metadata tags to jobs:
+
+    - **`bedrock:TagResource`** on `arn:aws:bedrock:*:*:async-invoke/*` — needed for Bedrock asynchronous invocation jobs (see [IAM Permissions](operations_configuration.md#bedrock-iam)). The `twelvelabs.marengo-embed-3-0-v1:0` and `twelvelabs.marengo-embed-2-7-v1:0` models rely on asynchronous invocation and will fail with an access denied error if this permission is missing.
+    - **`transcribe:TagResource`** on `arn:aws:transcribe:*:*:transcription-job/*` — needed for Amazon Transcribe transcription jobs (see [IAM Permissions](operations_configuration.md#speech-to-text-optional)). The `amazon.transcribe` model will fail with an access denied error if this permission is missing.
+
+    Ensure your IAM role or user policy includes both statements before upgrading to v1.8.0.
+
+#### :material-chat: Chat Completions
+
+| Provider                                                                                      | Endpoint/Feature                                                  | AWS Backend                                                                                                            |
+|-----------------------------------------------------------------------------------------------|-------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------|
+| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**                | `response_format` – JSON object and JSON schema structured output | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
+| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**                | `metadata` – request metadata forwarding to Bedrock               | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
+| ![Amazon Nova](styles/logo_amazon_nova.svg){: style="height:20px;width:20px"} **Amazon Nova** | Nova Code Interpreter global profile support                      | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - Nova models       |
+
+#### :material-message: Messages (Anthropic-Compatible)
+
+| Provider                                                                                      | Endpoint/Feature                                                              | AWS Backend                                                                                                         |
+|-----------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------|
+| ![Amazon Nova](styles/logo_amazon_nova.svg){: style="height:20px;width:20px"} **Amazon Nova** | `nova_grounding` responses mapped to `web_search` content blocks              | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - Nova models    |
+| ![Amazon Nova](styles/logo_amazon_nova.svg){: style="height:20px;width:20px"} **Amazon Nova** | Multi-turn conversation support with `nova_grounding`                         | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - Nova models    |
+
+#### Platform Features
+
+| Feature                                          | Description                                                                                                                                                                                              |
+|--------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Non-global profiles for region-restricted models | Region-restricted models are now always assigned non-global inference profiles, preventing requests from bypassing configured region restrictions                                                        |
+| Region routing edge case handling                | Region routing gracefully handles cases where no usable regions are available                                                                                                                            |
+| ECS-based server ID                              | When running on ECS, `server_id` in logs is set to `task_id.container_name` for precise instance identification across tasks and containers                                                              |
+| Request metadata tagging                         | stdapi.ai request context (`request_id`, `server_id`, `user_id`) is automatically attached as tags to every Bedrock and Amazon Transcribe job, making it easy to trace API calls across AWS service logs |
+
+#### Fixes
+
+- Fix `systemTool_` prefix handling: removed broken auto-promotion logic; system tools require specific tool output handling not compatible with generic tool forwarding
+- `AWS_BEDROCK_LEGACY` default changed from `true` to `false` to prevent access denied errors on legacy models that have not been actively used recently
+- Bedrock read timeouts are now handled as standard model errors (503) instead of unhandled exceptions, and are properly retried across regions when multi-region routing is enabled
+
+---
+
 ### v1.7.0 – Automatic Region Routing, Deprecated Model Fallback & Resilience Improvements
 
 The headline feature of v1.7 is **automatic multi-region routing**: stdapi.ai now intelligently distributes requests across your configured AWS regions, failing over automatically on quota limits or unavailability—and because each region carries its own independent quota, adding regions directly multiplies your effective tokens-per-minute and daily limits. Alongside this, deprecated model IDs are transparently redirected to their replacements so clients survive AWS model retirements without any code changes. This release also adds S3 URL support for file inputs across all relevant endpoints, a configurable AI response timeout, and memory efficiency improvements.
@@ -169,7 +213,7 @@ Introduces a full Anthropic-compatible API layer, enabling direct use of the Ant
 
 | Provider                                                                       | Endpoint/Feature                                                                                                                     | AWS Backend                                                                                                   |
 |--------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------|
-| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/chat/completions` Claude server tools (`systemTool_bash`, `systemTool_text_editor`, `systemTool_computer`, `systemTool_memory`) | ![Claude](styles/logo_anthropic_claude.svg){: style="height:20px;width:20px"} Claude models on Amazon Bedrock |
+| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/chat/completions` Claude server tools (`bash`, `str_replace_based_edit_tool`, `computer`, `memory`) | ![Claude](styles/logo_anthropic_claude.svg){: style="height:20px;width:20px"} Claude models on Amazon Bedrock |
 
 #### :material-message: Messages (Anthropic-Compatible)
 
