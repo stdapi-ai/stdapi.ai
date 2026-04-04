@@ -3,6 +3,8 @@ site_name: stdapi.ai
 site_description: "Deploy OpenAI-compatible applications on AWS Bedrock with no code changes. Access 80+ models including Claude, Nova, Llama with enterprise compliance, pay-per-use pricing, and AWS data sovereignty."
 site_url: https://stdapi.ai
 site_author: JGoutin-dev
+exclude_docs: |
+  internal/**/*
 
 theme:
   name: material
@@ -66,6 +68,7 @@ nav:
           - Local Development: operations_getting_started_local.md
           - Advanced Deployment: operations_deploy_advanced.md
           - Configuration: operations_configuration.md
+          - Authentication & Security: operations_authentication_security.md
           - Licensing: operations_licensing.md
           - Logging & Monitoring: operations_logging_monitoring.md
           - Resilience & Failover: operations_resilience.md

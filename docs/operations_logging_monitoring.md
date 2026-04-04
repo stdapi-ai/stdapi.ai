@@ -1,7 +1,7 @@
 ---
 title: Logging & Monitoring - AWS Bedrock API Observability
-description: Production-grade observability for stdapi.ai with CloudWatch, Prometheus, OpenTelemetry. Track API performance, monitor costs, debug issues, and ensure compliance.
-keywords: AWS CloudWatch logs, API monitoring, Prometheus metrics, OpenTelemetry, API observability, cost monitoring AWS, performance tracking, compliance logging
+description: Production-grade observability for stdapi.ai with CloudWatch, OpenTelemetry. Track API performance, monitor costs, debug issues, and ensure compliance.
+keywords: AWS CloudWatch logs, API monitoring, OpenTelemetry, API observability, cost monitoring AWS, performance tracking, compliance logging
 ---
 
 # :material-chart-line: Logging and Monitoring
@@ -101,6 +101,7 @@ Each event shares core fields and may add type‑specific ones.
 |                                   `level` | all                                 | `info`, `warning`, `error`, `critical` (controlled by `LOG_LEVEL`)                          |
 |                                    `date` | all                                 | RFC3339, timezone‑aware timestamp                                                           |
 |                               `server_id` | all                                 | Instance identifier — on ECS: `task_id-container_name-uuid`; elsewhere: `hostname-pid-uuid` |
+|                          `server_version` | all                                 | Application version string                                                                  |
 |                            `error_detail` | all                                 | Optional list of formatted exception strings                                                |
 |                                      `id` | request, request_stream, background | Correlation ID (also returned as `x-request-id`)                                            |
 |                       `execution_time_ms` | request, request_stream, background | Duration of the handled block                                                               |
@@ -111,6 +112,7 @@ Each event shares core fields and may add type‑specific ones.
 |                       `client_user_agent` | request                             | When provided by client                                                                     |
 |                                `model_id` | request                             | Targeted model (if applicable)                                                              |
 |                                `voice_id` | request                             | TTS voice (if applicable)                                                                   |
+|                           `model_regions` | request                             | AWS region(s) that handled the request; may contain multiple values when failover occurred  |
 |       `request_user_id`, `request_org_id` | request                             | Propagated identifiers (if applicable)                                                      |
 |                          `request_params` | request                             | Sanitized request payload (if `LOG_REQUEST_PARAMS=true`)                                    |
 |                        `request_response` | request                             | Sanitized response payload (if `LOG_REQUEST_PARAMS=true`)                                   |
@@ -294,27 +296,45 @@ refer to the official AWS documentation for more information.
 - Correlation: Service logs won’t include StdAPI `x-request-id`. Correlate by time window, region, model/voice/job identifiers, and volume. Use StdAPI `model_id`, `voice_id`, and `execution_time_ms` to narrow windows.
 - AWS Bedrock Invocation logging (optional): Export invocation metadata and, if enabled, content to CloudWatch Logs/S3/Firehose. Treat prompts/completions as sensitive; manage retention and KMS.
 
-### Bedrock Request Metadata and Tags
+### AWS Service Correlation Metadata
 
-stdapi.ai automatically injects correlation context into every Bedrock API call, enabling you to join stdapi.ai logs with Bedrock invocation logs.
+stdapi.ai attaches correlation identifiers to outgoing service calls, allowing you to trace a stdapi.ai request back to the corresponding AWS service invocation.
 
-**Converse and ConverseStream** (`requestMetadata`):
+| Key                    | Description                                                                                                                      |
+|:-----------------------|:---------------------------------------------------------------------------------------------------------------------------------|
+| `stdapi-ai.request_id` | Matches the `id` field in stdapi.ai logs and the `x-request-id` response header                                                  |
+| `stdapi-ai.server_id`  | Matches the `server_id` field in stdapi.ai logs                                                                                  |
+| `stdapi-ai.user_id`    | Present only when the client supplies a user ID (e.g. `user` field in OpenAI requests, `metadata.user_id` in Anthropic requests) |
 
-| Key                    | Value               | Description                                                                                                                      |
-|:-----------------------|:--------------------|:---------------------------------------------------------------------------------------------------------------------------------|
-| `stdapi-ai.request_id` | Request UUID        | Matches the `id` field in stdapi.ai logs and the `x-request-id` response header                                                  |
-| `stdapi-ai.server_id`  | Instance identifier | Matches the `server_id` field in stdapi.ai logs                                                                                  |
-| `stdapi-ai.user_id`    | User identifier     | Present only when the client supplies a user ID (e.g. `user` field in OpenAI requests, `metadata.user_id` in Anthropic requests) |
+Coverage and how to use it varies by service:
 
-**StartAsyncInvoke** (same keys passed as `tags`):
-
-Same three keys (`stdapi-ai.request_id`, `stdapi-ai.server_id`, `stdapi-ai.user_id`) are attached as resource tags on the async invocation job.
+- **Bedrock — standard inference** (most chat and generation routes): identifiers are embedded in the invocation request and appear in Bedrock invocation log records when [model invocation logging](https://docs.aws.amazon.com/bedrock/latest/userguide/model-invocation-logging.html) is enabled. Coverage is limited to standard inference routes — some model-specific paths do not carry this metadata. Filter by `requestMetadata.stdapi-ai\.request_id` in CloudWatch Logs Insights to join a Bedrock record with its stdapi.ai event.
+- **Bedrock — asynchronous batch jobs**: identifiers are attached as resource tags on the job, visible in the AWS Console and searchable via the CLI/API.
+- **Transcribe — audio transcription**: identifiers are attached as job tags. stdapi.ai deletes completed transcription jobs automatically, so tags are only available while the job is still running.
 
 !!! note "Security"
-    Any `requestMetadata` key starting with `stdapi-ai.` that is passed by the client is silently dropped before the Bedrock call. Only values set by stdapi.ai itself are forwarded under that prefix.
+    Any `stdapi-ai.*` key supplied by the client is silently dropped before the service call. Only values injected by stdapi.ai itself are forwarded under that prefix.
 
-!!! tip "Correlating with Bedrock Invocation Logs"
-    When [Bedrock model invocation logging](https://docs.aws.amazon.com/bedrock/latest/userguide/model-invocation-logging.html) is enabled, the `requestMetadata` fields are included in the invocation log records. Filter by `requestMetadata.stdapi-ai\.request_id` in CloudWatch Logs Insights to join a Bedrock invocation log entry with its corresponding stdapi.ai request event.
+## :material-cloud-check: Infrastructure Observability
+
+!!! info "Terraform Module"
+    The Terraform module automatically configures production-ready observability for all infrastructure components — no manual setup required.
+
+    **Application Logs (ECS)**
+
+    Container STDOUT is forwarded to a dedicated CloudWatch Logs log group. Log retention defaults to **365 days** (`cloudwatch_logs_retention_in_days`). All log groups are **KMS-encrypted**.
+
+    **Container Insights**
+
+    ECS Container Insights is enabled by default (`container_insight = "enabled"`), providing CPU, memory, network, and storage metrics per task. Set `container_insight = "enhanced"` to enable enhanced observability with additional OS-level and application performance metrics.
+
+    **CloudWatch Alarms**
+
+    The module can trigger a CloudWatch alarm whenever an `error` or `critical` log event is detected. Enable with `alarms_enabled = true` and provide `sns_topic_arn` to receive notifications via SNS (email, Slack, PagerDuty, etc.). When enabled, a metric filter scans the ECS log group for any line containing `error` or `critical` and fires the alarm as soon as the count exceeds zero in a 5-minute window.
+
+    **ALB and WAF Logs**
+
+    ALB access logs and WAF logs are stored in dedicated S3 buckets, **KMS-encrypted**. These capture all HTTP requests at the infrastructure level — use them to audit traffic patterns and investigate security events before they reach the application.
 
 ## :material-wrench: Troubleshooting Checklist
 
@@ -328,7 +348,7 @@ Same three keys (`stdapi-ai.request_id`, `stdapi-ai.server_id`, `stdapi-ai.user_
 <div class="grid cards" markdown>
 
 - :material-cog: [**Configuration Reference**](operations_configuration.md) — Complete list of environment variables including logging options
-- :material-chart-bar: [**Operations & Compliance**](operations_compliance.md) — Compliance-focused logging and audit requirements
+- :material-chart-bar: [**Data Sovereignty & Compliance**](operations_compliance.md) — Compliance-focused logging and audit requirements
 - :material-server-network: [**Advanced Deployment**](operations_deploy_advanced.md) — Production deployment with observability stack
 
 </div>

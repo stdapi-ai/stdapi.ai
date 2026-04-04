@@ -374,9 +374,12 @@ flowchart TB
 
 **Stateless by design.** stdapi.ai stores no local state — all persistent data lives in S3. Each ECS Fargate task is fully replaceable: ECS can terminate and relaunch a failed task without any loss of data or request state that the client cannot retry.
 
-**Multi-AZ spread.** The Terraform module places ECS tasks across all available Availability Zones in the region. If an AZ experiences a partial or full failure, tasks in the remaining AZs continue to process requests without interruption. The default configuration maintains a minimum of two tasks, guaranteeing availability even during a task replacement event.
+**Multi-AZ spread.** The Terraform module places ECS tasks across all available Availability Zones in the region. If an AZ experiences a partial or full failure, tasks in the remaining AZs continue to process requests without interruption. The default configuration maintains at least one task per Availability Zone, guaranteeing availability even during a task replacement event.
 
-**Auto-scaling.** Task count scales between 2 and 10 based on CPU load with configurable thresholds. Fargate Spot is optionally available for cost-sensitive deployments — see [Cost-Optimized Deployment](operations_deploy_advanced.md#cost-optimized-deployment) for the trade-offs.
+**Auto-scaling.** Task count scales automatically based on CPU utilisation, memory utilisation, and ALB request count — whichever metric signals pressure first. Fargate Spot is optionally available for cost-sensitive deployments — see [Cost-Optimized Deployment](operations_deploy_advanced.md#cost-optimized-deployment) for the trade-offs.
+
+!!! info "Terraform Module"
+    Minimum capacity defaults to the number of deployed Availability Zones (one task per AZ). Maximum capacity is configurable (`ecs_max_capacity`, default: 10). Auto-scaling targets CPU and memory utilisation as well as ALB request count per target, so the service scales out under any of these pressure signals.
 
 **Fast startup.** The stdapi.ai container image is optimised for minimal startup time — a new task typically becomes healthy in under 30 seconds. Fast startup is critical for recovery: when ECS detects a failed task it launches a replacement immediately, keeping the degraded window short and ensuring the service restores full capacity without manual intervention.
 
@@ -389,6 +392,10 @@ The Application Load Balancer is a fully managed, natively multi-AZ AWS service:
 - **Cross-AZ load balancing** — traffic is distributed evenly across tasks in all healthy AZs.
 - **Health check integration** — the ALB polls `/health` on each task; a task is removed from rotation after two consecutive failed checks (~60 s) and readded as soon as it recovers.
 - **WAF protection** — when enabled, WAF sits in front of the ALB and mitigates DDoS and rate-limit abuse before requests reach the application.
+
+!!! info "Terraform Module"
+    - **Load balancing algorithm** — uses `weighted_random` with **anomaly mitigation enabled**, automatically reducing traffic sent to tasks exhibiting elevated error rates before they are fully drained.
+    - **Idle timeout** — set to **3600 s (1 hour)** (`alb_idle_timeout`) to accommodate long-running streaming LLM responses. Without a sufficiently large timeout, the ALB may terminate connections mid-stream for slow or large generations.
 
 !!! tip "ALB is not a single point of failure"
     AWS manages ALB node redundancy across AZs automatically. An AZ failure reduces capacity but does not take the load balancer offline.

@@ -17,6 +17,7 @@ stdapi.ai is configured entirely through environment variables, which are read o
 - **Observability** - Logging levels, OpenTelemetry, request/response debugging
 - **Security** - CORS, proxy headers, trusted hosts for production deployments
 - **Performance** - Caching, model overrides, S3 acceleration
+- **TLS / SSL** - End-to-end encryption using Granian environment variables
 
 !!! tip "Zero Configuration Startup"
     stdapi.ai works out of the box with zero configuration. The service automatically detects your current AWS region and discovers available Bedrock models.
@@ -243,6 +244,12 @@ Choose **one** method (mutually exclusive):
 | [`CORS_ALLOW_ORIGINS`](#cors-allow-origins)                                         | None    | JSON array of allowed origins for browser cross-origin requests                       |
 | [`TRUSTED_HOSTS`](#trusted-hosts)                                                   | None    | JSON array of trusted Host header values (prefer ALB host-based routing; see details) |
 | [`ENABLE_PROXY_HEADERS`](#enable-proxy-headers)                                     | `false` | Trust X-Forwarded-* headers from reverse proxies (only enable behind trusted proxy)   |
+| [`GRANIAN_SSL_CERTIFICATE`](#graniansslcertificate)                                 | None      | Path to SSL certificate file for end-to-end encryption                                |
+| [`GRANIAN_SSL_KEYFILE`](#graniansslkeyfile)                                         | None      | Path to SSL private key file (PKCS#8) for end-to-end encryption                       |
+| [`GRANIAN_SSL_KEYFILE_PASSWORD`](#graniansslkeyfilepassword)                        | None      | Password for the SSL private key file                                                  |
+| [`GRANIAN_SSL_PROTOCOL_MIN`](#graniansslprotocolmin)                                | `tls1.3`  | Minimum supported TLS version (`tls1.2` or `tls1.3`)                                  |
+| [`GRANIAN_SSL_CA`](#graniansslca)                                                   | None      | Path to CA certificate bundle for client verification (mTLS)                           |
+| [`GRANIAN_SSL_CLIENT_VERIFY`](#graniansslclientverify)                              | `false`   | Enable client certificate verification (mTLS)                                          |
 | [`ENABLE_GZIP`](#enable-gzip)                                                       | `false` | Enable GZip compression for responses >1KB (prefer AWS ALB/CloudFront compression)    |
 | [`SSRF_PROTECTION_BLOCK_PRIVATE_NETWORKS`](#ssrf-protection-block-private-networks) | `true`  | Block requests to private/local networks for SSRF protection                          |
 
@@ -1424,7 +1431,7 @@ stdapi.ai requires specific AWS IAM permissions to access Bedrock models and oth
 !!! tip "Building Your Policy"
     Combine the permission statements below based on the features you need. At minimum, you need the **Bedrock** permissions. Add statements for S3, TTS, STT, and other features as required by your deployment.
 
-### Bedrock (Required)
+### Bedrock (Required) { #bedrock-iam }
 
 **Environment Variables**: Always required
 
@@ -1599,7 +1606,7 @@ Required for generating speech from text using Amazon Polly. See [Audio and Text
     }
     ```
 
-### Speech-to-Text (Optional)
+### Speech-to-Text (Optional) { #speech-to-text-optional }
 
 **Environment Variables**: [`AWS_TRANSCRIBE_REGION`](#aws-transcribe-region), [`AWS_TRANSCRIBE_S3_BUCKET`](#aws-transcribe-s3-bucket)
 
@@ -1916,7 +1923,7 @@ stdapi.ai supports three methods for API key authentication.
 
 ### Method 1: SSM Parameter Store (Recommended)
 
-**Recommended** - Use AWS Systems Manager Parameter Store for secure key storage with encryption, access control, and auditing.
+**Recommended** - Use AWS Systems Manager Parameter Store for secure key storage with encryption, access control, and auditing. This method should be used only with **already existing** parameters.
 
 #### `API_KEY_SSM_PARAMETER` { #api-key-ssm }
 
@@ -1935,7 +1942,7 @@ export API_KEY_SSM_PARAMETER=/stdapi/prod/api-key
 
 ### Method 2: Secrets Manager
 
-Use AWS Secrets Manager for secure key storage with automatic rotation support.
+Use AWS Secrets Manager for secure key storage with automatic rotation support. This method should be used only with **already existing** secrets.
 
 #### `API_KEY_SECRETSMANAGER_SECRET` { #api-key-secretsmanager-secret }
 
@@ -2351,6 +2358,60 @@ export ENABLE_PROXY_HEADERS=true
     - Client's real IP address (from X-Forwarded-For)
     - Original protocol (from X-Forwarded-Proto: http/https)
     - Original port (from X-Forwarded-Port)
+
+---
+
+## TLS / SSL Configuration
+
+Configure end-to-end TLS encryption within the container. These are native [Granian](https://github.com/emmett-framework/granian) environment variables and are available with the provided container images.
+
+#### `GRANIAN_SSL_CERTIFICATE` { #graniansslcertificate }
+:octicons-package-24: **Purpose**
+:   Path to the SSL certificate file
+
+:octicons-database-24: **Type**
+:   File path
+
+#### `GRANIAN_SSL_KEYFILE` { #graniansslkeyfile }
+:octicons-package-24: **Purpose**
+:   Path to the SSL private key file (PKCS#8 format only)
+
+:octicons-database-24: **Type**
+:   File path
+
+#### `GRANIAN_SSL_KEYFILE_PASSWORD` { #graniansslkeyfilepassword }
+:octicons-package-24: **Purpose**
+:   Password for the private key file
+
+:octicons-database-24: **Type**
+:   String
+
+#### `GRANIAN_SSL_PROTOCOL_MIN` { #graniansslprotocolmin }
+:octicons-package-24: **Purpose**
+:   Minimum supported TLS version (`tls1.2` or `tls1.3`)
+
+:octicons-database-24: **Type**
+:   Enum
+
+:octicons-gear-24: **Default**
+:   `tls1.3`
+
+#### `GRANIAN_SSL_CA` { #graniansslca }
+:octicons-package-24: **Purpose**
+:   Path to the CA certificate bundle used to verify client certificates (mTLS)
+
+:octicons-database-24: **Type**
+:   File path
+
+#### `GRANIAN_SSL_CLIENT_VERIFY` { #graniansslclientverify }
+:octicons-package-24: **Purpose**
+:   Enable client certificate verification (mTLS)
+
+:octicons-database-24: **Type**
+:   Boolean
+
+:octicons-gear-24: **Default**
+:   `false` (disabled)
 
 ---
 
