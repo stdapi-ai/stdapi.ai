@@ -369,7 +369,7 @@ class _Settings(BaseSettings):
     )
 
     aws_bedrock_legacy: bool = Field(
-        default=True, description="If true, allow legacy Bedrock models to be used."
+        default=False, description="If true, allow legacy Bedrock models to be used."
     )
 
     aws_bedrock_deprecated_model_fallback: bool = Field(

@@ -277,6 +277,9 @@ This is controlled by [`AWS_BEDROCK_DEPRECATED_MODEL_FALLBACK`](operations_confi
 3. If a live replacement is found, the request proceeds with it. A **warning** is recorded in the request log and the log level is elevated to `warning` so the event is visible in monitoring.
 4. If no live model is found at the end of the chain, a `404` is returned naming both the original deprecated ID and the last replacement tried.
 
+!!! warning "`AWS_BEDROCK_LEGACY` — Use with caution"
+    Setting `AWS_BEDROCK_LEGACY=true` forces stdapi.ai to keep serving legacy (end-of-life) models. AWS may deny requests to such models with an access error if you have not been actively using the model recently, causing failover to break silently. Only set this option if using a legacy model is absolutely required.
+
 #### Legacy model warnings
 
 Using a **legacy** model (one AWS has scheduled for end-of-life) also emits a `warning`-level log entry, including the EOL date when known:
