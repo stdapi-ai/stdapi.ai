@@ -6,7 +6,8 @@ from time import perf_counter_ns
 from traceback import format_exception
 from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict, TypeVar
 
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, HTTPClientError
+from botocore.exceptions import ConnectionError as BotocoreConnectionError
 from fastapi import Request  # noqa: TC002
 from pydantic import AwareDatetime, BaseModel, JsonValue
 from sse_starlette import JSONServerSentEvent
@@ -476,6 +477,16 @@ async def log_request_sse_stream_event(
         yield JSONServerSentEvent(
             data=format_http_error(
                 REQUEST.get(), status, hide_security_details(status, error["Message"])
+            )[0],
+            event="error",
+        )
+    except (HTTPClientError, BotocoreConnectionError) as exc:
+        message = str(exc)
+        status = AWS_ERROR_MAP.get(exc.__class__.__name__, (503, "server_error"))[0]
+        log_error_details(message, status=status)
+        yield JSONServerSentEvent(
+            data=format_http_error(
+                REQUEST.get(), status, hide_security_details(status, message)
             )[0],
             event="error",
         )

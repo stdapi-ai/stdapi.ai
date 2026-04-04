@@ -10,7 +10,7 @@ from time import time_ns
 from traceback import format_exception
 from typing import TYPE_CHECKING
 
-from botocore.exceptions import BotoCoreError, ClientError
+from botocore.exceptions import BotoCoreError, ClientError, HTTPClientError
 from botocore.exceptions import ConnectionError as BotocoreConnectionError
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -246,7 +246,14 @@ async def _middleware(
         with log_request_event(request) as log:
             set_guardrail_configuration(request.headers)
             set_performance_configuration(request.headers)
-            response = await call_next(request)
+            try:
+                response = await call_next(request)
+            except RuntimeError as exc:
+                if await request.is_disconnected():
+                    log["status_code"] = 499
+                    log_error_details(f"Client disconnected: {exc}", status=499)
+                    return Response(status_code=499)
+                raise
             log["status_code"] = response.status_code
             response.headers[get_request_id_header(request)] = log["id"]
             set_log_fields(request, log)
@@ -365,14 +372,15 @@ async def handle_botocore_client_error(
 
 
 @app.exception_handler(BotocoreConnectionError)
+@app.exception_handler(HTTPClientError)
 async def handle_botocore_connection_error(
-    request: Request, exc: BotocoreConnectionError
+    request: Request, exc: BotocoreConnectionError | HTTPClientError
 ) -> JSONResponse:
     """Format botocore connection errors (timeouts, unreachable endpoints) as 503.
 
     Args:
         request: The current request.
-        exc: The botocore ConnectionError raised by SDK calls.
+        exc: The botocore ConnectionError or HTTPClientError raised by SDK calls.
 
     Returns:
         JSONResponse with 503 status.
@@ -389,6 +397,7 @@ _EXCEPTION_HANDLERS: dict[
     ApiError: handle_api_error,
     ClientError: handle_botocore_client_error,
     BotocoreConnectionError: handle_botocore_connection_error,
+    HTTPClientError: handle_botocore_connection_error,
     HTTPException: handle_http_exception,
 }
 

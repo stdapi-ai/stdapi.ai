@@ -10,7 +10,7 @@ from re import compile as re_compile
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Never, TypedDict, TypeVar
 
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, HTTPClientError
 from botocore.exceptions import ConnectionError as BotocoreConnectionError
 from pydantic import AwareDatetime, BaseModel, JsonValue
 from pydantic_core import from_json, to_json
@@ -1172,7 +1172,8 @@ async def _route_and_execute[T](
 
     Raises:
         ClientError: Last non-retryable error, or last retryable error when all attempts exhausted.
-        ConnectionError: Last connection error when all attempts exhausted.
+        BotocoreConnectionError: Last connection error when all attempts exhausted.
+        HTTPClientError: Last HTTP client error (e.g. timeout) when all attempts exhausted.
     """
     if not REGION_ROUTER or len(candidates) == 1:
         return await fn(candidates[0])
@@ -1184,9 +1185,9 @@ async def _route_and_execute[T](
         except ClientError as exc:
             if (code := exc.response["Error"]["Code"]) not in ROUTING_RETRYABLE_CODES:
                 raise
-            last_exc: ClientError | BotocoreConnectionError = exc
+            last_exc: ClientError | BotocoreConnectionError | HTTPClientError = exc
             REGION_ROUTER.mark_error(model_id, region, code)
-        except BotocoreConnectionError as exc:
+        except (BotocoreConnectionError, HTTPClientError) as exc:
             last_exc = exc
             REGION_ROUTER.mark_error(model_id, region, exc.__class__.__name__)
         else:
