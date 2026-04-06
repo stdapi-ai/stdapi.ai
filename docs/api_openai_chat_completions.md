@@ -45,6 +45,7 @@ Generate conversational AI responses with AWS Bedrock foundation models—includ
 | Video input                              |       :material-cog:{ .model-dep }       | Supported by select models                                      |
 | Audio input                              |       :material-cog:{ .model-dep }       | Supported by select models                                      |
 | Document input (`file`)                  |       :material-cog:{ .model-dep }       | PDF and document support varies by model                        |
+| Files API (`file_id`)                    |   :material-check-circle:{ .success }    | Reference uploaded files via `type: "file"` — see [Files API](api_openai_files.md) |
 | System messages                          |       :material-cog:{ .model-dep }       | Includes `developer` role                                       |
 | **Tool Calling**                         |                                          |                                                                 |
 | Function calling (`tools`)               |       :material-cog:{ .model-dep }       | Full OpenAI-compatible schema                                   |

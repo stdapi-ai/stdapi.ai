@@ -4,6 +4,7 @@ from asyncio import to_thread
 from base64 import b32encode
 from binascii import Error as BinasciiError
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from io import BytesIO
 from re import ASCII
 from re import compile as compile_regex
@@ -31,6 +32,7 @@ if TYPE_CHECKING:
 
 T = TypeVar("T")
 
+
 #: Application inference profile ARN regex matcher
 match_bedrock_app_profile_arn = compile_regex(
     "arn:aws(?:-[^:]+)?:bedrock:(?P<region>[a-z0-9-]{1,20}):[0-9]{12}:(?:inference-profile|application-inference-profile)/[a-zA-Z0-9-:.]+"
@@ -40,6 +42,15 @@ match_bedrock_app_profile_arn = compile_regex(
 match_bedrock_prompt_router_arn = compile_regex(
     "arn:aws(?:-[^:]+)?:bedrock:(?P<region>[a-z0-9-]{1,20}):[0-9]{12}:(?:prompt-router|default-prompt-router)/[a-zA-Z0-9-:.]+"
 ).match
+
+
+def now_utc_timestamp() -> int:
+    """Return the current UTC time as a Unix timestamp (seconds).
+
+    Returns:
+        Current Unix timestamp in seconds.
+    """
+    return int(datetime.now(UTC).timestamp())
 
 
 @contextmanager

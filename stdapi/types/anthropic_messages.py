@@ -4,7 +4,7 @@ from typing import Annotated, Literal
 
 from pydantic import AliasChoices, Field
 
-from stdapi.input_file import InputFile  # noqa: TC001
+from stdapi.input_file import FileIdInputFile, InputFile  # noqa: TC001
 from stdapi.types import (
     BaseModelRequest,
     BaseModelRequestWithExtra,
@@ -307,7 +307,7 @@ class ImageBlockParam(BaseModelRequest):
 
     type: Literal["image"] = Field(description="Content block type. Always `image`.")
     source: Annotated[
-        Base64ImageSource | URLImageSource,
+        Base64ImageSource | URLImageSource | FileSource,
         Field(discriminator="type", description="Image source data."),
     ]
     cache_control: CacheControlEphemeralParam | None = Field(
@@ -359,6 +359,14 @@ class ContentBlockSourceParam(BaseModelRequest):
     type: Literal["content"] = Field(description="The type discriminator.")
 
 
+# Ref: anthropic.types.beta.BetaFileDocumentSourceParam / BetaFileImageSourceParam
+class FileSource(BaseModelRequest):
+    """File source for document or image content block (Files API)."""
+
+    type: Literal["file"] = Field(description="Source type. Always `file`.")
+    file_id: FileIdInputFile = Field(description="The Files API file identifier.")
+
+
 # Ref: anthropic.types.citations_config_param.CitationsConfigParam
 class CitationsConfigParam(BaseModelRequest):
     """Citations config parameter."""
@@ -374,7 +382,11 @@ class DocumentBlockParam(BaseModelRequest):
         description="Content block type. Always `document`."
     )
     source: Annotated[
-        Base64PDFSource | PlainTextSourceParam | ContentBlockSourceParam | URLPDFSource,
+        Base64PDFSource
+        | PlainTextSourceParam
+        | ContentBlockSourceParam
+        | URLPDFSource
+        | FileSource,
         Field(discriminator="type", description="Document source data."),
     ]
     cache_control: CacheControlEphemeralParam | None = Field(

@@ -38,6 +38,7 @@ from stdapi.types.anthropic_messages import (
     ContentBlockParam,
     ContentBlockSourceParam,
     DocumentBlockParam,
+    FileSource,
     ImageBlockParam,
     InputJSONDelta,
     MemoryToolParam,
@@ -212,21 +213,26 @@ def _map_system_blocks(
 
 
 async def _map_image_to_bedrock(
-    source: Base64ImageSource | URLImageSource,
+    source: Base64ImageSource | URLImageSource | FileSource,
 ) -> ContentBlockTypeDef:
     """Convert an Anthropic image source to a Bedrock content block.
 
     Args:
-        source: Base64-encoded or URL image source.
+        source: Base64-encoded, URL, or Files API image source.
 
     Returns:
         A partial content block dict (source will be resolved later).
     """
-    return await (
-        source.url.to_bedrock_content_block()
-        if isinstance(source, URLImageSource)
-        else source.data.to_bedrock_content_block(content_type=source.media_type)
-    )
+    match source:
+        case FileSource(file_id=file_input):
+            return await file_input.to_bedrock_content_block()
+        case URLImageSource(url=url):
+            return await url.to_bedrock_content_block()
+        case Base64ImageSource(data=data, media_type=media_type):
+            return await data.to_bedrock_content_block(content_type=media_type)
+        case _:  # pragma: no cover
+            msg = f"Unsupported image source type: {type(source)}"
+            raise ApiError(msg)
 
 
 async def _map_tool_result_to_bedrock(
@@ -278,6 +284,12 @@ async def _map_document_to_bedrock(block: DocumentBlockParam) -> ContentBlockTyp
     """
     doc_name = _RE_DOC_NAME.sub("_", block.title or "document")[:200]
     match block.source:
+        case FileSource(file_id=file_input):
+            return await file_input.to_bedrock_content_block(
+                filename=doc_name,
+                context=block.context or None,
+                citations_enabled=bool(block.citations and block.citations.enabled),
+            )
         case Base64PDFSource(data=data):
             return await data.to_bedrock_content_block(
                 filename=doc_name,

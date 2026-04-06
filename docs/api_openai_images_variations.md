@@ -57,7 +57,8 @@ Create variations of existing images using AWS Bedrock image models through an O
 | Output image tokens            |   :material-check-circle:{ .success }    | Number of variations generated (`n` parameter)                           |
 | **Other**                      |                                          |                                                                          |
 | `user`                         |   :material-minus-circle:{ .partial }    | Logged but not used for abuse monitoring                                 |
-| Extra parameters via form data |   :material-check-circle:{ .success }    | Provider-specific parameters passed through                              |
+| Extra parameters via form data | :material-plus-circle:{ .extra-feature } | Provider-specific parameters passed through                              |
+| JSON body request format       | :material-plus-circle:{ .extra-feature } | Reference images via Files API ID or URL instead of file upload          |
 
 </div>
 
@@ -69,6 +70,7 @@ Create variations of existing images using AWS Bedrock image models through an O
 * :material-cog:{ .model-dep } **Available on Select Models** — Check your model's capabilities
 * :material-minus-circle:{ .partial } **Partial** — Supported with limitations
 * :material-close-circle:{ .unsupported } **Unsupported** — Not available in this implementation
+* :material-plus-circle:{ .extra-feature } **Extra Feature** — Enhanced capability beyond OpenAI API
 
 </div>
 
@@ -126,6 +128,60 @@ curl -X POST "$BASE/v1/images/variations" \
 ```
 
 ## Advanced Features
+
+### Request Formats
+
+The `/v1/images/variations` endpoint accepts two request formats:
+
+#### Multipart Form-Data (Binary Uploads)
+
+The classic format — upload an image file directly via the `image` field.
+
+```bash
+curl -X POST "$BASE/v1/images/variations" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -F image=@input.png \
+  -F model="amazon.nova-canvas-v1:0"
+```
+
+#### JSON Body (Files API or URL References) :material-plus-circle:{ .extra-feature }
+
+Reference an image already stored in the Files API or accessible via URL. Send `Content-Type: application/json` with an `image` object containing either `file_id` or `image_url`:
+
+```bash
+# Variation from a Files API file ID
+curl -X POST "$BASE/v1/images/variations" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "amazon.nova-canvas-v1:0",
+    "image": {"file_id": "file-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"},
+    "n": 2,
+    "size": "1024x1024"
+  }'
+
+# Variation from an HTTP URL
+curl -X POST "$BASE/v1/images/variations" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "amazon.nova-canvas-v1:0",
+    "image": {"image_url": "https://example.com/photo.png"},
+    "response_format": "b64_json"
+  }'
+```
+
+**`image` object fields:**
+
+| Field       | Type   | Description                                              |
+|-------------|--------|----------------------------------------------------------|
+| `file_id`   | string | Files API file identifier (`file-*` or `file_*` prefix)  |
+| `image_url` | string | HTTP/HTTPS URL or data URI (`data:image/png;base64,...`) |
+
+Exactly one of `file_id` or `image_url` must be provided.
+
+!!! tip "Workflow Integration"
+    The JSON body format works seamlessly with the [Files API](api_openai_files.md): upload images once, reuse them across multiple variation requests by file ID without re-uploading.
 
 ### Provider-Specific Parameters
 

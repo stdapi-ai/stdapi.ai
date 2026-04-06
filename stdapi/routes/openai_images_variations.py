@@ -3,11 +3,17 @@
 This module implements the /v1/images/variations endpoint following the OpenAI API
 specification, calling AWS Bedrock image generation models (e.g., Amazon Titan Image Generator)
 to create variations of existing images.
+
+Two request formats are supported:
+- ``multipart/form-data``: binary file upload via the ``image`` field.
+- ``application/json``: structured body with an ``image`` field referencing a
+  Files API identifier or HTTP/data URL.
 """
 
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from pydantic import ValidationError
 
 from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
@@ -18,7 +24,11 @@ from stdapi.models import validate_model
 from stdapi.models.image import get_image_model
 from stdapi.monitoring import log_request_params
 from stdapi.routes._images_common import build_images_response
-from stdapi.types.openai_images import ImagesResponse, ImageVariationParams
+from stdapi.types.openai_images import (
+    ImagesResponse,
+    ImageVariationJsonBody,
+    ImageVariationParams,
+)
 from stdapi.utils import validation_error_handler
 
 router = APIRouter(
@@ -62,7 +72,33 @@ _KNOWN_PARAMS = set(ImageVariationParams.model_fields.keys()) | {"image"}
                             },
                         },
                     }
-                }
+                },
+                "application/json": {
+                    "examples": {
+                        "file_id": {
+                            "summary": "Variation from Files API ID",
+                            "value": {
+                                "model": "amazon.nova-canvas-v1:0",
+                                "image": {
+                                    "file_id": "file-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                                },
+                                "response_format": "url",
+                                "n": 1,
+                                "size": "1024x1024",
+                            },
+                        },
+                        "image_url": {
+                            "summary": "Variation from URL",
+                            "value": {
+                                "model": "amazon.nova-canvas-v1:0",
+                                "image": {"image_url": "https://example.com/image.png"},
+                                "response_format": "b64_json",
+                                "n": 2,
+                                "size": "512x512",
+                            },
+                        },
+                    }
+                },
             }
         }
     },
@@ -71,9 +107,13 @@ _KNOWN_PARAMS = set(ImageVariationParams.model_fields.keys()) | {"image"}
 async def create_image_variations(
     http_request: Request,
     image: Annotated[
-        UploadFile,
-        File(..., description="The image to use as the basis for the variation(s)."),
-    ],
+        UploadFile | None,
+        File(
+            description="The image to use as the basis for the variation(s). "
+            "Accepts a binary file upload. "
+            "For Files API identifiers or URLs, use ``application/json`` body instead."
+        ),
+    ] = None,
     *,
     model: Annotated[
         str,
@@ -82,7 +122,7 @@ async def create_image_variations(
             min_length=1,
             max_length=255,
         ),
-    ],
+    ] = "",
     response_format: Annotated[
         str,
         Form(
@@ -117,9 +157,13 @@ async def create_image_variations(
 ) -> ImagesResponse:
     """Create variations of a given image.
 
+    Accepts either ``multipart/form-data`` (binary file upload) or
+    ``application/json`` (``image`` field with a Files API ID or URL).
+
     Args:
-        http_request: FastAPI request object to extract extra form parameters.
-        image: The image to use as the basis for the variation(s).
+        http_request: FastAPI request object used to detect content-type and
+            read the raw body for JSON requests.
+        image: Binary file upload for multipart requests.
         model: The model to use for image generation.
         response_format: The format in which the generated images are returned.
         n: The number of images to generate.
@@ -133,19 +177,43 @@ async def create_image_variations(
         ApiError: With 404 if the model does not exist; 400 on unsupported
             options or invalid values.
     """
-    with validation_error_handler():
-        request = ImageVariationParams(
-            model=model,
-            response_format=response_format,  # type: ignore[arg-type]
-            n=n,
-            size=size,
-            user=user,
-            **{  # type: ignore[arg-type]
-                k: v
-                for k, v in (await http_request.form()).items()
-                if k not in _KNOWN_PARAMS
-            },
-        )
+    content_type = http_request.headers.get("content-type", "")
+
+    if "application/json" in content_type:
+        # JSON body: image referenced by file_id or image_url
+        with validation_error_handler():
+            body = ImageVariationJsonBody.model_validate(await http_request.json())
+        input_image: InputFile = body.image.input_file
+        request: ImageVariationJsonBody | ImageVariationParams = body
+    else:
+        # Multipart form-data: binary file upload only
+        form_data = await http_request.form()
+        if image is None:
+            msg = "ValidationError"
+            raise ValidationError.from_exception_data(
+                msg,
+                [
+                    {
+                        "type": "missing",
+                        "loc": ("body", "image"),
+                        "input": None,
+                        "ctx": {},
+                    }
+                ],
+            )
+        with validation_error_handler():
+            input_image = InputFile(image)
+            request = ImageVariationParams(
+                model=model,
+                response_format=response_format,  # type: ignore[arg-type]
+                n=n,
+                size=size,
+                user=user,
+                **{  # type: ignore[arg-type]
+                    k: v for k, v in form_data.items() if k not in _KNOWN_PARAMS
+                },
+            )
+
     log_request_params(request, user_id=request.user)
     model_id = (
         await validate_model(
@@ -167,7 +235,7 @@ async def create_image_variations(
         extra_params=get_extra_model_parameters(model_id, request),
     )
 
-    results = await job.create_variations(images=[await InputFile(image).to_base64()])
+    results = await job.create_variations(images=[await input_image.to_base64()])
     return await build_images_response(
         job=job,
         results=results,

@@ -1,29 +1,37 @@
 """Local OpenAI-compatible image generation types."""
 
-from typing import Literal, Self
+from typing import TYPE_CHECKING, Literal, Self
 
 from pydantic import Field, field_validator, model_validator
 
 from stdapi.config import SETTINGS
+from stdapi.input_file import FileIdInputFile, InputFileUrl  # noqa: TC001
 from stdapi.monitoring import log_error_details
 from stdapi.types import (
+    BaseModelRequest,
     BaseModelRequestWithExtra,
     BaseModelRequestWithFormExtra,
     BaseModelResponse,
 )
 from stdapi.types.openai import Auto
 
+if TYPE_CHECKING:
+    from stdapi.input_file import InputFile
+
 __all__ = [
     "Image",
     "ImageBackground",
     "ImageBackgroundAuto",
+    "ImageEditJsonBody",
     "ImageEditParams",
     "ImageGenCompletedEvent",
     "ImageGenPartialImageEvent",
     "ImageGenerateParams",
+    "ImageInputReferenceParam",
     "ImageOutputFormats",
     "ImageOutputQuality",
     "ImageOutputQualityAuto",
+    "ImageVariationJsonBody",
     "ImageVariationParams",
     "ImagesResponse",
     "Usage",
@@ -43,6 +51,42 @@ ImageBackgroundAuto = Auto | ImageBackground
 
 #: Supported image input fidelity
 ImageInputFidelity = Literal["low", "high"]
+
+
+# Ref: openai.types.image_input_reference_param.ImageInputReferenceParam
+class ImageInputReferenceParam(BaseModelRequest):
+    """Reference to an input image — either a Files API file ID or a URL/data-URI.
+
+    Exactly one of ``file_id`` or ``image_url`` must be provided.
+    """
+
+    file_id: FileIdInputFile | None = Field(
+        default=None, description="The ID of a file uploaded via the Files API."
+    )
+    image_url: InputFileUrl | None = Field(
+        default=None, description="A fully qualified URL or base64-encoded data URL."
+    )
+
+    @model_validator(mode="after")
+    def _validate_source(self) -> Self:
+        """Ensure at least one image source is provided.
+
+        Raises:
+            ValueError: When both fields are None.
+        """
+        if self.file_id is None and self.image_url is None:
+            msg = "Provide one of 'file_id' or 'image_url'."
+            raise ValueError(msg)
+        return self
+
+    @property
+    def input_file(self) -> InputFile:
+        """Return the resolved ``InputFile`` (``file_id`` takes priority).
+
+        Returns:
+            The non-None InputFile instance.
+        """
+        return self.file_id or self.image_url  # type: ignore[return-value]
 
 
 # Ref: openai.types.image.Image
@@ -340,11 +384,10 @@ class ImageGenerateParams(_ImageBaseParams):
 
 
 # Ref: openai.types.image_edit_params.ImageEditParams
-class ImageEditParams(_ImageBaseParams, BaseModelRequestWithFormExtra):
-    """Request body for editing images (multipart/form-data)."""
+class _ImageEditCommonParams(_ImageBaseParams):
+    """Shared parameters for image-editing requests (form and JSON body)."""
 
-    # image: handled in route
-    # mask: handled in route
+    # image/mask handled in route
     prompt: str = Field(
         description="A text description of the desired image(s). "
         "Required for a majority of models.",
@@ -417,8 +460,45 @@ class ImageEditParams(_ImageBaseParams, BaseModelRequestWithFormExtra):
         return self
 
 
+class ImageEditParams(_ImageEditCommonParams, BaseModelRequestWithFormExtra):
+    """Request body for editing images (multipart/form-data)."""
+
+
+class ImageEditJsonBody(_ImageEditCommonParams):
+    """Request body for editing images (application/json).
+
+    Uses a structured ``images`` array instead of binary file uploads,
+    allowing references via Files API identifiers or HTTP/data URLs.
+    """
+
+    images: list[ImageInputReferenceParam] = Field(
+        min_length=1,
+        max_length=16,
+        description="One or more input images to edit, each referenced by a "
+        "Files API identifier (``file_*`` / ``file-*``) or an HTTP/data URL.",
+    )
+    mask: ImageInputReferenceParam | None = Field(
+        default=None,
+        description="An optional mask image indicating where edits should be applied, "
+        "referenced by a Files API identifier or URL.",
+    )
+
+
 # Ref: openai.types.image_create_variation_params.ImageCreateVariationParams
 class ImageVariationParams(_ImageBaseParams, BaseModelRequestWithFormExtra):
     """Request body for creating image variations (multipart/form-data)."""
 
     # image: handled in route
+
+
+class ImageVariationJsonBody(_ImageBaseParams):
+    """Request body for creating image variations (application/json).
+
+    Uses a structured ``image`` field instead of a binary file upload,
+    allowing reference via a Files API identifier or HTTP/data URL.
+    """
+
+    image: ImageInputReferenceParam = Field(
+        description="The input image to create a variation of, referenced by a "
+        "Files API identifier (``file_*`` / ``file-*``) or an HTTP/data URL."
+    )

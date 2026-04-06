@@ -188,3 +188,102 @@ class TestImagesVariationsProviderParams:
         assert response.data is not None
         assert len(response.data) == 1
         assert response.data[0].url is not None
+
+
+class TestImagesVariationsJsonBody:
+    """Tests for /v1/images/variations endpoint with application/json request body."""
+
+    @pytest.fixture(autouse=True)
+    def _skip_on_official_api(self, use_official_api: bool) -> None:
+        """Skip when running against the official API (variations removed, model unavailable)."""
+        if use_official_api:
+            pytest.skip(
+                "Variations endpoint removed from official OpenAI API; "
+                "amazon.nova-canvas-v1:0 not available there."
+            )
+
+    @pytest.mark.expensive
+    def test_variation_with_image_url(
+        self, openai_client: OpenAI, sample_image_file_base64: str
+    ) -> None:
+        """Test image variation via JSON body using a data URL image reference.
+
+        Validates:
+            - 200 response with valid image data
+            - Response structure matches ImagesResponse schema
+        """
+        http_client = openai_client._client  # noqa: SLF001
+        response = http_client.post(
+            f"{openai_client.base_url}images/variations",
+            json={
+                "model": "amazon.nova-canvas-v1:0",
+                "image": {"image_url": sample_image_file_base64},
+                "response_format": "b64_json",
+                "size": "512x512",
+                "n": 1,
+            },
+            headers={"Authorization": f"Bearer {openai_client.api_key}"},
+        )
+        assert response.status_code == 200, (
+            f"Expected 200, got {response.status_code}: {response.text}"
+        )
+        body = response.json()
+        assert body.get("created") is not None
+        assert body.get("data") is not None
+        assert len(body["data"]) == 1
+        assert body["data"][0].get("b64_json") is not None
+        validate_base64_image(body["data"][0]["b64_json"])
+
+    @pytest.mark.expensive
+    def test_variation_with_file_id(
+        self, openai_client: OpenAI, sample_image_file: bytes
+    ) -> None:
+        """Test image variation via JSON body using a Files API file_id reference.
+
+        Validates:
+            - Upload succeeds and returns a file-* identifier
+            - JSON body variation with that file_id returns 200 with image data
+        """
+        uploaded = openai_client.files.create(
+            file=("image.png", sample_image_file, "image/png"), purpose="assistants"
+        )
+        try:
+            http_client = openai_client._client  # noqa: SLF001
+            response = http_client.post(
+                f"{openai_client.base_url}images/variations",
+                json={
+                    "model": "amazon.nova-canvas-v1:0",
+                    "image": {"file_id": uploaded.id},
+                    "response_format": "b64_json",
+                    "size": "512x512",
+                    "n": 1,
+                },
+                headers={"Authorization": f"Bearer {openai_client.api_key}"},
+            )
+            assert response.status_code == 200, (
+                f"Expected 200, got {response.status_code}: {response.text}"
+            )
+            body = response.json()
+            assert body.get("data") is not None
+            assert len(body["data"]) == 1
+            assert body["data"][0].get("b64_json") is not None
+            validate_base64_image(body["data"][0]["b64_json"])
+        finally:
+            openai_client.files.delete(uploaded.id)
+
+    def test_missing_image_returns_400(self, openai_client: OpenAI) -> None:
+        """Test that a JSON body without an 'image' field returns 400.
+
+        Validates:
+            - 400 status code
+            - Error type is invalid_request_error
+        """
+        http_client = openai_client._client  # noqa: SLF001
+        response = http_client.post(
+            f"{openai_client.base_url}images/variations",
+            json={"model": "amazon.nova-canvas-v1:0"},
+            headers={"Authorization": f"Bearer {openai_client.api_key}"},
+        )
+        assert response.status_code == 400
+        error = response.json().get("error", {})
+        assert error.get("type") == "invalid_request_error"

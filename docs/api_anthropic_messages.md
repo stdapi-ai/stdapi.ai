@@ -50,6 +50,7 @@ Generate conversational AI responses with AWS Bedrock foundation models—includ
 | Search result input (`search_result`) |   :material-check-circle:{ .success }    | Pass search results as context                                             |
 | System messages                       |       :material-cog:{ .model-dep }       | System prompts                                                             |
 | Image & Document input from S3        | :material-plus-circle:{ .extra-feature } | S3 URLs                                                                    |
+| Files API (`file_id`)                 |   :material-check-circle:{ .success }    | Reference uploaded files in document/image sources — see [Files API](api_anthropic_files.md) |
 | **Tool Calling**                      |                                          |                                                                            |
 | Tool use (`tools`)                    |       :material-cog:{ .model-dep }       | Full Anthropic-compatible schema                                           |
 | Tool choice (`auto`, `any`, `tool`)   |       :material-cog:{ .model-dep }       | Control tool selection behavior                                            |

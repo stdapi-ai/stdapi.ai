@@ -91,3 +91,10 @@ class InvalidLanguageFormatError(ApiError):
     """Language format is invalid."""
 
     code = "invalid_language_format"
+
+
+class FileNotExistError(ApiError):
+    """Requested file does not exist or has expired."""
+
+    status = 404
+    code = "not_found"

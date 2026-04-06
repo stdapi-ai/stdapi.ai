@@ -524,6 +524,19 @@ class _Settings(BaseSettings):
         ),
     )
 
+    aws_s3_files_prefix: str = Field(
+        default="files/",
+        description=(
+            "S3 prefix (folder path) for Files API objects.\n\n"
+            "Configure S3 Lifecycle rules on this prefix to:\n"
+            "- Automatically delete expired files (tag-based, see Terraform module)\n"
+            "- Apply S3 Intelligent-Tiering for cost optimisation\n\n"
+            "Example: 'files/' stores objects under s3://bucket/files/\n"
+            "Example: 'uploads/files/' stores objects under s3://bucket/uploads/files/\n"
+            "Example: '' (empty string) stores files at bucket root (not recommended)"
+        ),
+    )
+
     aws_translate_region: RegionName | None = Field(
         default=None, description="AWS region for Translate text translation service"
     )

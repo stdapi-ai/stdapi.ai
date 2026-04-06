@@ -162,6 +162,50 @@ Enables: Speech-to-text transcription in workflows.
 
     n8n calls `POST /v1/audio/transcriptions` (see [Audio Transcriptions API](api_openai_audio_transcriptions.md)), so the model must match the speech-to-text modality.
 
+#### :material-file-upload: Files
+
+Enables: Upload files once and reference them across multiple chat completion requests without resending the raw bytes each time.
+
+n8n calls the `/v1/files` endpoints (see [Files API](api_openai_files.md)). Set **Resource** to **"Files"** in the OpenAI node for all operations below.
+
+!!! example "Upload a file — `OpenAI/Upload a file`"
+    Uploads a file to S3 and returns a `file_id` for use in subsequent requests.
+
+    **Node parameters:**
+
+    - **Resource:** Files
+    - **Operation:** Upload a File
+    - **Input Data Field Name:** name of the binary field containing the file
+    - **Purpose:** intended purpose (e.g. `assistants`, `user_data`)
+
+    **Typical workflow pattern:**
+
+    1. Receive or fetch a file (PDF, image, etc.) in an earlier node
+    2. Pass the binary data to this node
+    3. Store the returned `file_id` in a variable or database
+    4. Pass `file_id` in `OpenAI Chat Model` messages via the `type: "file"` content part for repeated analysis without re-uploading
+
+!!! example "Delete a file — `OpenAI/Delete a file`"
+    Permanently deletes a file from S3 by its `file_id`.
+
+    **Node parameters:**
+
+    - **Resource:** Files
+    - **Operation:** Delete a File
+    - **File ID:** the `file_id` of the file to delete
+
+!!! example "List files — `OpenAI/List files`"
+    Returns a paginated list of uploaded files, optionally filtered by purpose.
+
+    **Node parameters:**
+
+    - **Resource:** Files
+    - **Operation:** List Files
+    - **Purpose:** _(optional)_ filter results to a specific purpose
+    - **Return All / Limit:** control pagination; enable **Return All** or set **Limit** for the first page
+
+    Files are returned in descending order (newest first) by default.
+
 #### :material-alert-outline: Unsupported Nodes
 
 The following nodes are not yet supported:
@@ -239,6 +283,57 @@ Enables: Document understanding and extraction in workflows.
     - Model can be selected directly in the `Model` parameter
 
     n8n calls `POST /anthropic/v1/messages` with document content (see [Anthropic Messages API](api_anthropic_messages.md)), so the model must support document processing capabilities.
+
+#### :material-file-upload: Files
+
+Enables: Upload files once and reference them across multiple Messages requests as document or image sources.
+
+n8n calls the `/anthropic/v1/files` endpoints (see [Anthropic Files API](api_anthropic_files.md)). Set **Resource** to **"Files"** in the Anthropic node for all operations below.
+
+!!! example "Upload a file — `Anthropic/Upload a file`"
+    Uploads a file to S3 and returns a `file_id` for use in subsequent Messages requests.
+
+    **Node parameters:**
+
+    - **Resource:** Files
+    - **Operation:** Upload a File
+    - **Input Data Field Name:** name of the binary field containing the file
+
+    **Typical workflow pattern:**
+
+    1. Receive or fetch a file (PDF, image, etc.) in an earlier node
+    2. Pass the binary data to this node
+    3. Store the returned `file_id` in a variable or database
+    4. Pass `file_id` as a `source: {type: "file"}` in `Anthropic/Message a model` document or image blocks
+
+!!! example "Get file metadata — `Anthropic/Get file metadata`"
+    Retrieves metadata (filename, MIME type, size, creation date) for a file by its `file_id`.
+
+    **Node parameters:**
+
+    - **Resource:** Files
+    - **Operation:** Get File Metadata
+    - **File ID:** the `file_id` of the file to retrieve
+
+!!! example "List files — `Anthropic/List files`"
+    Returns a paginated list of uploaded files.
+
+    **Node parameters:**
+
+    - **Resource:** Files
+    - **Operation:** List Files
+    - **Return All / Limit:** control pagination; enable **Return All** or set **Limit** for the first page
+
+    Files are returned in ascending order (oldest first). Use `after_id` / `before_id` cursors for bidirectional pagination.
+
+!!! example "Delete a file — `Anthropic/Delete a file`"
+    Permanently deletes a file from S3 by its `file_id`.
+
+    **Node parameters:**
+
+    - **Resource:** Files
+    - **Operation:** Delete a File
+    - **File ID:** the `file_id` of the file to delete
 
 ## :material-arrow-right: Next Steps
 

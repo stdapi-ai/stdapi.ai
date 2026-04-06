@@ -316,6 +316,8 @@ async def put_s3_object(
     key: str | None = None,
     region: RegionName | None = None,
     temporary: bool = False,
+    content_disposition: str | None = None,
+    metadata: dict[str, str] | None = None,
 ) -> S3Object:
     """Upload data to S3, choosing the most efficient strategy.
 
@@ -337,6 +339,8 @@ async def put_s3_object(
         region: AWS region for bucket resolution when *bucket* is not
             specified.
         temporary: If ``True``, the object will be deleted when the request ends.
+        content_disposition: Optional ``Content-Disposition`` header value.
+        metadata: Optional user-defined S3 object metadata key/value pairs.
 
     Returns:
         An :class:`S3Object` referencing the uploaded object.
@@ -347,9 +351,13 @@ async def put_s3_object(
         raise ValueError(msg)
     key = key or await _get_tmp_key(content_type)
     s3: S3Client = get_client("s3", BUCKET_TO_REGION.get(bucket))
-    kwargs: dict[str, str] = {}
+    kwargs: dict[str, str | dict[str, str]] = {}
     if content_type:
         kwargs["ContentType"] = content_type
+    if content_disposition:
+        kwargs["ContentDisposition"] = content_disposition
+    if metadata is not None:
+        kwargs["Metadata"] = metadata
 
     if isinstance(data, bytes):
         if len(data) < _COPY_OBJECT_MAX_BYTES:
@@ -379,7 +387,11 @@ async def put_s3_object(
 
 
 async def _multipart_upload(
-    s3: S3Client, bucket: str, key: str, chunks: AsyncIterator[bytes], **kwargs: str
+    s3: S3Client,
+    bucket: str,
+    key: str,
+    chunks: AsyncIterator[bytes],
+    **kwargs: str | dict[str, str],
 ) -> None:
     """Perform a multipart upload from an async chunk iterator.
 

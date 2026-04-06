@@ -457,10 +457,11 @@ async def _convert_content_part(
                 "audio", content_type=f"audio/{part.input_audio.format}"
             )
         case File():
-            if part.file.file_data is None:
-                msg = f"Missing file_data in {part}"
+            file_input = part.file.file_id or part.file.file_data
+            if file_input is None:  # pragma: no cover
+                msg = f"Missing file in {part}"
                 raise ApiError(msg)
-            return await part.file.file_data.to_bedrock_content_block(
+            return await file_input.to_bedrock_content_block(
                 filename=part.file.filename
             )
         case _:  # pragma: no cover

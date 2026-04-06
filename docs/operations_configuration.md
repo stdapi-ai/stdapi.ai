@@ -160,6 +160,7 @@ This section provides a quick reference of all available configuration options. 
 | [`AWS_S3_REGIONAL_BUCKETS`](#aws-s3-regional-buckets)   | `{}`            | Region-specific S3 buckets for Bedrock async/batch inference operations                              |
 | [`AWS_S3_ACCEPTED_BUCKETS`](#aws-s3-accepted-buckets)   | `{}`            | External S3 buckets with read access, mapped to their region for S3 URI conversion and routing       |
 | [`AWS_S3_TMP_PREFIX`](#aws-s3-tmp-prefix)               | `tmp/`          | S3 prefix for temporary files used for jobs; configure lifecycle policies on this prefix             |
+| [`AWS_S3_FILES_PREFIX`](#aws-s3-files-prefix)           | `files/`        | S3 prefix for Files API objects; configure S3 lifecycle policies on this prefix                     |
 | [`AWS_TRANSCRIBE_S3_BUCKET`](#aws-transcribe-s3-bucket) | `AWS_S3_BUCKET` | S3 bucket for temporary audio transcription files; must be in same region as `AWS_TRANSCRIBE_REGION` |
 
 ### :material-robot: AWS AI Services
@@ -485,6 +486,49 @@ export AWS_S3_TMP_PREFIX=tmp/2025/01/
 export AWS_S3_TMP_PREFIX=
 ```
 
+#### `AWS_S3_FILES_PREFIX` { #aws-s3-files-prefix }
+
+:octicons-package-24: **Purpose**
+:   S3 prefix (folder path) for Files API objects (OpenAI and Anthropic `/v1/files` endpoints)
+
+:octicons-gear-24: **Default**
+:   `files/`
+
+:octicons-check-circle-24: **Best Practice**
+:   Configure an `AbortIncompleteMultipartUpload` S3 lifecycle rule on this prefix to clean up abandoned upload parts, and apply Intelligent-Tiering for cost optimisation
+
+```bash
+export AWS_S3_FILES_PREFIX=files/
+```
+
+!!! info "What is an S3 Prefix?"
+    An S3 prefix is a folder path within your S3 bucket. When you set `AWS_S3_FILES_PREFIX=files/`, all Files API objects are stored under that folder in your bucket.
+
+    **Example file paths:**
+
+    - With prefix `files/`: `s3://my-bucket/files/file-0190c51c7de7455d9b8c2efe27dfbf67`
+    - With prefix `uploads/files/`: `s3://my-bucket/uploads/files/file-0190...`
+    - With empty prefix ``: `s3://my-bucket/file-0190...` (not recommended)
+
+!!! warning "Trailing Slash"
+    Always include a trailing slash (`/`) in your prefix to create a proper folder structure.
+
+    - ✅ Correct: `files/` → Objects stored as `files/file-0190...`
+    - ❌ Incorrect: `files` → Objects stored as `filesfile-0190...`
+
+**Custom prefix examples:**
+
+```bash
+# Production environment
+export AWS_S3_FILES_PREFIX=prod/files/
+
+# Staging environment
+export AWS_S3_FILES_PREFIX=staging/files/
+
+# No prefix (store at bucket root - not recommended)
+export AWS_S3_FILES_PREFIX=
+```
+
 #### `AWS_TRANSCRIBE_S3_BUCKET` { #aws-transcribe-s3-bucket }
 
 :octicons-package-24: **Purpose**
@@ -580,12 +624,14 @@ export AWS_S3_ACCEPTED_BUCKETS='{"my-data-bucket": "us-east-1", "my-eu-bucket": 
 #### S3 Bucket Lifecycle Configuration { #s3-lifecycle }
 
 :octicons-package-24: **Purpose**
-:   Configure automatic deletion of temporary files to minimize storage costs
+:   Configure automatic deletion of temporary files and abandoned multipart upload parts to minimize storage costs
 
 :octicons-clock-24: **Recommendation**
-:   Configure S3 lifecycle policies to automatically delete objects under the `AWS_S3_TMP_PREFIX` after 1 day
+:   Configure S3 lifecycle policies to automatically delete objects under the `AWS_S3_TMP_PREFIX` after 1 day, and abort incomplete multipart uploads under the `AWS_S3_FILES_PREFIX` after 1 day
 
-stdapi.ai stores temporary files under the prefix configured by `AWS_S3_TMP_PREFIX` (default: `tmp/`). These include generated images, audio files, and transcription workflow files. Configure S3 lifecycle policies to automatically delete objects under this prefix after 1 day:
+stdapi.ai stores temporary files under the prefix configured by `AWS_S3_TMP_PREFIX` (default: `tmp/`). These include generated images, audio files, and transcription workflow files. Configure S3 lifecycle policies to automatically delete objects under this prefix after 1 day.
+
+Additionally, multipart file uploads (OpenAI Uploads API) store parts under `AWS_S3_FILES_PREFIX` (default: `files/`). If a session is never completed or cancelled — for example when a client disconnects — the uploaded parts remain in S3 and accumulate costs. Add an `AbortIncompleteMultipartUpload` rule on the files prefix to clean these up automatically.
 
 !!! info "Application Cleanup Behavior"
     **Short-lived temporary files:** The application attempts to clean up short-lived temporary files (such as intermediate transcription files) after processing completes.
@@ -609,18 +655,28 @@ stdapi.ai stores temporary files under the prefix configured by `AWS_S3_TMP_PREF
       "AbortIncompleteMultipartUpload": {
         "DaysAfterInitiation": 1
       }
+    },
+    {
+      "Id": "AbortIncompleteMultipartUploads",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": "files/"
+      },
+      "AbortIncompleteMultipartUpload": {
+        "DaysAfterInitiation": 1
+      }
     }
   ]
 }
 ```
 
-!!! warning "Important: Update the Prefix"
-    The `"Prefix": "tmp/"` value in the lifecycle policy must match your `AWS_S3_TMP_PREFIX` setting. If you use a custom prefix, update the policy accordingly.
+!!! warning "Important: Update the Prefixes"
+    The `"Prefix"` values in the lifecycle policy must match your `AWS_S3_TMP_PREFIX` and `AWS_S3_FILES_PREFIX` settings. If you use custom prefixes, update the policy accordingly.
 
     **Examples:**
 
-    - If `AWS_S3_TMP_PREFIX=temporary/`, use `"Prefix": "temporary/"`
-    - If `AWS_S3_TMP_PREFIX=prod/tmp/`, use `"Prefix": "prod/tmp/"`
+    - If `AWS_S3_TMP_PREFIX=temporary/`, use `"Prefix": "temporary/"` in the first rule
+    - If `AWS_S3_FILES_PREFIX=prod/files/`, use `"Prefix": "prod/files/"` in the second rule
 
 **Apply via AWS CLI:**
 
@@ -648,7 +704,7 @@ aws s3api put-bucket-lifecycle-configuration \
     - **`AWS_TRANSCRIBE_S3_BUCKET`** - Transcription temporary files (if different from AWS_S3_BUCKET)
     - **`AWS_S3_REGIONAL_BUCKETS`** - All regional buckets for async/batch operations
 
-    All these buckets use the same `AWS_S3_TMP_PREFIX` for temporary file storage.
+    All these buckets use the same `AWS_S3_TMP_PREFIX` for temporary file storage, and the same `AWS_S3_FILES_PREFIX` for multipart upload parts.
 
 ### Bedrock Configuration
 
@@ -1552,10 +1608,25 @@ Required for storing generated images, audio files, and documents. See [Storage 
       "Effect": "Allow",
       "Action": [
         "s3:PutObject",
+        "s3:PutObjectTagging",
         "s3:GetObject",
-        "s3:DeleteObject"
+        "s3:DeleteObject",
+        "s3:CreateMultipartUpload",
+        "s3:UploadPart",
+        "s3:CompleteMultipartUpload",
+        "s3:AbortMultipartUpload",
+        "s3:ListMultipartUploadParts"
       ],
       "Resource": "arn:aws:s3:::AWS_S3_BUCKET_VALUE/*"
+    },
+    {
+      "Sid": "S3FileStorageList",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListBucket",
+        "s3:ListBucketMultipartUploads"
+      ],
+      "Resource": "arn:aws:s3:::AWS_S3_BUCKET_VALUE"
     }
     ```
 
@@ -1852,10 +1923,25 @@ Required if you configure API authentication. See [Authentication](#authenticati
           "Effect": "Allow",
           "Action": [
             "s3:PutObject",
+            "s3:PutObjectTagging",
             "s3:GetObject",
-            "s3:DeleteObject"
+            "s3:DeleteObject",
+            "s3:CreateMultipartUpload",
+            "s3:UploadPart",
+            "s3:CompleteMultipartUpload",
+            "s3:AbortMultipartUpload",
+            "s3:ListMultipartUploadParts"
           ],
           "Resource": "arn:aws:s3:::my-stdapi-bucket/*"
+        },
+        {
+          "Sid": "S3FileStorageList",
+          "Effect": "Allow",
+          "Action": [
+            "s3:ListBucket",
+            "s3:ListBucketMultipartUploads"
+          ],
+          "Resource": "arn:aws:s3:::my-stdapi-bucket"
         },
         {
           "Sid": "SSMParameterAccess",
@@ -1886,7 +1972,7 @@ Required if you configure API authentication. See [Authentication](#authenticati
 | **Bedrock Marketplace Auto-Subscribe**          | `aws-marketplace:Subscribe`<br>`aws-marketplace:ViewSubscriptions`                                                                                         | `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE=true` (default)                      |
 | **Bedrock Inference Profiles & Prompt Routers** | `bedrock:GetInferenceProfile`<br>`bedrock:GetPromptRouter`                                                                                                 | `AWS_BEDROCK_ALLOW_*_ARN=true` or `AWS_BEDROCK_MODEL_ARN_MAPPING` configured |
 | **Bedrock Guardrails**                          | `bedrock:ApplyGuardrail`                                                                                                                                   | `AWS_BEDROCK_GUARDRAIL_IDENTIFIER`                                           |
-| **File Storage**                                | `s3:PutObject`<br>`s3:GetObject`<br>`s3:DeleteObject`                                                                                                      | `AWS_S3_BUCKET`                                                              |
+| **File Storage**                                | `s3:PutObject`<br>`s3:PutObjectTagging`<br>`s3:GetObject`<br>`s3:DeleteObject`<br>`s3:CreateMultipartUpload`<br>`s3:UploadPart`<br>`s3:CompleteMultipartUpload`<br>`s3:AbortMultipartUpload`<br>`s3:ListMultipartUploadParts`<br>`s3:ListBucket`<br>`s3:ListBucketMultipartUploads` | `AWS_S3_BUCKET`                                                              |
 | **KMS Encrypted S3 Buckets**                    | `kms:Decrypt`<br>`kms:GenerateDataKey`<br>with `kms:ViaService` condition                                                                                  | If S3 buckets use KMS encryption                                             |
 | **Text-to-Speech**                              | `polly:SynthesizeSpeech`<br>`polly:DescribeVoices`                                                                                                         | `AWS_POLLY_REGION`                                                           |
 | **Speech-to-Text**                              | `transcribe:StartTranscriptionJob`<br>`transcribe:GetTranscriptionJob`<br>`transcribe:DeleteTranscriptionJob`<br>`transcribe:TagResource` (on `arn:aws:transcribe:*:*:transcription-job/*`)<br>`s3:PutObject` (transcribe bucket)        | `AWS_TRANSCRIBE_REGION`<br>`AWS_TRANSCRIBE_S3_BUCKET`                        |

@@ -36,39 +36,43 @@ Edit images using inpainting with AWS Bedrock image models through an OpenAI-com
 
 <div class="feature-table" markdown>
 
-| Feature                        |                  Status                  | Notes                                                            |
-|--------------------------------|:----------------------------------------:|------------------------------------------------------------------|
-| **Editing**                    |                                          |                                                                  |
-| Image-to-image (`/edits`)      |   :material-check-circle:{ .success }    | Edit images with prompts and masks                               |
-| **Parameters**                 |                                          |                                                                  |
-| `image`                        |   :material-check-circle:{ .success }    | PNG image(s) to edit (required, supports multiple via `image[]`) |
-| `prompt`                       |   :material-check-circle:{ .success }    | Text description of desired changes                              |
-| `mask`                         |   :material-check-circle:{ .success }    | Optional mask defining edit regions                              |
-| `n` (number of images)         |   :material-check-circle:{ .success }    | Generate multiple variations per request (1-10)                  |
-| `size` (WIDTHxHEIGHT)          |   :material-check-circle:{ .success }    | Output dimensions (default: 1024x1024, format validated)         |
-| `model`                        |   :material-check-circle:{ .success }    | Required parameter                                               |
-| `response_format`              |   :material-check-circle:{ .success }    | `url` or `b64_json` (default: `url`)                             |
-| `output_format`                |   :material-check-circle:{ .success }    | `png`, `jpeg`, or `webp` (model-specific)                        |
-| `output_compression`           |   :material-check-circle:{ .success }    | Compression level 1-100% (default: 100)                          |
-| `quality`                      |   :material-check-circle:{ .success }    | Quality setting (default: `auto`, model-specific values)         |
-| `stream`                       |   :material-check-circle:{ .success }    | Generate images in streaming mode with partial results           |
-| `partial_images`               |       :material-cog:{ .model-dep }       | Number of partial images in stream (0-3, model-specific)         |
-| `background`                   | :material-close-circle:{ .unsupported }  | Always `auto`, transparent backgrounds unsupported               |
-| `input_fidelity`               | :material-close-circle:{ .unsupported }  | Ignored, always `low`                                            |
-| **Output**                     |                                          |                                                                  |
-| URL response format            |   :material-check-circle:{ .success }    | Temporary URLs to edited images (requires AWS_S3_BUCKET)         |
-| Base64 JSON format             |   :material-check-circle:{ .success }    | Inline base64-encoded images                                     |
-| PNG format                     |   :material-check-circle:{ .success }    | Lossless image output                                            |
-| JPEG format                    |       :material-cog:{ .model-dep }       | Lossy compression (model-specific)                               |
-| WEBP format                    |       :material-cog:{ .model-dep }       | Modern format with compression (model-specific)                  |
-| Streaming response             |   :material-check-circle:{ .success }    | Server-sent events with partial and final images                 |
-| **Usage tracking**             |                                          |                                                                  |
-| Input text tokens              |   :material-check-circle:{ .success }    | Estimated from prompt                                            |
-| Input image tokens             |   :material-check-circle:{ .success }    | Count of input images (image + mask)                             |
-| Output image tokens            |   :material-check-circle:{ .success }    | Image count (billing unit)                                       |
-| **Other**                      |                                          |                                                                  |
-| `user`                         |   :material-minus-circle:{ .partial }    | Logged but not used for abuse monitoring                         |
-| Extra parameters via form data | :material-plus-circle:{ .extra-feature } | Provider-specific parameters passed through                      |
+| Feature                        |                  Status                  | Notes                                                        |
+|--------------------------------|:----------------------------------------:|--------------------------------------------------------------|
+| **Editing**                    |                                          |                                                              |
+| Image-to-image (`/edits`)      |   :material-check-circle:{ .success }    | Edit images with prompts and masks                           |
+| **Request Formats**            |                                          |                                                              |
+| Multipart form-data            |   :material-check-circle:{ .success }    | Binary file uploads via `image` / `image[]` / `mask` fields  |
+| JSON body                      |   :material-check-circle:{ .success }    | Structured `images` array with Files API IDs or URLs         |
+| **Parameters**                 |                                          |                                                              |
+| `image` / `image[]`            |   :material-check-circle:{ .success }    | PNG image(s) to edit (multipart: binary upload, 1+ images)   |
+| `images` (JSON)                |   :material-check-circle:{ .success }    | Array of `{file_id}` or `{image_url}` references (JSON body) |
+| `prompt`                       |   :material-check-circle:{ .success }    | Text description of desired changes                          |
+| `mask`                         |   :material-check-circle:{ .success }    | Optional mask defining edit regions                          |
+| `n` (number of images)         |   :material-check-circle:{ .success }    | Generate multiple variations per request (1-10)              |
+| `size` (WIDTHxHEIGHT)          |   :material-check-circle:{ .success }    | Output dimensions (default: 1024x1024, format validated)     |
+| `model`                        |   :material-check-circle:{ .success }    | Required parameter                                           |
+| `response_format`              |   :material-check-circle:{ .success }    | `url` or `b64_json` (default: `url`)                         |
+| `output_format`                |   :material-check-circle:{ .success }    | `png`, `jpeg`, or `webp` (model-specific)                    |
+| `output_compression`           |   :material-check-circle:{ .success }    | Compression level 1-100% (default: 100)                      |
+| `quality`                      |   :material-check-circle:{ .success }    | Quality setting (default: `auto`, model-specific values)     |
+| `stream`                       |   :material-check-circle:{ .success }    | Generate images in streaming mode with partial results       |
+| `partial_images`               |       :material-cog:{ .model-dep }       | Number of partial images in stream (0-3, model-specific)     |
+| `background`                   | :material-close-circle:{ .unsupported }  | Always `auto`, transparent backgrounds unsupported           |
+| `input_fidelity`               | :material-close-circle:{ .unsupported }  | Ignored, always `low`                                        |
+| **Output**                     |                                          |                                                              |
+| URL response format            |   :material-check-circle:{ .success }    | Temporary URLs to edited images (requires AWS_S3_BUCKET)     |
+| Base64 JSON format             |   :material-check-circle:{ .success }    | Inline base64-encoded images                                 |
+| PNG format                     |   :material-check-circle:{ .success }    | Lossless image output                                        |
+| JPEG format                    |       :material-cog:{ .model-dep }       | Lossy compression (model-specific)                           |
+| WEBP format                    |       :material-cog:{ .model-dep }       | Modern format with compression (model-specific)              |
+| Streaming response             |   :material-check-circle:{ .success }    | Server-sent events with partial and final images             |
+| **Usage tracking**             |                                          |                                                              |
+| Input text tokens              |   :material-check-circle:{ .success }    | Estimated from prompt                                        |
+| Input image tokens             |   :material-check-circle:{ .success }    | Count of input images (image + mask)                         |
+| Output image tokens            |   :material-check-circle:{ .success }    | Image count (billing unit)                                   |
+| **Other**                      |                                          |                                                              |
+| `user`                         |   :material-minus-circle:{ .partial }    | Logged but not used for abuse monitoring                     |
+| Extra parameters via form data | :material-plus-circle:{ .extra-feature } | Provider-specific parameters passed through                  |
 
 </div>
 
@@ -168,6 +172,65 @@ Edit images using inpainting with AWS Bedrock image models through an OpenAI-com
     **Models that don't use prompt**: `stability.stable-fast-upscale-v1:0`, `stability.stable-image-erase-object-v1:0`, `stability.stable-image-remove-background-v1:0` - provide empty string or omit the `prompt` parameter.
 
     All other Stability models use only standard OpenAI parameters (`image`, `prompt`, and optionally `mask`).
+
+## Request Formats
+
+The `/v1/images/edits` endpoint accepts two request formats:
+
+### Multipart Form-Data (Binary Uploads)
+
+The classic format — upload image files directly. Use `image` (single) or `image[]` (multiple) for source images and `mask` for the optional edit mask.
+
+```bash
+curl -X POST "$BASE/v1/images/edits" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -F image=@source.png \
+  -F mask=@mask.png \
+  -F prompt="A red apple on a wooden table" \
+  -F model="amazon.nova-canvas-v1:0"
+```
+
+### JSON Body (Files API or URL References)
+
+The modern format — reference images already stored in the Files API or accessible via URL. Send `Content-Type: application/json` with an `images` array, where each element has either `file_id` or `image_url`:
+
+```bash
+# Edit using a Files API file ID
+curl -X POST "$BASE/v1/images/edits" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "amazon.nova-canvas-v1:0",
+    "prompt": "A red apple on a wooden table",
+    "images": [{"file_id": "file-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}],
+    "response_format": "b64_json",
+    "size": "1024x1024"
+  }'
+
+# Edit using an HTTP URL
+curl -X POST "$BASE/v1/images/edits" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "amazon.nova-canvas-v1:0",
+    "prompt": "Add a dramatic sky",
+    "images": [{"image_url": "https://example.com/photo.png"}],
+    "mask": {"file_id": "file-mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"},
+    "size": "1024x1024"
+  }'
+```
+
+**`ImageRef` object** (used in `images` array and `mask` field):
+
+| Field       | Type   | Description                                              |
+|-------------|--------|----------------------------------------------------------|
+| `file_id`   | string | Files API file identifier (`file-*` or `file_*` prefix)  |
+| `image_url` | string | HTTP/HTTPS URL or data URI (`data:image/png;base64,...`) |
+
+Exactly one of `file_id` or `image_url` must be provided per `ImageRef`.
+
+!!! tip "Workflow Integration"
+    The JSON body format works seamlessly with the [Files API](api_openai_files.md): upload images once, reuse them across multiple edit requests by file ID without re-uploading.
 
 ## How Image Editing Works
 

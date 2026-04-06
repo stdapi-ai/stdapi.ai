@@ -1,0 +1,297 @@
+"""OpenAI-compatible Files API routes."""
+
+from typing import TYPE_CHECKING, Annotated, Literal
+
+from fastapi import APIRouter, Depends, File, Form, Path, Query, UploadFile
+from fastapi.responses import StreamingResponse
+
+from stdapi.api_providers.openai import TAG_OPENAI
+from stdapi.auth import authenticate
+from stdapi.config import SETTINGS
+from stdapi.files import (
+    FileRecord,
+    delete_file,
+    get_file,
+    get_file_content,
+    list_files,
+    upload_file,
+)
+from stdapi.input_file import InputFile
+from stdapi.monitoring import log_request_params, log_response_params
+from stdapi.types import FILE_ID_PATTERN
+from stdapi.types.openai_files import (
+    FileDeleted,
+    FileObject,
+    FilePurpose,
+    ListFilesResponse,
+)
+
+
+def _strip(fid: str) -> str:
+    """Return the bare 32-char payload for *fid* by stripping the ``file-``/``file_`` prefix."""
+    return fid[5:]
+
+
+if TYPE_CHECKING:
+    from enum import Enum
+
+#: OpenAI files router tags
+OPENAI_FILES_TAGS: list[str | Enum] = ["Files", TAG_OPENAI]
+
+router = APIRouter(prefix=f"{SETTINGS.openai_routes_prefix}/v1", tags=OPENAI_FILES_TAGS)
+
+#: Reusable path annotation for the ``file_id`` path parameter.
+_FileId = Annotated[
+    str,
+    Path(
+        description="The ID of the file to use for this request.",
+        pattern=FILE_ID_PATTERN,
+    ),
+]
+
+
+def _to_file_object(record: FileRecord) -> FileObject:
+    """Convert a ``_FileRecord`` to an OpenAI ``FileObject`` response.
+
+    Args:
+        record: Internal ``_FileRecord`` instance.
+
+    Returns:
+        Serialisable ``FileObject``.
+    """
+    return FileObject(
+        id=f"file-{record.file_id}",
+        bytes=record.size,
+        created_at=int(record.created_at.timestamp()),
+        filename=record.filename,
+        purpose=record.purpose or "user_data",
+        status="processed",
+        expires_at=record.expires_at,
+    )
+
+
+@router.post(
+    "/files",
+    summary="OpenAI - POST /v1/files",
+    description="Upload a file that can be used across various endpoints.",
+    response_description="The uploaded File object.",
+    response_model_exclude_none=True,
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "multipart/form-data": {
+                    "examples": {
+                        "assistants": {
+                            "summary": "Upload for Assistants API",
+                            "value": {"purpose": "assistants"},
+                        },
+                        "batch": {
+                            "summary": "Upload for Batch API (expires after 30 days)",
+                            "value": {"purpose": "batch"},
+                        },
+                        "fine-tune": {
+                            "summary": "Upload for fine-tuning",
+                            "value": {"purpose": "fine-tune"},
+                        },
+                    }
+                }
+            }
+        }
+    },
+)
+async def upload(
+    file: Annotated[
+        UploadFile,
+        File(..., description="The File object (not file name) to be uploaded."),
+    ],
+    purpose: Annotated[
+        FilePurpose,
+        Form(
+            description=(
+                "The intended purpose of the uploaded file.\n\n"
+                "Supported values:\n"
+                "- `assistants`: Used in the Assistants API\n"
+                "- `batch`: Used in the Batch API\n"
+                "- `fine-tune`: Used for fine-tuning\n"
+                "- `vision`: Images used for vision fine-tuning\n"
+                "- `user_data`: Flexible file type for any purpose\n"
+                "- `evals`: Used for eval data sets"
+            )
+        ),
+    ] = "assistants",
+    expires_after_anchor: Annotated[  # noqa: ARG001
+        Literal["created_at"] | None,
+        Form(
+            alias="expires_after[anchor]",
+            description="Anchor timestamp after which the expiration policy applies. Supported anchors: `created_at`.",
+        ),
+    ] = None,
+    expires_after_seconds: Annotated[
+        int | None,
+        Form(
+            alias="expires_after[seconds]",
+            ge=3600,
+            le=2592000,
+            description=(
+                "The number of seconds after the anchor time that the file will expire.\n"
+                "Must be between 3600 (1 hour) and 2592000 (30 days).\n"
+                "By default, files with `purpose=batch` expire after 30 days and all other files are persisted until they are manually deleted."
+            ),
+        ),
+    ] = None,
+    _: Annotated[None, Depends(authenticate)] = None,
+) -> FileObject:
+    """Upload a file.
+
+    Returns:
+        FileObject with metadata for the uploaded file.
+
+    Raises:
+        ApiError: If the upload parameters are invalid or S3 is not configured.
+    """
+    log_request_params({"purpose": purpose, "filename": file.filename})
+    return log_response_params(
+        _to_file_object(
+            await upload_file(InputFile(file), purpose, expires_after_seconds)
+        )
+    )
+
+
+@router.get(
+    "/files",
+    summary="OpenAI - GET /v1/files",
+    description="Returns a list of files.",
+    response_description="A list of File objects.",
+    response_model_exclude_none=True,
+)
+async def list_files_endpoint(
+    purpose: Annotated[
+        str | None, Query(description="Only return files with the given purpose.")
+    ] = None,
+    after: Annotated[
+        str | None,
+        Query(
+            description=(
+                "A cursor for use in pagination. `after` is an object ID that defines your place in the list. "
+                "For instance, if you make a list request and receive 100 objects, ending with obj_foo, "
+                "your subsequent call can include after=obj_foo in order to fetch the next page of the list."
+            ),
+            pattern=FILE_ID_PATTERN,
+        ),
+    ] = None,
+    limit: Annotated[
+        int,
+        Query(
+            ge=1,
+            le=10000,
+            description="A limit on the number of objects to be returned. Limit can range between 1 and 10,000, and the default is 10,000.",
+        ),
+    ] = 10000,
+    order: Annotated[
+        Literal["asc", "desc"],
+        Query(
+            description="Sort order by the `created_at` timestamp of the objects. `asc` for ascending order and `desc` for descending order."
+        ),
+    ] = "desc",
+    _: Annotated[None, Depends(authenticate)] = None,
+) -> ListFilesResponse:
+    """List files with cursor-based pagination.
+
+    Returns:
+        ListFilesResponse with paginated file objects.
+
+    Raises:
+        ApiError: If S3 is not configured.
+    """
+    log_request_params(
+        {"purpose": purpose, "after": after, "limit": limit, "order": order}
+    )
+    records, has_more = await list_files(
+        _strip(after) if after else None, None, limit, order, purpose
+    )
+    files = [_to_file_object(r) for r in records]
+    return log_response_params(
+        ListFilesResponse(
+            data=files,
+            has_more=has_more,
+            first_id=files[0].id if files else "",
+            last_id=files[-1].id if files else "",
+        )
+    )
+
+
+@router.get(
+    "/files/{file_id}",
+    summary="OpenAI - GET /v1/files/{file_id}",
+    description="Returns information about a specific file.",
+    response_description="The File object.",
+    response_model_exclude_none=True,
+)
+async def retrieve_file(
+    file_id: _FileId, _: Annotated[None, Depends(authenticate)] = None
+) -> FileObject:
+    """Retrieve metadata for a specific file.
+
+    Args:
+        file_id: Unique file identifier.
+
+    Returns:
+        FileObject with file metadata.
+
+    Raises:
+        FileNotExistError: If the file does not exist or has expired (404).
+    """
+    log_request_params({"file_id": file_id})
+    return log_response_params(_to_file_object(await get_file(_strip(file_id))))
+
+
+@router.delete(
+    "/files/{file_id}",
+    summary="OpenAI - DELETE /v1/files/{file_id}",
+    description="Delete a file.",
+    response_description="Deletion status.",
+    response_model_exclude_none=True,
+)
+async def delete_file_endpoint(
+    file_id: _FileId, _: Annotated[None, Depends(authenticate)] = None
+) -> FileDeleted:
+    """Delete a file by ID.
+
+    Args:
+        file_id: Unique file identifier.
+
+    Returns:
+        FileDeleted confirmation.
+
+    Raises:
+        FileNotExistError: If the file does not exist (404).
+    """
+    log_request_params({"file_id": file_id})
+    payload = _strip(file_id)
+    await delete_file(payload)
+    return log_response_params(FileDeleted(id=f"file-{payload}", deleted=True))
+
+
+@router.get(
+    "/files/{file_id}/content",
+    summary="OpenAI - GET /v1/files/{file_id}/content",
+    description="Returns the contents of the specified file.",
+    response_description="The raw file content.",
+)
+async def get_content(
+    file_id: _FileId, _: Annotated[None, Depends(authenticate)] = None
+) -> StreamingResponse:
+    """Stream the raw content of a file.
+
+    Args:
+        file_id: Unique file identifier.
+
+    Returns:
+        StreamingResponse with raw file bytes.
+
+    Raises:
+        FileNotExistError: If the file does not exist or has expired (404).
+    """
+    log_request_params({"file_id": file_id})
+    stream, content_type = await get_file_content(_strip(file_id))
+    return StreamingResponse(stream, media_type=content_type)

@@ -52,6 +52,7 @@ nav:
           - API Reference: api_reference.md
           - OpenAI Compatible:
             - Chat Completions: api_openai_chat_completions.md
+            - Files: api_openai_files.md
             - Images Generations: api_openai_images_generations.md
             - Images Edits: api_openai_images_edits.md
             - Images Variations: api_openai_images_variations.md
@@ -62,6 +63,7 @@ nav:
             - Models: api_openai_models.md
           - Anthropic Compatible:
             - Messages: api_anthropic_messages.md
+            - Files: api_anthropic_files.md
             - Models: api_anthropic_models.md
       - Operations:
           - Getting started: operations_getting_started.md

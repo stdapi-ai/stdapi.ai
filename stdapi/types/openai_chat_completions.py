@@ -5,7 +5,7 @@ from typing import Annotated, ClassVar, Literal, Self
 from pydantic import AliasChoices, Field, model_validator
 
 from stdapi.api_errors import UnsupportedParameterError
-from stdapi.input_file import InputFile  # noqa: TC001
+from stdapi.input_file import FileIdInputFile, InputFile  # noqa: TC001
 from stdapi.types import BaseModelRequest, BaseModelRequestWithExtra, BaseModelResponse
 from stdapi.types.bedrock import AmazonBedrockGuardrailConfigParams  # noqa: TC001
 from stdapi.types.openai import (
@@ -107,7 +107,7 @@ class ChatCompletionContentPartImageParam(BaseModelRequest):
 class FileFile(BaseModelRequest):
     """File content descriptor."""
 
-    file_id: str | None = Field(
+    file_id: FileIdInputFile | None = Field(
         default=None, description="The ID of an uploaded file to use as input."
     )
     file_data: InputFile | None = Field(

@@ -25,8 +25,6 @@ use tools in streaming mode), the test calls ``pytest.skip()`` so the result
 is recorded as *skipped* — not as a failure — in the report.
 """
 
-from __future__ import annotations
-
 import base64
 import json
 import struct

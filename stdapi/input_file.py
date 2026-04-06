@@ -14,6 +14,7 @@ from aiohttp import ClientError as AIOHTTPClientError
 from aiohttp import ClientSession
 from magic import from_buffer, from_file
 from pydantic_core.core_schema import (
+    chain_schema,
     no_info_plain_validator_function,
     plain_serializer_function_ser_schema,
     str_schema,
@@ -36,6 +37,7 @@ from stdapi.aws_s3 import (
     put_s3_object,
 )
 from stdapi.config import DOWNLOAD_TIMEOUT, SETTINGS
+from stdapi.files import resolve_file_bucket
 from stdapi.security import validate_url_ssrf
 from stdapi.server import HTTP_CLIENT_HEADERS
 from stdapi.utils import (
@@ -307,7 +309,14 @@ class _FileSource(ABC):
         return f"data:{await self.get_content_type() or 'application/octet-stream'};base64,{await self.to_base64()}"
 
     async def to_s3(
-        self, region: RegionName, *, bucket: str | None = None, key: str | None = None
+        self,
+        region: RegionName,
+        *,
+        bucket: str | None = None,
+        key: str | None = None,
+        temporary: bool = True,
+        content_disposition: str | None = None,
+        metadata: dict[str, str] | None = None,
     ) -> S3Object:
         """Ensure the file is on S3 in *region* and return an ``S3Object``.
 
@@ -319,6 +328,9 @@ class _FileSource(ABC):
                 regional bucket from settings is used.
             key: Explicit destination object key.  When ``None``, a
                 temporary key is auto-generated.
+            temporary: Tag the object for lifecycle cleanup when ``True``.
+            content_disposition: ``Content-Disposition`` header value.
+            metadata: User-defined S3 object metadata key/value pairs.
 
         Returns:
             An ``S3Object`` pointing to the S3 object.
@@ -329,7 +341,9 @@ class _FileSource(ABC):
             bucket=bucket,
             key=key,
             region=region,
-            temporary=True,
+            temporary=temporary,
+            content_disposition=content_disposition,
+            metadata=metadata,
         )
 
     def _metadata_from_bytes(self, data: bytes) -> None:
@@ -395,12 +409,21 @@ class _S3Source(_FileSource):
         return await get_bytes_from_s3(self._bucket, self._key)
 
     async def to_s3(
-        self, region: RegionName, *, bucket: str | None = None, key: str | None = None
+        self,
+        region: RegionName,
+        *,
+        bucket: str | None = None,
+        key: str | None = None,
+        temporary: bool = True,
+        content_disposition: str | None = None,  # noqa: ARG002
+        metadata: dict[str, str] | None = None,  # noqa: ARG002
     ) -> S3Object:
         """Ensure the file is on S3 in *region* and return an ``S3Object``.
 
         - S3 files already in *region* are returned as-is.
         - S3 files in another region are copied via server-side copy.
+          ``content_disposition`` and ``metadata`` are not applied during
+          server-side copy and are silently ignored.
 
         This is a **terminal method** — calling it consumes the source.
 
@@ -410,6 +433,9 @@ class _S3Source(_FileSource):
                 regional bucket from settings is used.
             key: Explicit destination object key.  When ``None``, a
                 temporary key is auto-generated.
+            temporary: Tag the object for lifecycle cleanup when ``True``.
+            content_disposition: ``Content-Disposition`` header value.
+            metadata: User-defined S3 object metadata key/value pairs.
 
         Returns:
             An ``S3Object`` pointing to the S3 object.
@@ -425,7 +451,7 @@ class _S3Source(_FileSource):
             dest_bucket=bucket,
             dest_key=key,
             dest_region=region,
-            temporary=True,
+            temporary=temporary,
         )
 
 
@@ -531,7 +557,14 @@ class _HttpSource(_FileSource):
         return body
 
     async def to_s3(
-        self, region: RegionName, *, bucket: str | None = None, key: str | None = None
+        self,
+        region: RegionName,
+        *,
+        bucket: str | None = None,
+        key: str | None = None,
+        temporary: bool = True,
+        content_disposition: str | None = None,
+        metadata: dict[str, str] | None = None,
     ) -> S3Object:
         """Ensure the file is on S3 in *region* and return an ``S3Object``.
 
@@ -543,6 +576,9 @@ class _HttpSource(_FileSource):
                 regional bucket from settings is used.
             key: Explicit destination object key.  When ``None``, a
                 temporary key is auto-generated.
+            temporary: Tag the object for lifecycle cleanup when ``True``.
+            content_disposition: ``Content-Disposition`` header value.
+            metadata: User-defined S3 object metadata key/value pairs.
 
         Returns:
             An ``S3Object`` pointing to the S3 object.
@@ -562,7 +598,9 @@ class _HttpSource(_FileSource):
                 region=region,
                 bucket=bucket,
                 key=key,
-                temporary=True,
+                temporary=temporary,
+                content_disposition=content_disposition,
+                metadata=metadata,
             )
 
     async def _validate_ssrf(self) -> None:
@@ -765,7 +803,14 @@ class _UploadSource(_FileSource):
             del self._upload
 
     async def to_s3(
-        self, region: RegionName, *, bucket: str | None = None, key: str | None = None
+        self,
+        region: RegionName,
+        *,
+        bucket: str | None = None,
+        key: str | None = None,
+        temporary: bool = True,
+        content_disposition: str | None = None,
+        metadata: dict[str, str] | None = None,
     ) -> S3Object:
         """Ensure the file is on S3 in *region* and return an ``S3Object``.
 
@@ -777,6 +822,9 @@ class _UploadSource(_FileSource):
                 regional bucket from settings is used.
             key: Explicit destination object key.  When ``None``, a
                 temporary key is auto-generated.
+            temporary: Tag the object for lifecycle cleanup when ``True``.
+            content_disposition: ``Content-Disposition`` header value.
+            metadata: User-defined S3 object metadata key/value pairs.
 
         Returns:
             An ``S3Object`` pointing to the S3 object.
@@ -791,7 +839,9 @@ class _UploadSource(_FileSource):
                 region=region,
                 bucket=bucket,
                 key=key,
-                temporary=True,
+                temporary=temporary,
+                content_disposition=content_disposition,
+                metadata=metadata,
             )
         finally:
             await self._upload.close()
@@ -1052,7 +1102,14 @@ class InputFile:
         return await self._source.to_data_uri()
 
     async def to_s3(
-        self, region: RegionName, *, bucket: str | None = None, key: str | None = None
+        self,
+        region: RegionName,
+        *,
+        bucket: str | None = None,
+        key: str | None = None,
+        temporary: bool = True,
+        content_disposition: str | None = None,
+        metadata: dict[str, str] | None = None,
     ) -> S3Object:
         """Ensure the file is on S3 in *region* and return an ``S3Object``.
 
@@ -1062,6 +1119,9 @@ class InputFile:
                 regional bucket from settings is used.
             key: Explicit destination object key.  When ``None``, a
                 temporary key is auto-generated.
+            temporary: Tag the object for lifecycle cleanup when ``True``.
+            content_disposition: ``Content-Disposition`` header value.
+            metadata: User-defined S3 object metadata key/value pairs.
 
         Returns:
             An ``S3Object`` pointing to the S3 object.
@@ -1069,7 +1129,14 @@ class InputFile:
         Raises:
             ApiError: When the file cannot be uploaded or copied.
         """
-        return await self._source.to_s3(region, bucket=bucket, key=key)
+        return await self._source.to_s3(
+            region,
+            bucket=bucket,
+            key=key,
+            temporary=temporary,
+            content_disposition=content_disposition,
+            metadata=metadata,
+        )
 
     async def to_bedrock_content_block(
         self,
@@ -1194,6 +1261,77 @@ class InputFileBase64(InputFile):
     ALLOWED_ORIGINS: frozenset[_FileOrigin] = frozenset(
         {_FileOrigin.BASE64, _FileOrigin.DATA_URI}
     )
+
+
+class FileIdInputFile(InputFile):
+    """``InputFile`` backed by a Files API file identifier.
+
+    Accepts a ``file-*`` identifier string at the Pydantic level and
+    resolves it to the corresponding S3 object at runtime.
+    """
+
+    def __new__(cls, value: str) -> Self:
+        """Create a ``FileIdInputFile`` from a Files API identifier.
+
+        Args:
+            value: Files API file identifier, e.g. ``file-{32 base32 chars}``
+                or ``file_{32 base32 chars}``.  The prefix is stripped
+                immediately; the bare payload is used for S3 key construction.
+
+        Returns:
+            A new ``FileIdInputFile`` backed by the corresponding S3 object.
+
+        Raises:
+            ApiError: If no S3 bucket is configured (503).
+        """
+        payload = value[5:]  # strip 5-char prefix (file- or file_)
+        bucket = resolve_file_bucket(payload)
+        key = f"{SETTINGS.aws_s3_files_prefix}{payload}"
+        instance: Self = object.__new__(cls)
+        instance._origin = _FileOrigin.S3_URI
+        instance._source = _S3Source(f"s3://{bucket}/{key}", bucket, key)
+        _track_current_input_files(instance)
+        return instance
+
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls, source_type: type, handler: GetCoreSchemaHandler
+    ) -> CoreSchema:
+        """Return the Pydantic v2 core schema for file identifier strings.
+
+        Args:
+            source_type: The Python type being processed.
+            handler: Pydantic schema generation handler.
+
+        Returns:
+            A core schema that validates ``file-*`` identifier strings.
+        """
+        return chain_schema(
+            [
+                str_schema(pattern=r"^file[-_][a-z2-7]{32}$"),
+                no_info_plain_validator_function(
+                    cls,
+                    serialization=plain_serializer_function_ser_schema(
+                        repr, info_arg=False
+                    ),
+                ),
+            ]
+        )
+
+    @classmethod
+    def __get_pydantic_json_schema__(
+        cls, _schema: CoreSchema, handler: GetJsonSchemaHandler
+    ) -> JsonSchemaValue:
+        """Return the JSON schema for Files API identifier strings.
+
+        Args:
+            _schema: The core schema.
+            handler: Pydantic JSON schema handler.
+
+        Returns:
+            A JSON schema dict for ``file-`` or ``file_`` identifier strings.
+        """
+        return {"type": "string", "pattern": r"^file[-_]"}
 
 
 def get_s3_input_regions() -> dict[RegionName, int]:

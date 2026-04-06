@@ -40,8 +40,6 @@ Security per test run:
     - ``--max-budget-usd 10`` caps API spend per invocation to prevent runaway loops.
 """
 
-from __future__ import annotations
-
 import json
 import os
 import shutil

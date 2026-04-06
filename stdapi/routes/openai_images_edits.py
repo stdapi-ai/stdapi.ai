@@ -3,6 +3,11 @@
 This module implements the /v1/images/edits endpoint following the OpenAI API
 specification, calling AWS Bedrock image generation models (e.g., Amazon Nova Canvas)
 to edit images using inpainting techniques.
+
+Two request formats are supported:
+- ``multipart/form-data``: binary file uploads via ``image`` / ``mask`` fields.
+- ``application/json``: structured body with an ``images`` array of ``ImageRef``
+  objects (Files API identifiers or HTTP/data URLs) and an optional ``mask``.
 """
 
 from asyncio import create_task, gather
@@ -29,10 +34,12 @@ from stdapi.routes.openai_images_generations import stream_generator
 from stdapi.tokenizer import estimate_token_count
 from stdapi.types.openai_images import (
     ImageBackgroundAuto,
+    ImageEditJsonBody,
     ImageEditParams,
     ImageInputFidelity,
     ImageOutputFormats,
     ImagesResponse,
+    _ImageEditCommonParams,
 )
 from stdapi.utils import validation_error_handler
 
@@ -47,27 +54,26 @@ _KNOWN_PARAMS = set(ImageEditParams.model_fields.keys()) | {"image", "image[]", 
 def _merge_image_parameters(
     form_data: FormData, image_param: list[UploadFile] | None
 ) -> list[UploadFile]:
-    """Merge image files from both 'image' and 'image[]' form parameters.
+    """Merge image files from both ``image`` and ``image[]`` form parameters.
 
-    FastAPI does not support validation_alias for File parameters in multipart/form-data
-    requests. The parameter name matching occurs at the request parsing level before
-    Pydantic validation, preventing alias resolution from working.
-
-    This function provides a workaround by manually extracting files uploaded with the
-    'image[]' parameter name and merging them with files from the standard 'image'
-    parameter, enabling OpenAI API compatibility for array-style parameter notation.
+    FastAPI does not support ``validation_alias`` for ``File`` parameters in
+    multipart/form-data requests — alias resolution happens before Pydantic
+    validation.  This function provides the workaround by manually extracting
+    ``image[]``-keyed files from the raw form data and merging them with any
+    files already captured by the ``image`` FastAPI parameter.
 
     Args:
         form_data: Parsed multipart form data from the request.
-        image_param: Files uploaded via the 'image' parameter, or None if not provided.
+        image_param: Files uploaded via the ``image`` parameter, or ``None``.
 
     Returns:
-        Combined list of UploadFile objects from both parameters.
+        Combined list of ``UploadFile`` objects from both parameters.
 
     Raises:
-        ValidationError: If no images are provided via either parameter.
+        ValidationError: If no images are provided, or if a non-file value is
+            submitted under the ``image[]`` key.
     """
-    images: list[UploadFile] = list(image_param) if image_param else []
+    images: list[UploadFile] = list(image_param or [])
 
     for key, value in form_data.multi_items():
         if key == "image[]":
@@ -138,18 +144,37 @@ def _merge_image_parameters(
                                 "partial_images": 2,
                             },
                         },
-                        "multiple": {
-                            "summary": "Multiple edits",
+                    }
+                },
+                "application/json": {
+                    "examples": {
+                        "file_id": {
+                            "summary": "Edit image by Files API ID",
                             "value": {
                                 "model": "amazon.nova-canvas-v1:0",
-                                "prompt": "A modern living room",
-                                "response_format": "b64_json",
-                                "n": 3,
-                                "size": "512x512",
+                                "prompt": "A red apple on a wooden table",
+                                "images": [
+                                    {"file_id": "file-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}
+                                ],
+                                "response_format": "url",
+                                "n": 1,
+                                "size": "1024x1024",
+                            },
+                        },
+                        "image_url": {
+                            "summary": "Edit image by URL",
+                            "value": {
+                                "model": "amazon.nova-canvas-v1:0",
+                                "prompt": "A sunset over mountains",
+                                "images": [
+                                    {"image_url": "https://example.com/image.png"}
+                                ],
+                                "stream": True,
+                                "partial_images": 2,
                             },
                         },
                     }
-                }
+                },
             }
         }
     },
@@ -161,8 +186,8 @@ async def edit_images(
     image: Annotated[
         list[UploadFile] | None,
         File(
-            description="The image(s) to edit.",
-            min_length=1,
+            description="The image(s) to edit. Accepts binary file uploads. "
+            "For Files API identifiers or URLs, use ``application/json`` body instead.",
             validation_alias=AliasChoices("image", "image[]"),
         ),
     ] = None,
@@ -180,7 +205,7 @@ async def edit_images(
             min_length=1,
             max_length=255,
         ),
-    ],
+    ] = "",
     mask: Annotated[
         UploadFile | None,
         File(
@@ -280,14 +305,18 @@ async def edit_images(
     ] = False,
     _: Annotated[None, Depends(authenticate)] = None,
 ) -> ImagesResponse | EventSourceResponse:
-    """Edit images using a prompt and mask.
+    """Edit images using a prompt and optional mask.
+
+    Accepts either ``multipart/form-data`` (binary file uploads) or
+    ``application/json`` (``images`` array with Files API IDs or URLs).
 
     Args:
-        http_request: FastAPI request object to extract extra form parameters.
-        image: The image(s) to edit (single or multiple).
+        http_request: FastAPI request object used to detect content-type and
+            read the raw body for JSON requests.
+        image: Binary file upload(s) for multipart requests.
         prompt: A text description of the desired image(s).
         model: The model to use for image generation.
-        mask: An additional image indicating where the image should be edited.
+        mask: Binary mask upload for multipart requests.
         response_format: The format in which the generated images are returned.
         n: The number of images to generate.
         size: The size of the generated images.
@@ -308,30 +337,43 @@ async def edit_images(
         ApiError: With 404 if the model does not exist; 400 on unsupported
             options or invalid values.
     """
-    form_data = await http_request.form()
+    content_type = http_request.headers.get("content-type", "")
 
-    with validation_error_handler():
-        image = _merge_image_parameters(form_data, image)
-        request = ImageEditParams(
-            prompt=prompt,
-            model=model,
-            response_format=response_format,  # type: ignore[arg-type]
-            n=n,
-            size=size,
-            user=user,
-            background=background,
-            input_fidelity=input_fidelity,
-            output_compression=output_compression,
-            output_format=output_format,
-            partial_images=partial_images,
-            quality=quality,
-            stream=stream,
-            **{  # type: ignore[arg-type]
-                k: v for k, v in form_data.items() if k not in _KNOWN_PARAMS
-            },
-        )
+    if "application/json" in content_type:
+        # JSON body: structured images array with file_id or image_url references
+        with validation_error_handler():
+            body = ImageEditJsonBody.model_validate(await http_request.json())
+        input_images: list[InputFile] = [ref.input_file for ref in body.images]
+        input_mask: InputFile | None = ref.input_file if (ref := body.mask) else None
+        request: _ImageEditCommonParams = body
+    else:
+        # Multipart form-data: binary file uploads only
+        form_data = await http_request.form()
+        with validation_error_handler():
+            images = _merge_image_parameters(form_data, image)
+            input_images = [InputFile(img) for img in images]
+            input_mask = InputFile(mask) if mask else None
+            request = ImageEditParams(
+                prompt=prompt,
+                model=model,
+                response_format=response_format,  # type: ignore[arg-type]
+                n=n,
+                size=size,
+                user=user,
+                background=background,
+                input_fidelity=input_fidelity,
+                output_compression=output_compression,
+                output_format=output_format,
+                partial_images=partial_images,
+                quality=quality,
+                stream=stream,
+                **{  # type: ignore[arg-type]
+                    k: v for k, v in form_data.items() if k not in _KNOWN_PARAMS
+                },
+            )
+
     log_request_params(request, user_id=request.user)
-    model = (
+    model_id = (
         await validate_model(
             request.model,
             input_modality="IMAGE",
@@ -341,7 +383,7 @@ async def edit_images(
     ).id
 
     width, height = map(int, request.size.split("x"))
-    job = get_image_model(model).get_image_edit_job(
+    job = get_image_model(model_id).get_image_edit_job(
         prompt=request.prompt,
         count=request.n,
         width=width,
@@ -349,15 +391,15 @@ async def edit_images(
         output_format=request.output_format,
         output_compression=request.output_compression,
         is_url=request.response_format == "url" and not request.stream,
-        extra_params=get_extra_model_parameters(model, request),
+        extra_params=get_extra_model_parameters(model_id, request),
     )
 
-    if mask:
+    if input_mask:
         *images_b64, mask_b64 = await gather(
-            *(InputFile(img).to_base64() for img in [*image, mask])
+            *(img.to_base64() for img in [*input_images, input_mask])
         )
     else:
-        images_b64 = await gather(*(InputFile(img).to_base64() for img in image))
+        images_b64 = list(await gather(*(img.to_base64() for img in input_images)))
         mask_b64 = None
 
     # Handle streaming requests
@@ -387,5 +429,5 @@ async def edit_images(
         response_format=request.response_format,
         image_count=request.n,
         text_tokens=text_tokens,
-        image_tokens=len(image) + (0 if mask is None else 1),
+        image_tokens=len(input_images) + (0 if input_mask is None else 1),
     )
