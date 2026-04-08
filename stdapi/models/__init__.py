@@ -216,13 +216,15 @@ class ModelBase[RequestT, ResponseT]:
     MATCHER: ClassVar[str | Pattern[str]] = ""
 
     #: Maps HTTP header name (lowercase) to a (field_key, transform) tuple.
-    #: The transform callable converts the raw header string to the expected value type.
     PASSTHROUGH_HEADERS: ClassVar[
         MappingProxyType[str, tuple[str, Callable[[str], Any]]]
     ] = MappingProxyType({})
 
     #: Regex to extract model alias from model ID
     ALIAS_MATCHER: ClassVar[Pattern[str] | None] = None
+
+    #: Whether the model supports ``s3Location`` for document content blocks in the Bedrock Converse API.
+    S3_LOCATION_DOCUMENT_SUPPORTED: ClassVar[bool] = True
 
     def __init__(self, model_id: str) -> None:
         """Initialize the model with its Bedrock model identifier.
@@ -448,6 +450,74 @@ class ModelBase[RequestT, ResponseT]:
             )["Body"].read()
         )
 
+    async def _prepare_converse_request_for_region(
+        self, request: ConverseRequestBaseTypeDef, region: RegionName
+    ) -> None:
+        """Prepare a Converse request in-place for *region*.
+
+        Args:
+            request: Converse request payload to mutate.
+            region: AWS region to target.
+        """
+        await resolve_all_bedrock_content_blocks(
+            region, document_s3_location=self.S3_LOCATION_DOCUMENT_SUPPORTED
+        )
+        _set_effective_region(region)
+        request["modelId"] = (
+            await get_model_details(self._model_id)
+        ).get_id_for_region(region, inference_profile=True)
+        request["requestMetadata"] = build_stdapi_metadata(
+            request.get("requestMetadata")
+        )
+
+    async def _converse(
+        self,
+        request: ConverseRequestBaseTypeDef,
+        region: RegionName,
+        *,
+        single_region: bool,
+    ) -> ConverseResponseTypeDef:
+        """Call the Bedrock Converse API for *region*.
+
+        Args:
+            request: Converse request payload (``modelId`` is injected here).
+            region: AWS region to target.
+            single_region: Selects the botocore client (see :func:`bedrock_client`).
+
+        Returns:
+            Bedrock Converse response.
+        """
+        await self._prepare_converse_request_for_region(request, region)
+        with handle_bedrock_client_error():
+            return await bedrock_client(region, single_region=single_region).converse(
+                **request
+            )
+
+    async def _converse_stream(
+        self,
+        request: ConverseRequestBaseTypeDef,
+        region: RegionName,
+        *,
+        single_region: bool,
+    ) -> ConverseStreamResponseTypeDef:
+        """Open the Bedrock ConverseStream API for *region*.
+
+        Failover is possible until the stream opens; once open, the region is locked.
+
+        Args:
+            request: Converse request payload (``modelId`` is injected here).
+            region: AWS region to target.
+            single_region: Selects the botocore client (see :func:`bedrock_client`).
+
+        Returns:
+            Bedrock ConverseStream response containing the event stream.
+        """
+        await self._prepare_converse_request_for_region(request, region)
+        with handle_bedrock_client_error():
+            return await bedrock_client(
+                region, single_region=single_region
+            ).converse_stream(**request)
+
     async def converse(
         self, request: ConverseRequestBaseTypeDef
     ) -> ConverseResponseTypeDef:
@@ -463,9 +533,7 @@ class ModelBase[RequestT, ResponseT]:
         return await _route_and_execute(
             self._model_id,
             candidates,
-            lambda r: _converse(
-                self._model_id, request, r, single_region=len(candidates) == 1
-            ),
+            lambda r: self._converse(request, r, single_region=len(candidates) == 1),
         )
 
     async def converse_stream(
@@ -486,8 +554,8 @@ class ModelBase[RequestT, ResponseT]:
         return await _route_and_execute(
             self._model_id,
             candidates,
-            lambda r: _converse_stream(
-                self._model_id, request, r, single_region=len(candidates) == 1
+            lambda r: self._converse_stream(
+                request, r, single_region=len(candidates) == 1
             ),
         )
 
@@ -1653,76 +1721,3 @@ def build_stdapi_metadata(existing: Mapping[str, str] | None = None) -> dict[str
     ):
         metadata["stdapi-ai.user_id"] = user_id
     return metadata
-
-
-async def _prepare_converse_request_for_region(
-    model_id: str, request: ConverseRequestBaseTypeDef, region: RegionName
-) -> None:
-    """Prepare a Converse request in-place for *region*.
-
-    Sets the effective region, resolves pending S3 content blocks, injects
-    ``modelId``, and injects ``stdapi-ai.*`` metadata.
-
-    Args:
-        model_id: Bedrock model identifier.
-        request: Converse request payload to mutate.
-        region: AWS region to target.
-    """
-    _set_effective_region(region)
-    await resolve_all_bedrock_content_blocks(region)
-    request["modelId"] = (await get_model_details(model_id)).get_id_for_region(
-        region, inference_profile=True
-    )
-    request["requestMetadata"] = build_stdapi_metadata(request.get("requestMetadata"))
-
-
-async def _converse(
-    model_id: str,
-    request: ConverseRequestBaseTypeDef,
-    region: RegionName,
-    *,
-    single_region: bool,
-) -> ConverseResponseTypeDef:
-    """Call the Bedrock Converse API and return the response.
-
-    Args:
-        model_id: Bedrock model identifier.
-        request: Converse request payload (``modelId`` is injected here).
-        region: AWS region to target.
-        single_region: Selects the botocore client (see :func:`bedrock_client`).
-
-    Returns:
-        Bedrock Converse response.
-    """
-    await _prepare_converse_request_for_region(model_id, request, region)
-    with handle_bedrock_client_error():
-        return await bedrock_client(region, single_region=single_region).converse(
-            **request
-        )
-
-
-async def _converse_stream(
-    model_id: str,
-    request: ConverseRequestBaseTypeDef,
-    region: RegionName,
-    *,
-    single_region: bool,
-) -> ConverseStreamResponseTypeDef:
-    """Open the Bedrock ConverseStream API and return the event-stream response.
-
-    Failover is possible until the stream opens; once open, the region is locked.
-
-    Args:
-        model_id: Bedrock model identifier.
-        request: Converse request payload (``modelId`` is injected here).
-        region: AWS region to target.
-        single_region: Selects the botocore client (see :func:`bedrock_client`).
-
-    Returns:
-        Bedrock ConverseStream response containing the event stream.
-    """
-    await _prepare_converse_request_for_region(model_id, request, region)
-    with handle_bedrock_client_error():
-        return await bedrock_client(
-            region, single_region=single_region
-        ).converse_stream(**request)

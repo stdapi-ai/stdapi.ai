@@ -811,7 +811,7 @@ class InputFile:
         }
     )
 
-    __slots__ = ("_bedrock_source", "_origin", "_source")
+    __slots__ = ("_bedrock_source", "_is_document", "_origin", "_source")
 
     _origin: _FileOrigin
     _source: _FileSource
@@ -1125,6 +1125,7 @@ class InputFile:
                 if format_from_mime not in _BEDROCK_DOCUMENT_FORMATS:
                     msg = f"Unsupported MIME type for Bedrock document: {await self.get_content_type()!r}"
                     raise ApiError(msg)
+                self._is_document = True
                 document_source: DocumentSourceTypeDef = self._bedrock_source  # type: ignore[assignment]
                 document_block: DocumentBlockTypeDef = {
                     "format": MIME_TYPES_TO_DOCUMENT_TYPE.get(format_from_mime, "txt"),
@@ -1140,7 +1141,11 @@ class InputFile:
                 return {"document": document_block}
 
     async def resolve_bedrock_content_block(
-        self, region: RegionName, *, to_s3: bool | None = None
+        self,
+        region: RegionName,
+        *,
+        to_s3: bool | None = None,
+        document_s3_location: bool = True,
     ) -> None:
         """Populate the partial Bedrock content block for this file with final content.
 
@@ -1149,9 +1154,14 @@ class InputFile:
         Args:
             region: Target AWS region.
             to_s3: S3 routing override; None auto-selects based on file origin.
+            document_s3_location: Whether the target model supports ``s3Location``
+                for document content blocks.  When ``False``, documents are always
+                sent as inline bytes regardless of origin.
         """
         if hasattr(self, "_bedrock_source"):
-            if to_s3 or (to_s3 is None and self._origin == _FileOrigin.S3_URI):
+            is_document = getattr(self, "_is_document", False)
+            use_s3 = to_s3 or (to_s3 is None and self._origin == _FileOrigin.S3_URI)
+            if use_s3 and (not is_document or document_s3_location):
                 self._bedrock_source["s3Location"] = {
                     "uri": (await self.to_s3(region)).uri
                 }
@@ -1217,17 +1227,21 @@ async def prefetch_all_content_types() -> None:
 
 
 async def resolve_all_bedrock_content_blocks(
-    region: RegionName, *, to_s3: bool | None = None
+    region: RegionName, *, to_s3: bool | None = None, document_s3_location: bool = True
 ) -> None:
     """Resolve all pending Bedrock content blocks for the current request context.
 
     Args:
         region: Target AWS region.
         to_s3: S3 routing override passed to each resolve_bedrock_content_block call.
+        document_s3_location: Passed to each resolve_bedrock_content_block call; set
+            to ``False`` for models that do not support ``s3Location`` for documents.
     """
     if input_files := _CURRENT_INPUT_FILES.get([]):
         async with TaskGroup() as task_group:
             for input_file in input_files:
                 task_group.create_task(
-                    input_file.resolve_bedrock_content_block(region, to_s3=to_s3)
+                    input_file.resolve_bedrock_content_block(
+                        region, to_s3=to_s3, document_s3_location=document_s3_location
+                    )
                 )
