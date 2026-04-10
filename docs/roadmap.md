@@ -6,13 +6,13 @@ keywords: stdapi.ai releases, AI gateway updates, AWS Bedrock features, API gate
 
 # :material-timeline: Releases & Roadmap
 
-**stdapi.ai is under active development** with regular feature releases. Eight major releases delivered since launch (v1.0-v1.8) with continuous improvements.
+**stdapi.ai is under active development** with regular feature releases. Nine major releases delivered since launch (v1.0-v1.9) with continuous improvements.
 
 ## :material-tag-multiple: Recent Releases
 
 See [Release History below](#release-history) for the full changelog of all releases.
 
-**Latest: v1.8** – Broader Model Compatibility & Structured Output (structured response formats, metadata forwarding, improved tool handling across models, Nova Code Interpreter global support, region routing reliability)
+**Latest: v1.9** – Files API & Images API JSON Body (OpenAI and Anthropic Files API backed by Amazon S3, multipart uploads, JSON body for image edits and variations)
 
 ---
 
@@ -112,13 +112,6 @@ The following features may be implemented in future releases based on community 
 |--------------------------------------------------------------------------------|-------------------|------------------------------------------------------------------------------------------------------------------------|
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/moderations` | ![Amazon Comprehend](styles/logo_amazon_comprehend.svg){: style="height:20px;width:20px"} Amazon Comprehend - toxicity |
 
-### :material-folder: Files & Storage
-
-| Provider                                                                                | Endpoint/Feature | AWS Backend                                                                         |
-|-----------------------------------------------------------------------------------------|------------------|-------------------------------------------------------------------------------------|
-| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**          | `/v1/files`      | ![Amazon S3](styles/logo_amazon_s3.svg){: style="height:20px;width:20px"} Amazon S3 |
-| ![Anthropic](styles/logo_anthropic.svg){: style="height:20px;width:20px"} **Anthropic** | `/v1/files`      | ![Amazon S3](styles/logo_amazon_s3.svg){: style="height:20px;width:20px"} Amazon S3 |
-
 ### :material-chart-bar: Usage & Analytics
 
 | Provider                                                                       | Endpoint/Feature         | AWS Backend                                                                                                 |
@@ -139,6 +132,41 @@ The following features may be implemented in future releases based on community 
 ---
 
 ## :material-history: Release History
+
+### v1.9.0 – Files API & Images API JSON Body
+
+This release introduces a Files API backed by Amazon S3, available through both the OpenAI-compatible and Anthropic-compatible interfaces. Files uploaded via either API share the same S3 storage and can be referenced across both interfaces. Large files can be uploaded incrementally using the OpenAI multipart uploads API. Stored files can be referenced by ID directly in image edit and variation requests (JSON body), as well as in chat completion messages as document or image inputs. The image edits endpoint now also accepts an `application/json` body as an alternative to multipart form-data, making it easier to chain pipeline steps without re-uploading files.
+
+!!! warning "New Required Configuration"
+    Files API requires `AWS_S3_BUCKET` to be configured (shared with the image URL response feature). The S3 prefix for stored files defaults to `files/` and is configurable via `AWS_S3_FILES_PREFIX`. Ensure your IAM role includes read, write, delete, and list permissions on the files prefix in addition to the existing S3 permissions for presigned URLs.
+
+#### :material-folder: Files & Storage
+
+| Provider                                                                                | Endpoint/Feature                      | AWS Backend                                                                         |
+|-----------------------------------------------------------------------------------------|---------------------------------------|-------------------------------------------------------------------------------------|
+| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**          | `/v1/files` – CRUD operations         | ![Amazon S3](styles/logo_amazon_s3.svg){: style="height:20px;width:20px"} Amazon S3 |
+| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**          | `/v1/uploads` – multipart uploads     | ![Amazon S3](styles/logo_amazon_s3.svg){: style="height:20px;width:20px"} Amazon S3 |
+| ![Anthropic](styles/logo_anthropic.svg){: style="height:20px;width:20px"} **Anthropic** | `/v1/files` – CRUD operations         | ![Amazon S3](styles/logo_amazon_s3.svg){: style="height:20px;width:20px"} Amazon S3 |
+
+#### :material-image: Image Generation
+
+| Provider                                                                       | Endpoint/Feature                                                                      | AWS Backend                                                                                                       |
+|--------------------------------------------------------------------------------|---------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------|
+| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/images/edits` – JSON body with `images`/`mask` referencing Files API IDs or URLs | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - image models |
+| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/images/variations` – JSON body with `image` referencing a Files API ID or URL    | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - image models |
+
+#### :material-chat: Chat Completions & Messages
+
+| Provider                                                                                | Endpoint/Feature                                                               | AWS Backend                                                                                                            |
+|-----------------------------------------------------------------------------------------|--------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------|
+| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**          | Files API file IDs usable as document/image inputs in chat completions         | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
+| ![Anthropic](styles/logo_anthropic.svg){: style="height:20px;width:20px"} **Anthropic** | Files API file IDs usable as document/image inputs in messages                 | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
+
+#### Fixes
+
+- Document inputs via S3 URLs are not supported as Bedrock Converse API inputs for some models (e.g., Claude) — now properly detected and handled
+
+---
 
 ### v1.8.0 – Broader Model Compatibility & Structured Output
 
