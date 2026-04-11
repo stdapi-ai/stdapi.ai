@@ -12,7 +12,7 @@ Get a production-grade OpenAI-compatible AI gateway running on AWS in 5 minutes.
     The AWS Marketplace subscription includes a **14-day free trial**. Test the full production stack in your environment risk-free.
 
 !!! info "Prefer a hands-off setup?"
-    A [managed deployment service](https://aws.amazon.com/marketplace/pp/prodview-xknxzjgl7zi5s) is available to deploy stdapi.ai into your AWS account.
+    A [managed deployment service](https://aws.amazon.com/marketplace/pp/prodview-xknxzjgl7zi5s) is available if you'd rather not manage Terraform yourself. Choose between guided assistance (step-by-step support while you retain full control) or fully managed setup (handled on your behalf, inside your AWS account). Response time is 1 business day during the engagement.
 
 ---
 
@@ -111,6 +111,54 @@ stdapi.ai is compatible with both OpenAI and Anthropic SDKs. If you've used eith
 **No API key configured?** stdapi.ai runs without authentication by default for quick testing. Add `api_key_create = true` to your Terraform config to enable it.
 
 **Available models:** All AWS Bedrock models available in your configured regions are automatically discovered and exposed.
+
+**Verify the deployment is healthy:**
+
+```bash
+curl https://your-endpoint/health
+# → {"status": "ok"}
+```
+
+The `/health` endpoint requires no authentication and is used by the ALB health check.
+
+---
+
+## :material-wrench: Troubleshooting
+
+Common issues encountered when deploying for the first time:
+
+??? failure "403 Unauthorized on all requests"
+    The API key is wrong, missing, or not yet configured.
+
+    - Check that you're passing the key in the `Authorization: Bearer <key>` or `X-API-Key` header
+    - Retrieve the generated key with `terraform output -raw api_key`
+    - If `api_key_create` was not set to `true`, no key is configured and all requests pass through without authentication by default
+
+??? failure "404 / model not found"
+    The model ID is not available in your configured region(s).
+
+    - Verify the model ID is correct for your Bedrock region
+    - Check `AWS_BEDROCK_REGIONS` includes a region where the model is available
+    - Run `GET /v1/models` to list all models currently discovered by the gateway
+    - Some model families are only available in specific regions — consult the [Bedrock model availability table](https://docs.aws.amazon.com/bedrock/latest/userguide/models-regions.html)
+
+??? failure "ThrottlingException / too many requests immediately"
+    Your regional Bedrock quota is exhausted.
+
+    - Configure multiple AWS regions in `AWS_BEDROCK_REGIONS` — each region has its own independent quota
+    - See [Resilience & Failover](operations_resilience.md) for multi-region routing configuration
+
+??? failure "S3 error on image generation or audio transcription"
+    The `AWS_S3_BUCKET` environment variable is not set or the bucket is in the wrong region.
+
+    - Set `AWS_S3_BUCKET` to a bucket in the same region as the first entry in `AWS_BEDROCK_REGIONS`
+    - The Terraform module creates and configures this bucket automatically via `s3_bucket_create = true`
+
+??? failure "Connection timeout to AWS services"
+    Outbound traffic to AWS endpoints is blocked by a security group rule.
+
+    - Ensure the ECS task's security group allows outbound HTTPS (port 443) to AWS service endpoints
+    - If using VPC endpoints (the commercial Terraform default), verify the endpoint security groups and policies permit traffic from the ECS task
 
 ---
 

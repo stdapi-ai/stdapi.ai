@@ -653,6 +653,26 @@ curl -X POST "$BASE/v1/messages" \
   }'
 ```
 
+**Count tokens (without sending a message):**
+
+```bash
+curl -X POST "$BASE/v1/messages/count_tokens" \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "anthropic-beta: token-counting-2024-11-01" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "anthropic.claude-opus-4-6-v1",
+    "messages": [{"role": "user", "content": "Hello, how are you?"}]
+  }'
+```
+
+**Response:**
+
+```json
+{"input_tokens": 13}
+```
+
 ---
 
 **Ready to build with AI?** Check out the [Models API](api_openai_models.md) to see all available foundation models!

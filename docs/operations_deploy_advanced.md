@@ -536,7 +536,7 @@ For development, side projects, and non-critical workloads.
 **What you get:**
 
 - Fargate Spot for significant cost reduction
-- Minimal resources (0.25 vCPU ARM64, 512 MiB)
+- Minimal resources (0.25 vCPU, 512 MiB; ARM64 is the Terraform module default)
 - Reuse existing VPC infrastructure
 - Automated scheduling (runs 8 AM-7 PM weekdays only in UTC)
 - Minimal logging (7-day retention, no Container Insights, no VPC Flow Logs)
@@ -579,6 +579,8 @@ flowchart LR
 ```
 
 ### ECS Task Definition Example
+
+The example below uses ARM64 architecture, which requires the `-arm64` image tag. Replace `ARM64` with `X86_64` and use the untagged image for x86.
 
 ```json
 {
@@ -707,7 +709,7 @@ output "api_endpoint" {
 - `waf_web_acl_id` — WAF ACL ID (if enabled)
 - `waf_web_acl_arn` — WAF ACL ARN (if enabled)
 
-For the complete list of outputs, see [stdapi-ai/terraform-aws-stdapi-ai/outputs.tf](https://github.com/stdapi-ai/terraform-aws-stdapi-ai/outputs.tf).
+For the complete list of outputs, see [stdapi-ai/terraform-aws-stdapi-ai/outputs.tf](https://github.com/stdapi-ai/terraform-aws-stdapi-ai/blob/main/outputs.tf).
 
 ---
 

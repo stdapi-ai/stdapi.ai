@@ -10,7 +10,7 @@ hide:
 <div class="hero hero--home" markdown>
 # Run OpenAI & Anthropic Apps on AWS Bedrock
 
-Drop-in API gateway for AWS Bedrock and AI services. Your existing OpenAI and Anthropic applications work immediately—just change the base URL. Access 80+ models with enterprise privacy, compliance controls, and pay-per-use AWS pricing.
+Drop-in API gateway for AWS Bedrock and AI services. Build private AI products on AWS — without exposing your data to third-party AI providers, without subscriptions, and without rewriting your applications. Your existing OpenAI and Anthropic applications work immediately — just change the base URL. Access 80+ models with enterprise privacy, compliance controls, and pay-per-use AWS pricing.
 
 **14-day free trial included — free for local development.**
 
@@ -23,7 +23,7 @@ Drop-in API gateway for AWS Bedrock and AI services. Your existing OpenAI and An
 <div class="grid cards" markdown>
 
 - :material-swap-horizontal: __Change one line, access 80+ models__
-  <br>Drop-in replacement for OpenAI and Anthropic SDKs. Works with LangChain, Continue.dev, Open WebUI, n8n, OpenClaw, Claude SDK, and 1000+ tools—no code changes beyond the base URL.
+  <br>Drop-in replacement for OpenAI and Anthropic SDKs. Works with Open WebUI, n8n, OpenClaw, Claude Code, LangChain, Continue.dev, and 1000+ tools—no code changes beyond the base URL.
 
 - :material-shield-lock: __Your data stays in your AWS account__
   <br>All inference runs in your account. Data is never shared with model providers or used for training. Configure allowed regions for GDPR, HIPAA, and FedRAMP compliance.
@@ -233,7 +233,7 @@ Use Claude, Kimi K2, MiniMax, or any Bedrock model. Switch between models, regio
 <div class="grid cards" markdown>
 
 - :material-earth: __Multiply your quota across regions__
-  <br>Each AWS region has its own independent quota. Configure 3 regions and get **3x the tokens per minute** and 3x the daily limits. Automatic routing and failover—no client changes needed.
+  <br>Each AWS region has its own independent quota. Add a second region — double your tokens-per-minute. Add a third — triple it. stdapi.ai routes and fails over automatically; clients never see a throttle error.
   <br>[:octicons-arrow-right-24: Resilience & Failover](operations_resilience.md)
 
 - :material-star-settings: __Advanced Bedrock capabilities__
@@ -281,6 +281,9 @@ Use Claude, Kimi K2, MiniMax, or any Bedrock model. Switch between models, regio
 - :material-application-brackets: __Teams Migrating from OpenAI or Anthropic__
   <br>LangChain, LlamaIndex, Haystack, Claude SDK, or custom apps work immediately. Gradual migration supported—run both APIs in parallel during transition.
 
+- :material-briefcase: __Legal & Professional Services__
+  <br>Attorneys, consultants, and accountants cannot send client materials to third-party AI services. stdapi.ai processes all inference inside your own AWS account — client data never leaves your infrastructure.
+
 </div>
 
 ## Choose Your Edition
@@ -307,6 +310,7 @@ Use Claude, Kimi K2, MiniMax, or any Bedrock model. Switch between models, regio
 
     - **14-day free trial** — test in your environment risk-free
     - Hardened container, security updates, commercial support
+    - **$0.10/container-hour** — no markup on model usage; pay AWS Bedrock rates directly
     - No AGPL restrictions — keep your code and modifications private
     - Terraform module for production-ready deployment in minutes
     - Streamlined AWS billing

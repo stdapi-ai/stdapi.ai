@@ -98,7 +98,7 @@ Generate natural-sounding speech from text with AWS Polly through an OpenAI-comp
 - **SSML Support** :material-star-circle:{ .highlight }: Fine-grained control over pronunciation, emphasis, pauses, and prosody — [SSML docs](https://docs.aws.amazon.com/polly/latest/dg/ssml.html)
 - **Flexible Formats**: mp3, ogg, wav, flac, aac, opus (some transcoded server-side via ffmpeg)
 - **Streaming Options**: Raw bytes (default) or SSE events with `stream_format: "sse"`
-- **Speed Control**: Adjust playback from 0.25x to 4.0x
+- **Speed Control**: Adjust playback from 0.2x to 2.0x
 - **Character-Based Billing**: Usage tracks character counts—the native billing unit for AWS Polly and AWS Comprehend—rather than OpenAI-style tokens
 
 !!! tip "Performance Tips: Optimize Speed & Cost"

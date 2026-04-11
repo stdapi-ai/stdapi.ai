@@ -101,7 +101,7 @@ Enables: Text generation and conversational AI in workflows.
     **`OpenAI Chat Model`**
 
     - Model can be selected directly in the `Model` parameter
-    - ⚠️ **Important:** `Use Responses API` parameter must be **unchecked** (Responses API is not supported yet by stdapi.ai)
+    - ⚠️ **Important:** `Use Responses API` parameter must be **unchecked** (n8n's Responses API uses OpenAI's newer `/v1/responses` endpoint, which stdapi.ai does not implement; use the standard `/v1/chat/completions` endpoint instead)
 
     n8n calls `POST /v1/chat/completions` (see [Chat Completions API](api_openai_chat_completions.md)), so the model must be a text/chat-capable model from the correct family.
 
@@ -211,8 +211,8 @@ n8n calls the `/v1/files` endpoints (see [Files API](api_openai_files.md)). Set 
 The following nodes are not yet supported:
 
 !!! warning "Known Limitations"
-    - **`OpenAI/Message a model`** — Requires Responses API (not supported yet by stdapi.ai). Use `OpenAI Chat Model` instead.
-    - **`OpenAI/Analyze image`** — Requires Responses API (not supported yet by stdapi.ai). Use `OpenAI Chat Model` instead.
+    - **`OpenAI/Message a model`** — Requires Responses API (`/v1/responses`), not supported. Use `OpenAI Chat Model` instead.
+    - **`OpenAI/Analyze image`** — Requires Responses API (`/v1/responses`), not supported. Use `OpenAI Chat Model` with image content instead.
 
 ---
 

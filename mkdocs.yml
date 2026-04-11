@@ -101,6 +101,7 @@ extra_css:
 
 markdown_extensions:
   - admonition
+  - footnotes
   - attr_list
   - md_in_html
   - toc:

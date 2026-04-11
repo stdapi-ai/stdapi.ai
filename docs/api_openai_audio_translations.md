@@ -36,24 +36,24 @@ Translate audio from any language to English text with AWS Transcribe + Translat
 
 <div class="feature-table" markdown>
 
-| Feature                 |               Status                | Notes                         |
-|-------------------------|:-----------------------------------:|-------------------------------|
-| **Input**               |                                     |                               |
-| Audio file upload       | :material-check-circle:{ .success } | Multipart file upload         |
-| Auto language detection | :material-check-circle:{ .success } | Automatic source detection    |
-| **Output Formats**      |                                     |                               |
-| `json`                  | :material-check-circle:{ .success } | Structured translation        |
-| `text`                  | :material-check-circle:{ .success } | Plain English text            |
-| `verbose_json`          |    :material-cog:{ .model-dep }     | With timestamps               |
-| `srt`                   |    :material-cog:{ .model-dep }     | English subtitles with timing |
-| `vtt`                   |    :material-cog:{ .model-dep }     | English WebVTT subtitles      |
-| **Translation**         |                                     |                               |
-| Translation to English  | :material-check-circle:{ .success } | Using AWS Translate           |
-| **Advanced**            |                                     |                               |
-| `prompt`                |    :material-cog:{ .model-dep }     | Not available                 |
-| `temperature`           |    :material-cog:{ .model-dep }     | Not available                 |
-| **Usage tracking**      |                                     |                               |
-| Input audio duration    | :material-check-circle:{ .success } | Seconds (billing unit)        |
+| Feature                 |                 Status                  | Notes                         |
+|-------------------------|:---------------------------------------:|-------------------------------|
+| **Input**               |                                         |                               |
+| Audio file upload       |   :material-check-circle:{ .success }   | Multipart file upload         |
+| Auto language detection |   :material-check-circle:{ .success }   | Automatic source detection    |
+| **Output Formats**      |                                         |                               |
+| `json`                  |   :material-check-circle:{ .success }   | Structured translation        |
+| `text`                  |   :material-check-circle:{ .success }   | Plain English text            |
+| `verbose_json`          |      :material-cog:{ .model-dep }       | With timestamps               |
+| `srt`                   |      :material-cog:{ .model-dep }       | English subtitles with timing |
+| `vtt`                   |      :material-cog:{ .model-dep }       | English WebVTT subtitles      |
+| **Translation**         |                                         |                               |
+| Translation to English  |   :material-check-circle:{ .success }   | Using AWS Translate           |
+| **Advanced**            |                                         |                               |
+| `prompt`                | :material-close-circle:{ .unsupported } | Not available                 |
+| `temperature`           | :material-close-circle:{ .unsupported } | Not available                 |
+| **Usage tracking**      |                                         |                               |
+| Input audio duration    |   :material-check-circle:{ .success }   | Seconds (billing unit)        |
 
 </div>
 
@@ -62,8 +62,8 @@ Translate audio from any language to English text with AWS Transcribe + Translat
 **Legend:**
 
 * :material-check-circle:{ .success } **Supported** — Fully compatible with OpenAI API
-* :material-close-circle:{ .unsupported } **Unsupported** — Not available in this
-  implementation
+* :material-cog:{ .model-dep } **Available on Select Models** — Check your model's capabilities
+* :material-close-circle:{ .unsupported } **Unsupported** — Not available in this implementation
 
 </div>
 
@@ -74,6 +74,9 @@ Translate audio from any language to English text with AWS Transcribe + Translat
 | Model             | Supported Languages | Notes                                                                                                      |
 |-------------------|---------------------|------------------------------------------------------------------------------------------------------------|
 | amazon.transcribe | 100+                | Full-featured transcription with speaker diarization and subtitle generation at the cost of higher latency |
+
+!!! info "How the pipeline works"
+    `amazon.transcribe` performs translation in two steps: audio is transcribed to text in the source language with AWS Transcribe, then that text is translated to English with AWS Translate. The two calls are chained internally — your request and response use the same OpenAI `/v1/audio/translations` interface.
 
 !!! warning "Configuration Required"
     You must configure the `AWS_S3_BUCKET` or `AWS_TRANSCRIBE_S3_BUCKET` environment variable with a bucket in the main AWS region to use this model. This bucket is used for temporary storage during transcription processing.

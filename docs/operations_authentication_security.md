@@ -48,7 +48,7 @@ Three mutually exclusive sources are supported — configure exactly one:
 For the full list of environment variables and required IAM permissions for each method, see the [Configuration Guide](operations_configuration.md#authentication).
 
 !!! abstract "In-Memory Key Protection"
-    To ensure maximum security, stdapi.ai never stores your API key in plain text. At startup, the key is securely retrieved, salted, and hashed using a cryptographically strong algorithm. Only the resulting hash is used for verification, protecting your secret even in the event of a memory dump.
+    stdapi.ai never stores API keys in plain text. At startup, the key is retrieved, salted, and hashed using an industry-standard cryptographic function; only the hash is retained in memory — even a full memory dump cannot reconstruct the original key. Verification uses constant-time comparison to prevent timing-based side-channel attacks.
 
 !!! info "Terraform Module"
     The Terraform module offers additional options for providing the API key:
@@ -62,6 +62,9 @@ For the full list of environment variables and required IAM permissions for each
 For user-facing applications or enterprise SSO, you can offload authentication to an OpenID Connect (OIDC) provider, Amazon Cognito, or AWS IAM Identity Center (the AWS-native workforce SSO service for centralised employee and partner access).
 
 When authentication is handled at this layer, requests are fully validated **before they reach stdapi.ai** — the application receives only authenticated, pre-authorised requests.
+
+!!! tip "Trusted by AWS teams — no custom implementation risk"
+    Cognito and IAM Identity Center are the same identity systems AWS teams already rely on for console access and internal applications. By delegating authentication to these services, you get MFA, SSO, and fine-grained permission sets without building or maintaining custom user management logic — and without the security risk of a home-grown implementation. Crucially, there are **no API keys to rotate**: access is revoked instantly through your identity provider.
 
 !!! warning "Terraform Module"
     The Terraform module does not configure OIDC, Cognito, or IAM Identity Center authentication. These integrations must be set up directly on the ALB or API Gateway.
@@ -123,6 +126,19 @@ stdapi.ai includes built-in security mechanisms that are active regardless of th
 
     [:octicons-arrow-right-24: Subscribe on AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo)
 
+### :material-package-variant-closed: Supply Chain Security
+
+Supply chain attacks — where malicious code is injected into a software package before it reaches your infrastructure — represent one of the most dangerous threat vectors for self-hosted AI gateways. A compromised package can silently exfiltrate API keys and credentials from every deployment that installs it, and attacks of this kind have targeted the AI tooling ecosystem.
+
+stdapi.ai's distribution model eliminates this attack surface entirely:
+
+- **Container-only distribution** — stdapi.ai is never distributed as a pip package or PyPI dependency. There is no `pip install stdapi.ai`, no transitive dependency chain to compromise, and no package registry to hijack. The only distribution channels are the AWS Marketplace ECR registry (commercial) and GHCR (community image).
+- **AWS Marketplace security validation** — the commercial container image is scanned and validated by AWS before being made available in the Marketplace. The image you deploy is exactly the image AWS validated — nothing can be inserted between validation and deployment.
+- **Minimal base image** — the container has no shell, no package manager, and no unnecessary system tools. There is no mechanism to install additional packages or execute arbitrary commands at runtime.
+- **Immutable deployment** — the container image is pulled once at task start and run as-is. There are no runtime `pip install`, `apt install`, or dependency resolution steps that could fetch and execute untrusted code.
+- **Read-only root filesystem** — when deployed via the Terraform module, the ECS task definition enforces a read-only root filesystem, preventing any modification to the container files at runtime.
+- **Temporary credentials with least privilege** — CI/CD pipelines that build and publish the container image use short-lived, role-scoped credentials with only the permissions required for that specific job. No long-lived access keys are used in the build or release process. Jobs that do not require AWS access — such as linters and security scanners — run on isolated runners with no AWS credentials at all, limiting the blast radius of any compromised job.
+
 ### :material-shield-alert-outline: SSRF Protection
 
 Users can pass URLs to the API as multimodal content references (images, documents, audio). The application fetches the content at those URLs before forwarding it to the model. Without protection, a malicious user could supply URLs pointing to internal services — such as the AWS EC2/ECS metadata endpoint or private network resources — and read sensitive data through the model response.
@@ -162,7 +178,7 @@ When running behind a load balancer (ALB) or reverse proxy, stdapi.ai can be con
 - :material-check: **Deploy in private subnets** — without direct internet access.
 - :material-check: **Restrict security group inbound rules** — allow traffic to the stdapi.ai service only from the ALB or API Gateway security group on the application port.
 - :material-check: **Apply strict egress rules** — limit outbound traffic to only the required AWS services (Bedrock, S3, etc.).
-- :material-check: **Use VPC endpoints** — set `vpc_endpoints_allowed=true` (the default) to keep all traffic to Bedrock, S3, SSM, CloudWatch Logs, and AI services off the public internet.
+- :material-check: **Use VPC endpoints** — the Terraform module creates VPC endpoints for all required AWS services (`vpc_endpoints_allowed=true` by default), keeping all traffic to Bedrock, S3, SSM, CloudWatch Logs, and AI services off the public internet with no NAT Gateway required.
 
 **WAF & Rate Limiting:**
 
@@ -174,6 +190,11 @@ When running behind a load balancer (ALB) or reverse proxy, stdapi.ai can be con
 
 - :material-check: **Use SSM Parameter Store or Secrets Manager** — always use encrypted secret storage for production API keys; never pass keys as plain environment variables.
 - :material-check: **Rotate API keys** — Secrets Manager supports [automated secret rotation](https://docs.aws.amazon.com/secretsmanager/latest/userguide/rotating-secrets.html) via Lambda; note that stdapi.ai reads the key once at startup, so a container restart is required after rotation.
+
+!!! tip "Eliminate key rotation with AWS native auth"
+    When using API key authentication, rotation requires updating SSM/Secrets Manager and performing a rolling ECS task replacement. This is predictable but adds a deployment step.
+
+    To avoid key rotation entirely, use **OIDC / Cognito / IAM Identity Center** via the ALB — there are no API keys to rotate. Access is controlled through your existing AWS identity provider and can be revoked instantly without touching the deployment.
 
 **IAM & Access Control:**
 

@@ -21,8 +21,8 @@ Create variations of existing images using AWS Bedrock image models through an O
 - :material-auto-fix: __Quick Iterations__
   <br>Rapidly create variations without manual editing.
 
-- :material-aws: __Scalable Infrastructure__
-  <br>Generate variations at scale with AWS Bedrock infrastructure.
+- :material-aws: __Flexible Models__
+  <br>Amazon Titan, Amazon Nova Canvas, and Stability AI SD3.5 — each with unique variation modes (standard variation, text-guided conditioning, color-guided generation).
 
 </div>
 

@@ -32,7 +32,7 @@ Build ChatGPT-like experiences with AWS Bedrock models and complete privacy cont
 - **Internal knowledge base** - RAG-enabled chat with document search
 - **Multi-modal applications** - Process text, voice, images, and documents
 
-**Popular tools:** Open WebUI, LibreChat, Chatbot UI
+**Popular tools:** Open WebUI, LobeHub, LibreChat, Chatbot UI
 
 **[Open WebUI Integration Guide](use_cases_openwebui.md)** — Complete setup with Terraform deployment examples
 
@@ -64,9 +64,8 @@ Enhance your development workflow with AI-powered coding assistants. stdapi.ai i
 - **Code completion** - Real-time suggestions as you type in VS Code, JetBrains IDEs
 - **Code generation** - Natural language to code with Claude and specialized coding models
 - **Codebase understanding** - Chat with your codebase, explain functions, refactor code
-- **Framework development** - Use LangChain, LlamaIndex, Haystack with AWS Bedrock
 
-**Popular tools:** Continue.dev, Cline, Cursor, Windsurf, Aider, LangChain, LlamaIndex
+**Popular tools:** Claude Code, Continue.dev, Cline, Cursor, JetBrains AI Assistant, Junie, Windsurf, Aider
 
 **[AI Coding Assistants Guide](use_cases_coding_assistants.md)** — Universal setup for IDEs and development frameworks
 
@@ -74,7 +73,7 @@ Enhance your development workflow with AI-powered coding assistants. stdapi.ai i
 
 ### :material-note-text: Knowledge Management — AI-Enhanced Notes & Research
 
-Transform your knowledge base with AI-powered insights and generation. Integrate stdapi.ai with note-taking applications to add semantic search, writing assistance, and intelligent content organization to your personal or team knowledge systems.
+Transform your knowledge base with AI-powered insights and generation. Integrate stdapi.ai with note-taking applications to add semantic search, writing assistance, and intelligent content organization.
 
 **What you can do:**
 
@@ -83,22 +82,27 @@ Transform your knowledge base with AI-powered insights and generation. Integrate
 - **Auto-summarization** - Extract key points from long documents
 - **Smart organization** - Automatic tagging, linking, and categorization
 
-**Popular tools:** Obsidian, Notion AI integrations, Logseq, Roam Research
+**Compatible tools:** Obsidian (AI plugins), Notion AI, Logseq, Roam Research
+
+!!! tip "Getting started"
+    Most knowledge management tools with AI features support custom OpenAI-compatible endpoints. Point them to your stdapi.ai `/v1` URL. No dedicated guide yet — [see the API overview](api_overview.md) for connection details.
 
 ---
 
 ### :material-robot: Team Chatbots & Assistants — Slack, Discord, Teams Integration
 
-Deploy intelligent AI assistants to your team's communication platforms. Connect stdapi.ai to chat platforms like Slack, Discord, or Microsoft Teams to create context-aware bots powered by AWS Bedrock models that can answer questions, automate workflows, and assist your team.
+Deploy intelligent AI assistants to your team's communication platforms powered by AWS Bedrock models.
 
 **What you can build:**
 
 - **Team Q&A bot** - Answer common questions instantly in Slack or Teams
 - **Documentation assistant** - Search and cite internal docs in real-time
 - **Task automation** - Create tickets, schedule meetings, update databases via chat
-- **Custom workflows** - Build company-specific commands and integrations
 
-**Popular tools:** Slack Bot, Discord Bot, Microsoft Teams Apps, Botpress
+**Compatible platforms:** Slack, Discord, Microsoft Teams, Botpress
+
+!!! tip "Getting started"
+    Build bots using the OpenAI or Anthropic SDK, pointing to your stdapi.ai endpoint. No dedicated guide yet — [see the API overview](api_overview.md) and [use cases guide](use_cases.md) for connection details.
 
 ---
 
@@ -114,7 +118,9 @@ Build self-directed AI agents that can plan, execute, and refine complex tasks a
 - **Task automation** - Self-improving workflows that adapt to results
 - **Code agents** - Autonomous development and testing systems
 
-**Popular tools:** OpenClaw, AutoGPT, BabyAGI, LangGraph, CrewAI, Semantic Kernel
+**Compatible frameworks:** OpenClaw, LangChain, LlamaIndex, LangGraph, CrewAI, AutoGPT, Semantic Kernel
+
+All agent frameworks that support OpenAI or Anthropic SDKs work immediately — point the SDK's base URL to stdapi.ai. See the [AI Coding Assistants Guide](use_cases_coding_assistants.md) for framework configuration patterns.
 
 ---
 

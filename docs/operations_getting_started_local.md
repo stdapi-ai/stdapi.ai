@@ -8,6 +8,12 @@ keywords: Docker OpenAI gateway, local AI development, Podman AI gateway, free O
 
 Run stdapi.ai locally for development, testing, and evaluation using the free community container image (AGPL-3.0). Full API compatibility — the same endpoints and features as the production deployment.
 
+!!! tip "New to AWS Bedrock?"
+    To run stdapi.ai locally you need:
+
+    1. An **AWS account** — [create one free](https://aws.amazon.com/free/)
+    2. **AWS credentials** configured locally — via `aws configure` or `aws sso login` ([AWS CLI setup guide](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-quickstart.html))
+
 ---
 
 ## :material-docker: Run It

@@ -8,6 +8,12 @@ keywords: data sovereignty, data residency, GDPR compliance AWS, AWS Bedrock com
 
 stdapi.ai is deployed entirely within your AWS account. All AI model inference, data storage, and service calls are performed within the AWS regions you explicitly configure — no data is ever sent to third-party services or leaves your account without your control.
 
+!!! success "What this means for your organization"
+    - **Your data never leaves your AWS account** — all model inference, storage, and service calls run exclusively in the regions you configure
+    - **AWS Bedrock does not retain or train on your data** — prompts and completions are never used for model training; model providers have no access
+    - **AWS services carry enterprise compliance certifications** — GDPR, ISO 27001/27017/27018, SOC 1/2/3, HIPAA, FedRAMP (Moderate and High), PCI-DSS, and more via Amazon Bedrock
+    - **All data encrypted in transit and at rest** — TLS 1.2+ on all AWS service calls; the Terraform module additionally enforces TLS 1.3 with post-quantum key exchange on the ALB and Customer Managed KMS keys for all stored data
+
 <div class="grid cards" markdown>
 
 - :material-map-marker-check: __Region-Locked Processing__
@@ -17,7 +23,7 @@ stdapi.ai is deployed entirely within your AWS account. All AI model inference, 
   <br>The application communicates exclusively with AWS services — no external APIs, telemetry endpoints, or third-party services
 
 - :material-lock: __Data in Transit Encrypted__
-  <br>All external communication uses TLS 1.2+; ALB supports TLS 1.3 and post-quantum hybrid key exchange
+  <br>All AWS service calls use TLS 1.2+. The Terraform module configures the ALB with TLS 1.3 and post-quantum hybrid key exchange.
 
 - :material-database-off: __No Persistent State on Compute__
   <br>ECS containers hold no user data — all persistent storage lives in your S3 buckets, encrypted at rest
@@ -32,6 +38,27 @@ stdapi.ai is deployed entirely within your AWS account. All AI model inference, 
 ---
 
 ## :material-application-outline: Application
+
+The diagram below shows exactly where data flows and what is retained at each step:
+
+```mermaid
+%%{init: {'flowchart': {'htmlLabels': false}} }%%
+flowchart TD
+    client["Client request"] -->|"HTTPS (TLS 1.3)"| alb["ALB (your AWS account)"]
+    alb -->|"HTTP (private VPC)"| ecs["ECS container\n(in-memory only, stateless)"]
+    ecs -->|"HTTPS — inference"| bedrock["Amazon Bedrock\n(no prompt retention)"]
+    ecs -->|"HTTPS — temp files"| s3["Amazon S3\n(your bucket, TTL = request duration)"]
+    ecs -->|"HTTPS — metadata only"| cw["Amazon CloudWatch\n(no prompt content by default)"]
+    ecs -.->|"HTTPS — when used"| ai["Polly / Transcribe\nComprehend / Translate"]
+```
+
+**What this means:**
+
+- **ECS container** — holds request data in memory only; stateless between requests; no disk writes
+- **Amazon Bedrock** — processes the inference and returns the result; does not retain prompts ([AWS source](https://docs.aws.amazon.com/bedrock/latest/userguide/data-protection.html))
+- **Amazon S3** — temporary storage for multimodal inputs/outputs (images, audio, PDFs); files are deleted immediately after the request completes; a 1-day lifecycle policy acts as a failsafe
+- **Amazon CloudWatch** — receives structured request metadata (method, path, status, model, latency); prompt and response content are **never logged by default** (requires `LOG_REQUEST_PARAMS=true` to enable)
+- **Polly / Transcribe / Comprehend / Translate** — used only when audio or translation features are invoked; see [AI service opt-out](#aws-ai-service-improvement-opt-out) for data retention controls
 
 stdapi.ai communicates exclusively with the following AWS services, all within the regions you configure:
 
@@ -124,13 +151,14 @@ Amazon Polly, Transcribe, Comprehend, and Translate each run in an independently
 
 ### AWS AI Service Improvement Opt-Out
 
-Unlike Amazon Bedrock, AWS may use content processed by Polly, Transcribe, Comprehend, and Translate to improve service quality by default. AWS confirms:
+!!! warning "Action required before processing sensitive data with Polly, Transcribe, Comprehend, or Translate"
+    Unlike Amazon Bedrock, AWS may use content processed by these four AI services to improve service quality **by default**. This means audio recordings, transcription text, translated content, and language detection inputs could be used for model training unless you opt out.
 
-> *"AWS AI services may use and store customer content for service improvement, such as fixing operational issues, evaluating service performance, debugging, or model training."*
+    Opt out by configuring an [AI services opt-out policy](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_ai-opt-out.html) at the AWS Organizations level. This is a **one-time action** in the AWS Console. It applies to your entire account immediately and AWS also deletes previously stored content:
 
-You can prevent this by configuring an [AI services opt-out policy](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_ai-opt-out.html) at the AWS Organizations level. This is a **one-time configuration that takes only a few minutes** in the AWS Console, and applies to your entire AWS account or organisational unit immediately. When you opt out, AWS also deletes previously stored content:
+    > *"When you opt out of content use by an AWS AI service, that service deletes all of the associated historical content that was shared with AWS before you set the option."*
 
-> *"When you opt out of content use by an AWS AI service, that service deletes all of the associated historical content that was shared with AWS before you set the option."*
+    You do not need to opt out for Amazon Bedrock — Bedrock never retains or uses prompts for training by design.
 
 ---
 
@@ -296,6 +324,41 @@ AWS also incorporates **Standard Contractual Clauses (SCCs)** into its Data Proc
 - :material-check: **Use AWS PrivateLink** for Bedrock and S3 to keep service calls off the public internet, and **enable TLS 1.3 on the ALB** to activate post-quantum hybrid key exchange.
 - :material-check: **Enable AWS CloudTrail** in all configured regions to monitor API activity across Bedrock, S3, KMS, and AI services.
 - :material-check: **EU users: maintain SCCs alongside the DPF** — SCCs (included by default in the AWS Data Processing Addendum) provide a transfer mechanism independent of DPF validity and contractually bind AWS to challenge requests and notify you.
+
+---
+
+## :material-domain: Regulated Industries
+
+### :material-hospital-box: Healthcare (HIPAA)
+
+**Amazon Bedrock is a HIPAA-eligible service** and is covered under the [AWS Business Associate Agreement (BAA)](https://aws.amazon.com/compliance/hipaa-eligible-services-reference/). For the current list of all HIPAA-eligible AWS services, see the [AWS HIPAA Eligible Services Reference](https://aws.amazon.com/compliance/hipaa-eligible-services-reference/).
+
+**There is no stdapi.ai BAA to sign.** stdapi.ai runs entirely within your AWS account — you are the data controller. Your existing AWS BAA with Amazon covers the underlying services. No separate agreement with stdapi.ai is required.
+
+Recommended configuration for PHI workloads:
+
+- Configure the [AI services opt-out policy](#aws-ai-service-improvement-opt-out) before processing any PHI through Polly, Transcribe, Comprehend, or Translate
+- Restrict `AWS_BEDROCK_REGIONS` to regions covered by your BAA geography requirements
+- Enable Bedrock invocation logging to a KMS-encrypted S3 bucket if audit trails are required by your compliance programme
+- Confirm `LOG_REQUEST_PARAMS` is disabled (the default) so PHI never appears in application logs
+
+### :material-bank: Financial Services (SOC 2, PCI-DSS, GDPR)
+
+Amazon Bedrock carries **SOC 1/2/3**, **PCI-DSS**, and **GDPR** certifications. See [AWS Compliance Programs](https://aws.amazon.com/compliance/programs/) for the current list.
+
+stdapi.ai itself does not process or store payment card data. Your PCI-DSS scoping decision is determined by what data your application sends to the gateway — not by the gateway itself.
+
+For concerns about cross-border data access under US law (CLOUD Act, FISA 702), see [US Law and Cloud Provider Obligations](#us-law-and-cloud-provider-obligations). The primary technical countermeasure is a Customer Managed KMS key — the Terraform module creates one by default.
+
+### :material-office-building: Government / Public Sector (FedRAMP)
+
+Amazon Bedrock has received **FedRAMP Moderate and High authorization**. See the [AWS FedRAMP page](https://aws.amazon.com/compliance/fedramp/) and the [FedRAMP Marketplace](https://marketplace.fedramp.gov/) for current authorization status.
+
+Restrict `AWS_BEDROCK_REGIONS` to US regions and set `AWS_BEDROCK_CROSS_REGION_INFERENCE_GLOBAL=false` to ensure inference never leaves US geography.
+
+### :material-briefcase: Legal & Professional Services
+
+Attorneys, consultants, accountants, and other professionals bound by confidentiality obligations cannot transmit client materials to third-party AI services. stdapi.ai processes all inference within your own AWS infrastructure — client data never leaves your account and never transits external endpoints. This makes it the appropriate choice for AI-assisted document review, contract analysis, and research where client confidentiality is non-negotiable.
 
 ---
 

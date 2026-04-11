@@ -42,12 +42,18 @@ stdapi.ai provides multiple interfaces for exploring and testing the API—choos
 |                   | `POST /v1/audio/translations`   | Speech-to-English translation                                 | [Translations →](api_openai_audio_translations.md)     |
 | **🧠 Embeddings** | `POST /v1/embeddings`           | Vector embeddings for semantic search                         | [Embeddings →](api_openai_embeddings.md)               |
 | **📋 Models**     | `GET /v1/models`                | List available models                                         | [Models →](api_openai_models.md)                       |
+| **📁 Files**      | `POST/GET/DELETE /v1/files`     | Upload, list, retrieve, download, delete files                | [Files →](api_openai_files.md)                         |
+|                   | `POST /v1/uploads`              | Multipart upload sessions for large files                     | [Files →](api_openai_files.md)                         |
 
 ### ![Anthropic](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Anthropic-Compatible API
 
-| Category      | Endpoint                     | Capability                                                    | Documentation                                |
-|---------------|------------------------------|---------------------------------------------------------------|----------------------------------------------|
-| **💬 Messages** | `POST /anthropic/v1/messages` | Multi-modal conversations with text, images, video, documents | [Messages →](api_anthropic_messages.md)      |
+| Category        | Endpoint                                   | Capability                                                    | Documentation                           |
+|-----------------|--------------------------------------------|---------------------------------------------------------------|-----------------------------------------|
+| **💬 Messages** | `POST /anthropic/v1/messages`              | Multi-modal conversations with text, images, video, documents | [Messages →](api_anthropic_messages.md) |
+|                 | `POST /anthropic/v1/messages/count_tokens` | Count tokens without sending a message                        | [Messages →](api_anthropic_messages.md) |
+| **📋 Models**   | `GET /anthropic/v1/models`                 | List available models                                         | [Models →](api_anthropic_models.md)     |
+|                 | `GET /anthropic/v1/models/{model_id}`      | Retrieve model details                                        | [Models →](api_anthropic_models.md)     |
+| **📁 Files**    | `POST/GET/DELETE /anthropic/v1/files`      | Upload, list, retrieve, download, delete files                | [Files →](api_anthropic_files.md)       |
 
 ## :material-connection: Using stdapi.ai
 
@@ -59,7 +65,7 @@ stdapi.ai is a **drop-in replacement** for both OpenAI and Anthropic APIs. Any a
 
 1. **Replace the OpenAI API URL** with your stdapi.ai deployment URL
 2. **Use the same authentication mechanism** (Bearer token in the `Authorization` header)
-3. **Use AWS Bedrock model IDs** instead of OpenAI model names (e.g., `amazon.nova-micro-v1:0`)
+3. **Use AWS Bedrock model IDs** (e.g., `amazon.nova-micro-v1:0`) or any configured model alias
 
 That's it. Your application continues to work without any code changes—just point it to stdapi.ai instead of OpenAI.
 
@@ -69,7 +75,7 @@ That's it. Your application continues to work without any code changes—just po
 
 1. **Replace the Anthropic API URL** (`https://api.anthropic.com`) with your stdapi.ai deployment URL + `/anthropic` (e.g., `https://your-endpoint.com/anthropic`)
 2. **Use the same authentication mechanism** (`x-api-key` header and `anthropic-version` header)
-3. **Use AWS Bedrock model IDs** instead of Anthropic model names (e.g., `anthropic.claude-opus-4-6-v1` instead of `claude-opus-4.6-20250514`)
+3. **Use your preferred model name** — official Anthropic names (e.g., `claude-opus-4-6`) are automatically resolved to Bedrock IDs, or use Bedrock model IDs directly
 
 Your Anthropic SDK applications continue to work without any code changes—just point them to stdapi.ai instead of Anthropic.
 

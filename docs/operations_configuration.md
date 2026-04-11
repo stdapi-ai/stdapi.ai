@@ -260,6 +260,7 @@ Choose **one** method (mutually exclusive):
 |---------------------------------------------------------------------|-------------------------|--------------------------------------------------------------------------------------------|
 | [`TIMEZONE`](#validation-and-logging)                               | `UTC`                   | IANA timezone identifier for request timestamps                                            |
 | [`STRICT_INPUT_VALIDATION`](#validation-and-logging)                | `false`                 | Reject API requests with unknown/extra fields                                              |
+| [`MODEL_ALIASES`](#model-aliases)                                   | `{}`                    | JSON object mapping custom model name aliases to Bedrock model IDs                         |
 | [`DEFAULT_TTS_MODEL`](#default-tts-model)                           | `amazon.polly-standard` | Default text-to-speech model: `standard`, `neural`, `long-form`, or `generative`           |
 | [`DEFAULT_TTS_LANGUAGE`](#default-tts-language)                     | None                    | Default language for TTS (e.g., `en-US`); when set, skips AWS Comprehend auto-detection    |
 | [`TOKENS_ESTIMATION`](#tokens-estimation)                           | `false`                 | Estimate token counts using tiktoken when model doesn't provide them                       |

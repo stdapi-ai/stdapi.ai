@@ -1,23 +1,21 @@
 ---
 title: Features - OpenAI & Anthropic Compatible AI Gateway for AWS Bedrock
 description: stdapi.ai features — OpenAI and Anthropic API compatibility for AWS Bedrock & AI services. Multi-region access, compliance controls, security, observability, and more.
-keywords: AI gateway features, AWS Bedrock gateway, OpenAI API compatible, Anthropic API compatible, OpenAI to Bedrock, Anthropic to Bedrock, AWS AI services, private AI gateway, prompt caching, guardrails, data sovereignty, enterprise AI, multi-region AI, S3 integration, OpenTelemetry AI, OpenAI alternative AWS, Anthropic alternative AWS
+keywords: AI gateway features, AWS Bedrock gateway, OpenAI API compatible, Anthropic API compatible, OpenAI to Bedrock, Anthropic to Bedrock, AWS AI services, private AI gateway, prompt caching, guardrails, data sovereignty, enterprise AI, multi-region AI, S3 integration, OpenTelemetry AI, OpenAI alternative AWS, Anthropic alternative AWS, LiteLLM alternative, Bedrock Access Gateway alternative, Bedrock Mantle alternative
 hide:
   - navigation
 ---
 
 # :material-check-all: Features — AI Gateway for AWS Bedrock
 
-stdapi.ai is an **AI gateway purpose-built for AWS**. It brings full OpenAI and Anthropic API compatibility to AWS Bedrock and AWS AI services, so your team can use their favorite OpenAI and Anthropic-powered applications—ChatGPT-compatible UIs, Claude-compatible tools, coding assistants, automation platforms—on AWS infrastructure with zero friction.
-
-Born from deep AWS Solutions Architecture and software engineering expertise—and a genuine passion for AI—stdapi.ai is designed to work seamlessly whether you're an end user, an ops engineer, or a developer: broad API parameter coverage, careful error handling, and deep AWS integration provide a smooth experience out of the box.
+stdapi.ai is an **AI gateway purpose-built for AWS**. It brings full OpenAI and Anthropic API compatibility to AWS Bedrock and AWS AI services — so any tool, SDK, or application your team already uses connects instantly, without code changes.
 
 <div class="grid cards" markdown>
 
-- :material-api: **Drop-in OpenAI & Anthropic replacement** — Change only the base URL
-- :material-aws: **Optimized for AWS** — Built to leverage Bedrock, Polly, Transcribe, Translate
-- :material-shield-check: **Broad compatibility** — Works with your favorite OpenAI and Anthropic-powered apps and SDKs
-- :material-rocket-launch: **Deploy anywhere on AWS** — ECS via Terraform, Docker for local dev
+- :material-api: **One URL change, 80+ models** — Drop in as an OpenAI or Anthropic replacement
+- :material-aws: **Everything stays in your AWS account** — No third-party routing, no data sharing
+- :material-shield-check: **Enterprise compliance built in** — ISO, SOC, HIPAA, GDPR, FedRAMP via AWS
+- :material-rocket-launch: **Production in minutes** — Terraform module on AWS Marketplace, 14-day free trial
 
 </div>
 
@@ -25,7 +23,7 @@ Born from deep AWS Solutions Architecture and software engineering expertise—a
 
 ## :material-sitemap: How It Works
 
-stdapi.ai sits between your applications and AWS AI services, translating OpenAI and Anthropic API calls into native AWS requests. Any tool or SDK that speaks the OpenAI or Anthropic protocol connects instantly—no plugins, no custom integrations.
+stdapi.ai sits between your applications and AWS services, translating OpenAI and Anthropic API calls into native AWS requests. Any tool or SDK that speaks either protocol connects instantly — no plugins, no custom integrations.
 
 ```mermaid
 %%{init: {'flowchart': {'htmlLabels': true}} }%%
@@ -45,247 +43,434 @@ flowchart LR
   stdapi --> polly["<img src='../styles/logo_amazon_polly.svg' style='height:48px;width:auto;vertical-align:middle;' /> AWS Polly"]
   stdapi --> s3["<img src='../styles/logo_amazon_s3.svg' style='height:48px;width:auto;vertical-align:middle;' /> Amazon S3"]
 ```
+!!! note "Latency overhead"
+    The gateway adds negligible per-request processing overhead — typically a few milliseconds. End-to-end latency is dominated by Bedrock model inference time. Streaming responses are passed through immediately with no intermediate buffering.
 
 ---
 
-## :material-api: OpenAI & Anthropic API Compatibility
+## :material-scale-balance: Why stdapi.ai?
 
-stdapi.ai provides **broad OpenAI and Anthropic API compatibility**, covering routes and parameters far beyond basic chat. Your existing applications, SDKs, and tools—from Open WebUI to Claude SDK to coding assistants—work immediately.
+<div class="grid cards" markdown>
 
-### Supported API Routes
+- :material-puzzle: **Complete API surface**
+  <br>Most gateways cover chat completions only. stdapi.ai delivers the full OpenAI surface on AWS: chat completions, embeddings, image generation and editing, text-to-speech, speech-to-text, translation, and file storage — all through standard API calls, with no AWS-specific code in your application.
+
+- :material-shield-lock: **Your data, your account**
+  <br>stdapi.ai runs entirely within your own VPC — no traffic leaves your account. AWS Bedrock never retains or trains on your prompts. The software supply chain is hardened end-to-end — distributed as a validated container image with no public package registry exposure.
+
+- :material-chart-multiple: **Multiply your throughput**
+  <br>Every AWS region has its own independent quota. Configure three regions and you get approximately three times your tokens-per-minute. Multi-region failover is fully automatic — clients never see a throttle error.
+
+- :material-star-four-points: **Every Bedrock capability, zero custom code**
+  <br>Prompt caching, extended thinking, guardrails, service tiers, cross-region inference profiles, system tools (Nova web grounding, code interpreter), SSML for speech synthesis — every Bedrock-native feature exposed through standard OpenAI and Anthropic APIs.
+
+</div>
+
+---
+
+## :material-api: API Compatibility
+
+Your existing applications, SDKs, and tools work immediately — no plugins or client changes needed.
+
+### Supported Endpoints
 
 **OpenAI-Compatible:**
 
-| Endpoint                   | Capability                                   | AWS Backend                          |
-|----------------------------|----------------------------------------------|--------------------------------------|
-| `/v1/chat/completions`     | Conversational AI, tool calling, multi-modal | AWS Bedrock Converse API             |
-| `/v1/embeddings`           | Vector embeddings for search & RAG           | AWS Bedrock Embedding Models         |
-| `/v1/images/generations`   | Image generation                             | AWS Bedrock Image Models             |
-| `/v1/images/edits`         | Image editing & inpainting                   | AWS Bedrock Image Models             |
-| `/v1/images/variations`    | Image variations                             | AWS Bedrock Image Models             |
-| `/v1/audio/speech`         | Text-to-speech                               | Amazon Polly                         |
-| `/v1/audio/transcriptions` | Speech-to-text with diarization              | Amazon Transcribe                    |
-| `/v1/audio/translations`   | Speech-to-English translation                | Amazon Transcribe + Amazon Translate |
-| `/v1/models`               | Model discovery & listing                    | AWS Bedrock                          |
+| Endpoint                   | Capability                                                       | AWS Backend                          |
+|----------------------------|------------------------------------------------------------------|--------------------------------------|
+| `/v1/chat/completions`     | Conversational AI, tool calling, multi-modal                     | AWS Bedrock Converse API             |
+| `/v1/responses`            | Stateless conversational AI with built-in tools *(coming soon)*  | AWS Bedrock Converse API             |
+| `/v1/embeddings`           | Vector embeddings for search & RAG                               | AWS Bedrock Embedding Models         |
+| `/v1/images/generations`   | Text-to-image generation                                         | AWS Bedrock Image Models             |
+| `/v1/images/edits`         | Image editing, inpainting & transformations                      | AWS Bedrock Image Models             |
+| `/v1/images/variations`    | Image variations                                                 | AWS Bedrock Image Models             |
+| `/v1/audio/speech`         | Text-to-speech with SSML support                                 | Amazon Polly                         |
+| `/v1/audio/transcriptions` | Speech-to-text with speaker diarization                          | Amazon Transcribe                    |
+| `/v1/audio/translations`   | Speech-to-English translation                                    | Amazon Transcribe + Amazon Translate |
+| `/v1/models`               | Model discovery & listing                                        | AWS Bedrock                          |
+| `/v1/files`                | File upload, listing, metadata, download, deletion               | Amazon S3                            |
+| `/v1/uploads`              | Multipart upload sessions for large files                        | Amazon S3                            |
+| `/available_models`        | List models filtered by modality (text, image, audio, embedding) | Internal                             |
 
 **Anthropic-Compatible:**
 
-| Endpoint                    | Capability                                   | AWS Backend                 |
-|-----------------------------|----------------------------------------------|-----------------------------|
-| `/v1/messages`              | Conversational AI, tool calling, multi-modal | AWS Bedrock Converse API    |
-| `/v1/messages/count_tokens` | Count tokens without sending a message       | AWS Bedrock CountTokens API |
-| `/v1/models`                | Model discovery & listing                    | AWS Bedrock                 |
-| `/v1/models/{model_id}`     | Model details                                | AWS Bedrock                 |
+| Endpoint                    | Capability                                         | AWS Backend                 |
+|-----------------------------|----------------------------------------------------|-----------------------------|
+| `/v1/messages`              | Conversational AI, tool calling, multi-modal       | AWS Bedrock Converse API    |
+| `/v1/messages/count_tokens` | Count tokens without sending a message             | AWS Bedrock CountTokens API |
+| `/v1/models`                | Model discovery & listing                          | AWS Bedrock                 |
+| `/v1/models/{model_id}`     | Model details                                      | AWS Bedrock                 |
+| `/v1/files`                 | File upload, listing, metadata, download, deletion | Amazon S3                   |
 
-### Unified Multi-Modal API
+!!! note "Route prefix"
+    Anthropic-compatible routes are prefixed with `/anthropic` by default (e.g., `/anthropic/v1/messages`). The prefix is configurable via `ANTHROPIC_ROUTES_PREFIX`.
 
-Access **text, image, audio, and video** capabilities through a single, consistent API interface:
+### Parameter Coverage
 
-- **Text** — Chat completions, embeddings, and translation across 80+ models
-- **Images** — Generation, editing, and variations via Stable Diffusion, Nova Canvas, and more
-- **Audio** — Speech synthesis (Polly), transcription with speaker diarization (Transcribe), and translation
-- **Video & Documents** — Multi-modal inputs in chat completions for models that support them
+stdapi.ai maps as many parameters as possible to Bedrock equivalents — across all routes, not just chat:
 
-### Broad Parameter Coverage
-
-Unlike minimal adapters, stdapi.ai works to map as many OpenAI API parameters as possible to their Bedrock equivalents—across all supported routes, not just chat completions:
-
-- **Generation controls** — `temperature`, `max_tokens`, streaming, and many more specialized parameters
-- **Tool/function calling** with OpenAI-compatible schema, including parallel tool calls
-- **Streaming** via Server-Sent Events (SSE) with token usage reporting
-- **All message roles** — System, developer, user, assistant, and tool
-- **Image & audio parameters** — Size, quality, format, voice, speed, and other route-specific options
-- **Model-specific features** — Support for capabilities unique to specific models (e.g., reasoning effort, prompt caching, system tools)
-- **Extra parameters** — Pass additional model-specific or route-specific parameters beyond the standard OpenAI API via the `extra_body` field
+- **Generation controls** — `temperature`, `max_tokens`, `top_p`, `top_k`, `stop`, `seed`, `frequency_penalty`, `presence_penalty`, `logit_bias`, `top_logprobs`, streaming via SSE, token usage reporting
+- **Reasoning** — `reasoning_effort` (minimal/low/medium/high/xhigh), `enable_thinking`, `thinking_budget`
+- **Tool / function calling** — Full OpenAI and Anthropic schemas, parallel tool calls, tool choice modes
+- **All content types** — System, developer, user, assistant, and tool roles; text, image, audio, video, and document content
+- **Response formats** — JSON object, JSON schema, streaming chunks, `reasoning_content`, `annotations`
+- **Model-specific extras** — Any parameter beyond the standard API via `extra_body` or top-level request fields
 
 !!! note "Bedrock & model differences"
-    AWS Bedrock and its underlying models may not support every OpenAI parameter identically. stdapi.ai aims to maximize compatibility, but some parameters may behave differently or have limitations depending on the model. Check the [API documentation](api_openai_chat_completions.md) for details.
+    Not every parameter maps identically across all models. Check the [API documentation](api_openai_chat_completions.md) for details.
+
+---
+
+## :material-brain: 80+ Models Across 10+ Providers
+
+Access every model available on AWS Bedrock through a single, consistent API.
+
+<div class="grid cards" markdown>
+
+- ![Claude](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } **Anthropic Claude**
+  <br>Claude 4.6, Claude Sonnet, Claude Haiku — including reasoning models. Use official Anthropic model names (e.g., `claude-opus-4-6`) — they resolve automatically.
+
+- ![Amazon Nova](styles/logo_amazon_nova.svg){ style="height: 1.2em; vertical-align: text-bottom;" } **Amazon Nova**
+  <br>Nova Micro, Lite, Pro, Premier, Nova 2 with reasoning. Canvas for images. Multimodal embeddings. Built-in web grounding and code interpreter.
+
+- ![Meta Llama](styles/logo_meta.svg){ style="height: 1.2em; vertical-align: text-bottom;" } **Meta Llama**
+  <br>Llama 4 Scout, Maverick, and earlier Llama 3 variants.
+
+- ![Qwen](styles/logo_qwen.svg){ style="height: 1.2em; vertical-align: text-bottom;" } **Alibaba Qwen**
+  <br>Qwen3 and Qwen Coder — including thinking mode.
+
+- ![DeepSeek](styles/logo_deepSeek.svg){ style="height: 1.2em; vertical-align: text-bottom;" } **DeepSeek**
+  <br>Latest DeepSeek V3 models with automatic reasoning content surfacing.
+
+- ![Kimi](styles/logo_moonshot.svg){ style="height: 1.2em; vertical-align: text-bottom;" } **Moonshot Kimi K2**
+  <br>Kimi K2 with optional thinking mode.
+
+- ![Mistral](styles/logo_mistralai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } **Mistral AI**
+  <br>Mistral, Mixtral, and Mistral Large variants.
+
+- ![Cohere](styles/logo_cohere.svg){ style="height: 1.2em; vertical-align: text-bottom;" } **Cohere**
+  <br>Command models for chat; Embed v4 for multimodal embeddings.
+
+- ![Stability AI](styles/logo_stabilityai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } **Stability AI**
+  <br>Stable Diffusion 3.5, SD3 Ultra, and specialty models (upscale, style, search).
+
+- ![MiniMax](styles/logo_minimax.svg){ style="height: 1.2em; vertical-align: text-bottom;" } **MiniMax & more**
+  <br>MiniMax M2.5, Writer Palmyra, AI21 Jamba, TwelveLabs Marengo video embeddings, and others.
+
+</div>
+
+### Model Management
+
+- **Automatic model discovery** — Scans configured regions at startup; no manual model list to maintain
+- **Model aliases** — Map custom names to Bedrock model IDs; Claude and OpenAI names resolve automatically
+- **Deprecated model failover** — Requests to retired models transparently redirect to their replacements
+- **Legacy model filtering** — Optionally hide deprecated models from the models list
+
+---
+
+## :material-image-multiple: Multi-Modal Capabilities
+
+### :material-chat: Text & Conversational AI
+
+- All message roles: system, developer, user, assistant, tool
+- Multi-turn conversations with full history
+- Tool / function calling with parallel execution
+- Structured JSON output (JSON object and JSON schema modes)
+- Streaming via Server-Sent Events with real-time token delivery
+- Reasoning content blocks (`thinking`, `reasoning_content`) for supported models
+- Web search results as context (`search_result` content blocks)
+
+### :material-image: Images
+
+**Generation** — Text-to-image with:
+
+- Multiple output formats: PNG, JPEG, WebP with adjustable quality and compression
+- Flexible sizes and aspect ratios
+- Streaming generation with partial image previews
+- Style presets (model-specific)
+
+**Editing** — Powerful inpainting and transformation:
+
+- Mask-based inpainting (define edit regions precisely)
+- Image-to-image transformation (style, structure conditioning)
+- Background removal, object search & replace, object recolor
+- Creative and conservative upscaling
+
+**Variations** — Create alternative versions of existing images
+
+**JSON body format** — Reference images via Files API `file_id` or URL instead of re-uploading
+
+### :material-microphone: Audio
+
+**Text-to-Speech (Amazon Polly):**
+
+- 60+ voices across 30+ languages
+- Multiple engine tiers: Standard, Neural, Long-Form, Generative
+- SSML support — control pronunciation, emphasis, pauses, prosody
+- Output formats: MP3, PCM, Opus, AAC, FLAC, OGG Vorbis
+- Speed control (0.25× to 4×)
+- Automatic language detection via Amazon Comprehend
+
+**Speech-to-Text (Amazon Transcribe):**
+
+- 100+ languages
+- Speaker diarization — automatic speaker separation and labeling
+- Word-level and segment-level timestamps
+- Subtitle export: SRT and VTT formats
+- Vocabulary customization and custom language models
+- Automatic language detection
+
+**Speech Translation** — Transcribe audio and translate to English in a single request
+
+### :material-file-document: Documents & Files
+
+- PDF input with optional citation support (precise source references in responses)
+- Plain text and structured content blocks as context
+- File storage via the Files API — upload once, reference by ID across multiple requests
+- Multipart uploads for large files via the Uploads API (S3 native multipart)
+- File expiry with configurable TTL (1 hour – 30 days)
+
+### :material-video: Video
+
+- Video input in chat completions for supported models (e.g., Amazon Nova)
+- S3 URLs as direct video input for multimodal embeddings
+
+### :material-vector-polyline: Embeddings
+
+- Text embeddings — single and batch processing
+- Multimodal embeddings — images, audio, video, PDF documents
+- Dimension control (model-specific reduction)
+- Float or Base64 output encoding
+- S3 URL input for large files; oversized base64 payloads auto-uploaded to S3
 
 ---
 
 ## :material-aws: Purpose-Built for AWS
 
-stdapi.ai is **engineered specifically for AWS**, unlocking advanced Bedrock features and native AI services that generic gateways cannot provide.
+### Multi-Region & Quota Multiplication
 
-### Multi-Region Bedrock Access
+Configure multiple AWS regions to scale your throughput and maximize availability:
 
-- **Configure multiple AWS regions** to access the widest selection of models and maximize availability
-- **Multiply your effective quota** — Each AWS region has its own independent quota; adding regions scales your tokens-per-minute and daily token limits proportionally (3 regions = ~3× the quota)
-- **Automatic cross-region inference profile selection** — stdapi.ai intelligently selects the best inference profile or falls back to direct model invocation
-- **Region-aware optimization** — Models are routed to the optimal region based on availability and your configuration
+| Routing Strategy    | Description                             | Prompt Caching |
+|---------------------|-----------------------------------------|----------------|
+| `ordered` (default) | Try regions in order; skip blocked ones | ✓ Compatible   |
+| `lowest_latency`    | Prefer fastest measured region          | ✓ Compatible   |
+| `round_robin`       | Distribute evenly across regions        | —              |
+| `disabled`          | Single region per model                 | ✓ Compatible   |
 
-### Resilience & Failover
-
-stdapi.ai automatically handles service disruptions and model changes, with no client-side changes needed:
-
-- **Automatic region routing** — Distribute requests across regions with ordered, lowest-latency, or round-robin strategies; automatically fails over on quota limits or regional unavailability
-- **Deprecated model failover** — Requests to deprecated or retired models are transparently redirected to their replacements
+- **3 regions ≈ 3× your tokens-per-minute** — each region has its own independent quota
+- **Automatic failover** — transparent region switching on throttle, quota, or service errors
+- **Exponential backoff** — doubles per consecutive error, capped at 1 hour
+- **Region health tracking** — per-model health status with configurable recovery delays
 
 [:octicons-arrow-right-24: Resilience & Failover](operations_resilience.md)
 
 ### Advanced Bedrock Features
 
-stdapi.ai exposes Bedrock-specific capabilities through the familiar OpenAI API:
-
-| Feature                            | Description                                                         |
-|------------------------------------|---------------------------------------------------------------------|
-| **Prompt Caching**                 | Cache prompts to reduce latency and cost on supported models        |
-| **Reasoning Modes**                | Extended thinking with configurable effort (Claude, Nova 2)         |
-| **Guardrails**                     | AWS Bedrock Guardrails for content filtering and safety policies    |
-| **Service Tiers**                  | Optimized latency tiers for different workload priorities           |
-| **Application Inference Profiles** | Use custom inference profiles for workload isolation                |
-| **Prompt Routers**                 | Bedrock prompt routers for intelligent model selection              |
-| **System Tools**                   | AWS Bedrock system tools (e.g., web grounding with citations)       |
-| **Claude Server Tools**            | Bash, text editor, computer use, and memory tools for Claude models |
-| **Extra Model Parameters**         | Pass model-specific parameters not covered by the OpenAI API        |
+| Feature                            | Description                                                                                                             |
+|------------------------------------|-------------------------------------------------------------------------------------------------------------------------|
+| **Prompt Caching**                 | Cache system prompts, messages, and tools; granular section control; configurable TTL; cache metrics in every response  |
+| **Reasoning Modes**                | Extended thinking with effort levels (minimal → xhigh) for Claude and Nova 2; `thinking_budget` for token-level control |
+| **Bedrock Guardrails**             | Content filtering and safety policies with configurable trace levels                                                    |
+| **Service Tiers**                  | Priority, default, and flex latency tiers per request                                                                   |
+| **Application Inference Profiles** | Custom profiles for workload isolation and cost attribution                                                             |
+| **Prompt Routers**                 | Bedrock prompt routers for intelligent model selection                                                                  |
+| **Cross-Region Inference**         | Geography-pinned (US, EU, APAC) and global profiles with data residency control                                         |
+| **System Tools (Nova)**            | Web grounding with URL citations; code interpreter                                                                      |
+| **Claude Server Tools**            | Bash, text editor, computer use (3.5+), memory (3.7+)                                                                   |
+| **Extra Model Parameters**         | Any model-specific parameter forwarded via `extra_body` or top-level field                                              |
 
 ### AWS AI Services Integration
 
-Beyond Bedrock, stdapi.ai integrates natively with AWS AI services—all accessible through OpenAI-compatible endpoints:
+| Service               | Capability                                                          |
+|-----------------------|---------------------------------------------------------------------|
+| **Amazon Polly**      | 60+ voices, 30+ languages, SSML, multiple engines and audio formats |
+| **Amazon Transcribe** | 100+ languages, speaker diarization, timestamps, SRT/VTT subtitles  |
+| **Amazon Translate**  | Language translation for audio translation workflows                |
+| **Amazon Comprehend** | Automatic language detection for intelligent voice routing          |
 
-- **Amazon Polly** — High-quality text-to-speech with multiple voices and languages
-- **Amazon Transcribe** — Speech-to-text with **speaker diarization** support
-- **Amazon Translate** — Language translation for audio translation workflows
-- **Amazon Comprehend** — Automatic language detection for routing
+### Amazon S3 Integration
 
-### S3 Integration
+S3 is woven into the entire API surface — not just file storage:
 
-- **S3 bucket support** for file storage in image and audio operations
-- **Regional S3 buckets** for multi-region deployments
-- **S3 Transfer Acceleration** for faster file access via generated HTTP links
+- **Files API** — Full CRUD at `/v1/files` with no artificial size limit (up to S3's ~5 TB), optional expiry, S3 Lifecycle backstop; file IDs work across both OpenAI and Anthropic endpoints
+- **Multipart uploads** — `/v1/uploads` backed by S3 native multipart; stream large files without buffering
+- **Direct `s3://` image references** — Use `s3://bucket/key` in chat completions and Anthropic Messages; the gateway reads from S3 via IAM role — no pre-signed URLs
+- **Files API in image operations** — Reference uploaded files by `file_id` in image edits and variations
+- **Multimodal embeddings** — Pass `s3://` URLs directly; oversized base64 payloads auto-uploaded and invoked asynchronously
+- **Regional buckets** — One bucket per Bedrock region; S3 region routing is automatic
+- **Transfer Acceleration** — Faster downloads via generated HTTP links
 
 ---
 
-## :material-shield-lock: Compliance & Data Sovereignty
+## :material-shield-lock: Security & Compliance
 
-stdapi.ai gives you **full control over where your data is processed**, making it straightforward to meet regulatory requirements.
+### Authentication
 
-- **Region restrictions** — Configure exactly which AWS regions are allowed for inference, matching your GDPR, HIPAA, or FedRAMP requirements
-- **Cross-region inference profile filtering** — Easily restrict cross-region profiles to only compliant regions
-- **Data stays in your AWS account** — All inference runs within your own account; data is never shared with model providers or used for training
-- **No external data transmission** — stdapi.ai processes requests locally and communicates only with AWS services
+stdapi.ai supports multiple authentication strategies to fit your architecture:
 
-!!! info "AWS Bedrock Privacy Defaults"
-    AWS Bedrock provides strong privacy guarantees by default: inference data is not shared with model providers and is not used for model training. stdapi.ai inherits and preserves these protections.
+| Method                | How                                                                                                                | Best For                |
+|-----------------------|--------------------------------------------------------------------------------------------------------------------|-------------------------|
+| **API Key**           | `Authorization: Bearer` or `X-API-Key` header; stored in SSM Parameter Store or Secrets Manager (never plain text) | Direct clients, SDKs    |
+| **OIDC / Cognito**    | Delegate to AWS Application Load Balancer or API Gateway                                                           | Web apps, SSO           |
+| **AWS IAM (SigV4)**   | Via API Gateway with IAM authorization                                                                             | Internal AWS services   |
+| **No authentication** | Open access                                                                                                        | Private VPC deployments |
+
+[:octicons-arrow-right-24: Authentication & Security](operations_authentication_security.md)
+
+### Security Features
+
+| Feature                               | Description                                                                                                                                         |
+|---------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Industry-Standard API Key Hashing** | API keys hashed with a cryptographic function + per-key salt; constant-time comparison prevents timing attacks; only the hash is retained in memory |
+| **SSRF Protection**                   | Blocks loopback, link-local, private network addresses, and DNS rebinding attacks                                                                   |
+| **Trusted Hosts**                     | Restrict which hostnames the service responds to                                                                                                    |
+| **CORS Controls**                     | Configurable cross-origin resource sharing policies                                                                                                 |
+| **CSRF Protection**                   | Built-in cross-site request forgery protection                                                                                                      |
+| **Input Validation**                  | Configurable strict mode — rejects malformed or out-of-spec requests at the gateway edge                                                            |
+| **Proxy Header Handling**             | Secure forwarded header processing for ALB and CloudFront                                                                                           |
+| **TLS 1.2+ in transit**               | All AWS service calls encrypted; the Terraform module configures ALB with TLS 1.3 and post-quantum hybrid key exchange                              |
+
+!!! success "Commercial: Hardened Container Image :material-arrow-right: [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo)"
+    The commercial image is security-validated by AWS Marketplace and includes: **read-only root filesystem**, **dropped Linux capabilities**, minimal installed packages, and no shell. The Terraform module also configures a **Customer Managed KMS key** (auto-rotation enabled) for all data at rest.
+
+### Compliance & Data Sovereignty
+
+Data never leaves your AWS account — every AWS service call is restricted to the regions you configure. All AWS services used by stdapi.ai (Bedrock, S3, Polly, Transcribe, and more) are in scope for **GDPR**, **ISO 27001/27017/27018**, **SOC 1/2/3**, **HIPAA**, **FedRAMP**, **PCI-DSS**, and **CSA STAR Level 2**. The commercial Terraform module adds VPC endpoints (no internet egress), Customer Managed KMS keys, and region-pinned cross-region profiles for strict data residency.
 
 [:octicons-arrow-right-24: Data Sovereignty & Compliance](operations_compliance.md)
 
 ---
 
-## :material-security: Security
+## :material-puzzle: Works with Your Existing Tools
 
-Security is built into every layer of stdapi.ai:
+stdapi.ai is a drop-in replacement in hundreds of applications and frameworks. Change the API endpoint — nothing else.
 
-| Feature | Description |
-|---|---|
-| **API Key via SSM / Secrets Manager** | Store API keys securely in AWS Systems Manager Parameter Store or Secrets Manager—never in environment variables or code |
-| **CORS Controls** | Configurable Cross-Origin Resource Sharing policies |
-| **Trusted Hosts** | Restrict which hostnames the service responds to |
-| **Proxy Header Handling** | Secure forwarded header processing for load balancer deployments |
-| **CSRF Protection** | Built-in Cross-Site Request Forgery protection |
-| **Hardened Docker Image** | Minimal attack surface container image (commercial version) |
+<div class="grid cards" markdown>
+
+- :material-chat: **Chat Interfaces**
+  <br>Open WebUI, LobeHub, LibreChat, Chatbot UI — private ChatGPT-style experiences on AWS
+
+- :material-code-braces: **AI Coding Assistants**
+  <br>Claude Code, Continue.dev, Cline, Cursor, Windsurf, Aider — backed by Claude 4.6, Kimi K2, Qwen Coder
+
+- :material-graph-outline: **Workflow Automation**
+  <br>n8n, Make, Zapier — connect AI to your business processes
+
+- :material-robot: **Agent Frameworks**
+  <br>OpenClaw, LangChain, LlamaIndex, CrewAI, LangGraph, AutoGPT — multi-agent systems on Bedrock
+
+- :material-forum: **Team Chatbots**
+  <br>Slack, Discord, Microsoft Teams — AI assistants in your team's communication tools
+
+- :material-note-text: **Knowledge Management**
+  <br>Obsidian, Notion, Logseq — AI-powered writing assistance and search
+
+</div>
+
+[:octicons-arrow-right-24: See all use cases](use_cases.md)
 
 ---
 
-## :material-chart-line: Observability & Debugging
+## :material-chart-line: Observability & Operations
 
-Monitor, debug, and audit your AI gateway with built-in tooling:
+### Structured Logging
 
-- **OpenTelemetry integration** — Export traces and metrics to AWS X-Ray, Datadog, or any OTLP-compatible backend
-- **Request/response logging** — Optional detailed logging of full request and response payloads for debugging
-- **Token usage tracking** — Accurate token consumption reporting in API responses
-- **Swagger & ReDoc interfaces** — Interactive API documentation served directly by the application
-- **Configurable log levels** — Fine-grained control over logging verbosity
-- **Client IP logging** — Optional client IP tracking for audit trails
+- JSON logs to stdout — natively ingested by CloudWatch Logs
+- Every request logs: method, path, status, model ID, region(s) used, execution time
+- Optional: full request/response payloads, client IP (disabled by default)
+- Configurable log levels (info, warning, error, critical, disabled)
 
----
+### OpenTelemetry Integration
 
-## :material-cog: Quality of Life
+- Export traces and metrics to AWS X-Ray, Datadog, Jaeger, or any OTLP-compatible backend
+- Configurable sampling rate
+- Root span per request with full correlation IDs
 
-Features that make day-to-day operations smoother:
+### Token Usage Tracking
 
-- **Model aliases & overrides** — Map custom model names to specific Bedrock model IDs for simplified client configuration
-- **Claude model name aliases** — Use official Anthropic model names (e.g., `claude-opus-4-6`) that automatically resolve to the correct Bedrock model identifiers
-- **Model auto-detection** — Automatically discovers available Bedrock models in your configured regions
-- **Model list caching** — Cached model listings for fast responses without repeated AWS API calls
-- **Token usage reporting** — Consistent usage statistics across all endpoints
-- **Zero-configuration startup** — Works out of the box with automatic region and model detection
+- Input, output, reasoning, and cached token counts in every API response
+- Consistent reporting across all endpoints (chat, messages, embeddings, images, audio)
+
+### Developer Tools
+
+- **Swagger UI** at `/docs` — test endpoints directly in your browser
+- **ReDoc** at `/redoc` — clean, searchable API reference
+- **OpenAPI schema** at `/openapi.json` — import into Postman, generate client code
+
+### Quality of Life
+
+- **Model aliases** — Map custom names to Bedrock IDs; Claude model names resolve automatically
+- **Model auto-detection** — Discovers available models across all configured regions at startup
+- **Model list caching** — Fast model listing without repeated AWS API calls
+- **Token estimation** — Optional pre-flight token count via tiktoken (without calling Bedrock); useful for client-side budgeting and routing decisions
+- **Safety identifier** — `safety_identifier` field in requests as an alias to `user` for abuse tracking and audit trails
+- **Zero-configuration startup** — Automatic region and model detection; warnings on missing config
+- **Deprecated model failover** — Requests to retired models silently redirect to their replacements
 
 ---
 
 ## :material-rocket-launch: Deployment
 
-stdapi.ai offers flexible deployment options for every stage:
+### Community vs Commercial
 
-| Option                     | Best For                    | Details                                                                                                                                              |
-|----------------------------|-----------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **Community Docker Image** | Local development & testing | Free, open-source, quick to start                                                                                                                    |
-| **Terraform Module (ECS)** | Production on AWS           | Ready-to-use infrastructure-as-code via [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo), includes hardened container |
-| **Use Case Examples**      | Guided integration          | Pre-built deployment configurations for Open WebUI, n8n, coding assistants                                                                           |
-
-- **Comprehensive documentation** — Detailed [Getting Started](operations_getting_started.md) guide, [Configuration Reference](operations_configuration.md), and [Use Case](use_cases.md) walkthroughs
-- **High-performance runtime** — Powered by [Granian](https://github.com/emmett-framework/granian), a fast Python ASGI server, with configurable workers and threads
+|                               | :material-docker: **Community**                         | :material-aws: **Commercial**                                                                     |
+|-------------------------------|---------------------------------------------------------|---------------------------------------------------------------------------------------------------|
+| **Price**                     | Free                                                    | $0.10/container-hour - With 14-day free trial                                                     |
+| **License**                   | AGPL-3.0                                                | AWS Marketplace SCMP                                                                              |
+| **API compatibility**         | :material-check:{ .green-check } Full                   | :material-check:{ .green-check } Full                                                             |
+| **Container image**           | :material-check:{ .yellow-check } Community (GHCR)      | :material-check:{ .green-check } Hardened, AWS Marketplace validated                              |
+| **Deployment**                | :material-check:{ .yellow-check } Docker / self-managed | :material-check:{ .green-check } Terraform module (ECS Fargate) - AWS Marketplace container image |
+| **Production infrastructure** | —                                                       | :material-check:{ .green-check } Fully featured - AWS Well-Architected - Hardened                 |
+| **Commercial support**        | —                                                       | :material-check:{ .green-check } 1 business day                                                   |
 
 ---
 
-## :material-check-all: Feature Summary
+## :material-scale-balance: How stdapi.ai Compares
 
-A quick-reference checklist to find what you need at a glance:
+All four solutions below expose an OpenAI-compatible API in front of AWS Bedrock. The comparison focuses on the AWS deployment context — LiteLLM is evaluated with AWS services as the backend provider (Bedrock, Polly, Transcribe), not as a multi-cloud proxy. Bedrock Access Gateway is the official AWS-maintained open-source sample. Bedrock Mantle is AWS's own managed OpenAI-compatible endpoint, requiring no self-hosting.
 
-### API & Compatibility
+| Capability                                  |                   stdapi.ai                    |            LiteLLM (on AWS)             |         Bedrock Access Gateway          |             Bedrock Mantle             |
+|---------------------------------------------|:----------------------------------------------:|:---------------------------------------:|:---------------------------------------:|:--------------------------------------:|
+| **OpenAI Chat completions**                 |        :material-check:{ .green-check }        |    :material-check:{ .green-check }     |    :material-check:{ .green-check }     |    :material-check:{ .green-check }    |
+| **OpenAI Embeddings**                       |        :material-check:{ .green-check }        |    :material-check:{ .green-check }     |    :material-check:{ .green-check }     |                   —                    |
+| **Anthropic Messages API**                  |        :material-check:{ .green-check }        |    :material-check:{ .green-check }     |                    —                    |                   —                    |
+| **OpenAI Responses API**                    | :material-clock-outline:{ .coming-soon } [^12] |                    —                    |                    —                    |    :material-check:{ .green-check }    |
+| **OpenAI Image generation**                 |        :material-check:{ .green-check }        |    :material-check:{ .green-check }     |                    —                    |                   —                    |
+| **OpenAI Image editing**                    |        :material-check:{ .green-check }        |                    —                    |                    —                    |                   —                    |
+| **OpenAI Image variations**                 |        :material-check:{ .green-check }        |                    —                    |                    —                    |                   —                    |
+| **OpenAI TTS (speech)**                     |        :material-check:{ .green-check }        | :material-check:{ .yellow-check } [^13] |                    —                    |                   —                    |
+| **OpenAI STT (transcription)**              |        :material-check:{ .green-check }        |                    —                    |                    —                    |                   —                    |
+| **OpenAI Files & Uploads API**              |        :material-check:{ .green-check }        |                    —                    |                    —                    |                   —                    |
+| **OpenAI Realtime API**                     |                       —                        |    :material-check:{ .green-check }     |                    —                    |                   —                    |
+| **Cohere Rerank API**                       |                       —                        |    :material-check:{ .green-check }     |                    —                    |                   —                    |
+| **Bedrock Full model catalog**              |        :material-check:{ .green-check }        | :material-check:{ .yellow-check } [^1]  | :material-check:{ .yellow-check } [^10] | :material-check:{ .yellow-check } [^2] |
+| **Multimodal inputs**                       |      text · image · audio · video · docs       |           text · image · docs           |              text · image               |              text · image              |
+| **Multi-region quota multiplication**       |        :material-check:{ .green-check }        | :material-check:{ .yellow-check } [^8]  |                    —                    |                   —                    |
+| **Bedrock Cross-region inference profiles** |        :material-check:{ .green-check }        | :material-check:{ .yellow-check } [^14] | :material-check:{ .yellow-check } [^14] |                   —                    |
+| **Bedrock system tools**                    |        :material-check:{ .green-check }        |                    —                    |                    —                    |                   —                    |
+| **Bedrock Guardrails**                      |        :material-check:{ .green-check }        |    :material-check:{ .green-check }     |                    —                    |    :material-check:{ .green-check }    |
+| **Bedrock Service tiers**                   |        :material-check:{ .green-check }        |    :material-check:{ .green-check }     |                    —                    |    :material-check:{ .green-check }    |
+| **Bedrock Application inference profiles**  |        :material-check:{ .green-check }        |    :material-check:{ .green-check }     |    :material-check:{ .green-check }     |    :material-check:{ .green-check }    |
+| **Bedrock prompt routers**                  |        :material-check:{ .green-check }        |                    —                    |                    —                    |    :material-check:{ .green-check }    |
+| **Bedrock Prompt caching & reasoning**      |        :material-check:{ .green-check }        | :material-check:{ .yellow-check } [^6]  |    :material-check:{ .green-check }     | :material-check:{ .yellow-check } [^9] |
+| **Runs in your AWS account**                |        :material-check:{ .green-check }        |    :material-check:{ .green-check }     |    :material-check:{ .green-check }     |                   —                    |
+| **Model auto-discovery**                    |        :material-check:{ .green-check }        | :material-check:{ .yellow-check } [^1]  | :material-check:{ .yellow-check } [^7]  |    :material-check:{ .green-check }    |
+| **Deprecated model failover**               |        :material-check:{ .green-check }        |                    —                    |                    —                    |                   —                    |
+| **Ready-to-use deployment**                 |        :material-check:{ .green-check }        |                    —                    | :material-check:{ .yellow-check } [^3]  |    :material-check:{ .green-check }    |
+| **Commercial support**                      |        :material-check:{ .green-check }        |    :material-check:{ .green-check }     |                    —                    | :material-check:{ .green-check } [^4]  |
+| **Self-hosted**                             |        :material-check:{ .green-check }        |    :material-check:{ .green-check }     |    :material-check:{ .green-check }     |                   —                    |
+| **AWS-native focus**                        |        :material-check:{ .green-check }        | :material-check:{ .yellow-check } [^5]  |    :material-check:{ .green-check }     |    :material-check:{ .green-check }    |
+| **Multi-provider support**                  |                       —                        | :material-check:{ .green-check } [^11]  |                    —                    |                   —                    |
+| **Open-source community**                   |                     Small                      |             Large - ~40k+ ★             |             Medium - ~1k ★              |                   —                    |
+| **Source license**                          |       AGPL-3.0 (community) · commercial        |                   MIT                   |                  MIT-0                  |              AWS service               |
+| **Distribution & supply chain**             |               Marketplace · GHCR               |                pip/PyPI                 |             GitHub (MIT-0)              |              AWS-managed               |
 
-- :material-check-circle:{ .green-check } OpenAI Chat Completions API (`/v1/chat/completions`)
-- :material-check-circle:{ .green-check } OpenAI Embeddings API (`/v1/embeddings`)
-- :material-check-circle:{ .green-check } OpenAI Images API (generations, edits, variations)
-- :material-check-circle:{ .green-check } OpenAI Audio API (speech, transcriptions, translations)
-- :material-check-circle:{ .green-check } OpenAI Models API (`/v1/models`)
-- :material-check-circle:{ .green-check } Anthropic Messages API (`/v1/messages`)
-- :material-check-circle:{ .green-check } Anthropic Token Counting API (`/v1/messages/count_tokens`)
-- :material-check-circle:{ .green-check } Anthropic Models API (`/v1/models`, `/v1/models/{model_id}`)
-- :material-check-circle:{ .green-check } Streaming (Server-Sent Events)
-- :material-check-circle:{ .green-check } Tool / function calling
-- :material-check-circle:{ .green-check } Multi-modal inputs (text, image, audio, video, documents)
-- :material-check-circle:{ .green-check } Broad parameter mapping (all routes)
-- :material-check-circle:{ .green-check } Model-specific features & extra parameters
+!!! info "About the alternatives"
 
-### AWS Integration
-
-- :material-check-circle:{ .green-check } Multi-region Bedrock access
-- :material-check-circle:{ .green-check } Automatic region routing (ordered, lowest-latency, round-robin)
-- :material-check-circle:{ .green-check } Automatic cross-region inference profile selection
-- :material-check-circle:{ .green-check } Prompt caching
-- :material-check-circle:{ .green-check } Reasoning modes (extended thinking)
-- :material-check-circle:{ .green-check } Bedrock Guardrails
-- :material-check-circle:{ .green-check } Service tiers
-- :material-check-circle:{ .green-check } Application inference profiles
-- :material-check-circle:{ .green-check } Prompt routers
-- :material-check-circle:{ .green-check } Claude server tools (bash, text editor, computer use, memory)
-- :material-check-circle:{ .green-check } Amazon Polly (text-to-speech)
-- :material-check-circle:{ .green-check } Amazon Transcribe (speech-to-text with diarization)
-- :material-check-circle:{ .green-check } Amazon Translate
-- :material-check-circle:{ .green-check } S3 integration with Transfer Acceleration
-
-### Security & Compliance
-
-- :material-check-circle:{ .green-check } API keys in SSM Parameter Store / Secrets Manager
-- :material-check-circle:{ .green-check } Region-based data sovereignty controls
-- :material-check-circle:{ .green-check } CORS, trusted hosts, proxy headers
-- :material-check-circle:{ .green-check } CSRF protection
-- :material-check-circle:{ .green-check } Hardened Docker image (commercial)
-- :material-check-circle:{ .green-check } Data never leaves your AWS account
-
-### Operations
-
-- :material-check-circle:{ .green-check } OpenTelemetry integration
-- :material-check-circle:{ .green-check } Request/response detail logging
-- :material-check-circle:{ .green-check } Swagger & ReDoc API docs
-- :material-check-circle:{ .green-check } Model aliases & overrides
-- :material-check-circle:{ .green-check } Claude model name aliases (e.g., `claude-opus-4-6` → Bedrock ID)
-- :material-check-circle:{ .green-check } Model auto-detection & caching
-- :material-check-circle:{ .green-check } Token usage tracking
-- :material-check-circle:{ .green-check } Zero-configuration startup
-- :material-check-circle:{ .green-check } Terraform module for production (ECS)
-- :material-check-circle:{ .green-check } Community Docker image for development
+    - **LiteLLM** — widely adopted multi-cloud proxy with a large open-source community. Ideal when you need a single entry point across OpenAI, Azure, AWS, and others. AWS deployment and security features (WAF, VPC endpoints) require manual setup. Also offers a commercial Enterprise tier.
+    - **Bedrock Access Gateway** — official open-source AWS sample (MIT-0), actively maintained by AWS teams. Covers chat completions and embeddings only. No WAF, auto-scaling, monitoring, or commercial support included.
+    - **Bedrock Mantle** — AWS's own native OpenAI-compatible endpoint backed by AWS's full compliance and SLA. No self-hosting required. Supports chat completions and the Responses API; limited to a subset of models (mostly newer open-weight models — Claude 3.x/4.x, Nova, Llama, Cohere, and Stability AI image models are not available). Routes through an AWS-managed endpoint, not your private VPC. See [model availability](https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html).
 
 ---
 
@@ -293,9 +478,24 @@ A quick-reference checklist to find what you need at a glance:
 
 <div class="grid cards" markdown>
 
-- :material-rocket-launch: [**Get Started in Minutes**](operations_getting_started.md) — Deploy to AWS with Terraform or [run locally with Docker](operations_getting_started_local.md)
-- :material-book-open-variant: [**Explore the API**](api_overview.md) — Full API reference and examples
-- :material-puzzle: [**See Use Cases**](use_cases.md) — Open WebUI, n8n, coding assistants, and more
-- :material-aws: [**Start 14-Day Free Trial**](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo) — AWS Marketplace, no commitment
+- :material-aws: [**Start 14-Day Free Trial**](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo) — Production-ready Terraform deployment on AWS Marketplace
+- :material-rocket-launch: [**Getting Started Guide**](operations_getting_started.md) — Deploy to AWS with Terraform
+- :material-docker: [**Run Locally**](operations_getting_started_local.md) — Free Docker image for development
+- :material-book-open-variant: [**API Reference**](api_overview.md) — Full endpoint documentation and examples
 
 </div>
+
+[^1]: Full Bedrock catalog supported; each model must be declared in config (applies to auto-discovery)
+[^2]: Subset of Bedrock models — Claude 3.x/4.x, Nova, Llama, AI21, Cohere, and Stability AI (images) not available; supports mostly newer open-weight models (DeepSeek, Gemma, Qwen, Kimi K2, MiniMax, newer Mistral, etc.) — see [AWS endpoint availability](https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html)
+[^3]: CDK reference sample — no WAF, auto-scaling, monitoring, or commercial support
+[^4]: Covered through your existing AWS Support plan
+[^5]: Generalist multi-cloud proxy covering 100+ providers; AWS-specific Bedrock features and security integrations may lag behind dedicated solutions
+[^6]: Prompt caching and reasoning supported on standard routes; coverage varies by model — not all Bedrock models support prompt caching or extended thinking
+[^7]: Auto-discovery limited to the single deployed region — some models are only available in specific AWS regions
+[^8]: Achievable via the LiteLLM router, but requires manually declaring each model per region with explicit TPM/RPM limits — no automatic quota distribution
+[^9]: Claude 3.x/4.x (which support prompt caching) not available on Mantle; reasoning available via select open-weight models (Qwen3 thinking, etc.)
+[^10]: Single-region deployment — some models are only available in specific AWS regions; no cross-region catalog aggregation
+[^11]: 100+ providers: OpenAI, Azure OpenAI, GCP Vertex, Anthropic direct, and more — ideal when you need a single gateway across multiple clouds
+[^12]: Coming in the next release
+[^13]: Requires connecting Amazon Polly as the TTS backend — not included by default in a LiteLLM on AWS deployment
+[^14]: Supported by specifying the cross-region inference profile ARN as the model ID — no automatic profile selection
