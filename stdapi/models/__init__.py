@@ -791,6 +791,10 @@ async def _get_bedrock_models_from_region(region: RegionName) -> list[ModelDetai
             or eol > next_refresh
         )
         and (
+            (legacy := model["modelLifecycle"].get("legacyTime")) is None
+            or legacy > next_refresh
+        )
+        and (
             (set(model["inferenceTypesSupported"]) & _INFERENCE_TYPES)
             or (
                 "PROVISIONED" in model["inferenceTypesSupported"]
