@@ -635,6 +635,10 @@ class ChatModel(ChatModelBase[Any, Any]):
     ) -> None:
         """Place one checkpoint per requested component up to ``MAX_CACHE_BLOCKS``.
 
+        When ``PROMPT_CACHING_TOOL_SUPPORTED`` is ``False``, messages containing
+        ``toolUse`` or ``toolResult`` blocks are skipped — those models reject
+        cachePoint in tool-call-related turns.
+
         Args:
             system_blocks: System content blocks list.
             tool_config: Bedrock tool configuration.
@@ -642,26 +646,32 @@ class ChatModel(ChatModelBase[Any, Any]):
             prompt_caching: Requested cache components.
             cache_point: Cache-point block to append.
         """
-        cache_blocks_used = 0
+        remaining = self.MAX_CACHE_BLOCKS
 
         if "system" in prompt_caching and system_blocks:
             system_blocks.append(cache_point)
-            cache_blocks_used += 1
+            remaining -= 1
 
         if (
-            "tools" in prompt_caching
+            remaining
+            and "tools" in prompt_caching
             and tool_config
             and self.PROMPT_CACHING_TOOL_SUPPORTED
-            and cache_blocks_used < self.MAX_CACHE_BLOCKS
         ):
             tool_config["tools"].append(cache_point)  # type: ignore[attr-defined]
-            cache_blocks_used += 1
+            remaining -= 1
 
-        if "messages" in prompt_caching and bedrock_messages:
-            for message in bedrock_messages[
-                : self.MAX_CACHE_BLOCKS - cache_blocks_used
-            ]:
-                message["content"].append(cache_point)  # type: ignore[attr-defined]
+        if remaining and "messages" in prompt_caching:
+            for message in bedrock_messages:
+                if not remaining:
+                    break
+                content: list[ContentBlockTypeDef] = message["content"]  # type: ignore[assignment]
+                if not self.PROMPT_CACHING_TOOL_SUPPORTED and any(
+                    "toolUse" in block or "toolResult" in block for block in content
+                ):
+                    continue
+                content.append(cache_point)
+                remaining -= 1
 
     def _req_configure_tools(
         self,
