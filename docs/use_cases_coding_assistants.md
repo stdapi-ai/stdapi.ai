@@ -290,6 +290,21 @@ Common configuration issues with non-Claude models:
 
 - **Prompt caching** — Claude Code sends `cache_control` headers that can cause errors on models that handle caching differently. Set `DISABLE_PROMPT_CACHING=1` to suppress them.
 - **Extended thinking** — Claude Code enables reasoning by default. For models without any reasoning support, set `MAX_THINKING_TOKENS=0` to disable it entirely.
+- **Output token limit** — Claude Code defaults to requesting up to 32 000 output tokens, which exceeds the maximum for many non-Claude models. Set `CLAUDE_CODE_MAX_OUTPUT_TOKENS` to a value within the model's limit to avoid `max_tokens` validation errors.
+
+```json
+{
+  "env": {
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "moonshot.kimi-k2-instruct",
+    "DISABLE_PROMPT_CACHING": "1",
+    "MAX_THINKING_TOKENS": "0",
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "128000"
+  }
+}
+```
+
+!!! warning "Don't Switch Models Mid-Conversation"
+    Avoid switching between Claude models and non-Claude models (like Nova, Kimi, Qwen) within the same conversation. Claude Code and other tools may cache conversation context in a format specific to the model family, and switching can cause errors or unexpected behavior. Start a new conversation when changing model families.
 
 #### :material-format-list-bulleted: Adding a Model to the Picker
 

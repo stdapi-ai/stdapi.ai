@@ -488,7 +488,9 @@ class ThinkingBlock(BaseModelResponse):
         description="Content block type. Always `thinking`."
     )
     thinking: str = Field(description="The thinking process content.")
-    signature: str = Field(description="Signature for the thinking block.")
+    signature: str | None = Field(
+        default=None, description="Signature for the thinking block."
+    )
 
 
 # Ref: anthropic.types.thinking_block_param.ThinkingBlockParam
@@ -2186,7 +2188,7 @@ class SignatureDelta(BaseModelResponse):
     type: Literal["signature_delta"] = Field(
         description="Delta type. Always `signature_delta`."
     )
-    signature: str = Field(description="Signature content delta.")
+    signature: str | None = Field(default=None, description="Signature content delta.")
 
 
 # Ref: anthropic.types.raw_content_block_delta.RawContentBlockDelta
