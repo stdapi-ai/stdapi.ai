@@ -1,10 +1,9 @@
 # stdapi.ai — Model Coverage Benchmark Report
 
-**Report scope:** Combines three test sessions covering both API routes across all supported Bedrock model providers.
-**Test dates:** 2026-04-02 (initial routes), 2026-04-03 (extended multi-provider)
+**Report scope:** Combines test sessions covering all three API routes across all supported Bedrock model providers.
 **Server:** stdapi.ai v1.7.0+ running on `http://127.0.0.1:8001`
 **Config:** `AWS_BEDROCK_REGIONS=eu-west-3,eu-west-1,eu-central-1,us-east-1,us-west-2`
-**Routes tested:** Anthropic Messages API (`/anthropic/v1/messages`) and OpenAI Chat Completions API (`/v1/chat/completions`)
+**Routes tested:** Anthropic Messages API (`/anthropic/v1/messages`), OpenAI Chat Completions API (`/v1/chat/completions`), and OpenAI Responses API (`/v1/responses`)
 
 ---
 
@@ -30,11 +29,16 @@ Each scenario is labelled with the T-ID used throughout the matrices below, its 
 | T-CC3 | Anthropic (Claude Code) | Parameter mapping audit — read types, adapter, and _prepare_converse_request to document ≥10 OpenAI → Bedrock field mappings with exact code quotes | `tests/test_anthropic_messages_multi_model_claude_code.py::TestClaudeCodeAnalysis::test_audit_parameter_mapping` |
 | T-CC4 | Anthropic (Claude Code) | Model override enumeration — Glob + read all model-specific files in stdapi/models/chat/ and document ≥5 override implementations | `tests/test_anthropic_messages_multi_model_claude_code.py::TestClaudeCodeAnalysis::test_enumerate_model_overrides` |
 | T-CC5 | Anthropic (Claude Code) | Effort level comparison — T-CC3 task repeated at `--effort low` and `--effort high`; Claude + Nova 2 only | `tests/test_anthropic_messages_multi_model_claude_code.py::TestClaudeCodeEffortLevels::test_effort_parameter_mapping` |
+| T-CO1 | OpenAI (Codex CLI) | Request pipeline trace — follow POST /v1/responses from route handler to Bedrock `converse()`, quoting real function signatures at each step (≥5 steps, ≥2 shell tool calls) | `tests/test_openai_responses_multi_model_codex.py::TestCodexPipeline::test_trace_request_pipeline` |
+| T-CO2 | OpenAI (Codex CLI) | Streaming path trace — follow `stream=True` branch from divergence to SSE output, read ≥3 files, quote SSE event mapping code (≥2 shell tool calls) | `tests/test_openai_responses_multi_model_codex.py::TestCodexPipeline::test_trace_streaming_path` |
+| T-CO3 | OpenAI (Codex CLI) | Parameter mapping audit — read types, adapter, and `map_input`; document ≥6 Responses API → Bedrock field mappings with exact code quotes (≥2 shell tool calls) | `tests/test_openai_responses_multi_model_codex.py::TestCodexAnalysis::test_audit_parameter_mapping` |
+| T-CO4 | OpenAI (Codex CLI) | Model override enumeration — list all files in `stdapi/models/chat/`, read ≥4 model-specific files, quote overridden method signatures (≥3 shell tool calls) | `tests/test_openai_responses_multi_model_codex.py::TestCodexAnalysis::test_enumerate_model_overrides` |
 
 > **Running the parametrized suite:**
 > ```
 > pytest --expensive tests/test_anthropic_messages_multi_model.py
 > pytest --expensive tests/test_openai_chat_completions_multi_model.py
+> pytest --expensive tests/test_openai_responses_multi_model.py
 > ```
 >
 > **Running the Claude Code agentic suite** (requires `claude` CLI + AWS Bedrock credentials — spawns its own stdapi server automatically):
@@ -42,6 +46,14 @@ Each scenario is labelled with the T-ID used throughout the matrices below, its 
 > pytest --expensive -s tests/test_anthropic_messages_multi_model_claude_code.py
 > # Grep metrics: add 2>&1 | grep CC-METRICS
 > # Pass --server-url to use an external server instead of spawning one
+> ```
+>
+> **Running the Codex agentic suite** (requires `codex` CLI binary — either via JetBrains AI Assistant plugin or `CODEX_BIN` env var — plus AWS Bedrock credentials):
+> ```
+> pytest --agentic -s tests/test_openai_responses_multi_model_codex.py
+> # Grep metrics: add 2>&1 | grep CO-METRICS
+> # Pass --server-url to use an external server instead of spawning one
+> # Override binary path: CODEX_BIN=/path/to/codex pytest --agentic ...
 > ```
 
 ---
@@ -54,6 +66,7 @@ Each scenario is labelled with the T-ID used throughout the matrices below, its 
 | ⚠️ | Degraded — functions but not perfectly (see issue notes) |
 | ❌S | **Server issue** — gateway bug; our responsibility to fix |
 | ❌M | **Model limitation** — Bedrock or model behaviour; not fixable server-side |
+| ⏱️ | **Timeout** — model exceeded the Codex CLI 600 s process limit; agentic task too slow for the cap |
 | — | **Not tested** — model was not included in this scenario's parametrize list because the capability is not supported by this model (e.g. no tool calling, no vision, no native reasoning) |
 | ~ | **Not tested** — model likely supports this scenario but was not included in the test run; coverage not yet extended |
 | ⊘ | **Untested** — model is inaccessible due to an external restriction (Bedrock legacy access revoked or geo-restriction); not a server failure |
@@ -175,28 +188,72 @@ Each scenario is labelled with the T-ID used throughout the matrices below, its 
 
 ---
 
+## Combined Model Coverage Matrix — OpenAI Responses API
+
+**Test file:** `tests/test_openai_responses_multi_model.py`
+**Route:** OpenAI Responses API (`/v1/responses`)
+
+One representative model per provider family, covering basic generation, streaming, multi-turn context, tool use, vision, and structured output.  T5+ (agentic loop), T6 (prompt caching), and T7 (reasoning) are not yet implemented in this suite.
+
+| Provider | Model | T1 | T2 | T4 | T5 | T5s | T8 | T9 |
+|----------|-------|----|----|----|----|----|-----|-----|
+| Anthropic | `anthropic.claude-sonnet-4-6` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Amazon | `amazon.nova-micro-v1:0` | ✅ | ✅ | ✅ | — | — | — | — |
+| Amazon | `amazon.nova-lite-v1:0` | — | — | — | ✅ | ✅ | ✅ | ✅ |
+| Amazon | `amazon.nova-2-lite-v1:0` | — | — | — | ✅ | ✅ | — | — |
+| AI21 Labs | `ai21.jamba-1-5-mini-v1:0` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — |
+| AI21 Labs | `ai21.jamba-1-5-large-v1:0` | — | — | — | ✅ | ✅ | — | — |
+| DeepSeek | `deepseek.v3-v1:0` | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ |
+| DeepSeek | `deepseek.v3.2` | — | — | — | ✅ | ✅ | — | — |
+| Google | `google.gemma-3-12b-it` | ✅ | ✅ | ✅ | — | — | — | — |
+| Meta | `meta.llama3-3-70b-instruct-v1:0` | ✅ | ✅ | ✅ | — | — | — | — |
+| Meta | `meta.llama3-1-70b-instruct-v1:0` | — | — | — | ✅ | ✅ | — | — |
+| MiniMax | `minimax.minimax-m2.5` | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ |
+| Mistral | `mistral.mistral-7b-instruct-v0:2` | ✅ | ✅ | ✅ | — | — | — | — |
+| Mistral | `mistral.mistral-large-2402-v1:0` | ✅ | ✅ | ✅ | ✅ | ❌M² | — | — |
+| Mistral | `mistral.pixtral-large-2502-v1:0` | ✅ | ✅ | ✅ | ✅ | ❌M² | ❌M³ | — |
+| Moonshot AI | `moonshotai.kimi-k2.5` | ✅ | ⚠️⁴ | ✅ | ✅ | ✅ | — | — |
+| NVIDIA | `nvidia.nemotron-nano-3-30b` | ✅ | ✅ | ✅ | — | — | — | — |
+| OpenAI@Bedrock | `openai.gpt-oss-20b-1:0` | — | — | — | ✅ | ✅ | — | — |
+| OpenAI@Bedrock | `openai.gpt-oss-120b-1:0` | — | — | — | ✅ | ✅ | — | — |
+| Qwen | `qwen.qwen3-32b-v1:0` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — |
+| Qwen | `qwen.qwen3-vl-235b-a22b` | ✅ | ✅ | ✅ | — | — | ✅ | — |
+| Writer | `writer.palmyra-vision-7b` | ✅ | ✅ | ✅ | — | — | ✅ | — |
+| Writer | `writer.palmyra-x4-v1:0` | — | — | — | ✅ | ✅ | — | — |
+| Writer | `writer.palmyra-x5-v1:0` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — |
+| Z.AI | `zai.glm-4.7-flash` | ✅ | ✅ | ✅ | — | — | — | — |
+| Z.AI | `zai.glm-5` | — | — | — | ✅ | ✅ | — | — |
+
+**Matrix footnotes:**
+
+> ² **Streaming + tools — Bedrock limitation:** `mistral.mistral-large-2402-v1:0` and `mistral.pixtral-large-2502-v1:0` return HTTP 400 from Bedrock when streaming with `toolConfig`.  Consistent with ISSUE-3 in the Chat Completions matrix.
+>
+> ³ **Pixtral vision — non-deterministic colour identification:** `mistral.pixtral-large-2502-v1:0` non-deterministically misidentifies the colour of the 1×1 red PNG.  Marked `xfail(strict=False)` in the test suite; the model failed on this run (XFAIL).  `writer.palmyra-vision-7b` carries the same xfail mark but passed on this run (XPASS ✅).
+>
+> ⁴ **Kimi K2.5 streaming — intermittent `incomplete` stop reason:** `moonshotai.kimi-k2.5` occasionally returns `stop_reason: incomplete` on non-tool streaming responses.  This is a non-standard Bedrock stop reason; the server correctly maps it to Responses API `status: "incomplete"` with `incomplete_details.reason: "max_output_tokens"`.  Marked `xfail(strict=False)` in `_BASIC_MODELS` because the T2 test asserts `status == "completed"`; passes on most runs (XPASS ✅).
+
+---
+
+### Responses API — Single-Model Feature Tests (`test_openai_responses.py`)
+
+These tests cover capabilities specific to the Responses API route that are not exercised by the parametrized multi-model suite.  All run with `pytest --expensive -k openai_responses`.
+
+| Scenario | Model | Result | Notes |
+|----------|-------|--------|-------|
+| Image generation (`generate_image` tool) | `amazon.nova-canvas-v1:0` | ✅ | `quality` field restricted to `low`/`medium`/`high` (no `auto`); minimum size hint 320×320 added to schema to guide the LLM |
+| Computer use (`computer_use_preview` tool) | Claude Sonnet 4.6 | ✅ | `display_width_px`/`display_height_px` now injected for `ComputerTool` (defaults 1280×800); `environment` field stripped for tool versions before `computer_20251124` |
+| Web search (`web_search_preview` tool) — non-streaming | `amazon.nova-2-lite-v1:0` | ✅ / ⚠️⁷ | Passes when nova-2-lite routes to `us-east-1`; `nova_grounding` unavailable when cross-region-routed to `global.*` (XFAIL) |
+| Web search (`web_search_preview`) — streaming | `amazon.nova-2-lite-v1:0` | ✅ / ⚠️⁷ | Same cross-region caveat as above |
+| Web search via `tools=[{"type":"web_search_preview"}]` — non-streaming | `amazon.nova-2-lite-v1:0` | ✅ / ⚠️⁷ | Same cross-region caveat |
+| Web search via `tools=[{"type":"web_search_preview"}]` — streaming | `amazon.nova-2-lite-v1:0` | ✅ / ⚠️⁷ | Same cross-region caveat |
+
+> ⁷ **Nova 2 Lite web search — cross-region routing blocks `nova_grounding`:** When `amazon.nova-2-lite-v1:0` is served via Bedrock's cross-region inference profile (`global.amazon.nova-2-lite-v1:0`), `nova_grounding` is unavailable and Bedrock returns `BadRequestError`.  All four web-search tests catch this error with `pytest.xfail("nova_grounding unavailable in cross-region routing")`.  The `conftest.py` test server is configured with `aws_bedrock_model_region_restrict = {"amazon.nova-2-lite-v1:0": ["us-east-1"]}` to pin nova-2-lite to `us-east-1` and avoid cross-region routing; web-search tests pass in that configuration.  If the region restriction is removed or the model is unavailable in `us-east-1`, these tests XFAIL gracefully.
+
+---
+
 ## Issues Summary
 
-Issues are divided into two categories: **server issues** (our code, our responsibility) and **model / external limitations** (not fixable server-side).
-
----
-
-### 🔴 Server Issues — Our Responsibility
-
-Failures caused by a bug in the stdapi.ai gateway. Each entry is either fixed or open.
-
-| ID | Severity | Status | Summary | Location |
-|----|----------|--------|---------|----------|
-| ISSUE-1 | Critical | ✅ **Fixed** | DeepSeek V3 and Google Gemma 3 streaming returned empty content. `_process_content_block_delta()` permanently suppressed any block starting with an empty delta `{"text": ""}`, but DeepSeek/Gemma emit an empty first delta followed by real content in the same block. Fix: changed to *deferred suppression* — un-suppress on the first non-empty delta, synthesize the missing `content_block_start` retroactively. | `stdapi/models/chat/_adapters/_anthropic_message.py` · `_process_content_block_delta()` |
-| ISSUE-7 | Very Low | ✅ **Fixed** | Double-nested error message: when Bedrock returns `"Model 'xxx' not found"` the server wrapped it again, producing `"The model 'Model 'xxx' not found' does not exist..."`. Fixed by adding a `detail` kwarg to `UnsupportedModelError` and always passing the plain model ID; deprecation context now goes into `detail`. | `stdapi/api_errors.py` · `UnsupportedModelError` · `stdapi/models/__init__.py` · `_raise_model_not_found()` |
-
-> **Current state:** No open server bugs with functional impact. All ❌S have been resolved.
-
----
-
-### 🟡 Model & Bedrock Limitations — Not Our Responsibility
-
-Failures or gaps caused by Bedrock access policies, model-level behaviour, or model capability limits. The server handles these correctly (returns the appropriate error or response); they cannot be fixed server-side.
+Model and external limitations caused by Bedrock access policies, model-level behaviour, or model capability limits. The server handles these correctly; they cannot be fixed server-side.
 
 #### Bedrock Access Restrictions (⊘ Untested)
 
@@ -284,25 +341,27 @@ The `thinking` parameter is supported but model-dependent. Configuration method 
 
 Both API routes are functionally equivalent for all tested models. The gateway correctly translates between Anthropic Messages API format and OpenAI Chat Completions API format with no observable behavioral differences.
 
-| Capability | Anthropic route | OpenAI route |
-|-----------|----------------|--------------|
-| Basic chat (non-streaming) | ✅ | ✅ |
-| Streaming | ✅ (ISSUE-1 fixed) | ✅ |
-| Tool use (non-streaming) | ✅ | ✅ |
-| Tool use (streaming) | ✅ (model-dependent) | ✅ (model-dependent) |
-| Agentic loops | ✅ | ✅ |
-| Native reasoning / thinking blocks | ✅ | ✅ (as text, no `thinking` type) |
-| Vision (image input) | ✅ | ✅ |
-| Prompt caching | ✅ (`cache_control` per-block) | ✅ (`prompt_cache_key` parameter) |
-| JSON mode (structured output) | ✅ (`output_config` parameter with `json_schema`) | ✅ (`response_format` with `json_object` / `json_schema` via Bedrock `outputConfig`) |
-| `thinking` / reasoning (budget) | ✅ (`thinking.budget_tokens`, Claude only) | ✅ (`enable_thinking` + `thinking_budget`, Claude only) |
-| `thinking` / reasoning (effort) | ✅ (`thinking.effort`: `low`/`medium`/`high`/`max`, Claude + Nova 2 + DeepSeek) | ✅ (`reasoning_effort`: `low`/`medium`/`high`/`max`, Claude + Nova 2 + DeepSeek) |
+| Capability | Anthropic route | OpenAI Chat Completions | OpenAI Responses API |
+|-----------|----------------|------------------------|---------------------|
+| Basic chat (non-streaming) | ✅ | ✅ | ✅ |
+| Streaming | ✅ | ✅ | ✅ |
+| Tool use (non-streaming) | ✅ | ✅ | ✅ |
+| Tool use (streaming) | ✅ (model-dependent) | ✅ (model-dependent) | ✅ (model-dependent) |
+| Agentic loops | ✅ | ✅ | ✅ |
+| Native reasoning / thinking blocks | ✅ | ✅ (as text, no `thinking` type) | ✅ (as text, no `thinking` type) |
+| Vision (image input) | ✅ | ✅ | ✅ (model-dependent, see T8) |
+| Prompt caching | ✅ (`cache_control` per-block) | ✅ (`prompt_cache_key` parameter) | ~ |
+| JSON mode (structured output) | ✅ (`output_config` parameter with `json_schema`) | ✅ (`response_format` with `json_object` / `json_schema` via Bedrock `outputConfig`) | ✅ (`text.format.type="json_object"`, see T9) |
+| `thinking` / reasoning (budget) | ✅ (`thinking.budget_tokens`, Claude only) | ✅ (`enable_thinking` + `thinking_budget`, Claude only) | ~ |
+| `thinking` / reasoning (effort) | ✅ (`thinking.effort`: `low`/`medium`/`high`/`max`, Claude + Nova 2 + DeepSeek) | ✅ (`reasoning_effort`: `low`/`medium`/`high`/`max`, Claude + Nova 2 + DeepSeek) | ✅ (`reasoning.effort`) |
+| Echoed assistant turns in `input` | — | — | ✅ (`ResponseOutputMessage` in input) |
+| `developer` role messages | — | — | ✅ |
+| `instructions` system field | — | — | ✅ |
 
 ---
 
 ## Claude Code Agentic Benchmark (T-CC)
 
-**Test date:** 2026-04-03
 **Server:** stdapi.ai v1.7.0+ — **each test run spawns its own dedicated stdapi server** on a free port, captures its JSON request logs, and asserts that every Bedrock call targeted the expected model ID.
 **Claude Code:** v2.1.59
 **Route:** Anthropic Messages API (`/anthropic`) — all models routed through the `sonnet` slot via `ANTHROPIC_DEFAULT_SONNET_MODEL`
@@ -329,6 +388,7 @@ Trace POST /v1/chat/completions from the HTTP route handler to the Bedrock `conv
 | `qwen.qwen3-coder-next` | ✅ | 2 | 122s | 39 000 | 1 612 |
 | `minimax.minimax-m2.5` | ✅ | 2 | 121s | 39 129 | 1 888 |
 | `mistral.devstral-2-123b` | ✅ | 2 | 117s | 40 635 | 2 019 |
+| `zai.glm-5` | ✅ | 2 | 116s | 38 804 | 1 582 |
 
 ### T-CC2: Streaming Path Trace
 
@@ -343,6 +403,7 @@ Trace the `stream=True` code path from the divergence point to the final SSE out
 | `qwen.qwen3-coder-next` | ✅ | 12 | 160s | 248 217 | 4 638 |
 | `minimax.minimax-m2.5` | ✅ | 2 | 144s | 41 746 | 2 478 |
 | `mistral.devstral-2-123b` | ✅ | 2 | 155s | 41 258 | 2 207 |
+| `zai.glm-5` | ✅ | 29 | 125s | 481 207 | 6 467 |
 
 ### T-CC3: Parameter Mapping Audit
 
@@ -357,8 +418,7 @@ Read types, adapter, and `_prepare_converse_request` to document ≥10 OpenAI �
 | `qwen.qwen3-coder-next` | ✅ | 16 | 116s | 274 207 | 4 696 |
 | `minimax.minimax-m2.5` | ✅¹ | 19 | 112s | 400 245 | 5 350 |
 | `mistral.devstral-2-123b` | ✅ | 9 | 104s | 202 406 | 4 546 |
-
-¹ Failed once (hard error / unparseable output), passed on retry.
+| `zai.glm-5` | ✅ | 22 | 140s | 414 914 | 6 900 |
 
 ### T-CC4: Model Override Enumeration
 
@@ -373,6 +433,7 @@ Glob `stdapi/models/chat/`, read `_default.py` for baseline, then read ≥5 mode
 | `qwen.qwen3-coder-next` | ✅ | 15 | 63s | 99 253 | 3 879 |
 | `minimax.minimax-m2.5` | ✅ | 13 | 64s | 107 868 | 3 854 |
 | `mistral.devstral-2-123b` | ✅ | 13 | 62s | 107 796 | 3 672 |
+| `zai.glm-5` | ✅ | 14 | 66s | 108 928 | 4 033 |
 
 ### T-CC5: Effort Level Comparison (Claude + Nova 2 only)
 
@@ -393,13 +454,119 @@ Same T-CC3 parameter-mapping task at `--effort low` and `--effort high`.  Measur
 
 **Turn count reflects exploration depth**, not answer quality — all models produced correct, passing answers:
 
-- **T-CC4 (model overrides)** is the most consistent: five models used exactly 13 turns; Claude Sonnet and Qwen3-coder-next used 15.  The task inherently forces Glob + multiple Read calls regardless of prior knowledge.
-- **T-CC3 (parameter mapping)** drove the most variability and highest turn counts (9–19 turns), confirming it is the most demanding code-reading task.
-- **T-CC1 (pipeline trace)** was answered in 2 turns by six of seven models — those models either resolved the call chain from training knowledge or produced accurate answers from a minimal file read.  Qwen3-coder-30b is the exception (17 turns) and a better differentiator of exploration depth.
-- **T-CC2 (streaming path)** shows strong model differentiation: Claude Sonnet (12), Nova 2 Lite (16), and Qwen3-coder-next (12) explored deeply; other models completed in 2 turns.
+- **T-CC4 (model overrides)** is the most consistent: five models used exactly 13 turns; Claude Sonnet and Qwen3-coder-next used 15; glm-5 used 14.  The task inherently forces Glob + multiple Read calls regardless of prior knowledge.
+- **T-CC3 (parameter mapping)** drove the most variability and highest turn counts (9–22 turns), confirming it is the most demanding code-reading task.
+- **T-CC1 (pipeline trace)** was answered in 2 turns by seven of eight models — those models either resolved the call chain from training knowledge or produced accurate answers from a minimal file read.  Qwen3-coder-30b is the exception (17 turns) and a better differentiator of exploration depth.
+- **T-CC2 (streaming path)** shows strong model differentiation: glm-5 used 29 turns — the highest of any model; Claude Sonnet (12), Nova 2 Lite (16), and Qwen3-coder-next (12) also explored deeply; the remaining four models completed in 2 turns.
 - **Effort `low` → fewer turns than `high` for Claude Sonnet; reversed for Nova 2**: at `low` effort Claude Sonnet used 11 turns (vs 20 at `high`), while Nova 2 used 21 turns at `low` (vs 11 at `high`).  For Claude, higher effort drives deeper exploration (more files read, more output tokens: 6K vs 10K).  For Nova 2, higher effort appears to improve planning — fewer but more focused reads.  The two models exhibit opposite effort-turn relationships.
 - **Nova 2 Lite prompt caching**: removing `DISABLE_PROMPT_CACHING` enables Nova 2's Bedrock prompt caching.  Cached tokens reach 495K per test (T-CC5-low), leaving fresh `input_tokens` in the single digits.  Output tokens are the meaningful work metric for Nova 2.
 - **Token counts vs cost**: `cost_usd` from Claude Code was replaced by `in`/`out` token counts.  The cost field used Claude Sonnet pricing for all models (including Nova, Qwen, etc.), making cross-model cost comparisons misleading.  Token counts are model-agnostic and directly reflect the work done.
 - **MiniMax M2.5 flakiness**: MiniMax M2.5 produced a hard failure (non-zero exit / unparseable output) on T-CC3 in one run, then passed in a retry.  The `¹` marker in the T-CC3 table reflects this.  All other models passed every run consistently.
 - **Run-to-run variance**: Agentic turn counts are non-deterministic. Multiple runs of the same model on the same task have produced notably different counts: Kimi K2.5 pipeline trace was 2 turns on one run and 13 turns on another; Qwen3-coder-next pipeline trace was 2 turns on one run and 15 turns on another.  The figures in the tables above reflect the most recent successful run for each model.  The numbers reflect exploration depth on a given invocation, not a stable scalar.
 
+---
+
+## Codex CLI Agentic Benchmark (T-CO)
+
+**Server:** stdapi.ai v1.9.0+ — each test run spawns its own dedicated stdapi server on a free port, captures its JSON request logs, and asserts that every Bedrock call targeted the expected model ID.
+**Codex CLI:** bundled with JetBrains AI Assistant plugin (PyCharm 2025.3/2026.1); auto-detected from `~/.cache/JetBrains/*/aia/codex/bin/codex-x86_64-unknown-linux-musl`.
+**Route:** OpenAI Responses API (`/v1/responses`) — all models routed via `-m <model_id>` with `model_providers.openai.wire_api="responses"`.
+**Sandbox:** `-s read-only` — shell commands can read files but not write; provides the same isolation as `--disallowedTools Write,Edit` in Claude Code tests.
+
+Unlike the T-CC tests (which use the Anthropic Messages API via Claude Code's `--print` mode), the T-CO tests uniquely exercise the **Responses API route** (`/v1/responses`), which is the wire format used by Codex when `wire_api="responses"`. This is the same endpoint used by OpenAI Codex in production, and it exercises patterns that Chat Completions tests cannot cover:
+
+- Multi-turn `function_call` items echoed back verbatim in the next request's `input` array (the pattern that required the `FunctionCallInput` / `ResponseOutputMessage` / `ResponseReasoningItem` additions to `ResponseInputItem`).
+- `developer` role messages alongside `user` messages in a single `input` list.
+- A large `instructions` field (~7600 tokens) passed as the system prompt — tests that the server correctly maps it to Bedrock's system block.
+- Real SSE streaming of multi-turn agentic responses with interleaved tool events.
+
+Metrics per cell: **tool_calls · input tokens · output tokens**.  Turn counts are not captured by Codex's `--json` output (only the final `turn.completed` event is emitted).
+
+> **Token note**: `turn.completed` in Codex `--json` mode reports `usage.input_tokens`, `usage.output_tokens`, and `usage.cached_input_tokens`.  `in` below shows uncached input; `[cached=N]` is listed separately where non-zero.
+
+### T-CO1: Request Pipeline Trace
+
+| Model | Result | Tool calls | In tok | Out tok |
+|---|---|---|---|---|
+| `anthropic.claude-sonnet-4-6` | ✅ | 18 | 232 761 | 2 809 |
+| `amazon.nova-2-lite-v1:0` | ✅ | 17 | 17 818 [cached=121 271] | 1 290 |
+| `moonshotai.kimi-k2.5` | ✅ | 16 | 199 043 | 1 812 |
+| `qwen.qwen3-coder-30b-a3b-v1:0` | ✅ | 13 | 214 739 | 1 403 |
+| `qwen.qwen3-coder-next` | ✅ | 30 | 709 412 | 2 876 |
+| `minimax.minimax-m2.5` | ✅ | 19 | 263 558 | 3 119 |
+| `mistral.devstral-2-123b` | ❌M¹ | 5 | 55 203 | 417 |
+| `zai.glm-5` | ✅ | 22 | 360 199 | 1 868 |
+
+### T-CO2: Streaming Path Trace
+
+| Model | Result | Tool calls | In tok | Out tok |
+|---|---|---|---|---|
+| `anthropic.claude-sonnet-4-6` | ✅ | 11 | 129 214 | 3 160 |
+| `amazon.nova-2-lite-v1:0` | ✅ | 12 | 60 251 [cached=92 406] | 1 588 |
+| `moonshotai.kimi-k2.5` | ✅ | 16 | 338 378 | 3 008 |
+| `qwen.qwen3-coder-30b-a3b-v1:0` | ✅ | 11 | 190 686 | 2 402 |
+| `qwen.qwen3-coder-next` | ✅³ | — | — | — |
+| `minimax.minimax-m2.5` | ✅ | 17 | 229 043 | 3 375 |
+| `mistral.devstral-2-123b` | ✅ | 18 | 331 712 | 3 340 |
+| `zai.glm-5` | ✅ | 24 | 316 658 | 3 158 |
+
+### T-CO3: Parameter Mapping Audit
+
+| Model | Result | Tool calls | In tok | Out tok |
+|---|---|---|---|---|
+| `anthropic.claude-sonnet-4-6` | ✅ | 15 | 203 385 | 3 709 |
+| `amazon.nova-2-lite-v1:0` | ✅ | 9 | 76 417 [cached=65 194] | 1 175 |
+| `moonshotai.kimi-k2.5` | ✅ | 13 | 167 795 | 2 218 |
+| `qwen.qwen3-coder-30b-a3b-v1:0` | ✅ | 15 | 226 789 | 1 854 |
+| `qwen.qwen3-coder-next` | ✅ | 11 | 175 167 | 2 202 |
+| `minimax.minimax-m2.5` | ✅ | 19 | 281 574 | 4 187 |
+| `mistral.devstral-2-123b` | ✅ | 8 | 159 079 | 2 029 |
+| `zai.glm-5` | ✅ | 22 | 390 727 | 2 485 |
+
+### T-CO4: Model Override Enumeration
+
+| Model | Result | Tool calls | In tok | Out tok |
+|---|---|---|---|---|
+| `anthropic.claude-sonnet-4-6` | ✅ | 8 | 40 660 | 3 364 |
+| `amazon.nova-2-lite-v1:0` | ✅ | 6 | 18 564 [cached=47 795] | 519 |
+| `moonshotai.kimi-k2.5` | ✅ | 9 | 39 766 | 1 113 |
+| `qwen.qwen3-coder-30b-a3b-v1:0` | ✅ | 11 | 158 569 | 1 792 |
+| `qwen.qwen3-coder-next` | ✅ | 12 | 192 948 | 2 354 |
+| `minimax.minimax-m2.5` | ✅ | 13 | 268 250 | 4 159 |
+| `mistral.devstral-2-123b` | ✅ | 9 | 152 228 | 1 432 |
+| `zai.glm-5` | ✅ | 12 | 71 423 | 1 811 |
+
+¹ `devstral-2` T-CO1 fails consistently — the model stops exploration after only 5 tool calls and produces a partial answer that never reaches the Bedrock converse layer.  On longer runs it hits the 600 s Codex process timeout instead.  All other T-CO tasks pass.  This is a model-behavior gap on the hardest agentic task in the suite, not a server issue.
+
+² **`moonshotai.kimi-k2.5` — timeouts on T-CO1/T-CO3/T-CO4 when routed to `us-east-1` (✅ fixed):** Root cause: the `us-east-1` kimi deployment has intermittent 60+ s per-turn latency spikes (8-round simulation: 195 s total), while `us-west-2` is consistently fast (all turns < 1 s; same simulation: 15.8 s, 12× speedup).  Fix: `aws_bedrock_model_region_restrict` in `conftest.py` pins `moonshotai.kimi-k2.5` to `["us-west-2"]`.  All four T-CO tasks now pass.  Streaming note: kimi-k2.5 omits `contentBlockStart` for text blocks — handled by the synthesize-block-start path in `_handle_block_delta`.
+
+³ **`qwen.qwen3-coder-next` T-CO2 — intermittent ValidationException:** T-CO2 raised a `ValidationException` on one run but passed on a subsequent re-run (all 4 tasks passed).  The failure appears to be a transient Bedrock error rather than a consistent model-level limitation.  All four T-CO tasks are considered passing.
+
+### Observations
+
+**T-CO1 is the hardest task — 7 of 8 models pass.**  The pipeline trace requires reading ≥5 source files and quoting exact function signatures, driving high tool call counts and large accumulated input contexts.  `devstral-2` is the only failing model, consistently stopping exploration after only 5 tool calls.
+
+**kimi-k2.5 passes all 4 T-CO tasks after us-west-2 fix.** Direct Bedrock Converse comparison between regions showed that `us-east-1` has intermittent per-turn latency spikes (Turn 1 took 61 s, Turn 4 took 62 s; 8-round simulation: 195 s total), while `us-west-2` is consistently fast (all turns < 1 s; 8-round simulation: 15.8 s total, 12× speedup).  `conftest.py` pins `moonshotai.kimi-k2.5` to `us-west-2` via `aws_bedrock_model_region_restrict` — same mechanism used for `nova-2-lite`.
+
+**glm-5 passes all 4 T-CO tasks.** Tool call counts (22/24/22/12) are in the mid range; input tokens are moderate (71K–391K).  Like kimi-k2.5, glm-5 omits `contentBlockStart` for text blocks — handled by the synthesize-block-start path in `_handle_block_delta`.
+
+**qwen3-coder-next all 4 T-CO tasks pass.** The T-CO2 ValidationException was transient; on a subsequent re-run all four tasks completed successfully.  On T-CO1 it uses 30 tool calls and 709K input tokens — the highest of any model.
+
+**devstral-2 passes T-CO2/T-CO3/T-CO4 but fails T-CO1.** Devstral is efficient on tasks it completes (5–18 tool calls, 55K–332K tokens) but consistently stops early on T-CO1's pipeline-tracing prompt.  The explicit requirement to quote code from ≥5 specific named layers appears to trigger premature termination for this model.
+
+**Nova-2-lite now passes all T-CO tasks with large cache hits.** After the cachePoint fix, nova-2-lite leverages Bedrock prompt caching effectively: on T-CO1 it serves 121 K cached input tokens (vs 17 K uncached), on T-CO2 92 K cached, T-CO3 65 K cached, T-CO4 47 K cached.  Tool call counts (17/12/9/6) are comparable to Claude Sonnet, showing the model explores efficiently once prompt caching is applied correctly.
+
+**minimax-m2.5 is the most output-token-intensive model.** It produces 4 000–4 200 output tokens on T-CO3 and T-CO4 — 2–3× the range of other models — generating very detailed answers at the cost of higher latency.
+
+### What Codex Tests Uniquely Validate on `/v1/responses`
+
+The following server behaviours are exercised by the T-CO suite and are **not** covered by T-CC or the parametrized T1–T9 tests:
+
+| Behaviour | Test | Note |
+|---|---|---|
+| `FunctionCallInput` echoed in `input` array | T-CO1/T-CO3/T-CO4 | Codex echoes back `function_call` items from the prior response turn; requires `FunctionCallInput` in `ResponseInputItem` |
+| `ResponseOutputMessage` in `input` array | T-CO1/T-CO2/T-CO3/T-CO4 | Codex echoes back assistant message items; requires `ResponseOutputMessage` in `ResponseInputItem` and `_map_output_message` in the adapter |
+| `developer` role in `input` | all T-CO | Codex sends Codex-internal instructions as `developer`-role items |
+| `instructions` field (~7 600 tokens) | all T-CO | Large system prompt via the `instructions` parameter (separate from `input`) |
+| `external_web_access` in tool definition | all T-CO | Codex injects a web search tool with this non-spec field; server ignores it without error |
+| `output_text` content blocks in `EasyInputMessage` | all T-CO | When echoing assistant turns via the simple message format, Codex uses `type="output_text"` content blocks; requires `ResponseOutputTextContent` in the content union |

@@ -26,6 +26,7 @@ if TYPE_CHECKING:
         ChatCompletion,
         CompletionCreateParams,
     )
+    from stdapi.types.openai_responses import Response, ResponseCreateParams
 
 
 class ChatModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
@@ -60,6 +61,22 @@ class ChatModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
         Returns:
             - Message when stream is False.
             - EventSourceResponse streaming MessageStreamEvent events when stream is True.
+        """
+
+    @abstractmethod
+    async def create_response(
+        self, request: ResponseCreateParams, response_id: str, created_at: float
+    ) -> Response | EventSourceResponse:
+        """Create a response using the OpenAI Responses API format.
+
+        Args:
+            request: Responses API creation request.
+            response_id: Stable identifier for the response.
+            created_at: Unix timestamp of the request.
+
+        Returns:
+            - Response when stream is False.
+            - EventSourceResponse streaming ResponseStreamEvent events when stream is True.
         """
 
 

@@ -51,6 +51,7 @@ nav:
           - Overview: api_overview.md
           - API Reference: api_reference.md
           - OpenAI Compatible:
+            - Responses: api_openai_responses.md
             - Chat Completions: api_openai_chat_completions.md
             - Files: api_openai_files.md
             - Images Generations: api_openai_images_generations.md

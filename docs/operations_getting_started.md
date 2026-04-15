@@ -83,7 +83,7 @@ stdapi.ai is compatible with both OpenAI and Anthropic SDKs. If you've used eith
     )
 
     response = client.chat.completions.create(
-        model="anthropic.claude-opus-4-6-v1",
+        model="anthropic.claude-opus-4-7",
         messages=[{"role": "user", "content": "Hello! Tell me a joke."}]
     )
 
@@ -101,7 +101,7 @@ stdapi.ai is compatible with both OpenAI and Anthropic SDKs. If you've used eith
     )
 
     message = client.messages.create(
-        model="anthropic.claude-opus-4-6-v1",
+        model="anthropic.claude-opus-4-7",
         messages=[{"role": "user", "content": "Hello! Tell me a joke."}]
     )
 

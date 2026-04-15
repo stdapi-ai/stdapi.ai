@@ -194,6 +194,15 @@ _MODEL_CONFIGS = [
         },
         id="devstral-2",
     ),
+    # ── Z.AI ──────────────────────────────────────────────────────────────────
+    pytest.param(
+        {
+            "model_env": "zai.glm-5",
+            "extra_env": {"DISABLE_PROMPT_CACHING": "1", "MAX_THINKING_TOKENS": "0"},
+            "supports_effort": False,
+        },
+        id="glm-5",
+    ),
 ]
 
 # ---------------------------------------------------------------------------

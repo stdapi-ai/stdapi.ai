@@ -49,7 +49,7 @@ class ChatModel(_BaseChatModel):
     MATCHER = "amazon.nova-2-"
     PROMPT_CACHING_SUPPORTED = True
     SUPPORTED_SYSTEM_TOOLS = frozenset({"nova_grounding", "nova_code_interpreter"})
-    ANTHROPIC_TOOL_NAME_MAP = MappingProxyType(
+    CANONICAL_TO_BEDROCK_TOOL_MAP = MappingProxyType(
         {"web_search": "nova_grounding", "code_execution": "nova_code_interpreter"}
     )
 

@@ -137,7 +137,7 @@ _AGENTIC_MODELS = pytest.mark.parametrize(
         "mistral.mistral-large-2402-v1:0",  # Mistral Large
         "mistral.pixtral-large-2502-v1:0",  # Mistral Pixtral Large
         "moonshotai.kimi-k2.5",  # Moonshot Kimi K2.5
-        "openai.gpt-oss-20b-1:0",  # OpenAI GPT-OSS 20B (Bedrock)
+        # "openai.gpt-oss-20b-1:0",  # OpenAI GPT-OSS 20B (Bedrock), disabled : unstable tool use
         "openai.gpt-oss-120b-1:0",  # OpenAI GPT-OSS 120B (Bedrock)
         "qwen.qwen3-32b-v1:0",  # Qwen3 32B
         "writer.palmyra-x4-v1:0",  # Writer Palmyra X4
@@ -385,7 +385,7 @@ class TestMultiModelBasics:
 
         response = anthropic_client.messages.create(
             model=model,
-            max_tokens=256,
+            max_tokens=2048,
             messages=[
                 {
                     "role": "user",
@@ -435,7 +435,7 @@ class TestMultiModelToolUse:
 
         response = anthropic_client.messages.create(
             model=model,
-            max_tokens=512,
+            max_tokens=2048,
             tools=_TOOLS,  # type: ignore[arg-type]
             messages=[
                 {"role": "user", "content": f"List the files in {_PROJECT_ROOT}"}
@@ -476,7 +476,7 @@ class TestMultiModelToolUse:
         for _attempt in range(2):
             resp1 = anthropic_client.messages.create(
                 model=model,
-                max_tokens=512,
+                max_tokens=4096,
                 tools=tools,  # type: ignore[arg-type]
                 messages=[
                     {"role": "user", "content": f"What files are in {_PROJECT_ROOT}?"}
@@ -499,7 +499,7 @@ class TestMultiModelToolUse:
         # Turn 2: provide tool result
         resp2 = anthropic_client.messages.create(
             model=model,
-            max_tokens=512,
+            max_tokens=4096,
             tools=tools,  # type: ignore[arg-type]
             messages=[
                 {"role": "user", "content": f"What files are in {_PROJECT_ROOT}?"},
@@ -541,7 +541,7 @@ class TestMultiModelToolUse:
         try:
             with anthropic_client.messages.stream(
                 model=model,
-                max_tokens=512,
+                max_tokens=2048,
                 tools=_TOOLS,  # type: ignore[arg-type]
                 messages=[
                     {"role": "user", "content": f"List the files in {_PROJECT_ROOT}"}

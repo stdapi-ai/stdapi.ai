@@ -9,16 +9,13 @@ from asyncio import Task, create_task
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
-from pydantic_core import from_json, to_json
+from pydantic_core import to_json
 from sse_starlette import JSONServerSentEvent
 
 from stdapi.api_errors import ApiError
-from stdapi.aws_bedrock import (
-    PROMPT_CACHING,
-    build_system_blocks,
-    set_inference_configuration,
-)
+from stdapi.aws_bedrock import build_system_blocks, set_inference_configuration
 from stdapi.models.audio import synthesize_speech
+from stdapi.models.chat._adapters import _openai_common
 from stdapi.monitoring import log_response_params
 from stdapi.tokenizer import estimate_token_count
 from stdapi.types.openai import (
@@ -53,7 +50,6 @@ from stdapi.types.openai_chat_completions import (
     CompletionUsage,
     File,
     FunctionCall,
-    PromptCacheRetention,
     PromptTokensDetails,
 )
 from stdapi.utils import b64encode, try_parse_json
@@ -63,7 +59,6 @@ if TYPE_CHECKING:
 
     from pydantic import JsonValue
     from types_aiobotocore_bedrock_runtime.literals import (
-        CacheTTLType,
         ConversationRoleType,
         ServiceTierTypeType,
         StopReasonType,
@@ -85,7 +80,6 @@ if TYPE_CHECKING:
         ToolUseBlockTypeDef,
     )
 
-    from stdapi.aws_bedrock import PromptCaching
     from stdapi.types import JsonMapping
     from stdapi.types.openai_chat_completions import (
         ChatCompletionAssistantMessageParam,
@@ -103,7 +97,7 @@ if TYPE_CHECKING:
     )
 
 #: Bedrock stop reasons to OpenAI finish reasons mapping
-_FINISH_REASONS: dict[StopReasonType | None, FinishReason] = {
+_FINISH_REASONS: dict[StopReasonType | str | None, FinishReason] = {
     "max_tokens": "length",
     "model_context_window_exceeded": "length",
     "content_filtered": "content_filter",
@@ -111,27 +105,13 @@ _FINISH_REASONS: dict[StopReasonType | None, FinishReason] = {
     "malformed_model_output": "content_filter",
     "malformed_tool_use": "content_filter",
     "tool_use": "tool_calls",
+    # Non-standard but observed
+    "incomplete": "length",
 }
 
 #: Empty tool schema for Bedrock tool configuration
 _EMPTY_TOOL: dict[str, str] = {"type": "object"}
 
-#: OpenAI services tiers to Bedrock mapping
-_SERVICES_TIERS: dict[ServiceTiers, ServiceTierTypeType] = {
-    "priority": "priority",
-    "flex": "flex",
-    # Extra bedrock specific values
-    "reserved": "reserved",
-}
-
-
-#: OpenAI to Bedrock prompt cache retention mapping
-CACHE_TTL: dict[PromptCacheRetention | None, CacheTTLType | None] = {
-    "in-memory": None,
-    "24h": "1h",  # max current value
-    "1h": "1h",
-    "5m": "5m",
-}
 
 #: System message role names recognized by Bedrock
 _SYSTEM_ROLES: frozenset[str] = frozenset({"system", "developer"})
@@ -144,7 +124,7 @@ DEFAULT_OUTPUT_MODALITIES: list[str] = ["text"]
 
 
 def map_bedrock_stop_reason(
-    stop_reason: StopReasonType | None, *, legacy_function: bool
+    stop_reason: StopReasonType | str | None, *, legacy_function: bool
 ) -> FinishReason:
     """Translate Bedrock stop reasons to OpenAI finish reasons.
 
@@ -159,24 +139,6 @@ def map_bedrock_stop_reason(
     if legacy_function and reason == "tool_calls":
         return "function_call"
     return reason
-
-
-def map_service_tier(
-    value: ServiceTiers | None,
-) -> tuple[ServiceTierTypeType | None, ServiceTiers | None]:
-    """Map OpenAI service tier to Bedrock service tier.
-
-    Args:
-        value: OpenAI service tier.
-
-    Returns:
-        Bedrock service tier, Effective OpenAI service tier
-    """
-    if value is None:
-        return None, None
-    if value in _SERVICES_TIERS:
-        return _SERVICES_TIERS[value], value
-    return None, "default"
 
 
 def _map_tools(request: CompletionCreateParams) -> list[ChatCompletionToolUnionParam]:
@@ -397,7 +359,9 @@ def translate_request(
         **request.model_extra,
     )
 
-    bedrock_service_tier, openai_service_tier = map_service_tier(request.service_tier)
+    bedrock_service_tier, openai_service_tier = _openai_common.map_service_tier(
+        request.service_tier
+    )
     tool_config = build_tool_config(request)
 
     _LEGACY_FUNCTION.set(request.functions is not None)
@@ -634,23 +598,6 @@ def _extract_assistant_blocks(
     return content_blocks
 
 
-def _parse_tool_content(text_content: str) -> ToolResultContentBlockUnionTypeDef:
-    """Parse tool text output, returning JSON if it is a JSON object, otherwise plain text.
-
-    Args:
-        text_content: Text content from a tool message.
-
-    Returns:
-        ``{"json": ...}`` when the content is a JSON object, ``{"text": ...}`` otherwise.
-    """
-    try:
-        if isinstance(json_content := from_json(text_content), dict):
-            return {"json": json_content}
-    except ValueError:
-        pass
-    return {"text": text_content}
-
-
 async def _extract_tool_blocks(
     message_param: ChatCompletionToolMessageParam,
 ) -> list[ContentBlockTypeDef]:
@@ -672,7 +619,7 @@ async def _extract_tool_blocks(
     content: list[ToolResultContentBlockUnionTypeDef] = [
         await part.image_url.url.to_bedrock_content_block()  # type: ignore[misc]
         if isinstance(part, ChatCompletionContentPartImageParam)
-        else _parse_tool_content(part.text)
+        else _openai_common.parse_tool_content(part.text)
         for part in parts
     ]
     return [
@@ -693,7 +640,7 @@ def _extract_function_blocks(
     """
     _LEGACY_FUNCTION.set(True)
     content: list[ToolResultContentBlockUnionTypeDef] = (
-        [_parse_tool_content(message_param.content)]
+        [_openai_common.parse_tool_content(message_param.content)]
         if message_param.content is not None
         else []
     )
@@ -754,26 +701,6 @@ async def map_messages(
         previous_role_name = role_name
 
     return bedrock_messages, system_blocks
-
-
-def parse_prompt_cache_key(prompt_cache_key: str | None) -> set[PromptCaching]:
-    """Map a ``prompt_cache_key`` value to the set of cache components to enable.
-
-    A dot-separated string like ``"system.tools"`` enables specific components;
-    any unrecognised values are ignored.  A non-empty string with no recognisable
-    tokens enables all components (``PROMPT_CACHING``).
-
-    Args:
-        prompt_cache_key: Dot-separated cache component selector, or ``None``.
-
-    Returns:
-        Set of ``PromptCaching`` values to enable, or an empty set when caching is disabled.
-    """
-    if prompt_cache_key:
-        return (
-            set(prompt_cache_key.split(".")) & PROMPT_CACHING  # type: ignore[return-value]
-        ) or PROMPT_CACHING
-    return set()
 
 
 def extract_output_text(

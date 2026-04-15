@@ -1839,7 +1839,7 @@ class TestChatCompletions:
                 messages=messages,  # type: ignore[arg-type]
                 tools=tools,  # type: ignore[arg-type]
                 prompt_cache_key="default",
-                max_completion_tokens=50,
+                max_completion_tokens=2048,
             )
         except InternalServerError as exc:
             if "Model produced invalid sequence as part of ToolUse" in str(exc):
@@ -1856,7 +1856,7 @@ class TestChatCompletions:
                 messages=messages,  # type: ignore[arg-type]
                 tools=tools,  # type: ignore[arg-type]
                 prompt_cache_key="default",
-                max_completion_tokens=50,
+                max_completion_tokens=2048,
             )
         except InternalServerError as exc:
             if "Model produced invalid sequence as part of ToolUse" in str(exc):

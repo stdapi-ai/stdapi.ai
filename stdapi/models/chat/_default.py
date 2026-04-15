@@ -6,10 +6,11 @@ all AWS Bedrock models supporting the Converse and ConverseStream APIs.
 
 from asyncio import gather
 from contextlib import suppress
+from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from sse_starlette import EventSourceResponse
+from sse_starlette import EventSourceResponse, JSONServerSentEvent
 
 from stdapi.api_errors import ApiError
 from stdapi.aws_bedrock import (
@@ -23,6 +24,8 @@ from stdapi.input_file import prefetch_all_content_types
 from stdapi.models.chat import ChatModelBase
 from stdapi.models.chat._adapters import _anthropic_message as anthropic_adapter
 from stdapi.models.chat._adapters import _openai_chat_completion as openai_adapter
+from stdapi.models.chat._adapters import _openai_common
+from stdapi.models.chat._adapters import _openai_responses as responses_adapter
 from stdapi.monitoring import REQUEST, log_request_sse_stream_event, log_response_params
 from stdapi.types.anthropic_messages import (
     ServerToolUseBlock,
@@ -32,6 +35,8 @@ from stdapi.types.anthropic_messages import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, Callable
+
     from types_aiobotocore_bedrock_runtime.literals import (
         CacheTTLType,
         ServiceTierTypeType,
@@ -61,6 +66,7 @@ if TYPE_CHECKING:
         CompletionCreateParams,
         ReasoningEffort,
     )
+    from stdapi.types.openai_responses import Response, ResponseCreateParams
 
 
 class ChatModel(ChatModelBase[Any, Any]):
@@ -84,8 +90,8 @@ class ChatModel(ChatModelBase[Any, Any]):
     #: Bedrock system tool names eligible for auto-promotion from ``toolSpec``.
     SUPPORTED_SYSTEM_TOOLS: ClassVar[frozenset[str]] = frozenset()
 
-    #: Anthropic server tool name → Bedrock system tool name; Anthropic Messages route only.
-    ANTHROPIC_TOOL_NAME_MAP: ClassVar[MappingProxyType[ServerTools, str]] = (
+    #: Canonical (Anthropic-style) server tool name → Bedrock system tool name; consulted on all routes.
+    CANONICAL_TO_BEDROCK_TOOL_MAP: ClassVar[MappingProxyType[ServerTools, str]] = (
         MappingProxyType({})
     )
 
@@ -139,10 +145,10 @@ class ChatModel(ChatModelBase[Any, Any]):
             system_blocks=system_blocks,
             tool_config=tool_config,
             bedrock_messages=bedrock_messages,
-            prompt_caching=openai_adapter.parse_prompt_cache_key(
+            prompt_caching=_openai_common.parse_prompt_cache_key(
                 request.prompt_cache_key
             ),
-            prompt_caching_ttl=openai_adapter.CACHE_TTL.get(
+            prompt_caching_ttl=_openai_common.CACHE_TTL.get(
                 request.prompt_cache_retention
             ),
         )
@@ -215,7 +221,7 @@ class ChatModel(ChatModelBase[Any, Any]):
             self._model_id,
             prompt_caching_supported=self.PROMPT_CACHING_SUPPORTED,
             prompt_caching_tool_supported=self.PROMPT_CACHING_TOOL_SUPPORTED,
-            tool_name_map=self.ANTHROPIC_TOOL_NAME_MAP,
+            tool_name_map=self.CANONICAL_TO_BEDROCK_TOOL_MAP,
             req_map_content_block=self._req_map_content_block,
         )
 
@@ -293,6 +299,142 @@ class ChatModel(ChatModelBase[Any, Any]):
             )
         )
 
+    async def create_response(
+        self, request: ResponseCreateParams, response_id: str, created_at: float
+    ) -> Response | EventSourceResponse:
+        """Handle a response request via the OpenAI Responses route.
+
+        Args:
+            request: Responses API creation request.
+            response_id: Unique identifier for the response.
+            created_at: Unix timestamp of request creation.
+
+        Returns:
+            Completed response or streaming ``EventSourceResponse``.
+        """
+        await prefetch_all_content_types()
+
+        bedrock_messages, system_blocks = await responses_adapter.map_input(
+            request.input, request.instructions
+        )
+
+        (
+            inference_cfg,
+            additional_request_fields,
+            tool_config,
+            output_config,
+            service_tier,
+            prompt_caching,
+            prompt_caching_ttl,
+            request_metadata,
+        ) = responses_adapter.translate_request(
+            request,
+            self._model_id,
+            tool_name_map=self.CANONICAL_TO_BEDROCK_TOOL_MAP or None,
+        )
+
+        server_tools = self._req_extract_server_tools(tool_config)
+        tool_config = self._req_promote_system_tools(tool_config)
+        self._req_configure_tools(
+            tool_config=tool_config,
+            additional_request_fields=additional_request_fields,
+            server_tools=server_tools,
+            bedrock_messages=bedrock_messages,
+        )
+
+        if request.reasoning is not None and request.reasoning.effort not in (
+            None,
+            "none",
+        ):
+            self._req_configure_reasoning(
+                additional_request_fields=additional_request_fields,
+                reasoning_effort=request.reasoning.effort,
+                max_tokens=request.max_output_tokens,
+            )
+
+        if prompt_caching:
+            self._req_enable_prompt_caching(
+                system_blocks=system_blocks,
+                tool_config=tool_config,
+                bedrock_messages=bedrock_messages,
+                prompt_caching=prompt_caching,
+                prompt_caching_ttl=prompt_caching_ttl,
+            )
+
+        bedrock_request = await self._prepare_converse_request(
+            bedrock_messages=bedrock_messages,
+            inference_cfg=inference_cfg,
+            system_blocks=system_blocks,
+            tool_config=tool_config,
+            additional_request_fields=additional_request_fields,
+            service_tier=service_tier,
+            output_config=output_config,
+            request_metadata=request_metadata,
+        )
+
+        web_search_names: frozenset[str] | None = (
+            frozenset({ws_name})
+            if (ws_name := self.CANONICAL_TO_BEDROCK_TOOL_MAP.get("web_search"))
+            else None
+        )
+        suppress_names = (
+            self.SUPPORTED_SYSTEM_TOOLS - (web_search_names or frozenset())
+        ) or None
+        image_gen_tool = responses_adapter.get_image_generation_tool(request)
+
+        if request.stream:
+            suppress_with_img: frozenset[str] | None = suppress_names
+            post_handler: (
+                Callable[
+                    [responses_adapter._StreamState],
+                    AsyncGenerator[JSONServerSentEvent],
+                ]
+                | None
+            ) = None
+            if image_gen_tool:
+                suppress_with_img = (suppress_names or frozenset()) | {
+                    "image_generation"
+                }
+                post_handler = partial(
+                    responses_adapter.image_generation_stream_handler,
+                    image_gen_tool=image_gen_tool,
+                    response_id=response_id,
+                    fallback_model=SETTINGS.image_generation_model,
+                )
+
+            return EventSourceResponse(
+                log_request_sse_stream_event(
+                    responses_adapter.format_stream(
+                        response_id,
+                        created_at,
+                        self._model_id,
+                        (await self.converse_stream(bedrock_request))["stream"],
+                        request,
+                        suppress_with_img,
+                        post_handler,
+                        web_search_names,
+                    )
+                )
+            )
+
+        response = await responses_adapter.format_response(
+            response_id,
+            created_at,
+            self._model_id,
+            await self.converse(bedrock_request),
+            request,
+            suppress_names,
+            web_search_names,
+        )
+        if image_gen_tool:
+            response.output = await responses_adapter.execute_image_generation_calls(
+                response.output,
+                image_gen_tool,
+                response_id,
+                SETTINGS.image_generation_model,
+            )
+        return response
+
     async def _prepare_converse_request(
         self,
         bedrock_messages: list[MessageTypeDef],
@@ -326,7 +468,7 @@ class ChatModel(ChatModelBase[Any, Any]):
             Bedrock Converse request payload with ``modelId`` set to an empty
             string placeholder; the routing layer fills in the real value.
         """
-        latency, default_service_tier = PERFORMANCE_CONFIG_VAR.get()
+        latency, perf_service_tier = PERFORMANCE_CONFIG_VAR.get()
         request: ConverseRequestBaseTypeDef = {
             "modelId": "",  # placeholder — overwritten by converse()/converse_stream()
             "messages": bedrock_messages,
@@ -342,7 +484,7 @@ class ChatModel(ChatModelBase[Any, Any]):
             additional_request_fields
         ):
             request["additionalModelRequestFields"] = additional_request_fields
-        if service_tier := (service_tier or default_service_tier):
+        if service_tier := (service_tier or perf_service_tier):
             request["serviceTier"] = {"type": service_tier}
         if latency:
             request["performanceConfig"] = {"latency": latency}
@@ -442,34 +584,44 @@ class ChatModel(ChatModelBase[Any, Any]):
             A list of Anthropic content blocks  or ``None`` to drop the result.
         """
 
-    def _resp_map_tool_use(
-        self, tool_use_id: str, bedrock_tool_name: str, tool_input: JsonMapping
-    ) -> ContentBlock | None:
-        """Map a Bedrock toolUse block to an Anthropic content block.
+    def _canonical_name_for(self, bedrock_tool_name: str) -> ServerTools | None:
+        """Return the canonical (Anthropic-style) server-tool name for *bedrock_tool_name*.
 
-        Uses ``ANTHROPIC_TOOL_NAME_MAP`` (inverted) to translate Bedrock tool names to
-        Anthropic ``server_tool_use`` block names.  Returns ``None`` for unmapped tools.
+        Inverse lookup over ``CANONICAL_TO_BEDROCK_TOOL_MAP``.
 
         Args:
-            tool_use_id: The raw ``toolUseId`` from the Bedrock ``toolUse`` block.
-            bedrock_tool_name: The Bedrock-side tool name.
-            tool_input: The tool input dict from the Bedrock ``toolUse`` block.
+            bedrock_tool_name: Bedrock-side tool name.
 
         Returns:
-            An Anthropic content block, or ``None`` to use the default mapping.
+            Matching canonical server-tool key, or ``None`` if unmapped.
         """
-        if anthropic_name := next(
+        return next(
             (
                 k
-                for k, v in self.ANTHROPIC_TOOL_NAME_MAP.items()
+                for k, v in self.CANONICAL_TO_BEDROCK_TOOL_MAP.items()
                 if v == bedrock_tool_name
             ),
             None,
-        ):
+        )
+
+    def _resp_map_tool_use(
+        self, tool_use_id: str, bedrock_tool_name: str, tool_input: JsonMapping
+    ) -> ContentBlock | None:
+        """Map a Bedrock ``toolUse`` block to an Anthropic content block.
+
+        Args:
+            tool_use_id: Raw ``toolUseId`` from the Bedrock ``toolUse`` block.
+            bedrock_tool_name: Bedrock-side tool name.
+            tool_input: Tool input dict from the Bedrock ``toolUse`` block.
+
+        Returns:
+            Anthropic content block, or ``None`` for unmapped tools.
+        """
+        if canonical_name := self._canonical_name_for(bedrock_tool_name):
             return ServerToolUseBlock(
                 type="server_tool_use",
                 id=f"srvtoolu_{tool_use_id.removeprefix('tooluse_')}",
-                name=anthropic_name,
+                name=canonical_name,
                 input=tool_input,
             )
         return None
@@ -480,7 +632,7 @@ class ChatModel(ChatModelBase[Any, Any]):
         """Map an Anthropic request content block to a Bedrock content block.
 
         Maps ``ServerToolUseBlockParam`` blocks whose ``name`` appears in
-        ``ANTHROPIC_TOOL_NAME_MAP`` to Bedrock ``toolUse`` blocks.  Returns ``None``
+        ``CANONICAL_TO_BEDROCK_TOOL_MAP`` to Bedrock ``toolUse`` blocks.  Returns ``None``
         for all other block types (use the default adapter mapping).
 
         Args:
@@ -490,7 +642,7 @@ class ChatModel(ChatModelBase[Any, Any]):
             A Bedrock content block dict, or ``None`` to use the default mapping.
         """
         if isinstance(block, ServerToolUseBlockParam) and (
-            bedrock_name := self.ANTHROPIC_TOOL_NAME_MAP.get(block.name)  # type: ignore[call-overload]
+            bedrock_name := self.CANONICAL_TO_BEDROCK_TOOL_MAP.get(block.name)  # type: ignore[call-overload]
         ):
             return {
                 "toolUse": {
@@ -506,29 +658,18 @@ class ChatModel(ChatModelBase[Any, Any]):
     ) -> ContentBlock | None:
         """Map a Bedrock streaming ``toolUse`` start to an Anthropic content block.
 
-        Uses ``ANTHROPIC_TOOL_NAME_MAP`` (inverted) to translate Bedrock tool names to
-        Anthropic ``server_tool_use`` block names.  Returns ``None`` for unmapped tools.
-
         Args:
-            tool_use_id: The raw ``toolUseId`` from the Bedrock ``contentBlockStart``.
-            bedrock_tool_name: The Bedrock-side tool name.
+            tool_use_id: Raw ``toolUseId`` from the Bedrock ``contentBlockStart``.
+            bedrock_tool_name: Bedrock-side tool name.
 
         Returns:
-            An Anthropic content block for the stream start event, or ``None`` to
-            use the default mapping.
+            Anthropic content block for the stream start, or ``None`` for unmapped tools.
         """
-        if anthropic_name := next(
-            (
-                k
-                for k, v in self.ANTHROPIC_TOOL_NAME_MAP.items()
-                if v == bedrock_tool_name
-            ),
-            None,
-        ):
+        if canonical_name := self._canonical_name_for(bedrock_tool_name):
             return ServerToolUseBlock(
                 type="server_tool_use",
                 id=f"srvtoolu_{tool_use_id.removeprefix('tooluse_')}",
-                name=anthropic_name,
+                name=canonical_name,
                 input={},
             )
         return None
@@ -726,8 +867,11 @@ class ChatModel(ChatModelBase[Any, Any]):
         """Promote eligible ``toolSpec`` entries to ``systemTool`` entries.
 
         A ``toolSpec`` entry is promoted when its name appears in
-        ``SUPPORTED_SYSTEM_TOOLS``.  Promoted entries move to the end of the
-        list; ``toolChoice`` is dropped when no regular entries remain.
+        ``SUPPORTED_SYSTEM_TOOLS``.  Both the Anthropic Messages adapter
+        (pre-translated via ``tool_name_map``) and the Responses adapter
+        (pre-translated via ``tool_name_map``) emit Bedrock names directly, so
+        a simple membership check suffices.  Promoted entries move to the end of
+        the list; ``toolChoice`` is dropped when no regular entries remain.
 
         This is the only place that emits ``{"systemTool": {"name": ...}}``.
 
@@ -746,8 +890,7 @@ class ChatModel(ChatModelBase[Any, Any]):
             if not spec:
                 remaining.append(entry)
                 continue
-            name: str = spec.get("name", "")
-            if name in self.SUPPORTED_SYSTEM_TOOLS:
+            if (name := spec.get("name", "")) in self.SUPPORTED_SYSTEM_TOOLS:
                 promoted.append({"systemTool": {"name": name}})
             else:
                 remaining.append(entry)

@@ -101,9 +101,20 @@ Enables: Text generation and conversational AI in workflows.
     **`OpenAI Chat Model`**
 
     - Model can be selected directly in the `Model` parameter
-    - ⚠️ **Important:** `Use Responses API` parameter must be **unchecked** (n8n's Responses API uses OpenAI's newer `/v1/responses` endpoint, which stdapi.ai does not implement; use the standard `/v1/chat/completions` endpoint instead)
+    - ⚠️ **Note:** `Use Responses API` parameter can optionally be checked — stdapi.ai now implements the `/v1/responses` endpoint. When unchecked, n8n uses the standard `/v1/chat/completions` endpoint instead.
 
-    n8n calls `POST /v1/chat/completions` (see [Chat Completions API](api_openai_chat_completions.md)), so the model must be a text/chat-capable model from the correct family.
+    n8n calls either `POST /v1/chat/completions` (see [Chat Completions API](api_openai_chat_completions.md)) or `POST /v1/responses` (see [Responses API](api_openai_responses.md)) depending on this setting. Either way, the model must be a text/chat-capable model from the correct family.
+
+#### :material-message-text: Text Generation
+
+Enables: Text generation using the OpenAI Responses API.
+
+!!! example "Supported Node"
+    **`OpenAI/Message a model`**
+
+    - Model can be selected directly in the `Model` parameter
+
+    n8n calls `POST /v1/responses` (see [Responses API](api_openai_responses.md)), so the model must be a text/chat-capable model from the correct family.
 
 #### :material-database: Embeddings
 
@@ -115,6 +126,17 @@ Enables: Vector embeddings for semantic search and RAG workflows.
     - Model can be selected directly in the `Model` parameter
 
     n8n calls `POST /v1/embeddings` (see [Embeddings API](api_openai_embeddings.md)), so the model must be an embeddings-capable model from the correct family.
+
+#### :material-image-search: Image Analysis
+
+Enables: Image understanding and analysis in workflows.
+
+!!! example "Supported Node"
+    **`OpenAI/Analyze image`**
+
+    - Model can be selected directly in the `Model` parameter
+
+    n8n calls `POST /v1/responses` with image input (see [Responses API](api_openai_responses.md)), so the model must be a vision-capable model from the correct family.
 
 #### :material-image: Image Generation
 
@@ -205,14 +227,6 @@ n8n calls the `/v1/files` endpoints (see [Files API](api_openai_files.md)). Set 
     - **Return All / Limit:** control pagination; enable **Return All** or set **Limit** for the first page
 
     Files are returned in descending order (newest first) by default.
-
-#### :material-alert-outline: Unsupported Nodes
-
-The following nodes are not yet supported:
-
-!!! warning "Known Limitations"
-    - **`OpenAI/Message a model`** — Requires Responses API (`/v1/responses`), not supported. Use `OpenAI Chat Model` instead.
-    - **`OpenAI/Analyze image`** — Requires Responses API (`/v1/responses`), not supported. Use `OpenAI Chat Model` with image content instead.
 
 ---
 

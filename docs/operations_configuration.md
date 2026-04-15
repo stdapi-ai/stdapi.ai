@@ -271,6 +271,7 @@ Choose **one** method (mutually exclusive):
 | [`DROP_UNSUPPORTED_SYSTEM_PROMPT`](#drop-unsupported-system-prompt) | `true`                  | Drop system prompts for unsupported models; when `false`, return error instead             |
 | [`ANTHROPIC_BETA_FILTER`](#anthropic-beta-filter)                   | `true`                  | Enable filtering of unsupported `anthropic_beta` flags for Claude models                   |
 | [`ANTHROPIC_BETA_ALLOWLIST`](#anthropic-beta-allowlist)             | `(empty)`               | Additional `anthropic_beta` flags to allow beyond built-in Bedrock defaults                |
+| [`IMAGE_GENERATION_MODEL`](#image-generation-model)                 | `(empty)`               | Default Bedrock image model ID used when the `image_generation` Responses API tool is invoked |
 
 ### :material-file-document: API Documentation
 
@@ -3873,6 +3874,47 @@ export ANTHROPIC_BETA_ALLOWLIST='new-feature-2026-03-01,another-flag-2026-04-01'
     - :material-robot: **Claude Code via Bedrock** - Clients work without `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`
     - :material-shield-check: **Production stability** - Prevent unsupported flags from causing request failures
     - :material-swap-horizontal: **Drop-in compatibility** - Clients configured for direct Anthropic API work through stdapi.ai without changes
+
+---
+
+#### `IMAGE_GENERATION_MODEL` { #image-generation-model }
+
+:octicons-package-24: **Purpose**
+
+Default Bedrock image model ID used when the [`image_generation`](api_openai_responses.md#image-generation) integrated tool is invoked via the Responses API. The tool intercepts requests from any text model, generates the image against this Bedrock image model, and returns an `image_generation_call` output item.
+
+:octicons-gear-24: **Default**: `(empty)` — the tool returns HTTP 400 if no model is configured and the request does not specify one.
+
+The tool definition in the request may include a `model` field to override this default per call. Priority: request `model` field > this env var.
+
+**Supported Bedrock image models:**
+
+| Model ID | Description |
+|----------|-------------|
+| `amazon.nova-canvas-v1:0` | Amazon Nova Canvas (high quality) |
+| `amazon.titan-image-generator-v2:0` | Amazon Titan Image Generator v2 |
+| `amazon.titan-image-generator-v1` | Amazon Titan Image Generator v1 |
+| `stability.stable-diffusion-xl-v1` | Stability AI SDXL v1 |
+
+**Example:**
+
+```bash
+export IMAGE_GENERATION_MODEL='amazon.nova-canvas-v1:0'
+```
+
+With this set, any text model can generate images via the Responses API:
+
+```bash
+curl -X POST "$BASE/v1/responses" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "amazon.nova-micro-v1:0",
+    "input": "Generate a sunset over the ocean.",
+    "tools": [{"type": "image_generation"}],
+    "tool_choice": "required"
+  }'
+```
 
 ---
 

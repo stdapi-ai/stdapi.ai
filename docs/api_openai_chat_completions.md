@@ -146,7 +146,7 @@ curl -X POST "$BASE/v1/chat/completions" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "anthropic.claude-opus-4-6-v1",
+    "model": "anthropic.claude-opus-4-7",
     "prompt_cache_key": "default",
     "messages": [
       {
@@ -176,7 +176,7 @@ Enable caching for specific prompt sections using dot-separated values:
 
 ```json
 {
-  "model": "anthropic.claude-opus-4-6-v1",
+  "model": "anthropic.claude-opus-4-7",
   "prompt_cache_key": "system.tools",
   "messages": [...],
   "tools": [...]
@@ -201,7 +201,7 @@ curl -X POST "$BASE/v1/chat/completions" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "anthropic.claude-opus-4-6-v1",
+    "model": "anthropic.claude-opus-4-7",
     "prompt_cache_key": "default",
     "prompt_cache_retention": "24h",
     "messages": [
@@ -266,7 +266,7 @@ Simply reference your S3 images using the `s3://` URI scheme in `image_url` fiel
 
 ```json
 {
-  "model": "anthropic.claude-opus-4-6-v1",
+  "model": "anthropic.claude-opus-4-7",
   "messages": [
     {
       "role": "user",
@@ -462,7 +462,7 @@ Add provider-specific fields at the top level of your request body alongside sta
 **Top K Sampling:**
 ```json
 {
-  "model": "anthropic.claude-opus-4-6-v1",
+  "model": "anthropic.claude-opus-4-7",
   "messages": [{"role": "user", "content": "Write a poem"}],
   "top_k": 50,
   "temperature": 0.7
@@ -555,7 +555,7 @@ curl -X POST "$BASE/v1/chat/completions" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "anthropic.claude-opus-4-6-v1",
+    "model": "anthropic.claude-opus-4-7",
     "reasoning_effort": "high",
     "messages": [{"role": "user", "content": "Solve this complex problem..."}]
   }'
@@ -601,7 +601,7 @@ client = OpenAI(
 
 # OpenAI-style reasoning (predefined effort levels)
 response = client.chat.completions.create(
-    model="anthropic.claude-opus-4-6-v1",
+    model="anthropic.claude-opus-4-7",
     reasoning_effort="high",
     messages=[{"role": "user", "content": "Complex problem..."}]
 )
@@ -671,7 +671,7 @@ curl -X POST "$BASE/v1/chat/completions" \
   -H "X-Amzn-Bedrock-Service-Tier: priority" \
   -H "X-Amzn-Bedrock-PerformanceConfig-Latency: optimized" \
   -d '{
-    "model": "anthropic.claude-opus-4-6-v1",
+    "model": "anthropic.claude-opus-4-7",
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```

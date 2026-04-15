@@ -200,7 +200,7 @@ module "stdapi_ai" {
     )
 
     response = client.chat.completions.create(
-        model="anthropic.claude-opus-4-6-v1",
+        model="anthropic.claude-opus-4-7",
         messages=[{"role": "user", "content": "Hello!"}]
     )
     ```
@@ -216,7 +216,7 @@ module "stdapi_ai" {
     )
 
     message = client.messages.create(
-        model="anthropic.claude-opus-4-6-v1",
+        model="anthropic.claude-opus-4-7",
         messages=[{"role": "user", "content": "Hello!"}]
     )
     ```

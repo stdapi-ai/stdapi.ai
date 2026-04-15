@@ -9,7 +9,15 @@ from io import BytesIO
 from re import ASCII
 from re import compile as compile_regex
 from sys import stdout
-from typing import TYPE_CHECKING, Literal, NotRequired, Protocol, TypedDict, TypeVar
+from typing import (
+    TYPE_CHECKING,
+    Literal,
+    LiteralString,
+    NotRequired,
+    Protocol,
+    TypedDict,
+    TypeVar,
+)
 from urllib.parse import unquote
 from uuid import uuid7 as uuid
 
@@ -18,8 +26,9 @@ from langcodes import Language
 from PIL import Image
 from pybase64 import b64decode as _b64decode
 from pybase64 import b64encode as _b64encode
-from pydantic import JsonValue, ValidationError
+from pydantic import BaseModel, JsonValue, ValidationError
 from pydantic_core import from_json, to_json
+from sse_starlette import JSONServerSentEvent
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Buffer, Generator
@@ -42,6 +51,25 @@ match_bedrock_app_profile_arn = compile_regex(
 match_bedrock_prompt_router_arn = compile_regex(
     "arn:aws(?:-[^:]+)?:bedrock:(?P<region>[a-z0-9-]{1,20}):[0-9]{12}:(?:prompt-router|default-prompt-router)/[a-zA-Z0-9-:.]+"
 ).match
+
+
+def json_sse(event: LiteralString | None, payload: BaseModel) -> JSONServerSentEvent:
+    """Build a ``JSONServerSentEvent`` from a pydantic payload.
+
+    Args:
+        event: SSE event name (always a literal in callers), or ``None`` for a
+            data-only event.
+        payload: Pydantic model to serialise as the event data.
+
+    Returns:
+        A ready-to-yield ``JSONServerSentEvent``.
+    """
+    data = payload.model_dump(mode="json", exclude_none=True)
+    return (
+        JSONServerSentEvent(event=event, data=data)
+        if event
+        else JSONServerSentEvent(data=data)
+    )
 
 
 def now_utc_timestamp() -> int:

@@ -147,8 +147,8 @@ def _build_cache_point(
     return PROMPT_CACHING_DEFAULT
 
 
-#: Bedrock stop reasons to Anthropic stop reasons mapping
-_STOP_REASONS: dict[StopReasonType | None, StopReason] = {
+#: Bedrock stop reasons to Anthropic stop reasons mapping.
+_STOP_REASONS: dict[StopReasonType | str | None, StopReason] = {
     "end_turn": "end_turn",
     "max_tokens": "max_tokens",
     "model_context_window_exceeded": "max_tokens",
@@ -158,6 +158,8 @@ _STOP_REASONS: dict[StopReasonType | None, StopReason] = {
     "guardrail_intervened": "refusal",
     "malformed_model_output": "refusal",
     "malformed_tool_use": "refusal",
+    # Non-standard but observed
+    "incomplete": "max_tokens",
 }
 
 #: Anthropic services tiers to Bedrock mapping
@@ -173,7 +175,7 @@ _SERVICES_TIERS: dict[ServiceTiers | None, ServiceTierTypeType] = {
 _RE_DOC_NAME = re.compile(r"[^a-zA-Z0-9_-]")
 
 
-def _map_stop_reason(stop_reason: StopReasonType | None) -> StopReason:
+def _map_stop_reason(stop_reason: StopReasonType | str | None) -> StopReason:
     """Map a Bedrock stop reason to an Anthropic stop reason.
 
     Args:

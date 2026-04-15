@@ -105,7 +105,7 @@ This API supports dynamic model name aliases matching the official Anthropic API
 
 **Examples:**
 
-- `claude-opus-4-6` → `anthropic.claude-opus-4-6-v1`
+- `claude-opus-4-6` → `anthropic.claude-opus-4-7`
 - `claude-sonnet-4-6` → `anthropic.claude-sonnet-4-6`
 - `claude-haiku-4-5-20251001` → `anthropic.claude-haiku-4-5-20251001-v1:0`
 
@@ -138,7 +138,7 @@ curl -X POST "$BASE/v1/messages" \
   -H "anthropic-version: 2023-06-01" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "anthropic.claude-opus-4-6-v1",
+    "model": "anthropic.claude-opus-4-7",
     "max_tokens": 1024,
     "system": [
       {
@@ -163,7 +163,7 @@ Enable caching for specific sections by adding `cache_control` blocks:
 
 ```json
 {
-  "model": "anthropic.claude-opus-4-6-v1",
+  "model": "anthropic.claude-opus-4-7",
   "max_tokens": 1024,
   "system": [
     {
@@ -239,7 +239,7 @@ Simply reference your S3 images using the `s3://` URI scheme in image source fie
 
 ```json
 {
-  "model": "anthropic.claude-opus-4-6-v1",
+  "model": "anthropic.claude-opus-4-7",
   "max_tokens": 1024,
   "messages": [
     {
@@ -557,7 +557,7 @@ curl -X POST "$BASE/v1/messages" \
   -H "X-Amzn-Bedrock-Service-Tier: priority" \
   -H "X-Amzn-Bedrock-PerformanceConfig-Latency: optimized" \
   -d '{
-    "model": "anthropic.claude-opus-4-6-v1",
+    "model": "anthropic.claude-opus-4-7",
     "max_tokens": 1024,
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
@@ -632,7 +632,7 @@ curl -X POST "$BASE/v1/messages" \
   -H "anthropic-version: 2023-06-01" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "anthropic.claude-opus-4-6-v1",
+    "model": "anthropic.claude-opus-4-7",
     "max_tokens": 1024,
     "tools": [
       {
@@ -662,7 +662,7 @@ curl -X POST "$BASE/v1/messages/count_tokens" \
   -H "anthropic-beta: token-counting-2024-11-01" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "anthropic.claude-opus-4-6-v1",
+    "model": "anthropic.claude-opus-4-7",
     "messages": [{"role": "user", "content": "Hello, how are you?"}]
   }'
 ```

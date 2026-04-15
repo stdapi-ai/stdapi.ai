@@ -73,12 +73,12 @@ class TestNovaChatCompletions:
     def test_web_search_plain_name_not_auto_promoted(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Passing ``web_search`` as a plain tool name is NOT auto-promoted to a system tool.
+        """Passing ``web_search`` as a plain Chat Completions function name is NOT auto-promoted.
 
-        ``web_search`` is the Anthropic-side key in ``ANTHROPIC_TOOL_NAME_MAP``, not the
-        Bedrock value (``nova_grounding``).  Only Bedrock names listed in
-        ``SUPPORTED_SYSTEM_TOOLS`` trigger auto-promotion.
-        ``web_search`` is passed as a regular ``toolSpec`` and Nova Premier responds normally.
+        ``_req_promote_system_tools`` only promotes names that are literally present in
+        ``SUPPORTED_SYSTEM_TOOLS`` (Bedrock names such as ``"nova_grounding"``).  A user-defined
+        tool named ``"web_search"`` is never pre-translated, so it stays as a regular
+        ``toolSpec`` and Nova Premier receives it as a custom function tool.
         """
         if use_official_api:
             pytest.skip("Amazon Nova is not supported on the official API")

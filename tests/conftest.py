@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import sys
 from io import BytesIO
+from json import dumps
 from os import environ, getenv
 from pathlib import Path
 from secrets import token_hex
@@ -109,6 +110,15 @@ environ.update(
         "otel_enabled": "true",
         "tokens_estimation": "true",
         "trusted_hosts": '["*"]',
+        "aws_bedrock_model_region_restrict": dumps(
+            {
+                # Required for system tools (Like "nova_grounding")
+                "amazon.nova-2-lite-v1:0": ["us-east-1"],
+                # kimi-k2.5 us-east-1 deployment has intermittent 60 s per-turn latency
+                # spikes that cause T-CO test timeouts; us-west-2 is consistently fast.
+                "moonshotai.kimi-k2.5": ["us-west-2"],
+            }
+        ),
     }
 )
 
@@ -126,9 +136,12 @@ MODEL_MAPPINGS = {
         "chat_audio": "mistral.voxtral-mini-3b-2507",
         "embedding": "amazon.titan-embed-text-v2:0",
         "responses": "amazon.nova-micro-v1:0",
-        "image_generation": "amazon.titan-image-generator-v2:0",
+        "responses_json_output": "anthropic.claude-haiku-4-5-20251001-v1:0",
+        "responses_web_search": "amazon.nova-2-lite-v1:0",
+        "responses_code_interpreter": "amazon.nova-2-lite-v1:0",
+        "image_generation": "amazon.nova-canvas-v1:0",
         "image_generation_hd": "amazon.nova-canvas-v1:0",
-        "image_generation_stream": "amazon.titan-image-generator-v2:0",
+        "image_generation_stream": "amazon.nova-canvas-v1:0",
     },
     "openai": {
         "transcription": "whisper-1",
@@ -142,6 +155,9 @@ MODEL_MAPPINGS = {
         "chat_audio": "gpt-audio",
         "embedding": "text-embedding-3-small",
         "responses": "gpt-5-nano",
+        "responses_json_output": "gpt-5-nano",
+        "responses_web_search": "gpt-5-nano",
+        "responses_code_interpreter": "gpt-5-nano",
         "image_generation": "dall-e-2",  # Cheapest/default model
         "image_generation_hd": "dall-e-3",  # For HD & style quality features
         "image_generation_stream": "gpt-image-1",  # For streaming features
@@ -295,6 +311,32 @@ def embedding_model(models: dict[str, str]) -> str:
 def responses_model(models: dict[str, str]) -> str:
     """Provide the appropriate model for the Responses API."""
     return models["responses"]
+
+
+@pytest.fixture(scope="session")
+def responses_json_output_model(models: dict[str, str]) -> str:
+    """Provide a model for Responses API JSON output (Bedrock ``outputConfig``).
+
+    Local: Claude Haiku 4.5 (supports Bedrock Converse ``outputConfig``).
+    Official API: ``gpt-5-nano``.
+    """
+    return models["responses_json_output"]
+
+
+@pytest.fixture(scope="session")
+def responses_web_search_model(models: dict[str, str]) -> str:
+    """Provide the appropriate model for the Responses API with web search support."""
+    return models["responses_web_search"]
+
+
+@pytest.fixture(scope="session")
+def responses_code_interpreter_model(models: dict[str, str]) -> str:
+    """Provide the appropriate model for Responses API code interpreter (executes code autonomously).
+
+    Local: Amazon Nova 2 Lite (``nova_code_interpreter`` system tool).
+    Official API: ``gpt-5-nano`` (native Python execution via OpenAI code interpreter).
+    """
+    return models["responses_code_interpreter"]
 
 
 @pytest.fixture(scope="session")

@@ -79,7 +79,7 @@ Your existing applications, SDKs, and tools work immediately — no plugins or c
 | Endpoint                   | Capability                                                       | AWS Backend                          |
 |----------------------------|------------------------------------------------------------------|--------------------------------------|
 | `/v1/chat/completions`     | Conversational AI, tool calling, multi-modal                     | AWS Bedrock Converse API             |
-| `/v1/responses`            | Stateless conversational AI with built-in tools *(coming soon)*  | AWS Bedrock Converse API             |
+| `/v1/responses`            | Stateless conversational AI with tool calling and streaming      | AWS Bedrock Converse API             |
 | `/v1/embeddings`           | Vector embeddings for search & RAG                               | AWS Bedrock Embedding Models         |
 | `/v1/images/generations`   | Text-to-image generation                                         | AWS Bedrock Image Models             |
 | `/v1/images/edits`         | Image editing, inpainting & transformations                      | AWS Bedrock Image Models             |
@@ -430,41 +430,41 @@ stdapi.ai is a drop-in replacement in hundreds of applications and frameworks. C
 
 All four solutions below expose an OpenAI-compatible API in front of AWS Bedrock. The comparison focuses on the AWS deployment context — LiteLLM is evaluated with AWS services as the backend provider (Bedrock, Polly, Transcribe), not as a multi-cloud proxy. Bedrock Access Gateway is the official AWS-maintained open-source sample. Bedrock Mantle is AWS's own managed OpenAI-compatible endpoint, requiring no self-hosting.
 
-| Capability                                  |                   stdapi.ai                    |            LiteLLM (on AWS)             |         Bedrock Access Gateway          |             Bedrock Mantle             |
-|---------------------------------------------|:----------------------------------------------:|:---------------------------------------:|:---------------------------------------:|:--------------------------------------:|
-| **OpenAI Chat completions**                 |        :material-check:{ .green-check }        |    :material-check:{ .green-check }     |    :material-check:{ .green-check }     |    :material-check:{ .green-check }    |
-| **OpenAI Embeddings**                       |        :material-check:{ .green-check }        |    :material-check:{ .green-check }     |    :material-check:{ .green-check }     |                   —                    |
-| **Anthropic Messages API**                  |        :material-check:{ .green-check }        |    :material-check:{ .green-check }     |                    —                    |                   —                    |
-| **OpenAI Responses API**                    | :material-clock-outline:{ .coming-soon } [^12] |                    —                    |                    —                    |    :material-check:{ .green-check }    |
-| **OpenAI Image generation**                 |        :material-check:{ .green-check }        |    :material-check:{ .green-check }     |                    —                    |                   —                    |
-| **OpenAI Image editing**                    |        :material-check:{ .green-check }        |                    —                    |                    —                    |                   —                    |
-| **OpenAI Image variations**                 |        :material-check:{ .green-check }        |                    —                    |                    —                    |                   —                    |
-| **OpenAI TTS (speech)**                     |        :material-check:{ .green-check }        | :material-check:{ .yellow-check } [^13] |                    —                    |                   —                    |
-| **OpenAI STT (transcription)**              |        :material-check:{ .green-check }        |                    —                    |                    —                    |                   —                    |
-| **OpenAI Files & Uploads API**              |        :material-check:{ .green-check }        |                    —                    |                    —                    |                   —                    |
-| **OpenAI Realtime API**                     |                       —                        |    :material-check:{ .green-check }     |                    —                    |                   —                    |
-| **Cohere Rerank API**                       |                       —                        |    :material-check:{ .green-check }     |                    —                    |                   —                    |
-| **Bedrock Full model catalog**              |        :material-check:{ .green-check }        | :material-check:{ .yellow-check } [^1]  | :material-check:{ .yellow-check } [^10] | :material-check:{ .yellow-check } [^2] |
-| **Multimodal inputs**                       |      text · image · audio · video · docs       |           text · image · docs           |              text · image               |              text · image              |
-| **Multi-region quota multiplication**       |        :material-check:{ .green-check }        | :material-check:{ .yellow-check } [^8]  |                    —                    |                   —                    |
-| **Bedrock Cross-region inference profiles** |        :material-check:{ .green-check }        | :material-check:{ .yellow-check } [^14] | :material-check:{ .yellow-check } [^14] |                   —                    |
-| **Bedrock system tools**                    |        :material-check:{ .green-check }        |                    —                    |                    —                    |                   —                    |
-| **Bedrock Guardrails**                      |        :material-check:{ .green-check }        |    :material-check:{ .green-check }     |                    —                    |    :material-check:{ .green-check }    |
-| **Bedrock Service tiers**                   |        :material-check:{ .green-check }        |    :material-check:{ .green-check }     |                    —                    |    :material-check:{ .green-check }    |
-| **Bedrock Application inference profiles**  |        :material-check:{ .green-check }        |    :material-check:{ .green-check }     |    :material-check:{ .green-check }     |    :material-check:{ .green-check }    |
-| **Bedrock prompt routers**                  |        :material-check:{ .green-check }        |                    —                    |                    —                    |    :material-check:{ .green-check }    |
-| **Bedrock Prompt caching & reasoning**      |        :material-check:{ .green-check }        | :material-check:{ .yellow-check } [^6]  |    :material-check:{ .green-check }     | :material-check:{ .yellow-check } [^9] |
-| **Runs in your AWS account**                |        :material-check:{ .green-check }        |    :material-check:{ .green-check }     |    :material-check:{ .green-check }     |                   —                    |
-| **Model auto-discovery**                    |        :material-check:{ .green-check }        | :material-check:{ .yellow-check } [^1]  | :material-check:{ .yellow-check } [^7]  |    :material-check:{ .green-check }    |
-| **Deprecated model failover**               |        :material-check:{ .green-check }        |                    —                    |                    —                    |                   —                    |
-| **Ready-to-use deployment**                 |        :material-check:{ .green-check }        |                    —                    | :material-check:{ .yellow-check } [^3]  |    :material-check:{ .green-check }    |
-| **Commercial support**                      |        :material-check:{ .green-check }        |    :material-check:{ .green-check }     |                    —                    | :material-check:{ .green-check } [^4]  |
-| **Self-hosted**                             |        :material-check:{ .green-check }        |    :material-check:{ .green-check }     |    :material-check:{ .green-check }     |                   —                    |
-| **AWS-native focus**                        |        :material-check:{ .green-check }        | :material-check:{ .yellow-check } [^5]  |    :material-check:{ .green-check }     |    :material-check:{ .green-check }    |
-| **Multi-provider support**                  |                       —                        | :material-check:{ .green-check } [^11]  |                    —                    |                   —                    |
-| **Open-source community**                   |                     Small                      |             Large - ~40k+ ★             |             Medium - ~1k ★              |                   —                    |
-| **Source license**                          |       AGPL-3.0 (community) · commercial        |                   MIT                   |                  MIT-0                  |              AWS service               |
-| **Distribution & supply chain**             |               Marketplace · GHCR               |                pip/PyPI                 |             GitHub (MIT-0)              |              AWS-managed               |
+| Capability                                  |              stdapi.ai              |            LiteLLM (on AWS)             |         Bedrock Access Gateway          |             Bedrock Mantle              |
+|---------------------------------------------|:-----------------------------------:|:---------------------------------------:|:---------------------------------------:|:---------------------------------------:|
+| **OpenAI Chat completions**                 |  :material-check:{ .green-check }   |    :material-check:{ .green-check }     |    :material-check:{ .green-check }     | :material-check:{ .yellow-check } [^2]  |
+| **OpenAI Embeddings**                       |  :material-check:{ .green-check }   |    :material-check:{ .green-check }     |    :material-check:{ .green-check }     |                    —                    |
+| **Anthropic Messages API**                  |  :material-check:{ .green-check }   |    :material-check:{ .green-check }     |                    —                    | :material-check:{ .yellow-check } [^14] |
+| **OpenAI Responses API**                    |  :material-check:{ .green-check }   |                    —                    |                    —                    | :material-check:{ .yellow-check } [^2]  |
+| **OpenAI Image generation**                 |  :material-check:{ .green-check }   |    :material-check:{ .green-check }     |                    —                    |                    —                    |
+| **OpenAI Image editing**                    |  :material-check:{ .green-check }   |                    —                    |                    —                    |                    —                    |
+| **OpenAI Image variations**                 |  :material-check:{ .green-check }   |                    —                    |                    —                    |                    —                    |
+| **OpenAI TTS (speech)**                     |  :material-check:{ .green-check }   | :material-check:{ .yellow-check } [^12] |                    —                    |                    —                    |
+| **OpenAI STT (transcription)**              |  :material-check:{ .green-check }   |                    —                    |                    —                    |                    —                    |
+| **OpenAI Files & Uploads API**              |  :material-check:{ .green-check }   |                    —                    |                    —                    |                    —                    |
+| **OpenAI Realtime API**                     |                  —                  |    :material-check:{ .green-check }     |                    —                    |                    —                    |
+| **Cohere Rerank API**                       |                  —                  |    :material-check:{ .green-check }     |                    —                    |                    —                    |
+| **Bedrock Full model catalog**              |  :material-check:{ .green-check }   | :material-check:{ .yellow-check } [^1]  | :material-check:{ .yellow-check } [^10] | :material-check:{ .yellow-check } [^2]  |
+| **Multimodal inputs**                       | text · image · audio · video · docs |           text · image · docs           |              text · image               |              text · image               |
+| **Multi-region quota multiplication**       |  :material-check:{ .green-check }   | :material-check:{ .yellow-check } [^8]  |                    —                    |                    —                    |
+| **Bedrock Cross-region inference profiles** |  :material-check:{ .green-check }   | :material-check:{ .yellow-check } [^13] | :material-check:{ .yellow-check } [^13] |                    —                    |
+| **Bedrock system tools**                    |  :material-check:{ .green-check }   |                    —                    |                    —                    |                    —                    |
+| **Bedrock Guardrails**                      |  :material-check:{ .green-check }   |    :material-check:{ .green-check }     |                    —                    |    :material-check:{ .green-check }     |
+| **Bedrock Service tiers**                   |  :material-check:{ .green-check }   |    :material-check:{ .green-check }     |                    —                    |    :material-check:{ .green-check }     |
+| **Bedrock Application inference profiles**  |  :material-check:{ .green-check }   |    :material-check:{ .green-check }     |    :material-check:{ .green-check }     |    :material-check:{ .green-check }     |
+| **Bedrock prompt routers**                  |  :material-check:{ .green-check }   |                    —                    |                    —                    |    :material-check:{ .green-check }     |
+| **Bedrock Prompt caching & reasoning**      |  :material-check:{ .green-check }   | :material-check:{ .yellow-check } [^6]  |    :material-check:{ .green-check }     | :material-check:{ .yellow-check } [^9]  |
+| **Runs in your AWS account**                |  :material-check:{ .green-check }   |    :material-check:{ .green-check }     |    :material-check:{ .green-check }     |                    —                    |
+| **Model auto-discovery**                    |  :material-check:{ .green-check }   | :material-check:{ .yellow-check } [^1]  | :material-check:{ .yellow-check } [^7]  |    :material-check:{ .green-check }     |
+| **Deprecated model failover**               |  :material-check:{ .green-check }   |                    —                    |                    —                    |                    —                    |
+| **Ready-to-use deployment**                 |  :material-check:{ .green-check }   |                    —                    | :material-check:{ .yellow-check } [^3]  |    :material-check:{ .green-check }     |
+| **Commercial support**                      |  :material-check:{ .green-check }   |    :material-check:{ .green-check }     |                    —                    |  :material-check:{ .green-check } [^4]  |
+| **Self-hosted**                             |  :material-check:{ .green-check }   |    :material-check:{ .green-check }     |    :material-check:{ .green-check }     |                    —                    |
+| **AWS-native focus**                        |  :material-check:{ .green-check }   | :material-check:{ .yellow-check } [^5]  |    :material-check:{ .green-check }     |    :material-check:{ .green-check }     |
+| **Multi-provider support**                  |                  —                  | :material-check:{ .green-check } [^11]  |                    —                    |                    —                    |
+| **Open-source community**                   |                Small                |             Large - ~40k+ ★             |             Medium - ~1k ★              |                    —                    |
+| **Source license**                          |  AGPL-3.0 (community) · commercial  |                   MIT                   |                  MIT-0                  |               AWS service               |
+| **Distribution & supply chain**             |         Marketplace · GHCR          |                pip/PyPI                 |             GitHub (MIT-0)              |               AWS-managed               |
 
 !!! info "About the alternatives"
 
@@ -496,6 +496,6 @@ All four solutions below expose an OpenAI-compatible API in front of AWS Bedrock
 [^9]: Claude 3.x/4.x (which support prompt caching) not available on Mantle; reasoning available via select open-weight models (Qwen3 thinking, etc.)
 [^10]: Single-region deployment — some models are only available in specific AWS regions; no cross-region catalog aggregation
 [^11]: 100+ providers: OpenAI, Azure OpenAI, GCP Vertex, Anthropic direct, and more — ideal when you need a single gateway across multiple clouds
-[^12]: Coming in the next release
-[^13]: Requires connecting Amazon Polly as the TTS backend — not included by default in a LiteLLM on AWS deployment
-[^14]: Supported by specifying the cross-region inference profile ARN as the model ID — no automatic profile selection
+[^12]: Requires connecting Amazon Polly as the TTS backend — not included by default in a LiteLLM on AWS deployment
+[^13]: Supported by specifying the cross-region inference profile ARN as the model ID — no automatic profile selection
+[^14]: Anthropic Messages API supported on Mantle, but only for a subset of Anthropic models — Claude 3.x/4.x are not available; coverage limited to models supported by the Mantle endpoint

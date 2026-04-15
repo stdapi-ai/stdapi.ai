@@ -84,14 +84,14 @@ Most AI coding assistants follow a similar configuration pattern. The exact menu
 
         API Key: YOUR_STDAPI_KEY
 
-        Model: anthropic.claude-opus-4-6-v1
+        Model: anthropic.claude-opus-4-7
         (or select from detected models if available)
         ```
 
 !!! tip "Model Selection for Coding"
     **Recommended models for different tasks:**
 
-    - **Advanced reasoning & architecture**: `anthropic.claude-opus-4-6-v1`
+    - **Advanced reasoning & architecture**: `anthropic.claude-opus-4-7`
     - **Complex problem-solving**: Kimi K2 thinking models
     - **Specialized coding tasks**: `qwen2-coder-next-1-5-instruct-v1:0` (Qwen Coder Next)
     - **Fast completions**: Amazon Nova Micro or Nova Lite
@@ -99,7 +99,7 @@ Most AI coding assistants follow a similar configuration pattern. The exact menu
     **Configuration tips:**
 
     - **Auto-detect**: Some assistants query `/v1/models` and show a dropdown
-    - **Manual entry**: Use full Bedrock model ID (e.g., `anthropic.claude-opus-4-6-v1`)
+    - **Manual entry**: Use full Bedrock model ID (e.g., `anthropic.claude-opus-4-7`)
     - **Multi-model setup**: Use fast, cheap models for secondary tasks (autocomplete, summaries) and powerful models for complex generation
 
 ### :material-chat-outline: Chat Completions
@@ -166,7 +166,7 @@ Create or edit `~/.claude/claude.json`:
   "env": {
     "ANTHROPIC_AUTH_TOKEN": "YOUR_API_KEY",
     "ANTHROPIC_BASE_URL": "https://YOUR_STDAPI_URL/anthropic",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "anthropic.claude-opus-4-6-v1",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "anthropic.claude-opus-4-7",
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "anthropic.claude-sonnet-4-6",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "anthropic.claude-haiku-4-5-20251001-v1:0"
   }

@@ -728,6 +728,14 @@ class _Settings(BaseSettings):
         ),
     )
 
+    image_generation_model: str | None = Field(
+        default=None,
+        description=(
+            "Default model ID for image generation (e.g. `amazon.nova-canvas-v1:0`). "
+            "Required unless the client or the LLM specifies a model per call."
+        ),
+    )
+
     default_tts_model: Literal[
         "amazon.polly-standard",
         "amazon.polly-neural",

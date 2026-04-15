@@ -416,7 +416,7 @@ class TestMultiModelToolUse:
         # Turn 1: model decides to call the tool
         resp1 = openai_client.chat.completions.create(
             model=model,
-            max_tokens=512,
+            max_tokens=2048,
             tools=tools,  # type: ignore[arg-type]
             messages=[
                 {"role": "user", "content": f"What files are in {_PROJECT_ROOT}?"}
@@ -436,7 +436,7 @@ class TestMultiModelToolUse:
         # Turn 2: provide tool result
         resp2 = openai_client.chat.completions.create(
             model=model,
-            max_tokens=1024,
+            max_tokens=2048,
             tools=tools,  # type: ignore[arg-type]
             messages=[
                 {"role": "user", "content": f"What files are in {_PROJECT_ROOT}?"},
@@ -532,7 +532,7 @@ class TestMultiModelToolUse:
         for _ in range(8):
             response = openai_client.chat.completions.create(
                 model=model,
-                max_tokens=800,
+                max_tokens=4096,
                 tools=_TOOLS,  # type: ignore[arg-type]
                 messages=messages,  # type: ignore[arg-type]
             )

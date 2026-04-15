@@ -40,6 +40,26 @@ from tests.test_openai_chat_completions_anthropic_claude import (
     CLAUDE_ALL as _CLAUDE_ALL,
 )
 
+# ===========================================================================
+# Module-level fixture: skip when running with --use-official-api
+# ===========================================================================
+
+
+@pytest.fixture(autouse=True)
+def _skip_on_official_api(use_anthropic_api: bool) -> None:
+    """Skip all tests in this file when running against the official Anthropic API.
+
+    These tests validate gateway behavior for Anthropic system tools. When
+    ``--use-official-api`` is set, requests go directly to the Anthropic API,
+    bypassing the gateway entirely, so there's nothing to test.
+    """
+    if use_anthropic_api:
+        pytest.skip(
+            "These tests validate gateway behavior for Anthropic system tools, "
+            "which require the local gateway (run without --use-official-api)"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Shared tool definitions
 # ---------------------------------------------------------------------------

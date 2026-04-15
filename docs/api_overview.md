@@ -1,7 +1,7 @@
 ---
 title: API Overview - OpenAI & Anthropic Compatible AWS Bedrock API
 description: Complete API documentation for stdapi.ai OpenAI and Anthropic compatible gateway. Access AWS Bedrock models, chat completions, messages, embeddings, image generation, and audio APIs with SDK compatibility.
-keywords: OpenAI API documentation, Anthropic API documentation, AWS Bedrock API reference, OpenAI SDK compatibility, Anthropic SDK compatibility, chat completions API, messages API, embeddings API, image generation API, audio API AWS, OpenAI compatible endpoints, Anthropic compatible endpoints
+keywords: OpenAI API documentation, Anthropic API documentation, AWS Bedrock API reference, OpenAI SDK compatibility, Anthropic SDK compatibility, chat completions API, responses API, messages API, embeddings API, image generation API, audio API AWS, OpenAI compatible endpoints, Anthropic compatible endpoints
 ---
 
 # :material-api: API Overview
@@ -34,6 +34,7 @@ stdapi.ai provides multiple interfaces for exploring and testing the API—choos
 | Category          | Endpoint                        | Capability                                                    | Documentation                                          |
 |-------------------|---------------------------------|---------------------------------------------------------------|--------------------------------------------------------|
 | **💬 Chat**       | `POST /v1/chat/completions`     | Multi-modal conversations with text, images, video, documents | [Chat Completions →](api_openai_chat_completions.md)   |
+|                   | `POST /v1/responses`            | Stateless conversational AI with tool calling and streaming   | [Responses →](api_openai_responses.md)                 |
 | **🎨 Images**     | `POST /v1/images/generations`   | Text-to-image generation                                      | [Generations →](api_openai_images_generations.md)      |
 |                   | `POST /v1/images/edits`         | Image editing and transformations                             | [Edits →](api_openai_images_edits.md)                  |
 |                   | `POST /v1/images/variations`    | Generate image variations                                     | [Variations →](api_openai_images_variations.md)        |
