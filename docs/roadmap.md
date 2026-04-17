@@ -6,13 +6,13 @@ keywords: stdapi.ai releases, AI gateway updates, AWS Bedrock features, API gate
 
 # :material-timeline: Releases & Roadmap
 
-**stdapi.ai is under active development** with regular feature releases. Nine major releases delivered since launch (v1.0-v1.9) with continuous improvements.
+**stdapi.ai is under active development** with regular feature releases. Ten major releases delivered since launch (v1.0-v1.10) with continuous improvements.
 
 ## :material-tag-multiple: Recent Releases
 
 See [Release History below](#release-history) for the full changelog of all releases.
 
-**Latest: v1.9** – Files API & Images API JSON Body (OpenAI and Anthropic Files API backed by Amazon S3, multipart uploads, JSON body for image edits and variations)
+**Latest: v1.10** – OpenAI Responses API (full `/v1/responses` endpoint with streaming, function tools, built-in tools, extended reasoning, structured output, and prompt caching)
 
 ---
 
@@ -24,14 +24,14 @@ The following features may be implemented in future releases based on community 
 
 ### :material-chat: Chat Completions
 
-| Provider                                                                                 | Endpoint/Feature                             | AWS Backend                                                                                                            |
-|------------------------------------------------------------------------------------------|----------------------------------------------|------------------------------------------------------------------------------------------------------------------------|
-| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**           | `/v1/completions`                            | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
-| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**           | `/v1/responses`                              | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
-| ![Ollama](styles/logo_ollama.svg){: style="height:20px;width:20px"} **Ollama**           | `/api/generate`                              | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
-| ![Ollama](styles/logo_ollama.svg){: style="height:20px;width:20px"} **Ollama**           | `/api/chat`                                  | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
-| ![Cohere](styles/logo_cohere.svg){: style="height:20px;width:20px"} **Cohere**           | `/v1/chat`                                   | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
-| ![Qwen](styles/logo_qwen.svg){: style="height:20px;width:20px"} **Qwen**                 | `/v1/chat/completions` `translation_options` | ![Amazon Translate](styles/logo_amazon_translate.svg){: style="height:20px;width:20px"} Amazon Translate               |
+| Provider                                                                       | Endpoint/Feature                                                           | AWS Backend                                                                                                            |
+|--------------------------------------------------------------------------------|----------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------|
+| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/completions` – stateful conversations                                 | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
+| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/responses` – stateful conversations (`previous_response_id`, `store`) | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
+| ![Ollama](styles/logo_ollama.svg){: style="height:20px;width:20px"} **Ollama** | `/api/generate`                                                            | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
+| ![Ollama](styles/logo_ollama.svg){: style="height:20px;width:20px"} **Ollama** | `/api/chat`                                                                | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
+| ![Cohere](styles/logo_cohere.svg){: style="height:20px;width:20px"} **Cohere** | `/v1/chat`                                                                 | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
+| ![Qwen](styles/logo_qwen.svg){: style="height:20px;width:20px"} **Qwen**       | `/v1/chat/completions` `translation_options`                               | ![Amazon Translate](styles/logo_amazon_translate.svg){: style="height:20px;width:20px"} Amazon Translate               |
 
 ### :material-translate: Translation
 
@@ -132,6 +132,27 @@ The following features may be implemented in future releases based on community 
 ---
 
 ## :material-history: Release History
+
+### v1.10.0 – OpenAI Responses API
+
+This release adds support for the OpenAI [`/v1/responses`](api_openai_responses.md) endpoint—OpenAI's next-generation API designed for building agents and multi-step AI workflows. Drop-in compatible with the OpenAI SDK, it works with all AWS Bedrock Converse-compatible models and supports streaming, function tools, built-in tools (web search, code interpreter, image generation), extended reasoning, and structured output.
+
+#### :material-chat: Responses (OpenAI-Compatible)
+
+| Provider                                                                       | Endpoint/Feature                                                    | AWS Backend                                                                                                            |
+|--------------------------------------------------------------------------------|---------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------|
+| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/responses`                                                     | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
+| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/responses` – `web_search` / `web_search_preview` built-in tool | ![Amazon Nova](styles/logo_amazon_nova.svg){: style="height:20px;width:20px"} Amazon Nova models                       |
+| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/responses` – `code_interpreter` built-in tool                  | ![Amazon Nova](styles/logo_amazon_nova.svg){: style="height:20px;width:20px"} Amazon Nova models                       |
+| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/responses` – `image_generation` built-in tool                  | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - image models      |
+
+#### Fixes
+
+- Fix prompt caching error when messages contain tool-related content on models that do not support tool caching
+- Make `signature` field optional in Anthropic message types
+- Fix model legacy detection when the end-of-life date falls before the next cache refresh
+
+---
 
 ### v1.9.0 – Files API & Images API JSON Body
 
