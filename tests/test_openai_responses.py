@@ -1763,8 +1763,7 @@ class TestUnsupportedFeatures:
             )
 
     @pytest.mark.parametrize(
-        ("param", "value"),
-        [("truncation", "auto"), ("stream_options", {})],
+        ("param", "value"), [("truncation", "auto"), ("stream_options", {})]
     )
     def test_unsupported_param_returns_400(
         self,

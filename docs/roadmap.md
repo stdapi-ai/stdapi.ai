@@ -24,20 +24,15 @@ The following features may be implemented in future releases based on community 
 
 ### :material-chat: Chat Completions
 
-| Provider                                                                       | Endpoint/Feature                                                           | AWS Backend                                                                                                            |
-|--------------------------------------------------------------------------------|----------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------|
-| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/completions` – stateful conversations                                 | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
-| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/responses` – stateful conversations (`previous_response_id`, `store`) | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
-| ![Ollama](styles/logo_ollama.svg){: style="height:20px;width:20px"} **Ollama** | `/api/generate`                                                            | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
-| ![Ollama](styles/logo_ollama.svg){: style="height:20px;width:20px"} **Ollama** | `/api/chat`                                                                | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
-| ![Cohere](styles/logo_cohere.svg){: style="height:20px;width:20px"} **Cohere** | `/v1/chat`                                                                 | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
-| ![Qwen](styles/logo_qwen.svg){: style="height:20px;width:20px"} **Qwen**       | `/v1/chat/completions` `translation_options`                               | ![Amazon Translate](styles/logo_amazon_translate.svg){: style="height:20px;width:20px"} Amazon Translate               |
-
-### :material-translate: Translation
-
-| Provider  | Endpoint/Feature | AWS Backend                                                                                              |
-|-----------|------------------|----------------------------------------------------------------------------------------------------------|
-| **DeepL** | `/v2/translate`  | ![Amazon Translate](styles/logo_amazon_translate.svg){: style="height:20px;width:20px"} Amazon Translate |
+| Provider                                                                       | Endpoint/Feature                                | AWS Backend                                                                                                            |
+|--------------------------------------------------------------------------------|-------------------------------------------------|------------------------------------------------------------------------------------------------------------------------|
+| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/completions`                               | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
+| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/responses` – stateful conversations        | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
+| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/chat/completions` – stateful conversations | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
+| ![Ollama](styles/logo_ollama.svg){: style="height:20px;width:20px"} **Ollama** | `/api/generate`                                 | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
+| ![Ollama](styles/logo_ollama.svg){: style="height:20px;width:20px"} **Ollama** | `/api/chat`                                     | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
+| ![Cohere](styles/logo_cohere.svg){: style="height:20px;width:20px"} **Cohere** | `/v1/chat`                                      | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
+| ![Qwen](styles/logo_qwen.svg){: style="height:20px;width:20px"} **Qwen**       | `/v1/chat/completions` `translation_options`    | ![Amazon Translate](styles/logo_amazon_translate.svg){: style="height:20px;width:20px"} Amazon Translate               |
 
 ### :material-vector-polyline: Embeddings
 
