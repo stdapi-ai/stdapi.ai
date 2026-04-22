@@ -7,6 +7,8 @@ hide:
   - navigation
 ---
 
+</style>
+
 <div class="hero hero--home" markdown>
 # Run OpenAI & Anthropic Apps on AWS Bedrock
 
@@ -157,10 +159,10 @@ Drop-in API gateway for AWS Bedrock and AI services. Build private AI products o
     });
   });
 </script>
-<div class="section--soft" markdown>
 
 ## How It Works
 
+<div class="section--soft" markdown>
 <div class="center" markdown>
 
 ```mermaid
@@ -174,52 +176,13 @@ flowchart LR
 
 </div>
 
-**1. Deploy to AWS with Terraform**
-
-```hcl
-module "stdapi_ai" {
-  source  = "stdapi-ai/stdapi-ai/aws"
-  version = "~> 1.0"
-}
-```
+**1. Deploy to AWS with Terraform** — use our Terraform module or a managed deployment service.
 
 !!! tip "Prefer a hands-off setup?"
 
     A [managed deployment service](https://aws.amazon.com/marketplace/pp/prodview-xknxzjgl7zi5s) can deploy stdapi.ai into your AWS account — no Terraform required.
 
-**2. Point your application to stdapi.ai**
-
-=== "OpenAI SDK"
-
-    ```python
-    from openai import OpenAI
-
-    client = OpenAI(
-        api_key="your-api-key",
-        base_url="https://your-endpoint.com/v1"  # ← only change
-    )
-
-    response = client.chat.completions.create(
-        model="anthropic.claude-opus-4-7",
-        messages=[{"role": "user", "content": "Hello!"}]
-    )
-    ```
-
-=== "Anthropic SDK"
-
-    ```python
-    from anthropic import Anthropic
-
-    client = Anthropic(
-        api_key="your-api-key",
-        base_url="https://your-endpoint.com/anthropic"  # ← only change
-    )
-
-    message = client.messages.create(
-        model="anthropic.claude-opus-4-7",
-        messages=[{"role": "user", "content": "Hello!"}]
-    )
-    ```
+**2. Point your application to stdapi.ai** — just change the base URL in your existing OpenAI or Anthropic SDK code.
 
 **3. Access any Bedrock model immediately**
 Use Claude, Kimi K2, MiniMax, or any Bedrock model. Switch between models, regions, and providers without changing application code.

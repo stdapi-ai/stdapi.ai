@@ -274,3 +274,8 @@
 .center {
   text-align: center;
 }
+
+/* Yellow section titles on home page only */
+.md-typeset:has(.hero--home) > h2 {
+  color: var(--accent-dark) !important;
+}
