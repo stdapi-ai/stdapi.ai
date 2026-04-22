@@ -27,8 +27,8 @@ LICENCE_INFO = (
         "identifier": "AGPL-3.0-or-later",
     }
 )
-EDITION_TITLE = f"stdapi.ai ({'Professional' if PRODUCT_CODE else 'Community'} Edition)"
-SERVER_FULL_VERSION = f"{SERVER_VERSION}+{'p' if PRODUCT_CODE else 'c'}"
+EDITION_TITLE = f"stdapi.ai ({'Enterprise' if PRODUCT_CODE else 'Community'} Edition)"
+SERVER_FULL_VERSION = f"{SERVER_VERSION}+{'e' if PRODUCT_CODE else 'c'}"
 
 
 async def register() -> RegisterUsageResultTypeDef | None:
