@@ -929,8 +929,6 @@ async def format_response(
             usage.completion_tokens_details = CompletionTokensDetails(
                 reasoning_tokens=reasoning_tokens
             )
-            usage.total_tokens += reasoning_tokens
-            usage.completion_tokens += reasoning_tokens
 
     for index, tts_task in tts_tasks.items():
         choices[index].message.audio = await tts_task
