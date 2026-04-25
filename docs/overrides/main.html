@@ -24,6 +24,13 @@
   <meta name="keywords" content="{{ page.meta.keywords }}">
   {% endif %}
 
+  {# RFC 8288 / RFC 9727 — Agent & service discovery #}
+  {% if page.is_homepage %}
+  <link rel="service-doc" href="{{ config.site_url }}api_reference/">
+  <link rel="repository" href="{{ config.repo_url }}">
+  <link rel="marketplace" href="https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo">
+  {% endif %}
+
   {# Schema.org JSON-LD Structured Data #}
   {% if page.is_homepage %}
   <script type="application/ld+json">
