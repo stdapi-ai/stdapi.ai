@@ -24,11 +24,17 @@
   <meta name="keywords" content="{{ page.meta.keywords }}">
   {% endif %}
 
+  {# Markdown for Agents — advertise raw markdown alternate #}
+  {% if page and page.file and page.file.src_uri != 'api_reference.md' %}
+  <link rel="alternate" type="text/markdown" href="{{ config.site_url }}md/{{ page.file.src_uri }}">
+  {% endif %}
+
   {# RFC 8288 / RFC 9727 — Agent & service discovery #}
-  {% if page.is_homepage %}
+  {% if page and page.is_homepage %}
   <link rel="service-doc" href="{{ config.site_url }}api_reference/">
   <link rel="repository" href="{{ config.repo_url }}">
   <link rel="marketplace" href="https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo">
+  <link rel="alternate" type="text/plain" href="{{ config.site_url }}llms.txt" title="LLM-friendly site index">
   {% endif %}
 
   {# Schema.org JSON-LD Structured Data #}
