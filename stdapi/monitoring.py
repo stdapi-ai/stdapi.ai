@@ -111,13 +111,15 @@ REQUEST_LOG: ContextVar[EventLog] = ContextVar("request_log")
 REQUEST: ContextVar[Request] = ContextVar("request")
 
 #: Paths to ignore in logging
-LOGGING_PATHS_IGNORE = {
+LOGGING_PATHS_IGNORE: set[str] = {
     "/",
     "/docs",
     "/favicon.ico",
     "/health",
     "/openapi.json",
     "/redoc",
+    "/.well-known/api-catalog",
+    "/robots.txt",
 }
 
 #: Sorted log levels

@@ -6,7 +6,7 @@ avoid hard runtime dependencies on the official openai.types package.
 
 from contextlib import suppress
 from re import compile as regex_compile
-from typing import Any
+from typing import Any, TypedDict
 
 from pydantic import BaseModel, ConfigDict, JsonValue, model_validator
 from pydantic_core import from_json
@@ -33,6 +33,22 @@ JsonList = list[JsonValue]
 
 #: JSON list or mapping
 JsonMappingOrList = JsonMapping | JsonList
+
+
+class ApiCatalogLink(TypedDict):
+    """Single link entry in the API catalog."""
+
+    rel: str
+    href: str
+    title: str
+
+
+class ApiCatalog(TypedDict):
+    """RFC 9727 API catalog for agent discovery."""
+
+    api_version: str
+    description: str
+    links: list[ApiCatalogLink]
 
 
 class BaseModelRequest(BaseModel):

@@ -2853,6 +2853,12 @@ export ENABLE_DOCS=true
     - View request/response schemas
     - Understand parameter requirements
 
+!!! info "Agent Discovery"
+    Enabling this setting also activates:
+
+    - **Link headers** — Root endpoint (`/`) includes RFC 8288 Link headers advertising available resources
+    - **API catalog** — Machine-readable catalog at `/.well-known/api-catalog` for AI agent discovery
+
 #### `ENABLE_REDOC` { #enable-redoc }
 
 :octicons-package-24: **Purpose**
@@ -2880,6 +2886,12 @@ export ENABLE_REDOC=true
 !!! tip "Static Documentation Available"
     ReDoc API documentation is also available as static documentation at [API Reference](api_reference.md) without requiring this endpoint to be enabled.
 
+!!! info "Agent Discovery"
+    Enabling this setting also activates:
+
+    - **Link headers** — Root endpoint (`/`) includes RFC 8288 Link headers advertising available resources
+    - **API catalog** — Machine-readable catalog at `/.well-known/api-catalog` for AI agent discovery
+
 #### `ENABLE_OPENAPI_JSON` { #enable-openapi-json }
 
 :octicons-package-24: **Purpose**
@@ -2906,6 +2918,12 @@ export ENABLE_OPENAPI_JSON=true
 
 !!! note "Automatic Enablement"
     If either `ENABLE_DOCS` or `ENABLE_REDOC` is set to `true`, the `/openapi.json` endpoint will be automatically enabled since both documentation UIs require the OpenAPI schema to function. You only need to explicitly set `ENABLE_OPENAPI_JSON=true` if you want to expose the schema endpoint without enabling the documentation UIs.
+
+!!! info "Agent Discovery"
+    Enabling this setting also activates:
+
+    - **Link headers** — Root endpoint (`/`) includes RFC 8288 Link headers advertising available resources
+    - **API catalog** — Machine-readable catalog at `/.well-known/api-catalog` for AI agent discovery
 
 ### Development Configuration
 

@@ -398,6 +398,21 @@ stdapi.ai is a drop-in replacement in hundreds of applications and frameworks. C
 - **ReDoc** at `/redoc` — clean, searchable API reference
 - **OpenAPI schema** at `/openapi.json` — import into Postman, generate client code
 
+### Agent Discovery
+
+AI agents can automatically discover the API's capabilities through standardized RFC 8288 Link headers and an API catalog:
+
+- **Link headers** — Root endpoint (`/`) includes `Link` response headers advertising available resources (`rel="service-desc"`, `rel="service-doc"`) when documentation endpoints are enabled
+- **API catalog** at `/.well-known/api-catalog` — RFC 9727 machine-readable catalog listing the OpenAPI schema and documentation URLs
+
+Enable the documentation endpoints to activate agent discovery:
+
+| Variable                   | Description                                                      |
+|----------------------------|------------------------------------------------------------------|
+| `ENABLE_DOCS=true`         | Enables Swagger UI, `/openapi.json`, and agent discovery headers |
+| `ENABLE_REDOC=true`        | Enables ReDoc UI (alternative to Swagger)                        |
+| `ENABLE_OPENAPI_JSON=true` | Enables `/openapi.json` schema + agent discovery (no docs UI)    |
+
 ### Quality of Life
 
 - **Model aliases** — Map custom names to Bedrock IDs; Claude model names resolve automatically
