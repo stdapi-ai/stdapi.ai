@@ -100,6 +100,8 @@ environ.update(
         "aws_bedrock_allow_prompt_router_arn": "true",
         # Ensure invalid inputs in tests are detected.
         "strict_input_validation": "true",
+        # Avoid "too many reqsuests" error with Pytest xdist and many CPU
+        "aws_adaptive_retry": "true",
         # Enable all optional middlewares so their behaviour is tested.
         "cors_allow_origins": '["*"]',
         "enable_gzip": "true",

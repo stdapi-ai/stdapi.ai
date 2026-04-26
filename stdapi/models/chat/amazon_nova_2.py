@@ -17,9 +17,9 @@ if TYPE_CHECKING:
         ToolResultContentBlockOutputTypeDef,
     )
 
+    from stdapi.models.chat import Effort
     from stdapi.types import JsonMapping
     from stdapi.types.anthropic_messages import ContentBlock, ContentBlockParam
-    from stdapi.types.openai_chat_completions import ReasoningEffort
 
     class _NovaCodeInterpreterResult(TypedDict, total=False):
         """JSON payload returned by Bedrock for a ``nova_code_interpreter`` toolResult."""
@@ -35,11 +35,13 @@ NovaReasoning = Literal["low", "medium", "high"]
 
 
 #: OpenAI to Deepseek override
-_REASONING_OVERRIDE: dict[ReasoningEffort | None, NovaReasoning] = {
+_REASONING_OVERRIDE: dict[Effort | None, NovaReasoning] = {
     "minimal": "low",
+    "low": "low",
     "medium": "medium",
     "high": "high",
     "xhigh": "high",
+    "max": "high",
 }
 
 
@@ -56,7 +58,7 @@ class ChatModel(_BaseChatModel):
     def _req_configure_reasoning(
         self,
         additional_request_fields: JsonMapping,
-        reasoning_effort: ReasoningEffort | None = None,
+        reasoning_effort: Effort | None = None,
         budget_tokens: int | None = None,
         max_tokens: int | None = None,  # noqa: ARG002
     ) -> None:

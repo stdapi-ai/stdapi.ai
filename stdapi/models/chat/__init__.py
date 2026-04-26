@@ -21,12 +21,20 @@ if TYPE_CHECKING:
 
     from sse_starlette import EventSourceResponse
 
-    from stdapi.types.anthropic_messages import Message, MessageCreateParams
+    from stdapi.types.anthropic_messages import (
+        Message,
+        MessageCreateParams,
+        ThinkingEffort,
+    )
     from stdapi.types.openai_chat_completions import (
         ChatCompletion,
         CompletionCreateParams,
+        ReasoningEffort,
     )
     from stdapi.types.openai_responses import Response, ResponseCreateParams
+
+    #: Merged reasoning effort type
+    Effort = ReasoningEffort | ThinkingEffort
 
 
 class ChatModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):

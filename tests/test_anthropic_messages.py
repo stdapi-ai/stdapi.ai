@@ -589,6 +589,36 @@ class TestAnthropicMessages:
         assert len(text_blocks) >= 1
         assert "405" in text_blocks[0].text
 
+    def test_output_config_effort_without_thinking(
+        self, anthropic_client: Anthropic, use_official_api: bool
+    ) -> None:
+        """Test output_config with effort but without thinking field.
+
+        Validates:
+            - output_config.effort is accepted without thinking field
+            - Response includes a thinking block
+            - Response includes text content with the answer
+        """
+        if use_official_api:
+            pytest.skip("Only Claude models are supported by official API")
+
+        response = anthropic_client.messages.create(
+            model=NON_ANTHROPIC_THINKING,
+            max_tokens=4000,
+            messages=[{"role": "user", "content": "What is 15 * 27?"}],
+            output_config={"effort": "medium"},
+        )
+
+        assert response.type == "message"
+        assert len(response.content) >= 1
+
+        thinking_blocks = [b for b in response.content if b.type == "thinking"]
+        text_blocks = [b for b in response.content if b.type == "text"]
+        assert len(thinking_blocks) >= 1
+        assert len(thinking_blocks[0].thinking) > 0
+        assert len(text_blocks) >= 1
+        assert "405" in text_blocks[0].text
+
     def test_extended_thinking_streaming(
         self, anthropic_client: Anthropic, anthropic_chat_reasoning_model: str
     ) -> None:

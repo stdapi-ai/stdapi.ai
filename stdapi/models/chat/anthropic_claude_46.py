@@ -11,15 +11,15 @@ from stdapi.models.chat._anthropic_claude import (
 )
 
 if TYPE_CHECKING:
+    from stdapi.models.chat import Effort
     from stdapi.types.anthropic_messages import ThinkingEffort
-    from stdapi.types.openai_chat_completions import ReasoningEffort
 
 
 class ChatModel(AnthropicClaudeChatModel):
     """Anthropic Claude 4.6 chat model implementation."""
 
     MATCHER = re_compile(r"anthropic\.claude-(?:sonnet|opus)-4-6")
-    REASONING_OVERRIDE: ClassVar[dict[ReasoningEffort | None, ThinkingEffort]] = {
+    REASONING_OVERRIDE: ClassVar[dict[Effort | None, ThinkingEffort]] = {
         "minimal": "low",
         "xhigh": "high",
     }

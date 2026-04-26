@@ -15,9 +15,9 @@ if TYPE_CHECKING:
     )
 
     from stdapi.models import ModelDetails
+    from stdapi.models.chat import Effort
     from stdapi.types import JsonMapping
     from stdapi.types.anthropic_messages import ServerTools, ThinkingEffort
-    from stdapi.types.openai_chat_completions import ReasoningEffort
 
 #: ``anthropic_beta`` flag for computer-use tools (2025-01-24 version)
 _BETA_COMPUTER_USE_2025 = "computer-use-2025-01-24"
@@ -116,8 +116,9 @@ class AnthropicClaudeChatModel(_BaseChatModel):
     SERVER_TOOL_NAME_TO_TYPE: ClassVar[MappingProxyType[str, str]]
 
     #: OpenAI to Anthropic reasoning effort override - subclass to customize
-    REASONING_OVERRIDE: ClassVar[dict[ReasoningEffort | None, ThinkingEffort]] = {
-        "minimal": "low"
+    REASONING_OVERRIDE: ClassVar[dict[Effort | None, ThinkingEffort]] = {
+        "minimal": "low",
+        "low": "low",
     }
 
     def _req_extract_server_tools(
@@ -275,7 +276,7 @@ class AnthropicClaudeChatModel(_BaseChatModel):
     def _req_configure_reasoning(
         self,
         additional_request_fields: JsonMapping,
-        reasoning_effort: ReasoningEffort | None = None,
+        reasoning_effort: Effort | None = None,
         budget_tokens: int | None = None,
         max_tokens: int | None = None,  # noqa: ARG002
     ) -> None:

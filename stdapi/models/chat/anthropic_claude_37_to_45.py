@@ -11,15 +11,16 @@ from stdapi.models.chat._anthropic_claude import (
 )
 
 if TYPE_CHECKING:
+    from stdapi.models.chat import Effort
     from stdapi.types import JsonMapping
-    from stdapi.types.openai_chat_completions import ReasoningEffort
 
 #: Reasoning models: Budget factor over the token max count
-_REASONING_EFFORT_BUDGET_FACTOR: dict[ReasoningEffort, float] = {
+_REASONING_EFFORT_BUDGET_FACTOR: dict[Effort, float] = {
     "low": 0.25,
     "medium": 0.5,
     "high": 75.0,
     "xhigh": 1.0,
+    "max": 1.0,
 }
 
 #: Minimal value for reasoning budget
@@ -57,7 +58,7 @@ class ChatModel(AnthropicClaudeChatModel):
     def _req_configure_reasoning(
         self,
         additional_request_fields: JsonMapping,
-        reasoning_effort: ReasoningEffort | None = None,
+        reasoning_effort: Effort | None = None,
         budget_tokens: int | None = None,
         max_tokens: int | None = None,
     ) -> None:
@@ -80,7 +81,9 @@ class ChatModel(AnthropicClaudeChatModel):
                     _REASONING_BUDGET_MINIMAL,
                     int(
                         ((max_tokens or _REASONING_BUDGET_MAXIMAL) - 1)
-                        * _REASONING_EFFORT_BUDGET_FACTOR[reasoning_effort or "high"]
+                        * _REASONING_EFFORT_BUDGET_FACTOR.get(
+                            reasoning_effort or "high", 1.0
+                        )
                     ),
                 )
             )

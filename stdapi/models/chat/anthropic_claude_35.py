@@ -10,8 +10,8 @@ from stdapi.models.chat._anthropic_claude import (
 )
 
 if TYPE_CHECKING:
+    from stdapi.models.chat import Effort
     from stdapi.types import JsonMapping
-    from stdapi.types.openai_chat_completions import ReasoningEffort
 
 
 class ChatModel(AnthropicClaudeChatModel):
@@ -38,7 +38,7 @@ class ChatModel(AnthropicClaudeChatModel):
     def _req_configure_reasoning(
         self,
         additional_request_fields: JsonMapping,  # noqa:ARG002
-        reasoning_effort: ReasoningEffort | None = None,  # noqa:ARG002
+        reasoning_effort: Effort | None = None,  # noqa:ARG002
         budget_tokens: int | None = None,  # noqa:ARG002
         max_tokens: int | None = None,  # noqa: ARG002
     ) -> None:

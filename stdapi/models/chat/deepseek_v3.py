@@ -5,17 +5,19 @@ from typing import TYPE_CHECKING, Literal
 from stdapi.models.chat._default import ChatModel as _BaseChatModel
 
 if TYPE_CHECKING:
+    from stdapi.models.chat import Effort
     from stdapi.types import JsonMapping
-    from stdapi.types.openai_chat_completions import ReasoningEffort
 
 DeepseekReasoning = Literal["low", "medium", "high"]
 
 #: OpenAI to Deepseek override
-_REASONING_OVERRIDE: dict[ReasoningEffort | None, DeepseekReasoning] = {
+_REASONING_OVERRIDE: dict[Effort | None, DeepseekReasoning] = {
     "minimal": "low",
+    "low": "low",
     "medium": "medium",
     "high": "high",
     "xhigh": "high",
+    "max": "high",
 }
 
 
@@ -27,7 +29,7 @@ class ChatModel(_BaseChatModel):
     def _req_configure_reasoning(
         self,
         additional_request_fields: JsonMapping,
-        reasoning_effort: ReasoningEffort | None = None,
+        reasoning_effort: Effort | None = None,
         budget_tokens: int | None = None,
         max_tokens: int | None = None,  # noqa: ARG002
     ) -> None:

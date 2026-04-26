@@ -53,6 +53,7 @@ if TYPE_CHECKING:
     )
 
     from stdapi.aws_bedrock import ConverseRequestBaseTypeDef
+    from stdapi.models.chat import Effort
     from stdapi.types import JsonMapping
     from stdapi.types.anthropic_messages import (
         ContentBlock,
@@ -64,7 +65,6 @@ if TYPE_CHECKING:
     from stdapi.types.openai_chat_completions import (
         ChatCompletion,
         CompletionCreateParams,
-        ReasoningEffort,
     )
     from stdapi.types.openai_responses import Response, ResponseCreateParams
 
@@ -237,11 +237,17 @@ class ChatModel(ChatModelBase[Any, Any]):
             bedrock_messages=bedrock_messages,
         )
 
-        if request.thinking is not None and request.thinking.type != "disabled":
+        if (request.thinking is not None and request.thinking.type != "disabled") or (
+            request.output_config is not None
+            and request.output_config.effort is not None
+        ):
             self._req_configure_reasoning(
                 additional_request_fields=additional_request_fields,
+                reasoning_effort=request.output_config.effort
+                if request.output_config is not None
+                else None,
                 budget_tokens=request.thinking.budget_tokens
-                if request.thinking.type == "enabled"
+                if request.thinking is not None and request.thinking.type == "enabled"
                 else None,
                 max_tokens=request.max_tokens,
             )
@@ -546,7 +552,7 @@ class ChatModel(ChatModelBase[Any, Any]):
     def _req_configure_reasoning(
         self,
         additional_request_fields: dict[str, Any],  # noqa: ARG002
-        reasoning_effort: ReasoningEffort | None = None,
+        reasoning_effort: Effort | None = None,
         budget_tokens: int | None = None,
         max_tokens: int | None = None,  # noqa: ARG002
     ) -> None:
