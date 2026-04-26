@@ -18,6 +18,10 @@ DEPRECATED_MODELS: dict[str, str] = {
     # Amazon Nova
     "amazon.nova-premier-v1:0": "amazon.nova-2-lite-v1:0",
     "amazon.nova-sonic-v1:0": "amazon.nova-2-sonic-v1:0",
+    "amazon.nova-reel-v1:0": "amazon.nova-reel-v1:1",
+    # amazon.nova-reel-v1:1: EOL Sept 30, 2026 - no replacement confirmed
+    # amazon.titan-tg1-large: EOL Oct 27, 2025 - no replacement confirmed
+    # amazon.nova-canvas-v1:0: EOL Sept 30, 2026 - no replacement confirmed
     # Amazon Titan Image
     "amazon.titan-image-generator-v1": "amazon.nova-canvas-v1:0",
     "amazon.titan-image-generator-v2:0": "amazon.nova-canvas-v1:0",
@@ -34,7 +38,9 @@ DEPRECATED_MODELS: dict[str, str] = {
     "anthropic.claude-3-sonnet-20240229-v1:0": "anthropic.claude-sonnet-4-5-20250929-v1:0",
     # Anthropic Claude (Legacy)
     "anthropic.claude-3-opus-20240229-v1:0": "anthropic.claude-opus-4-1-20250805-v1:0",
+    "anthropic.claude-3-haiku-20240307-v1:0": "anthropic.claude-haiku-4-5-20251001-v1:0",
     "anthropic.claude-opus-4-20250514-v1:0": "anthropic.claude-opus-4-1-20250805-v1:0",
+    "anthropic.claude-sonnet-4-20250514-v1:0": "anthropic.claude-sonnet-4-5-20250929-v1:0",
     "anthropic.claude-3-5-sonnet-20240620-v1:0": "anthropic.claude-sonnet-4-5-20250929-v1:0",
     "anthropic.claude-3-5-sonnet-20241022-v2:0": "anthropic.claude-sonnet-4-5-20250929-v1:0",
     "anthropic.claude-3-5-haiku-20241022-v1:0": "anthropic.claude-haiku-4-5-20251001-v1:0",
@@ -42,6 +48,8 @@ DEPRECATED_MODELS: dict[str, str] = {
     # Cohere
     "cohere.command-text-v14": "cohere.command-r-v1:0",
     "cohere.command-light-text-v14": "cohere.command-r-v1:0",
+    # Mistral AI
+    "mistral.mistral-large-2402-v1:0": "mistral.mistral-large-3-675b-instruct",
     # Meta Llama 2 (EOL)
     "meta.llama2-13b-chat-v1": "meta.llama3-1-8b-instruct-v1:0",
     "meta.llama2-70b-chat-v1": "meta.llama3-1-70b-instruct-v1:0",
