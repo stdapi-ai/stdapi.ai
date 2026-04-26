@@ -139,6 +139,7 @@ async def stream_generator(
     "/images/generations",
     response_model=ImagesResponse,
     summary="OpenAI - /v1/images/generations",
+    operation_id="openai_image_generation",
     description="Creates an image given a prompt.",
     response_description="The response from the image generation endpoint.",
     responses={

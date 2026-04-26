@@ -29,13 +29,13 @@ Upload and manage files via an Anthropic-compatible interface. Files are stored 
 
 ## Available Endpoints
 
-| Endpoint                      | Method   | Description                    |
-|-------------------------------|----------|--------------------------------|
-| `/v1/files`                   | `POST`   | Upload a file                  |
-| `/v1/files`                   | `GET`    | List files with pagination     |
-| `/v1/files/{file_id}`         | `GET`    | Retrieve file metadata         |
-| `/v1/files/{file_id}`         | `DELETE` | Delete a file                  |
-| `/v1/files/{file_id}/content` | `GET`    | Download raw file bytes        |
+| Endpoint                      | Method   | Description                    | MCP Tool               |
+|-------------------------------|----------|--------------------------------|------------------------|
+| `/v1/files`                   | `POST`   | Upload a file                  | `anthropic_file`       |
+| `/v1/files`                   | `GET`    | List files with pagination     | `anthropic_file_list`  |
+| `/v1/files/{file_id}`         | `GET`    | Retrieve file metadata         | `anthropic_files_get`  |
+| `/v1/files/{file_id}`         | `DELETE` | Delete a file                  | `anthropic_files_delete` |
+| `/v1/files/{file_id}/content` | `GET`    | Download raw file bytes        | `anthropic_file_content` |
 
 ## Feature Compatibility
 

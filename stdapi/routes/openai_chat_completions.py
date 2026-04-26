@@ -43,6 +43,7 @@ router = APIRouter(
 @router.post(
     "/completions",
     summary="OpenAI - /v1/chat/completions",
+    operation_id="openai_chat_completion",
     description=(
         "Creates a model response for the given chat conversation. Learn more in the text generation, vision, and audio guides.\n"
         "Parameter support can differ depending on the model used to generate the response, particularly for newer reasoning models. "

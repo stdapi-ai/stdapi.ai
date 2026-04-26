@@ -59,6 +59,7 @@ def format_bedrock_model_to_openai(model: ModelDetails) -> Model:
 @router.get(
     "/models",
     summary="OpenAI - /v1/models",
+    operation_id="openai_model_list",
     description="Lists the currently available models, and provides basic information about each one such as the owner and availability.",
     response_description="Describes model offerings that can be used with the API",
     response_model_exclude_none=True,
@@ -122,6 +123,7 @@ async def list_models(_: Annotated[None, Depends(authenticate)]) -> ModelsRespon
 @router.get(
     "/models/{model}",
     summary="OpenAI - /v1/models/{model}",
+    operation_id="openai_model_get",
     description="Retrieves a model instance, providing basic information about the model such as the owner.",
     response_description="Describes a model offering that can be used with the API.",
     responses={

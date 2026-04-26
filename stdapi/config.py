@@ -846,6 +846,49 @@ class _Settings(BaseSettings):
         ),
     )
 
+    enable_mcp_streamable_http: bool = Field(
+        default=False,
+        description=(
+            "Enable the MCP (Model Context Protocol) server using Streamable HTTP transport. "
+            "When enabled, exposes an MCP-compatible endpoint at /mcp that AI clients can connect to. "
+            "This is the recommended transport: it implements the latest MCP Streamable HTTP "
+            "specification, offering better session management and more robust connection handling. "
+            "Default: false."
+        ),
+    )
+
+    enable_mcp_sse: bool = Field(
+        default=False,
+        description=(
+            "Enable the MCP (Model Context Protocol) server using Server-Sent Events (SSE) transport. "
+            "When enabled, exposes MCP endpoints at /sse for AI clients that require SSE transport. "
+            "SSE transport is maintained for backwards compatibility with older MCP client implementations. "
+            "Prefer enable_mcp_streamable_http for new deployments. "
+            "Default: false."
+        ),
+    )
+
+    mcp_include_tools: list[str] | None = Field(
+        default=None,
+        description=(
+            "Comma-separated list of MCP tool names to expose exclusively. "
+            "Only the listed tools will be available to MCP clients; all others are hidden. "
+            "When both mcp_include_tools and mcp_exclude_tools are specified, "
+            "tools in mcp_exclude_tools are removed from mcp_include_tools.\n\n"
+            "Example: 'openai_chat_completion,openai_embedding,openai_model_list'"
+        ),
+    )
+
+    mcp_exclude_tools: list[str] | None = Field(
+        default=None,
+        description=(
+            "Comma-separated list of MCP tool names to hide from MCP clients. "
+            "All other tools remain exposed. When mcp_include_tools is also specified, "
+            "mcp_exclude_tools values are removed from mcp_include_tools.\n\n"
+            "Example: 'openai_files_delete,anthropic_files_delete'"
+        ),
+    )
+
     ssrf_protection_block_private_networks: bool = Field(
         default=True,
         description=(
@@ -939,6 +982,21 @@ class _Settings(BaseSettings):
             "Example: 'new-feature-2026-03-01,another-flag-2026-04-01'"
         ),
     )
+
+    @field_validator("mcp_include_tools", "mcp_exclude_tools", mode="before")
+    @classmethod
+    def _parse_mcp_tools_list(cls, value: list[str] | str | None) -> list[str] | None:
+        """Parse MCP tool names from a comma-separated string or list.
+
+        Args:
+            value: A comma-separated string of tool names, a list, or None.
+
+        Returns:
+            A list of unique tool name strings, or None if the input is empty.
+        """
+        if isinstance(value, str):
+            value = [t.strip() for t in value.split(",") if t.strip()]
+        return list(set(value)) if value else None
 
     @field_validator("anthropic_beta_allowlist", mode="before")
     @classmethod
@@ -1072,6 +1130,7 @@ class _Settings(BaseSettings):
         2. API key sources are mutually exclusive
         3. Transcribe S3 bucket defaults to main S3 bucket if not specified
         4. API key configuration options cannot conflict
+        5. When both MCP include/exclude are specified, include is filtered by exclude
 
         Returns:
             Self with validated and defaulted configuration.
@@ -1117,6 +1176,11 @@ class _Settings(BaseSettings):
                 "and api_key_secretsmanager_key must be specified."
             )
             raise ValueError(msg)
+        if self.mcp_include_tools and self.mcp_exclude_tools:
+            self.mcp_include_tools = list(
+                set(self.mcp_include_tools) - set(self.mcp_exclude_tools)
+            )
+            self.mcp_exclude_tools = None
         return self
 
     def now(self) -> AwareDatetime:

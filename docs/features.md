@@ -372,6 +372,58 @@ stdapi.ai is a drop-in replacement in hundreds of applications and frameworks. C
 
 ---
 
+## :material-robot: AI Agents
+
+### Agent Discovery
+
+AI agents can automatically discover the API's capabilities through standardized RFC 8288 Link headers and an API catalog:
+
+- **Link headers** — Root endpoint (`/`) includes `Link` response headers advertising available resources (`rel="service-desc"`, `rel="service-doc"`) when documentation endpoints are enabled, and `rel="mcp-server-card"` when MCP is enabled
+- **API catalog** at `/.well-known/api-catalog` — RFC 9727 machine-readable catalog (RFC 9264 Linkset format) listing the OpenAPI schema, documentation, and MCP server card
+- **MCP server card** at `/.well-known/mcp/server-card.json` — SEP-1649 server card advertising available MCP transports and capabilities; active when MCP is enabled
+
+Set `ENABLE_OPENAPI_JSON=true` to activate schema-based agent discovery — this exposes the machine-readable OpenAPI schema at `/openapi.json` and populates the Link headers and API catalog. `ENABLE_DOCS` and `ENABLE_REDOC` also enable it as a side effect, but those UIs are human-facing and not needed by agents.
+
+### MCP (Model Context Protocol)
+
+stdapi.ai exposes its full API surface as MCP tools, letting AI agents and orchestrators call any endpoint directly through the Model Context Protocol — no HTTP client code required.
+
+- **Streamable HTTP transport** — The recommended method, implementing the latest MCP Streamable HTTP specification at `/mcp`
+- **SSE transport** — Available at `/sse` for backwards compatibility with older MCP clients
+- **All endpoints as tools** — Every API operation (chat, images, audio, files, models) is surfaced as a named MCP tool with generated documentation
+- **Selective exposure** — Include or exclude tools by name to limit scope and reduce agent confusion
+- **Automatic timeout alignment** — MCP calls respect the global `AI_RESPONSE_TIMEOUT` setting
+
+```bash
+# Enable MCP via HTTP (recommended)
+export ENABLE_MCP_STREAMABLE_HTTP=true
+
+# Restrict to safe, read-oriented tools
+export MCP_EXCLUDE_TOOLS="openai_files_delete,anthropic_files_delete"
+```
+
+**Example use cases:**
+
+<div class="grid cards" markdown>
+
+- :material-robot: **AI coding assistants**
+  <br>Connect Claude Code, Cursor, or Cline directly to stdapi.ai via MCP. Agents can generate text, search models, and manage files without any custom integration code.
+
+- :material-flask: **Agentic pipelines**
+  <br>Let orchestration frameworks (LangChain, LlamaIndex, CrewAI) discover and call Bedrock models dynamically. Expose only `openai_chat_completion` and `openai_model_list` to keep the tool surface minimal.
+
+- :material-image-multiple: **Multimodal automation**
+  <br>Give an agent access to `openai_chat_completion`, `openai_image_generation`, and `openai_audio_speech` to build self-contained pipelines that generate text, images, and audio in a single session.
+
+- :material-database-search: **RAG pipelines**
+  <br>Expose `openai_embedding` and file management tools so agents can index documents, compute embeddings, and retrieve context autonomously — all backed by S3 and Bedrock.
+
+</div>
+
+[:octicons-arrow-right-24: MCP Configuration](operations_configuration.md#mcp-model-context-protocol)
+
+---
+
 ## :material-chart-line: Observability & Operations
 
 ### Structured Logging
@@ -397,21 +449,6 @@ stdapi.ai is a drop-in replacement in hundreds of applications and frameworks. C
 - **Swagger UI** at `/docs` — test endpoints directly in your browser
 - **ReDoc** at `/redoc` — clean, searchable API reference
 - **OpenAPI schema** at `/openapi.json` — import into Postman, generate client code
-
-### Agent Discovery
-
-AI agents can automatically discover the API's capabilities through standardized RFC 8288 Link headers and an API catalog:
-
-- **Link headers** — Root endpoint (`/`) includes `Link` response headers advertising available resources (`rel="service-desc"`, `rel="service-doc"`) when documentation endpoints are enabled
-- **API catalog** at `/.well-known/api-catalog` — RFC 9727 machine-readable catalog listing the OpenAPI schema and documentation URLs
-
-Enable the documentation endpoints to activate agent discovery:
-
-| Variable                   | Description                                                      |
-|----------------------------|------------------------------------------------------------------|
-| `ENABLE_DOCS=true`         | Enables Swagger UI, `/openapi.json`, and agent discovery headers |
-| `ENABLE_REDOC=true`        | Enables ReDoc UI (alternative to Swagger)                        |
-| `ENABLE_OPENAPI_JSON=true` | Enables `/openapi.json` schema + agent discovery (no docs UI)    |
 
 ### Quality of Life
 

@@ -59,6 +59,7 @@ def _to_file_metadata(record: FileRecord) -> FileMetadata:
 @router.post(
     "/files",
     summary="Anthropic - POST /v1/files",
+    operation_id="anthropic_file",
     description="Upload a file that can be used across various endpoints.",
     response_description="The file metadata.",
     response_model_exclude_none=True,
@@ -82,6 +83,7 @@ async def upload(
 @router.get(
     "/files",
     summary="Anthropic - GET /v1/files",
+    operation_id="anthropic_file_list",
     description="Returns a list of files.",
     response_description="A list of file metadata objects.",
     response_model_exclude_none=True,
@@ -147,6 +149,7 @@ async def list_files_endpoint(
 @router.get(
     "/files/{file_id}",
     summary="Anthropic - GET /v1/files/{file_id}",
+    operation_id="anthropic_files_get",
     description="Returns metadata for a specific file.",
     response_description="The file metadata.",
     response_model_exclude_none=True,
@@ -172,6 +175,7 @@ async def retrieve_file(
 @router.delete(
     "/files/{file_id}",
     summary="Anthropic - DELETE /v1/files/{file_id}",
+    operation_id="anthropic_files_delete",
     description="Delete a file.",
     response_description="Deletion status.",
     response_model_exclude_none=True,
@@ -199,6 +203,7 @@ async def delete_file_endpoint(
 @router.get(
     "/files/{file_id}/content",
     summary="Anthropic - GET /v1/files/{file_id}/content",
+    operation_id="anthropic_file_content",
     description="Returns the contents of the specified file.",
     response_description="The raw file content.",
 )

@@ -281,6 +281,15 @@ Choose **one** method (mutually exclusive):
 | [`ENABLE_REDOC`](#enable-redoc)               | `false` | Enable ReDoc documentation UI at `/redoc`                                        |
 | [`ENABLE_OPENAPI_JSON`](#enable-openapi-json) | `false` | Enable OpenAPI schema endpoint at `/openapi.json` (auto-enabled with docs/redoc) |
 
+### :material-connection: MCP (Model Context Protocol)
+
+| Variable                                                            | Default | Description                                                                             |
+|---------------------------------------------------------------------|---------|-----------------------------------------------------------------------------------------|
+| [`ENABLE_MCP_STREAMABLE_HTTP`](#enable-mcp-streamable-http)         | `false` | Enable MCP server via Streamable HTTP at `/mcp` — recommended transport                 |
+| [`ENABLE_MCP_SSE`](#enable-mcp-sse)                                 | `false` | Enable MCP server via Server-Sent Events at `/sse` — legacy transport for older clients |
+| [`MCP_INCLUDE_TOOLS`](#mcp-include-tools)                           | None    | Comma-separated tool names to expose exclusively; all others are hidden                 |
+| [`MCP_EXCLUDE_TOOLS`](#mcp-exclude-tools)                           | None    | Comma-separated tool names to hide; all others remain exposed                           |
+
 ---
 
 ## AWS Services and Regions
@@ -2635,6 +2644,140 @@ export ENABLE_GZIP=true
     - :material-server-off: No CPU impact on application servers
     - :material-speedometer: Better overall performance
     - :material-cash: Lower costs (compression offloaded to AWS infrastructure)
+
+---
+
+## MCP (Model Context Protocol)
+
+When enabled, stdapi.ai exposes its API endpoints as MCP tools, allowing AI clients and agents to call them directly using the Model Context Protocol. The full list of available tool names is documented in [API Overview → MCP Tools](api_overview.md#mcp-model-context-protocol).
+
+Both transport types can be enabled independently or simultaneously.
+
+#### `ENABLE_MCP_STREAMABLE_HTTP` { #enable-mcp-streamable-http }
+
+:octicons-package-24: **Purpose**
+:   Enable the MCP server using Streamable HTTP transport — the recommended method
+
+:material-server-network: **How it Works**
+:   Exposes an MCP-compatible endpoint at `/mcp`. AI clients connect using standard HTTP requests following the MCP Streamable HTTP specification.
+
+:material-cog: **Configuration**
+```bash
+# Disabled (default)
+# No environment variable needed
+
+# Enable MCP Streamable HTTP transport
+export ENABLE_MCP_STREAMABLE_HTTP=true
+```
+
+#### `ENABLE_MCP_SSE` { #enable-mcp-sse }
+
+:octicons-package-24: **Purpose**
+:   Enable the MCP server using Server-Sent Events (SSE) transport
+
+:material-server-network: **How it Works**
+:   Exposes MCP endpoints at `/sse` for AI clients that require the SSE transport protocol.
+
+:material-cog: **Configuration**
+```bash
+# Disabled (default)
+# No environment variable needed
+
+# Enable MCP SSE transport
+export ENABLE_MCP_SSE=true
+```
+
+!!! info "Transport Recommendation"
+    **HTTP transport (`ENABLE_MCP_STREAMABLE_HTTP`) is the recommended method.** It implements the latest MCP Streamable HTTP specification and provides better session management and more robust connection handling.
+
+    **SSE transport (`ENABLE_MCP_SSE`)** is maintained for backwards compatibility with older MCP client implementations. Prefer HTTP for new deployments.
+
+    Both transports can be enabled simultaneously to support clients with different requirements:
+
+    ```bash
+    export ENABLE_MCP_STREAMABLE_HTTP=true
+    export ENABLE_MCP_SSE=true
+    ```
+
+    When both are enabled, the MCP server card (`/.well-known/mcp/server-card.json`) advertises the Streamable HTTP transport as the primary endpoint. Both `/mcp` and `/sse` remain fully functional.
+
+#### `MCP_INCLUDE_TOOLS` { #mcp-include-tools }
+
+:octicons-package-24: **Purpose**
+:   Expose only a specific subset of MCP tools; all others are hidden
+
+:octicons-database-24: **Format**
+:   Comma-separated list of tool names (duplicates are automatically removed)
+
+:material-cog: **Configuration**
+```bash
+# All tools exposed by default
+# No environment variable needed
+
+# Expose only specific tools
+export MCP_INCLUDE_TOOLS="openai_chat_completion,openai_embedding,openai_model_list"
+
+# When both MCP_INCLUDE_TOOLS and MCP_EXCLUDE_TOOLS are specified,
+# tools in MCP_EXCLUDE_TOOLS are removed from MCP_INCLUDE_TOOLS:
+export MCP_INCLUDE_TOOLS="openai_chat_completion,openai_embedding,openai_model_list"
+export MCP_EXCLUDE_TOOLS="openai_files_delete,anthropic_files_delete"
+# Result: only openai_chat_completion, openai_embedding, openai_model_list are exposed
+```
+
+See [API Overview → MCP Tools](api_overview.md#mcp-model-context-protocol) for the full list of available tool names.
+
+#### `MCP_EXCLUDE_TOOLS` { #mcp-exclude-tools }
+
+:octicons-package-24: **Purpose**
+:   Hide specific MCP tools from clients; all others remain exposed
+
+:octicons-database-24: **Format**
+:   Comma-separated list of tool names (duplicates are automatically removed)
+
+!!! note "Behavior with `MCP_INCLUDE_TOOLS`"
+    When both `MCP_INCLUDE_TOOLS` and `MCP_EXCLUDE_TOOLS` are specified, tools in `MCP_EXCLUDE_TOOLS` are removed from `MCP_INCLUDE_TOOLS`. The remaining tools in `MCP_INCLUDE_TOOLS` are what get exposed.
+
+:material-cog: **Configuration**
+```bash
+# No tools excluded by default
+# No environment variable needed
+
+# Exclude destructive tools
+export MCP_EXCLUDE_TOOLS="openai_files_delete,anthropic_files_delete"
+```
+
+See [API Overview → MCP Tools](api_overview.md#mcp-model-context-protocol) for the full list of available tool names.
+
+### Tool Selection Best Practices { #tool-selection-best-practices }
+
+stdapi.ai exposes a fixed set of tools derived from its API surface — you can include or exclude them by name, but cannot modify or rename them. See [API Overview → MCP Tools](api_overview.md#mcp-model-context-protocol) for the full catalog.
+
+**Start from the minimum, not the maximum**
+
+By default all tools are exposed. It is safer and more effective to begin with a narrow `MCP_INCLUDE_TOOLS` list covering only what the workflow needs, then expand it deliberately. LLMs perform better with fewer choices, and many AI providers cap the number of active tools per session.
+
+**Always exclude file deletion tools unless required**
+
+Uploaded files are the only durable, stateful data managed by stdapi.ai — deletion is permanent and cannot be undone. Unless your workflow explicitly needs to delete files, always suppress these tools:
+
+```bash
+export MCP_EXCLUDE_TOOLS="openai_files_delete,anthropic_files_delete"
+```
+
+**Exclude high-cost tools unless the workflow requires them**
+
+Image generation (`openai_image_generation`, `openai_image_edit`, `openai_image_variation`) and speech synthesis (`openai_audio_speech`) incur a per-call cost that accumulates quickly if an agent invokes them speculatively. Only include them when the use case calls for it and the agent's decision to generate images or audio is intentional.
+
+**Use `MCP_INCLUDE_TOOLS` for the tightest control**
+
+For predictable, well-defined workflows, listing tools explicitly with `MCP_INCLUDE_TOOLS` is more reliable than maintaining an exclusion list. For example, a workflow limited to text generation and model discovery needs only:
+
+```bash
+export MCP_INCLUDE_TOOLS="openai_chat_completion,openai_model_list"
+```
+
+!!! note
+    The `Health` and `metadata` tags are automatically excluded from MCP exposure and do not need to be listed in `MCP_EXCLUDE_TOOLS`.
 
 ---
 

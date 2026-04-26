@@ -31,6 +31,7 @@ router = APIRouter(
 @router.post(
     "",
     summary="OpenAI - /v1/responses",
+    operation_id="openai_response",
     description=(
         "Creates a model response. Provide text or other input and the model "
         "will generate a response. Compatible with the OpenAI Responses API.\n\n"

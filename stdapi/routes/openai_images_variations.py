@@ -42,6 +42,7 @@ _KNOWN_PARAMS = set(ImageVariationParams.model_fields.keys()) | {"image"}
 @router.post(
     "/images/variations",
     summary="OpenAI - /v1/images/variations",
+    operation_id="openai_image_variation",
     description="Creates a variation of a given image.",
     response_description="The response from the image generation endpoint.",
     responses={

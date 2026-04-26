@@ -28,9 +28,9 @@ Generate images with AWS Bedrock image models like Stability AI and Amazon Nova 
 
 ## Quick Start: Available Endpoint
 
-| Endpoint                 | Method | What It Does                      | Powered By               |
-|--------------------------|--------|-----------------------------------|--------------------------|
-| `/v1/images/generations` | POST   | Generate images from text prompts | AWS Bedrock Image Models |
+| Endpoint                 | Method | What It Does                      | Powered By               | MCP Tool                  |
+|--------------------------|--------|-----------------------------------|--------------------------|---------------------------|
+| `/v1/images/generations` | POST   | Generate images from text prompts | AWS Bedrock Image Models | `openai_image_generation` |
 
 ## Feature Compatibility
 

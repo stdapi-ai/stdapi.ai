@@ -6,12 +6,13 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from stdapi.config import SETTINGS
-from stdapi.types import ApiCatalogLink
+from stdapi.metering import EDITION_TITLE
+from stdapi.server import SERVER_VERSION
 
 if TYPE_CHECKING:
-    from stdapi.types import ApiCatalog
+    from typing import Any
 
-router = APIRouter()
+router = APIRouter(tags=["metadata"], include_in_schema=False)
 
 #: Welcome message payload for root endpoint
 _WELCOME = {
@@ -22,6 +23,9 @@ _WELCOME = {
         else ("/redoc" if SETTINGS.enable_redoc else "https://stdapi.ai/api_reference/")
     )
 }
+
+_mcp_streamable = SETTINGS.enable_mcp_streamable_http
+_mcp_sse = SETTINGS.enable_mcp_sse
 
 #: Link header value for agent discovery (RFC 8288), None if no resources available
 _LINK_HEADER: str | None = (
@@ -38,37 +42,71 @@ _LINK_HEADER: str | None = (
                 if SETTINGS.enable_docs
                 else ('</redoc>; rel="service-doc"' if SETTINGS.enable_redoc else None)
             ),
+            (
+                '</.well-known/mcp/server-card.json>; rel="mcp-server-card"'
+                if _mcp_streamable or _mcp_sse
+                else None
+            ),
         ]
         if part is not None
     )
     or None
 )
 
-#: RFC 9727 API catalog response for agent discovery
-_API_CATALOG: ApiCatalog = {
-    "api_version": "1.0.0",
-    "description": "stdapi.ai - OpenAI-compatible API gateway for AWS Bedrock",
-    "links": [
-        *(
-            [
-                ApiCatalogLink(
-                    rel="service-desc", href="/openapi.json", title="OpenAPI Schema"
+#: RFC 9727 / RFC 9264 Linkset API catalog for agent discovery.
+_API_CATALOG: dict[str, Any] = {
+    "linkset": [
+        {
+            "anchor": "/.well-known/api-catalog",
+            **(
+                {
+                    "service-desc": [
+                        {
+                            "href": "/openapi.json",
+                            "type": "application/vnd.oai.openapi+json;version=3.0",
+                        }
+                    ]
+                }
+                if SETTINGS.enable_openapi_json
+                else {}
+            ),
+            **(
+                {"service-doc": [{"href": "/docs", "title": "Swagger UI"}]}
+                if SETTINGS.enable_docs
+                else (
+                    {"service-doc": [{"href": "/redoc", "title": "ReDoc"}]}
+                    if SETTINGS.enable_redoc
+                    else {}
                 )
-            ]
-            if SETTINGS.enable_openapi_json
-            else ()
-        ),
-        *(
-            [ApiCatalogLink(rel="service-doc", href="/docs", title="Swagger UI")]
-            if SETTINGS.enable_docs
-            else (
-                [ApiCatalogLink(rel="service-doc", href="/redoc", title="ReDoc")]
-                if SETTINGS.enable_redoc
-                else ()
-            )
-        ),
-    ],
+            ),
+            **(
+                {"mcp-server-card": [{"href": "/.well-known/mcp/server-card.json"}]}
+                if _mcp_streamable or _mcp_sse
+                else {}
+            ),
+        }
+    ]
 }
+
+
+#: MCP Server Card (SEP-1649) — served when at least one MCP transport is enabled.
+_MCP_SERVER_CARD: dict[str, Any] | None = (
+    {
+        "$schema": "https://static.modelcontextprotocol.io/schemas/mcp-server-card/v1.json",
+        "version": "1.0",
+        "protocolVersion": "2025-03-26",
+        "serverInfo": {"name": EDITION_TITLE, "version": SERVER_VERSION},
+        "transport": (
+            {"type": "streamable-http", "endpoint": "/mcp"}
+            if _mcp_streamable
+            else {"type": "sse", "endpoint": "/sse"}
+        ),
+        "capabilities": {"tools": {}},
+        "tools": "dynamic",
+    }
+    if _mcp_streamable or _mcp_sse
+    else None
+)
 
 
 #: Robots.txt content - allows docs/openapi/.well-known, disallows everything else
@@ -87,7 +125,7 @@ _ROBOTS_TXT = "\n".join(
 )
 
 
-@router.get("/", include_in_schema=False)
+@router.get("/")
 async def root() -> JSONResponse:
     """Return a welcome message for the API root endpoint.
 
@@ -100,20 +138,35 @@ async def root() -> JSONResponse:
     return response
 
 
-@router.get("/.well-known/api-catalog", include_in_schema=False, tags=["metadata"])
+@router.get("/.well-known/api-catalog")
 async def api_catalog() -> JSONResponse:
     """RFC 9727 API catalog for agent discovery.
 
-    Returns a JSON document containing links to the API OpenAPI schema
-    and documentation, enabling AI agents to discover available resources.
+    Returns a Linkset document (RFC 9264) advertising the API's OpenAPI schema,
+    documentation, and MCP server card to enable automated agent discovery.
 
     Returns:
-        API catalog.
+        Linkset document with Content-Type application/linkset+json.
     """
-    return JSONResponse(_API_CATALOG)
+    return JSONResponse(_API_CATALOG, media_type="application/linkset+json")
 
 
-@router.get("/robots.txt", include_in_schema=False, tags=["metadata"])
+@router.get("/.well-known/mcp/server-card.json")
+async def mcp_server_card() -> JSONResponse:
+    """MCP Server Card (SEP-1649) for agent discovery.
+
+    Advertises available MCP transports and capabilities to AI agents.
+    Only active when at least one MCP transport is enabled.
+
+    Returns:
+        MCP Server Card document, or 404 if no MCP transport is enabled.
+    """
+    if _MCP_SERVER_CARD is None:
+        return JSONResponse({"error": "MCP is not enabled"}, status_code=404)
+    return JSONResponse(_MCP_SERVER_CARD)
+
+
+@router.get("/robots.txt")
 async def robots_txt() -> PlainTextResponse:
     """Robots.txt optimized for API discovery by AI agents."""
     return PlainTextResponse(_ROBOTS_TXT)

@@ -34,10 +34,10 @@ Discover and list available AWS Bedrock chat models through an Anthropic-compati
 
 ## Quick Start: Available Endpoints
 
-| Endpoint                | Method | What It Does                     | Powered By  |
-|-------------------------|--------|----------------------------------|-------------|
-| `/v1/models`            | GET    | List all available models        | AWS Bedrock |
-| `/v1/models/{model_id}` | GET    | Get details for a specific model | AWS Bedrock |
+| Endpoint                | Method | What It Does                     | Powered By  | MCP Tool            |
+|-------------------------|--------|----------------------------------|-------------|---------------------|
+| `/v1/models`            | GET    | List all available models        | AWS Bedrock | `anthropic_model_list` |
+| `/v1/models/{model_id}` | GET    | Get details for a specific model | AWS Bedrock | `anthropic_model_get`  |
 
 ## Anthropic-Compatible with AWS Bedrock Power
 

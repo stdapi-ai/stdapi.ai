@@ -111,16 +111,19 @@ REQUEST_LOG: ContextVar[EventLog] = ContextVar("request_log")
 REQUEST: ContextVar[Request] = ContextVar("request")
 
 #: Paths to ignore in logging
-LOGGING_PATHS_IGNORE: set[str] = {
-    "/",
-    "/docs",
-    "/favicon.ico",
-    "/health",
-    "/openapi.json",
-    "/redoc",
-    "/.well-known/api-catalog",
-    "/robots.txt",
-}
+LOGGING_PATHS_IGNORE: frozenset[str] = frozenset(
+    {
+        "/",
+        "/docs",
+        "/favicon.ico",
+        "/health",
+        "/openapi.json",
+        "/redoc",
+        "/.well-known/api-catalog",
+        "/.well-known/mcp/server-card.json",
+        "/robots.txt",
+    }
+)
 
 #: Sorted log levels
 _SORTED_LOG_LEVELS: tuple[LogLevel, ...] = ("info", "warning", "error", "critical")
@@ -166,7 +169,13 @@ def write_log_event(log: EventLog) -> None:
 
 @contextmanager
 def log_request_event(request: Request) -> Generator[EventLog]:
-    """Context manager to log a request event with OpenTelemetry tracing.
+    """Log a request event with OpenTelemetry tracing.
+
+    Reuses the parent request ID for internal MCP → API calls (identified by
+    ``MCP_USER_AGENT`` + ``INTERNAL_REQUEST_ID_HEADER``) so both legs share
+    the same correlation ID in structured output.  All ``ContextVar`` tokens
+    are reset in the ``finally`` block so nested calls restore the parent
+    context correctly on exit.
 
     Args:
         request: Incoming HTTP request.
@@ -174,7 +183,15 @@ def log_request_event(request: Request) -> Generator[EventLog]:
     Yields:
         Mutable event log dict populated during the request lifetime.
     """
-    REQUEST_ID.set(request_id := webuuid())
+    request_id = (
+        parent_id
+        if (
+            request.headers.get("user-agent") == server.MCP_USER_AGENT
+            and (parent_id := request.headers.get(server.INTERNAL_REQUEST_ID_HEADER))
+        )
+        else webuuid()
+    )
+    request_id_token = REQUEST_ID.set(request_id)
     request_time_token = REQUEST_TIME.set(request_time := SETTINGS.now())
     request_log_token = REQUEST_LOG.set(
         log := EventLog(
@@ -227,6 +244,7 @@ def log_request_event(request: Request) -> Generator[EventLog]:
         raise
     finally:
         log["execution_time_ms"] = (perf_counter_ns() - start) // 1000000
+        REQUEST_ID.reset(request_id_token)
         REQUEST.reset(request_token)
         REQUEST_LOG.reset(request_log_token)
         REQUEST_TIME.reset(request_time_token)

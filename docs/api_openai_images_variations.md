@@ -28,9 +28,9 @@ Create variations of existing images using AWS Bedrock image models through an O
 
 ## Quick Start: Available Endpoint
 
-| Endpoint                | Method | What It Does                           | Powered By               |
-|-------------------------|--------|----------------------------------------|--------------------------|
-| `/v1/images/variations` | POST   | Create variations of an existing image | AWS Bedrock Image Models |
+| Endpoint                | Method | What It Does                           | Powered By               | MCP Tool               |
+|-------------------------|--------|----------------------------------------|--------------------------|------------------------|
+| `/v1/images/variations` | POST   | Create variations of an existing image | AWS Bedrock Image Models | `openai_image_variation` |
 
 ## Feature Compatibility
 

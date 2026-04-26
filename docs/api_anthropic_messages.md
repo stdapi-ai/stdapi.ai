@@ -31,10 +31,10 @@ Generate conversational AI responses with AWS Bedrock foundation models—includ
 
 ## Quick Start: Available Endpoints
 
-| Endpoint                    | Method | What It Does                               | Powered By                  |
-|-----------------------------|--------|--------------------------------------------|-----------------------------|
-| `/v1/messages`              | POST   | Conversational AI with multi-modal support | AWS Bedrock Converse API    |
-| `/v1/messages/count_tokens` | POST   | Count tokens in a message without sending  | AWS Bedrock CountTokens API |
+| Endpoint                    | Method | What It Does                               | Powered By                  | MCP Tool                       |
+|-----------------------------|--------|--------------------------------------------|-----------------------------|--------------------------------|
+| `/v1/messages`              | POST   | Conversational AI with multi-modal support | AWS Bedrock Converse API    | `anthropic_message`            |
+| `/v1/messages/count_tokens` | POST   | Count tokens in a message without sending  | AWS Bedrock CountTokens API | `anthropic_message_count_tokens` |
 
 ## Feature Compatibility
 

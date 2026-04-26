@@ -55,6 +55,7 @@ async def _transcript_audio_sse(
     "/transcriptions",
     response_model=None,
     summary="OpenAI - /v1/audio/transcriptions",
+    operation_id="openai_audio_transcription",
     description=(
         "Transcribes audio into the input language.\n\n"
         "Returns a transcription object in json, diarized_json, or verbose_json format, or a stream of transcript events."

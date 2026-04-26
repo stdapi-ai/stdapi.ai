@@ -37,6 +37,7 @@ router: APIRouter = APIRouter(
 @router.post(
     "/messages",
     summary="Anthropic - /v1/messages",
+    operation_id="anthropic_message",
     description=(
         "Send a structured list of input messages with text and / or image content, and the model will generate the next message in the conversation.\n"
         "The Messages API can be used for either single queries or stateless multi-turn conversations."
@@ -148,6 +149,7 @@ async def create_message(
 @router.post(
     "/messages/count_tokens",
     summary="Anthropic - /v1/messages/count_tokens",
+    operation_id="anthropic_message_count_tokens",
     description=(
         "Count the number of tokens in a Message.\n"
         "The Token Count API can be used to count the number of tokens in a Message, "

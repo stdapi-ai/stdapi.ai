@@ -4,7 +4,7 @@ from asyncio import gather
 from contextvars import ContextVar
 from typing import TYPE_CHECKING
 
-from stdapi.monitoring import REQUEST_ID, log_background_event
+from stdapi.monitoring import log_background_event
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -22,7 +22,11 @@ def schedule_cleanup(*tasks: Awaitable[None]) -> None:
     CLEANUPS.get().extend(tasks)
 
 
-async def run_scheduled_cleanups() -> None:
-    """Execute all registered cleanup coroutines."""
-    with log_background_event("cleanup", REQUEST_ID.get()):
+async def run_scheduled_cleanups(request_id: str) -> None:
+    """Execute all registered cleanup coroutines.
+
+    Args:
+        request_id: Request identifier to associate the cleanup log event with.
+    """
+    with log_background_event("cleanup", request_id):
         await gather(*CLEANUPS.get())

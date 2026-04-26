@@ -199,6 +199,11 @@ app = FastAPI(
 otel_manager.instrument(app)
 discover_routers(app)
 
+if SETTINGS.enable_mcp_streamable_http or SETTINGS.enable_mcp_sse:
+    from stdapi.mcp import mount_mcp
+
+    mount_mcp(app)
+
 if SETTINGS.enable_gzip:
     from fastapi.middleware.gzip import GZipMiddleware
 
@@ -259,7 +264,7 @@ async def _middleware(
             set_log_fields(request, log)
         set_response_headers(request, response, log["execution_time_ms"])
         if CLEANUPS.get():
-            response.background = BackgroundTask(run_scheduled_cleanups)
+            response.background = BackgroundTask(run_scheduled_cleanups, log["id"])
     response.headers["server"] = "stdapi.ai"
     return response
 

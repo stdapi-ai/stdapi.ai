@@ -28,9 +28,9 @@ Generate natural-sounding speech from text with AWS Polly through an OpenAI-comp
 
 ## Quick Start: Available Endpoint
 
-| Endpoint            | Method | What It Does                           | Powered By                 |
-|---------------------|--------|----------------------------------------|----------------------------|
-| `/v1/audio/speech`  | POST   | Turn text into natural-sounding speech | AWS Polly + AWS Comprehend |
+| Endpoint            | Method | What It Does                           | Powered By                 | MCP Tool           |
+|---------------------|--------|----------------------------------------|----------------------------|--------------------|
+| `/v1/audio/speech`  | POST   | Turn text into natural-sounding speech | AWS Polly + AWS Comprehend | `openai_audio_speech` |
 
 ## Feature Compatibility
 

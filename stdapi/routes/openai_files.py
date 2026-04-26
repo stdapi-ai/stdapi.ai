@@ -73,6 +73,7 @@ def _to_file_object(record: FileRecord) -> FileObject:
 @router.post(
     "/files",
     summary="OpenAI - POST /v1/files",
+    operation_id="openai_file",
     description="Upload a file that can be used across various endpoints.",
     response_description="The uploaded File object.",
     response_model_exclude_none=True,
@@ -160,6 +161,7 @@ async def upload(
 @router.get(
     "/files",
     summary="OpenAI - GET /v1/files",
+    operation_id="openai_file_list",
     description="Returns a list of files.",
     response_description="A list of File objects.",
     response_model_exclude_none=True,
@@ -223,6 +225,7 @@ async def list_files_endpoint(
 @router.get(
     "/files/{file_id}",
     summary="OpenAI - GET /v1/files/{file_id}",
+    operation_id="openai_files_get",
     description="Returns information about a specific file.",
     response_description="The File object.",
     response_model_exclude_none=True,
@@ -248,6 +251,7 @@ async def retrieve_file(
 @router.delete(
     "/files/{file_id}",
     summary="OpenAI - DELETE /v1/files/{file_id}",
+    operation_id="openai_files_delete",
     description="Delete a file.",
     response_description="Deletion status.",
     response_model_exclude_none=True,
@@ -275,6 +279,7 @@ async def delete_file_endpoint(
 @router.get(
     "/files/{file_id}/content",
     summary="OpenAI - GET /v1/files/{file_id}/content",
+    operation_id="openai_file_content",
     description="Returns the contents of the specified file.",
     response_description="The raw file content.",
 )

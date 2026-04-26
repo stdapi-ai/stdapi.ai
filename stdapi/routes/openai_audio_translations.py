@@ -28,6 +28,7 @@ router = APIRouter(
     "/translations",
     response_model=None,
     summary="OpenAI - /v1/audio/translations",
+    operation_id="openai_audio_translation",
     description="Translates audio into English.",
     response_description="Returns translation in the specified format",
     responses={

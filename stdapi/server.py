@@ -17,5 +17,11 @@ SERVER_VERSION = "1.10.0"
 #: Server user agent
 USER_AGENT = f"stdapi.ai/{SERVER_VERSION}/{SERVER_ID}"
 
+#: User agent used by the MCP internal HTTP client
+MCP_USER_AGENT = "stdapi.ai/MCP"
+
 #: Default headers for HTTP clients used in the server
 HTTP_CLIENT_HEADERS = {"User-Agent": USER_AGENT}
+
+#: Internal header name for request ID propagation; randomised at startup to prevent spoofing.
+INTERNAL_REQUEST_ID_HEADER = f"x-stdapi-{webuuid()}"

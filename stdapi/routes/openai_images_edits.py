@@ -114,6 +114,7 @@ def _merge_image_parameters(
     "/images/edits",
     response_model=None,
     summary="OpenAI - /v1/images/edits",
+    operation_id="openai_image_edit",
     description="Creates an edited or extended image given one or more source images and a prompt.",
     response_description="The response from the image generation endpoint.",
     responses={

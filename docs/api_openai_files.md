@@ -29,17 +29,17 @@ Upload and manage files via an OpenAI-compatible interface. Files are stored in 
 
 ## Available Endpoints
 
-| Endpoint                           | Method   | Description                            |
-|------------------------------------|----------|----------------------------------------|
-| `/v1/files`                        | `POST`   | Upload a file                          |
-| `/v1/files`                        | `GET`    | List files with pagination             |
-| `/v1/files/{file_id}`              | `GET`    | Retrieve file metadata                 |
-| `/v1/files/{file_id}`              | `DELETE` | Delete a file                          |
-| `/v1/files/{file_id}/content`      | `GET`    | Download raw file bytes                |
-| `/v1/uploads`                      | `POST`   | Create a multipart upload session      |
-| `/v1/uploads/{upload_id}/parts`    | `POST`   | Add a part to an upload session        |
-| `/v1/uploads/{upload_id}/complete` | `POST`   | Complete the upload and produce a file |
-| `/v1/uploads/{upload_id}/cancel`   | `POST`   | Cancel a pending upload session        |
+| Endpoint                           | Method   | Description                            | MCP Tool                 |
+|------------------------------------|----------|----------------------------------------|--------------------------|
+| `/v1/files`                        | `POST`   | Upload a file                          | `openai_file`            |
+| `/v1/files`                        | `GET`    | List files with pagination             | `openai_file_list`       |
+| `/v1/files/{file_id}`              | `GET`    | Retrieve file metadata                 | `openai_files_get`       |
+| `/v1/files/{file_id}`              | `DELETE` | Delete a file                          | `openai_files_delete`    |
+| `/v1/files/{file_id}/content`      | `GET`    | Download raw file bytes                | `openai_file_content`    |
+| `/v1/uploads`                      | `POST`   | Create a multipart upload session      | `openai_upload`          |
+| `/v1/uploads/{upload_id}/parts`    | `POST`   | Add a part to an upload session        | `openai_upload_part`     |
+| `/v1/uploads/{upload_id}/complete` | `POST`   | Complete the upload and produce a file | `openai_upload_complete` |
+| `/v1/uploads/{upload_id}/cancel`   | `POST`   | Cancel a pending upload session        | `openai_upload_cancel`   |
 
 ## Feature Compatibility
 

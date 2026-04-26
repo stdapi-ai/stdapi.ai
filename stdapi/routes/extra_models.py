@@ -18,6 +18,7 @@ router = APIRouter(prefix="", tags=["Models"])
 @router.get(
     "/available_models",
     summary="Lists all currently available models (extended)",
+    operation_id="model_list",
     description=(
         """Lists the currently available models with detailed metadata.\n\n
 This endpoint is project-specific and returns extended ModelDetails including modalities and regions.\n\n

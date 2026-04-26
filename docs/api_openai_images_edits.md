@@ -28,9 +28,9 @@ Edit images using inpainting with AWS Bedrock image models through an OpenAI-com
 
 ## Quick Start: Available Endpoint
 
-| Endpoint           | Method | What It Does                            | Powered By               |
-|--------------------|--------|-----------------------------------------|--------------------------|
-| `/v1/images/edits` | POST   | Edit images using prompts and masks     | AWS Bedrock Image Models |
+| Endpoint           | Method | What It Does                            | Powered By               | MCP Tool           |
+|--------------------|--------|-----------------------------------------|--------------------------|--------------------|
+| `/v1/images/edits` | POST   | Edit images using prompts and masks     | AWS Bedrock Image Models | `openai_image_edit` |
 
 ## Feature Compatibility
 

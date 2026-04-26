@@ -33,6 +33,7 @@ router = APIRouter(
 @router.post(
     "/embeddings",
     summary="OpenAI - /v1/embeddings",
+    operation_id="openai_embedding",
     description="Creates an embedding vector representing the input text.",
     response_description="Embedding response.",
     responses={

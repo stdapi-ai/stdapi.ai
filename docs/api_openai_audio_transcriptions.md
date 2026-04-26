@@ -28,9 +28,9 @@ Transcribe audio to text with AWS Transcribe or AWS Bedrock audio-capable models
 
 ## Quick Start: Available Endpoint
 
-| Endpoint                    | Method | What It Does                             | Powered By                                |
-|-----------------------------|--------|------------------------------------------|-------------------------------------------|
-| `/v1/audio/transcriptions`  | POST   | Convert spoken audio to written text     | AWS Transcribe or AWS Bedrock Audio Models |
+| Endpoint                    | Method | What It Does                             | Powered By                                | MCP Tool                  |
+|-----------------------------|--------|------------------------------------------|-------------------------------------------|---------------------------|
+| `/v1/audio/transcriptions`  | POST   | Convert spoken audio to written text     | AWS Transcribe or AWS Bedrock Audio Models | `openai_audio_transcription` |
 
 ## Feature Compatibility
 

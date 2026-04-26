@@ -28,9 +28,9 @@ Generate conversational AI responses with AWS Bedrock foundation models—includ
 
 ## Quick Start: Available Endpoint
 
-| Endpoint               | Method | What It Does                               | Powered By               |
-|------------------------|--------|--------------------------------------------|--------------------------|
-| `/v1/chat/completions` | POST   | Conversational AI with multi-modal support | AWS Bedrock Converse API |
+| Endpoint               | Method | What It Does                               | Powered By               | MCP Tool                  |
+|------------------------|--------|--------------------------------------------|--------------------------|---------------------------|
+| `/v1/chat/completions` | POST   | Conversational AI with multi-modal support | AWS Bedrock Converse API | `openai_chat_completion` |
 
 ## Feature Compatibility
 

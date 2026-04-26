@@ -28,9 +28,9 @@ Generate vector embeddings for semantic search and RAG applications with AWS Bed
 
 ## Quick Start: Available Endpoint
 
-| Endpoint         | Method | What It Does                         | Powered By                   |
-|------------------|--------|--------------------------------------|------------------------------|
-| `/v1/embeddings` | POST   | Transform text into semantic vectors | AWS Bedrock Embedding Models |
+| Endpoint         | Method | What It Does                         | Powered By                   | MCP Tool            |
+|------------------|--------|--------------------------------------|------------------------------|---------------------|
+| `/v1/embeddings` | POST   | Transform text into semantic vectors | AWS Bedrock Embedding Models | `openai_embedding`  |
 
 ## Feature Compatibility
 

@@ -57,6 +57,7 @@ if SETTINGS.anthropic_routes_prefix != SETTINGS.openai_routes_prefix:
     @router.get(
         "/models",
         summary="Anthropic - /v1/models",
+        operation_id="anthropic_model_list",
         description=(
             "List available models.\n"
             "The Models API response can be used to determine which models are available for use in the API."
@@ -162,6 +163,7 @@ if SETTINGS.anthropic_routes_prefix != SETTINGS.openai_routes_prefix:
     @router.get(
         "/models/{model_id}",
         summary="Anthropic - /v1/models/{model_id}",
+        operation_id="anthropic_model_get",
         description="Get a specific model.\n"
         "The Models API response can be used to determine information about a specific model or resolve a model alias to a model ID.",
         response_description="Model information.",

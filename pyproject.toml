@@ -35,6 +35,7 @@ opentelemetry = [
 ]
 uvicorn = ["uvicorn[standard]"]
 granian = ["granian[uvloop]"]
+mcp     = ["fastapi-mcp"]
 
 [dependency-groups]
 test = [
@@ -60,7 +61,7 @@ docs = [
     "mkdocs-redoc-tag",
 ]
 dev = [
-    "stdapi[opentelemetry, uvicorn, granian]",
+    "stdapi[opentelemetry, uvicorn, granian, mcp]",
     {include-group = "test"},
     {include-group = "lint"},
     {include-group = "docs"},

@@ -28,10 +28,10 @@ Discover and list available AWS Bedrock models across all configured regions thr
 
 ## Quick Start: Available Endpoints
 
-| Endpoint | Method | What It Does | Powered By |
-|----------|--------|--------------|------------|
-| `/v1/models` | GET | List all available models | AWS Bedrock + AWS AI Services |
-| `/v1/models/{model_id}` | GET | Get details for a specific model | AWS Bedrock + AWS AI Services |
+| Endpoint | Method | What It Does | Powered By | MCP Tool |
+|----------|--------|--------------|------------|----------|
+| `/v1/models` | GET | List all available models | AWS Bedrock + AWS AI Services | `openai_model_list` |
+| `/v1/models/{model_id}` | GET | Get details for a specific model | AWS Bedrock + AWS AI Services | `openai_model_get` |
 
 ## OpenAI-Compatible with AWS Bedrock Power
 

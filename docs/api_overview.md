@@ -56,6 +56,47 @@ stdapi.ai provides multiple interfaces for exploring and testing the API—choos
 |                 | `GET /anthropic/v1/models/{model_id}`      | Retrieve model details                                        | [Models →](api_anthropic_models.md)     |
 | **📁 Files**    | `POST/GET/DELETE /anthropic/v1/files`      | Upload, list, retrieve, download, delete files                | [Files →](api_anthropic_files.md)       |
 
+## :material-tools: MCP (Model Context Protocol)
+
+When `ENABLE_MCP_STREAMABLE_HTTP=true` or `ENABLE_MCP_SSE=true` is configured, stdapi.ai exposes all its endpoints as MCP tools. The tool names follow the pattern `provider_action`.
+
+| MCP Tool                          | Endpoint                                |
+|-----------------------------------|-----------------------------------------|
+| **OpenAI Tools**                  |                                         |
+| `openai_chat_completion`          | `POST /v1/chat/completions`             |
+| `openai_response`                 | `POST /v1/responses`                    |
+| `openai_image_generation`         | `POST /v1/images/generations`           |
+| `openai_image_edit`               | `POST /v1/images/edits`                 |
+| `openai_image_variation`          | `POST /v1/images/variations`            |
+| `openai_audio_speech`             | `POST /v1/audio/speech`                 |
+| `openai_audio_transcription`      | `POST /v1/audio/transcriptions`         |
+| `openai_audio_translation`        | `POST /v1/audio/translations`           |
+| `openai_embedding`                | `POST /v1/embeddings`                   |
+| `openai_model_list`               | `GET /v1/models`                        |
+| `openai_model_get`                | `GET /v1/models/{model}`                |
+| `openai_file`                     | `POST /v1/files`                        |
+| `openai_file_list`                | `GET /v1/files`                         |
+| `openai_files_get`                | `GET /v1/files/{file_id}`               |
+| `openai_files_delete`             | `DELETE /v1/files/{file_id}`            |
+| `openai_file_content`             | `GET /v1/files/{file_id}/content`       |
+| `openai_upload`                   | `POST /v1/uploads`                      |
+| `openai_upload_part`              | `POST /v1/uploads/{upload_id}/parts`    |
+| `openai_upload_complete`          | `POST /v1/uploads/{upload_id}/complete` |
+| `openai_upload_cancel`            | `POST /v1/uploads/{upload_id}/cancel`   |
+| **Anthropic Tools**               |                                         |
+| `anthropic_message`               | `POST /anthropic/v1/messages`           |
+| `anthropic_message_count_tokens`  | `POST /anthropic/v1/messages/count_tokens` |
+| `anthropic_model_list`            | `GET /anthropic/v1/models`              |
+| `anthropic_model_get`             | `GET /anthropic/v1/models/{model_id}`   |
+| `anthropic_file`                  | `POST /anthropic/v1/files`              |
+| `anthropic_file_list`             | `GET /anthropic/v1/files`               |
+| `anthropic_files_get`             | `GET /anthropic/v1/files/{file_id}`     |
+| `anthropic_files_delete`          | `DELETE /anthropic/v1/files/{file_id}`  |
+| `anthropic_file_content`          | `GET /anthropic/v1/files/{file_id}/content` |
+
+!!! tip "Filtering MCP Tools"
+    Use `MCP_INCLUDE_TOOLS` or `MCP_EXCLUDE_TOOLS` environment variables to control which tools are exposed. See [Operations Configuration →](operations_configuration.md#mcp-model-context-protocol) for details.
+
 ## :material-connection: Using stdapi.ai
 
 stdapi.ai is a **drop-in replacement** for both OpenAI and Anthropic APIs. Any application that works with either provider—chatbots, coding assistants, automation tools, custom scripts—works with stdapi.ai by simply changing the API base URL.

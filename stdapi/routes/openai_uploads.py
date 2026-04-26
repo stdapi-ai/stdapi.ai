@@ -57,6 +57,7 @@ def _to_upload(
 @router.post(
     "/uploads",
     summary="OpenAI - POST /v1/uploads",
+    operation_id="openai_upload",
     description=(
         "Creates an intermediate Upload object that you can add Parts to.\n\n"
         "Once you complete the Upload, we will create a File object that contains all the parts you uploaded."
@@ -96,6 +97,7 @@ async def create_upload_endpoint(
 @router.post(
     "/uploads/{upload_id}/parts",
     summary="OpenAI - POST /v1/uploads/{upload_id}/parts",
+    operation_id="openai_upload_part",
     description="Adds a Part to an Upload object.",
     response_description="The upload Part object.",
     response_model_exclude_none=True,
@@ -129,6 +131,7 @@ async def add_upload_part(
 @router.post(
     "/uploads/{upload_id}/complete",
     summary="OpenAI - POST /v1/uploads/{upload_id}/complete",
+    operation_id="openai_upload_complete",
     description="Completes the Upload. Only call this when all parts have been uploaded.",
     response_description="The completed Upload object with a nested File object.",
     response_model_exclude_none=True,
@@ -161,6 +164,7 @@ async def complete_upload_endpoint(
 @router.post(
     "/uploads/{upload_id}/cancel",
     summary="OpenAI - POST /v1/uploads/{upload_id}/cancel",
+    operation_id="openai_upload_cancel",
     description="Cancels the Upload. No Parts may be added after an Upload is cancelled.",
     response_description="The cancelled Upload object.",
     response_model_exclude_none=True,

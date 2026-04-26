@@ -28,9 +28,9 @@ Generate model responses with AWS Bedrock foundation models through an OpenAI Re
 
 ## Quick Start: Available Endpoint
 
-| Endpoint        | Method | What It Does            | Powered By               |
-|-----------------|--------|-------------------------|--------------------------|
-| `/v1/responses` | `POST` | Create a model response | AWS Bedrock Converse API |
+| Endpoint        | Method | What It Does            | Powered By               | MCP Tool          |
+|-----------------|--------|-------------------------|--------------------------|-------------------|
+| `/v1/responses` | `POST` | Create a model response | AWS Bedrock Converse API | `openai_response` |
 
 ## Feature Compatibility
 

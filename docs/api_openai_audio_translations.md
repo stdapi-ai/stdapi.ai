@@ -28,9 +28,9 @@ Translate audio from any language to English text with AWS Transcribe + Translat
 
 ## Quick Start: Available Endpoint
 
-| Endpoint                 | Method | What It Does                                     | Powered By                                             |
-|--------------------------|--------|--------------------------------------------------|--------------------------------------------------------|
-| `/v1/audio/translations` | POST   | Transcribe any language and translate to English | AWS Transcribe + Translate or AWS Bedrock Audio Models |
+| Endpoint                 | Method | What It Does                                     | Powered By                                             | MCP Tool                    |
+|--------------------------|--------|--------------------------------------------------|--------------------------------------------------------|-----------------------------|
+| `/v1/audio/translations` | POST   | Transcribe any language and translate to English | AWS Transcribe + Translate or AWS Bedrock Audio Models | `openai_audio_translation` |
 
 ## Feature Compatibility
 

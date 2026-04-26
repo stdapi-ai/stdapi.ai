@@ -211,6 +211,9 @@ Use Claude, Kimi K2, MiniMax, or any Bedrock model. Switch between models, regio
 - :material-chart-line: __Full observability__
   <br>OpenTelemetry integration for traces and metrics. Detailed request/response logging. Swagger and ReDoc API documentation served by the application.
 
+- :material-connection: __Agent-ready by design__
+  <br>Expose every API endpoint as a Model Context Protocol tool. AI agents connect directly — no HTTP client code. Streamable HTTP and SSE transports, configurable tool selection.
+
 - :material-swap-horizontal: __Automatic deprecated model fallback__
   <br>When AWS retires a model, requests are transparently redirected to its replacement. Your applications survive model deprecations without code changes.
 

@@ -328,6 +328,70 @@ Any tool using the Anthropic SDK or messages API can be configured the same way�
 
 ---
 
+## :material-connection: MCP (Model Context Protocol)
+
+stdapi.ai can act as an MCP server, exposing its API endpoints as tools that MCP-capable clients call directly using the Model Context Protocol. Enable MCP on your stdapi.ai deployment by setting the appropriate environment variable:
+
+| Transport       | Endpoint | Config variable                   | Notes                     |
+|-----------------|----------|-----------------------------------|---------------------------|
+| Streamable HTTP | `/mcp`   | `ENABLE_MCP_STREAMABLE_HTTP=true` | Recommended               |
+| SSE             | `/sse`   | `ENABLE_MCP_SSE=true`             | Legacy, for older clients |
+
+### :material-cog: Configuration
+
+Many MCP clients—including Claude Code and Cursor—configure servers via a `mcpServers` JSON block:
+
+```json
+{
+  "mcpServers": {
+    "stdapi": {
+      "type": "http",
+      "url": "https://YOUR_STDAPI_URL/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_API_KEY"
+      }
+    }
+  }
+}
+```
+
+- Replace `YOUR_STDAPI_URL` with your stdapi.ai deployment URL (e.g., `https://api.example.com` or `http://localhost:8000` for local)
+- The `Authorization` header (and `YOUR_API_KEY`) is only required if your deployment uses API key authentication; omit the `headers` block for local development without a key
+- For ![Anthropic](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } **Claude Code**, add this to `~/.claude/claude.json`
+
+!!! tip "SSE Transport (Legacy)"
+    For older MCP clients that do not support Streamable HTTP, use `"type": "sse"` with the `/sse` endpoint instead. Requires `ENABLE_MCP_SSE=true` on the server.
+
+### :material-filter: Tool Selection
+
+By default, all tools are exposed. Restrict the tool set for better performance — LLMs work better with fewer choices, and many providers cap active tools per session.
+
+`openai_chat_completion` and `anthropic_message` reach the same Bedrock models through different protocol adapters — pick one based on which API your client uses. The examples below use the OpenAI tools; replace with `anthropic_message,anthropic_model_list,anthropic_file,anthropic_file_list,anthropic_files_get,anthropic_file_content` if you prefer the Anthropic protocol.
+
+**Coding agent (text and code only)** — chat, model discovery, and file operations; no image/audio, no destructive tools:
+
+```bash
+export MCP_INCLUDE_TOOLS="openai_chat_completion,openai_model_list,openai_embedding,openai_file,openai_file_list,openai_files_get,openai_file_content"
+```
+
+**Coding agent with image support** — same baseline plus image generation and editing:
+
+```bash
+export MCP_INCLUDE_TOOLS="openai_chat_completion,openai_model_list,openai_embedding,openai_file,openai_file_list,openai_files_get,openai_file_content,openai_image_generation,openai_image_edit,openai_image_variation"
+```
+
+**Coding agent with audio support** — same baseline plus transcription, translation, and speech synthesis:
+
+```bash
+export MCP_INCLUDE_TOOLS="openai_chat_completion,openai_model_list,openai_embedding,openai_file,openai_file_list,openai_files_get,openai_file_content,openai_audio_transcription,openai_audio_translation,openai_audio_speech"
+```
+
+In all cases, file deletion tools (`openai_files_delete`, `anthropic_files_delete`) are intentionally omitted — add them only when your workflow explicitly requires cleanup.
+
+See [Configuration Reference → MCP](operations_configuration.md#mcp-model-context-protocol) for the full tool list and selection guidance.
+
+---
+
 ## :material-docker: Running stdapi.ai Locally
 
 stdapi.ai works well when running locally with Docker, making it ideal for your development environment.

@@ -98,6 +98,7 @@ async def _speech_audio_sse(
 @router.post(
     "/speech",
     summary="OpenAI - /v1/audio/speech",
+    operation_id="openai_audio_speech",
     description=(
         "Generates audio from the input text.\n\n"
         "Returns the audio file content, or a stream of audio events."
