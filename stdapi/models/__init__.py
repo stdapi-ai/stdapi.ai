@@ -159,8 +159,8 @@ class ModelDetails(BaseModel):
     service: str = "AWS Bedrock"
     input_modalities: list[str]
     output_modalities: list[str]
-    response_streaming: bool = False
-    legacy: bool = False
+    response_streaming: bool | None = None
+    legacy: bool | None = None
     start_of_life_time: AwareDatetime | None = None
     end_of_life_time: AwareDatetime | None = None
     legacy_time: AwareDatetime | None = None
@@ -769,11 +769,11 @@ async def _get_bedrock_models_from_region(region: RegionName) -> list[ModelDetai
             regions=[region],
             input_modalities=model["inputModalities"],  # type: ignore[arg-type]
             output_modalities=model["outputModalities"],  # type: ignore[arg-type]
-            response_streaming=model.get("responseStreamingSupported", False),
+            response_streaming=model.get("responseStreamingSupported"),
             inference_profiles={region: profiles.get(model["modelId"])}  # type: ignore[dict-item]
             if profiles.get(model["modelId"])
             else {},
-            legacy=model["modelLifecycle"]["status"] == "LEGACY",
+            legacy=(model["modelLifecycle"]["status"] == "LEGACY") or None,
             start_of_life_time=model["modelLifecycle"].get("startOfLifeTime"),
             end_of_life_time=model["modelLifecycle"].get("endOfLifeTime"),
             legacy_time=model["modelLifecycle"].get("legacyTime"),
