@@ -12,6 +12,7 @@ from stdapi.aws_bedrock import get_extra_model_parameters
 from stdapi.config import SETTINGS
 from stdapi.models import validate_model
 from stdapi.models.audio import get_audio_model
+from stdapi.models.capabilities import Capability, register_route_capability
 from stdapi.monitoring import (
     log_request_params,
     log_request_stream_event,
@@ -28,6 +29,13 @@ from stdapi.utils import b64encode
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
+register_route_capability(
+    "openai_audio_speech",
+    f"{SETTINGS.openai_routes_prefix}/v1/audio/speech",
+    "TEXT",
+    "SPEECH",
+    Capability.TTS,
+)
 
 router = APIRouter(
     prefix=f"{SETTINGS.openai_routes_prefix}/v1/audio", tags=["Audio", TAG_OPENAI]

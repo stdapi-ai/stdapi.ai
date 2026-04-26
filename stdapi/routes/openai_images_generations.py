@@ -16,6 +16,7 @@ from stdapi.auth import authenticate
 from stdapi.aws_bedrock import get_extra_model_parameters
 from stdapi.config import SETTINGS
 from stdapi.models import validate_model
+from stdapi.models.capabilities import Capability, register_route_capability
 from stdapi.models.image import (
     ImageGenerationJobBase,
     ImageGenerationResponse,
@@ -41,6 +42,14 @@ from stdapi.types.openai_images import (
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
+
+register_route_capability(
+    "openai_image_generation",
+    f"{SETTINGS.openai_routes_prefix}/v1/images/generations",
+    "TEXT",
+    "IMAGE",
+    Capability.IMAGE_GENERATION,
+)
 
 router = APIRouter(
     prefix=f"{SETTINGS.openai_routes_prefix}/v1", tags=["Images", TAG_OPENAI]

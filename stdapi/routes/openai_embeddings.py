@@ -15,6 +15,7 @@ from stdapi.auth import authenticate
 from stdapi.aws_bedrock import get_extra_model_parameters
 from stdapi.config import SETTINGS
 from stdapi.models import validate_model
+from stdapi.models.capabilities import register_route_capability
 from stdapi.models.embedding import get_embedding_model
 from stdapi.monitoring import log_request_params, log_response_params
 from stdapi.types.openai_embeddings import (
@@ -24,6 +25,13 @@ from stdapi.types.openai_embeddings import (
     Usage,
 )
 from stdapi.utils import b64encode
+
+register_route_capability(
+    "openai_embedding",
+    f"{SETTINGS.openai_routes_prefix}/v1/embeddings",
+    "TEXT",
+    "EMBEDDING",
+)
 
 router = APIRouter(
     prefix=f"{SETTINGS.openai_routes_prefix}/v1", tags=["Embeddings", TAG_OPENAI]

@@ -12,6 +12,7 @@ from stdapi.input_file import InputFile
 from stdapi.models import validate_model
 from stdapi.models.audio import get_audio_model
 from stdapi.models.audio.amazon_transcribe import AWS_TRANSCRIBE_MODEL_ID
+from stdapi.models.capabilities import Capability, register_route_capability
 from stdapi.monitoring import log_request_params, log_request_stream_event
 from stdapi.types.openai_audio import (
     AudioResponseFormat,
@@ -28,6 +29,13 @@ from stdapi.utils import validation_error_handler
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
+register_route_capability(
+    "openai_audio_transcription",
+    f"{SETTINGS.openai_routes_prefix}/v1/audio/transcriptions",
+    "SPEECH",
+    "TEXT",
+    Capability.STT,
+)
 
 router = APIRouter(
     prefix=f"{SETTINGS.openai_routes_prefix}/v1/audio", tags=["Audio", TAG_OPENAI]

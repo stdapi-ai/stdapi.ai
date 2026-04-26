@@ -11,6 +11,7 @@ from stdapi.input_file import InputFile
 from stdapi.models import validate_model
 from stdapi.models.audio import get_audio_model
 from stdapi.models.audio.amazon_transcribe import AWS_TRANSCRIBE_MODEL_ID
+from stdapi.models.capabilities import Capability, register_route_capability
 from stdapi.monitoring import log_request_params
 from stdapi.types.openai_audio import (
     TranslateAudioResponseFormat,
@@ -18,6 +19,14 @@ from stdapi.types.openai_audio import (
     TranslationCreateResponse,
 )
 from stdapi.utils import validation_error_handler
+
+register_route_capability(
+    "openai_audio_translation",
+    f"{SETTINGS.openai_routes_prefix}/v1/audio/translations",
+    "SPEECH",
+    "TEXT",
+    Capability.STT_TRANSLATE,
+)
 
 router = APIRouter(
     prefix=f"{SETTINGS.openai_routes_prefix}/v1/audio", tags=["Audio", TAG_OPENAI]

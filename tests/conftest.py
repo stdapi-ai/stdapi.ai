@@ -105,6 +105,7 @@ environ.update(
         # Enable all optional middlewares so their behaviour is tested.
         "cors_allow_origins": '["*"]',
         "enable_gzip": "true",
+        "enable_mcp_streamable_http": "true",
         "enable_proxy_headers": "true",
         "log_client_ip": "true",
         "log_request_params": "true",

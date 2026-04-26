@@ -33,6 +33,7 @@ from stdapi.aws_s3 import (
 )
 from stdapi.config import SETTINGS
 from stdapi.input_file import get_s3_input_regions, resolve_all_bedrock_content_blocks
+from stdapi.models.capabilities import ROUTE_CAPABILITIES, Capability
 from stdapi.models.deprecation import DEPRECATED_MODELS
 from stdapi.monitoring import REQUEST_ID, REQUEST_LOG, log_error_details
 from stdapi.region_routing import REGION_ROUTER, ROUTING_RETRYABLE_CODES
@@ -151,6 +152,8 @@ class ModelDetails(BaseModel):
         aliases: Alternative model IDs that resolve to this model.
         regions: All regions where the model is accessible.
         inference_profiles: Per-region inference profile ARNs.
+        supported_routes: Route paths this model can serve (e.g. /v1/chat/completions).
+        supported_mcp_tools: MCP tool names (operation_ids) this model can serve.
     """
 
     id: str
@@ -167,38 +170,42 @@ class ModelDetails(BaseModel):
     public_extended_access_time: AwareDatetime | None = None
     aliases: list[str] | None = None
     regions: list[RegionName]
-    inference_profiles: dict[RegionName, str] = {}
+    inference_profiles: dict[RegionName, str] | None = None
+    supported_routes: list[str] = []
+    supported_mcp_tools: list[str] = []
 
-    def get_id(self, *, inference_profile: bool = False) -> str:
-        """Return the model ID, preferring the inference profile when requested.
-
-        Args:
-            inference_profile: When ``True``, return the first inference profile if set.
-
-        Returns:
-            Model or inference-profile identifier.
-        """
-        default_profile = next(iter(self.inference_profiles.values()), None)
-        return (default_profile or self.id) if inference_profile else self.id
-
-    def get_id_for_region(
-        self, region: RegionName, *, inference_profile: bool = False
+    def get_id(
+        self, region: RegionName | None = None, *, inference_profile: bool = False
     ) -> str:
         """Return the model ID or inference profile ARN for a specific region.
 
         Args:
-            region: Target AWS region.
+            region: Target AWS region. If ``None``, returns any available profile.
             inference_profile: If True, prefer the inference profile for that region.
 
         Returns:
             The appropriate model identifier for the given region.
         """
-        if inference_profile:
-            if profile := self.inference_profiles.get(region):
-                return profile
-            default_profile = next(iter(self.inference_profiles.values()), None)
-            return default_profile or self.id
-        return self.id
+        if not inference_profile:
+            return self.id
+        profiles = self.inference_profiles or {}
+        return (
+            profiles.get(region)  # type: ignore[arg-type]
+            or next(iter(profiles.values()), None)
+            or self.id
+        )
+
+    def set_inference_profile(self, region: RegionName, name: str) -> None:
+        """Sets the inference profile for a specified region.
+
+        Args:
+            region: The region for which the inference profile needs
+                to be set.
+            name: The name of the inference profile to associate with the region.
+        """
+        if self.inference_profiles is None:
+            self.inference_profiles = {}
+        self.inference_profiles[region] = name
 
 
 RequestT = TypeVar("RequestT")
@@ -223,6 +230,16 @@ class ModelBase[RequestT, ResponseT]:
 
     #: Whether the model supports ``s3Location`` for document content blocks in the Bedrock Converse API.
     S3_LOCATION_DOCUMENT_SUPPORTED: ClassVar[bool] = True
+
+    @classmethod
+    def get_supported_operations(cls) -> Capability:
+        """Return capability flags for route-based model matching.
+
+        Returns:
+            Capability flags. Override in model family base classes
+            to enable auto-detection of specific operation support.
+        """
+        return Capability(0)
 
     def __init__(self, model_id: str) -> None:
         """Initialize the model with its Bedrock model identifier.
@@ -418,7 +435,7 @@ class ModelBase[RequestT, ResponseT]:
         with handle_bedrock_client_error():
             invocation_arn = (
                 await bedrock.start_async_invoke(
-                    modelId=(await get_model_details(self._model_id)).get_id_for_region(
+                    modelId=(await get_model_details(self._model_id)).get_id(
                         effective_region, inference_profile=inference_profile
                     ),
                     modelInput=body,  # type: ignore[arg-type]
@@ -461,9 +478,9 @@ class ModelBase[RequestT, ResponseT]:
             region, document_s3_location=self.S3_LOCATION_DOCUMENT_SUPPORTED
         )
         _set_effective_region(region)
-        request["modelId"] = (
-            await get_model_details(self._model_id)
-        ).get_id_for_region(region, inference_profile=True)
+        request["modelId"] = (await get_model_details(self._model_id)).get_id(
+            region, inference_profile=True
+        )
         request["requestMetadata"] = build_stdapi_metadata(
             request.get("requestMetadata")
         )
@@ -611,6 +628,65 @@ def resolve_model_alias(model_id: str) -> str:
     return MODEL_ALIASES.get(model_id, model_id)
 
 
+def _find_model_class(model_id: str) -> type[ModelBase[Any, Any]] | None:
+    """Find the most specific registered model class matching *model_id*.
+
+    Args:
+        model_id: Bedrock model identifier to look up.
+
+    Returns:
+        The matching model class, or ``None`` if no class is registered for this ID.
+    """
+    best: type[ModelBase[Any, Any]] | None = None
+    best_score = -1
+    for cls in _GLOBAL_MODEL_REGISTRY:
+        matcher = getattr(cls, "MATCHER", "")
+        if isinstance(matcher, Pattern):
+            if matcher.match(model_id) and best_score < 0:
+                best, best_score = cls, 0
+        elif (
+            matcher
+            and model_id.startswith(matcher)
+            and (score := len(matcher)) > best_score
+        ):
+            best, best_score = cls, score
+    return best
+
+
+def _compute_model_capabilities(
+    model_id: str, model: ModelDetails
+) -> tuple[list[str], list[str]]:
+    """Derive the routes and MCP tools a model supports from its modalities and class capabilities.
+
+    Args:
+        model_id: Bedrock model identifier.
+        model: Model details containing modality information.
+
+    Returns:
+        Tuple of (sorted list of route paths, sorted list of operation_ids / MCP tool names).
+    """
+    model_class = _find_model_class(model_id)
+    capability_flags = (
+        model_class.get_supported_operations()
+        if model_class is not None
+        else Capability(0)
+    )
+    input_mods = model.input_modalities
+    output_mods = model.output_modalities
+    routes: list[str] = []
+    tools: list[str] = []
+    for op_id, cap in ROUTE_CAPABILITIES.items():
+        if cap.required_input_modality not in input_mods:
+            continue
+        if cap.required_output_modality not in output_mods:
+            continue
+        if cap.required_capability and not (cap.required_capability & capability_flags):
+            continue
+        routes.append(cap.path)
+        tools.append(op_id)
+    return sorted(routes), sorted(tools)
+
+
 def update_unified_models_collections() -> None:
     """Merge Bedrock and extra-service model collections into the unified ``_ALL_*`` dicts.
 
@@ -635,6 +711,11 @@ def update_unified_models_collections() -> None:
         )
 
     _populate_model_aliases(_ALL_MODELS)
+
+    for model_id, model in _ALL_MODELS.items():
+        model.supported_routes, model.supported_mcp_tools = _compute_model_capabilities(
+            model_id, model
+        )
 
 
 async def _get_provisioned_models(bedrock_client: BedrockClient) -> set[str]:
@@ -770,9 +851,9 @@ async def _get_bedrock_models_from_region(region: RegionName) -> list[ModelDetai
             input_modalities=model["inputModalities"],  # type: ignore[arg-type]
             output_modalities=model["outputModalities"],  # type: ignore[arg-type]
             response_streaming=model.get("responseStreamingSupported"),
-            inference_profiles={region: profiles.get(model["modelId"])}  # type: ignore[dict-item]
-            if profiles.get(model["modelId"])
-            else {},
+            inference_profiles={region: inference_profile}
+            if (inference_profile := profiles.get(model["modelId"]))
+            else None,
             legacy=(model["modelLifecycle"]["status"] == "LEGACY") or None,
             start_of_life_time=model["modelLifecycle"].get("startOfLifeTime"),
             end_of_life_time=model["modelLifecycle"].get("endOfLifeTime"),
@@ -922,7 +1003,7 @@ def _apply_user_profiles(all_models: dict[str, ModelDetails]) -> dict[str, str]:
             inferred_region: RegionName = arn_match.group("region")  # type: ignore[assignment]
             if inferred_region not in model.regions:
                 model.regions.append(inferred_region)
-            model.inference_profiles[inferred_region] = arn
+            model.set_inference_profile(inferred_region, arn)
     return invalid_arn_mappings
 
 
@@ -1014,8 +1095,8 @@ async def _filter_model(
         existing = models[model.id]
         if model_region is not None and model_region not in existing.regions:
             existing.regions.append(model_region)
-            if model_profile := model.inference_profiles.get(model_region):
-                existing.inference_profiles[model_region] = model_profile
+            if model_profile := (model.inference_profiles or {}).get(model_region):
+                existing.set_inference_profile(model_region, model_profile)
         return
 
     availability = await bedrock_client.get_foundation_model_availability(
@@ -1298,7 +1379,7 @@ async def _build_invoke_kwargs(
         Fully populated request kwargs dict.
     """
     kwargs: InvokeModelRequestTypeDef = {
-        "modelId": (await get_model_details(model_id)).get_id_for_region(
+        "modelId": (await get_model_details(model_id)).get_id(
             region, inference_profile=inference_profile
         ),
         "contentType": "application/json",
@@ -1600,7 +1681,7 @@ async def _validate_model_from_arn(arn: str) -> ModelDetails | None:
         model = base_model.model_copy()
         if region not in model.regions:
             model.regions.append(region)
-        model.inference_profiles[region] = arn
+        model.set_inference_profile(region, arn)
         _USER_PROFILES[arn] = (model, SETTINGS.now() + _CACHE["update_interval"])
         return model
 

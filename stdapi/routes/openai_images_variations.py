@@ -21,6 +21,7 @@ from stdapi.aws_bedrock import get_extra_model_parameters
 from stdapi.config import SETTINGS
 from stdapi.input_file import InputFile
 from stdapi.models import validate_model
+from stdapi.models.capabilities import Capability, register_route_capability
 from stdapi.models.image import get_image_model
 from stdapi.monitoring import log_request_params
 from stdapi.routes._images_common import build_images_response
@@ -30,6 +31,14 @@ from stdapi.types.openai_images import (
     ImageVariationParams,
 )
 from stdapi.utils import validation_error_handler
+
+register_route_capability(
+    "openai_image_variation",
+    f"{SETTINGS.openai_routes_prefix}/v1/images/variations",
+    "IMAGE",
+    "IMAGE",
+    Capability.IMAGE_VARIATION,
+)
 
 router = APIRouter(
     prefix=f"{SETTINGS.openai_routes_prefix}/v1", tags=["Images", TAG_OPENAI]

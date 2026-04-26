@@ -66,6 +66,8 @@ nav:
             - Messages: api_anthropic_messages.md
             - Files: api_anthropic_files.md
             - Models: api_anthropic_models.md
+          - Native Extensions:
+            - Search Models: api_search_models.md
       - Operations:
           - Getting started: operations_getting_started.md
           - Local Development: operations_getting_started_local.md

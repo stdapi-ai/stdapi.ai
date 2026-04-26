@@ -366,24 +366,26 @@ Many MCP clients—including Claude Code and Cursor—configure servers via a `m
 
 By default, all tools are exposed. Restrict the tool set for better performance — LLMs work better with fewer choices, and many providers cap active tools per session.
 
-`openai_chat_completion` and `anthropic_message` reach the same Bedrock models through different protocol adapters — pick one based on which API your client uses. The examples below use the OpenAI tools; replace with `anthropic_message,anthropic_model_list,anthropic_file,anthropic_file_list,anthropic_files_get,anthropic_file_content` if you prefer the Anthropic protocol.
+`openai_chat_completion` and `anthropic_message` reach the same Bedrock models through different protocol adapters — pick one based on which API your client uses. The examples below use the OpenAI tools; replace with `anthropic_message,search_models,anthropic_file,anthropic_file_list,anthropic_files_get,anthropic_file_content` if you prefer the Anthropic protocol.
+
+Always include `search_models` in your tool set — it lets the agent discover available model IDs dynamically rather than relying on hardcoded values. Use it instead of `openai_model_list` or `anthropic_model_list`: it returns richer metadata and supports capability-based filtering (by modality, route, region, and more).
 
 **Coding agent (text and code only)** — chat, model discovery, and file operations; no image/audio, no destructive tools:
 
 ```bash
-export MCP_INCLUDE_TOOLS="openai_chat_completion,openai_model_list,openai_embedding,openai_file,openai_file_list,openai_files_get,openai_file_content"
+export MCP_INCLUDE_TOOLS="openai_chat_completion,search_models,openai_embedding,openai_file,openai_file_list,openai_files_get,openai_file_content"
 ```
 
 **Coding agent with image support** — same baseline plus image generation and editing:
 
 ```bash
-export MCP_INCLUDE_TOOLS="openai_chat_completion,openai_model_list,openai_embedding,openai_file,openai_file_list,openai_files_get,openai_file_content,openai_image_generation,openai_image_edit,openai_image_variation"
+export MCP_INCLUDE_TOOLS="openai_chat_completion,search_models,openai_embedding,openai_file,openai_file_list,openai_files_get,openai_file_content,openai_image_generation,openai_image_edit,openai_image_variation"
 ```
 
 **Coding agent with audio support** — same baseline plus transcription, translation, and speech synthesis:
 
 ```bash
-export MCP_INCLUDE_TOOLS="openai_chat_completion,openai_model_list,openai_embedding,openai_file,openai_file_list,openai_files_get,openai_file_content,openai_audio_transcription,openai_audio_translation,openai_audio_speech"
+export MCP_INCLUDE_TOOLS="openai_chat_completion,search_models,openai_embedding,openai_file,openai_file_list,openai_files_get,openai_file_content,openai_audio_transcription,openai_audio_translation,openai_audio_speech"
 ```
 
 In all cases, file deletion tools (`openai_files_delete`, `anthropic_files_delete`) are intentionally omitted — add them only when your workflow explicitly requires cleanup.

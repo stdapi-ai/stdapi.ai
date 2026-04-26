@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from stdapi.api_errors import ApiError
 from stdapi.aws_s3 import put_object_and_get_url
 from stdapi.models import ModelBase, get_model, load_model_plugins
+from stdapi.models.capabilities import Capability
 from stdapi.monitoring import REQUEST_ID
 from stdapi.utils import b64decode, convert_base64_image, get_base64_image_size
 
@@ -370,6 +371,28 @@ class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"]:
         msg = f"Image variations are not supported by {self._model.model.id}."
         raise ApiError(msg)
 
+    @classmethod
+    def get_supported_operations(cls) -> Capability:
+        """Auto-detect supported image operations from method override presence.
+
+        Returns:
+            Capability flags for operations this job class implements.
+        """
+        ops = Capability(0)
+        if (
+            cls._generate_images_from_text
+            is not ImageGenerationJobBase._generate_images_from_text
+        ):
+            ops |= Capability.IMAGE_GENERATION
+        if cls._edit_image is not ImageGenerationJobBase._edit_image:
+            ops |= Capability.IMAGE_EDITION
+        if (
+            cls._create_image_variations
+            is not ImageGenerationJobBase._create_image_variations
+        ):
+            ops |= Capability.IMAGE_VARIATION
+        return ops
+
     async def _generate_images_stream(
         self,
         partial_images: int | None = None,  # noqa:ARG002
@@ -493,6 +516,20 @@ class ImageModelBase[RequestT, ResponseT, ImageGenerationJobT](
     """Base class for provider-specific image models."""
 
     IMAGE_GENERATION_JOB_CLASS: type[ImageGenerationJobT]
+
+    @classmethod
+    def get_supported_operations(cls) -> Capability:
+        """Delegate capability detection to the job class.
+
+        Returns:
+            Capability flags derived from the job class implementation.
+        """
+        job_cls: type[ImageGenerationJobBase[Any]] | None = getattr(
+            cls, "IMAGE_GENERATION_JOB_CLASS", None
+        )
+        return (
+            job_cls.get_supported_operations() if job_cls is not None else Capability(0)
+        )
 
     def get_image_generation_job(
         self,

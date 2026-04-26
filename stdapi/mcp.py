@@ -17,6 +17,7 @@ from stdapi import server
 from stdapi.config import SETTINGS, LogLevel
 from stdapi.metering import EDITION_TITLE
 from stdapi.monitoring import REQUEST_ID, log_error_details
+from stdapi.routes.core_root import MCP_SERVER_CARD
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -61,6 +62,8 @@ def mount_mcp(app: FastAPI) -> None:
     tool errors appear in the structured JSON log rather than as stderr tracebacks.
     The internal HTTP client uses the ASGI transport (no TCP) with
     ``MCP_USER_AGENT`` and injects the parent request ID for log correlation.
+    Populates ``MCP_SERVER_CARD["tools"]`` in :mod:`stdapi.routes.core_root` with
+    the discovered tool list so the server card reflects real tools at startup.
 
     Args:
         app: FastAPI application to attach MCP to.
@@ -87,3 +90,13 @@ def mount_mcp(app: FastAPI) -> None:
         mcp.mount_http()
     if SETTINGS.enable_mcp_sse:
         mcp.mount_sse()
+
+    if (card := MCP_SERVER_CARD) is not None:
+        card["tools"] = [
+            {
+                "name": t.name,
+                **({"description": t.description} if t.description else {}),
+                "inputSchema": t.inputSchema,
+            }
+            for t in mcp.tools
+        ]

@@ -2715,13 +2715,13 @@ export ENABLE_MCP_SSE=true
 # No environment variable needed
 
 # Expose only specific tools
-export MCP_INCLUDE_TOOLS="openai_chat_completion,openai_embedding,openai_model_list"
+export MCP_INCLUDE_TOOLS="openai_chat_completion,openai_embedding,search_models"
 
 # When both MCP_INCLUDE_TOOLS and MCP_EXCLUDE_TOOLS are specified,
 # tools in MCP_EXCLUDE_TOOLS are removed from MCP_INCLUDE_TOOLS:
-export MCP_INCLUDE_TOOLS="openai_chat_completion,openai_embedding,openai_model_list"
+export MCP_INCLUDE_TOOLS="openai_chat_completion,openai_embedding,search_models"
 export MCP_EXCLUDE_TOOLS="openai_files_delete,anthropic_files_delete"
-# Result: only openai_chat_completion, openai_embedding, openai_model_list are exposed
+# Result: only openai_chat_completion, openai_embedding, search_models are exposed
 ```
 
 See [API Overview → MCP Tools](api_overview.md#mcp-model-context-protocol) for the full list of available tool names.
@@ -2756,6 +2756,14 @@ stdapi.ai exposes a fixed set of tools derived from its API surface — you can 
 
 By default all tools are exposed. It is safer and more effective to begin with a narrow `MCP_INCLUDE_TOOLS` list covering only what the workflow needs, then expand it deliberately. LLMs perform better with fewer choices, and many AI providers cap the number of active tools per session.
 
+**Always include `search_models` for agent model discovery**
+
+`search_models` is the recommended tool for agents to discover available model IDs — it supports capability-based filtering (by modality, route, region, streaming support) and returns richer metadata than `openai_model_list` or `anthropic_model_list`. Include it in every agent configuration so the agent can resolve the right model dynamically rather than relying on hardcoded IDs:
+
+```bash
+export MCP_INCLUDE_TOOLS="openai_chat_completion,search_models,openai_embedding"
+```
+
 **Always exclude file deletion tools unless required**
 
 Uploaded files are the only durable, stateful data managed by stdapi.ai — deletion is permanent and cannot be undone. Unless your workflow explicitly needs to delete files, always suppress these tools:
@@ -2773,7 +2781,7 @@ Image generation (`openai_image_generation`, `openai_image_edit`, `openai_image_
 For predictable, well-defined workflows, listing tools explicitly with `MCP_INCLUDE_TOOLS` is more reliable than maintaining an exclusion list. For example, a workflow limited to text generation and model discovery needs only:
 
 ```bash
-export MCP_INCLUDE_TOOLS="openai_chat_completion,openai_model_list"
+export MCP_INCLUDE_TOOLS="openai_chat_completion,search_models"
 ```
 
 !!! note

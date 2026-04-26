@@ -1,5 +1,6 @@
 """Root endpoint for the API."""
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter
@@ -13,6 +14,14 @@ if TYPE_CHECKING:
     from typing import Any
 
 router = APIRouter(tags=["metadata"], include_in_schema=False)
+
+
+@dataclass(slots=True, frozen=True)
+class HealthResponse:
+    """Response for the /health endpoint."""
+
+    status: str = "ok"
+
 
 #: Welcome message payload for root endpoint
 _WELCOME = {
@@ -90,7 +99,7 @@ _API_CATALOG: dict[str, Any] = {
 
 
 #: MCP Server Card (SEP-1649) — served when at least one MCP transport is enabled.
-_MCP_SERVER_CARD: dict[str, Any] | None = (
+MCP_SERVER_CARD: dict[str, Any] | None = (
     {
         "$schema": "https://static.modelcontextprotocol.io/schemas/mcp-server-card/v1.json",
         "version": "1.0",
@@ -102,7 +111,6 @@ _MCP_SERVER_CARD: dict[str, Any] | None = (
             else {"type": "sse", "endpoint": "/sse"}
         ),
         "capabilities": {"tools": {}},
-        "tools": "dynamic",
     }
     if _mcp_streamable or _mcp_sse
     else None
@@ -161,12 +169,22 @@ async def mcp_server_card() -> JSONResponse:
     Returns:
         MCP Server Card document, or 404 if no MCP transport is enabled.
     """
-    if _MCP_SERVER_CARD is None:
+    if MCP_SERVER_CARD is None:
         return JSONResponse({"error": "MCP is not enabled"}, status_code=404)
-    return JSONResponse(_MCP_SERVER_CARD)
+    return JSONResponse(MCP_SERVER_CARD)
 
 
 @router.get("/robots.txt")
 async def robots_txt() -> PlainTextResponse:
     """Robots.txt optimized for API discovery by AI agents."""
     return PlainTextResponse(_ROBOTS_TXT)
+
+
+@router.get("/health")
+async def health_check() -> HealthResponse:
+    """Check if the service is healthy and operational.
+
+    Returns:
+        HealthResponse with status "ok" when the service is operational
+    """
+    return HealthResponse()

@@ -90,7 +90,7 @@ Your existing applications, SDKs, and tools work immediately — no plugins or c
 | `/v1/models`               | Model discovery & listing                                        | AWS Bedrock                          |
 | `/v1/files`                | File upload, listing, metadata, download, deletion               | Amazon S3                            |
 | `/v1/uploads`              | Multipart upload sessions for large files                        | Amazon S3                            |
-| `/available_models`        | List models filtered by modality (text, image, audio, embedding) | Internal                             |
+| `/search_models`           | Search models by capability: modality, route, MCP tool, region, streaming | Internal |
 
 **Anthropic-Compatible:**
 
@@ -410,7 +410,7 @@ export MCP_EXCLUDE_TOOLS="openai_files_delete,anthropic_files_delete"
   <br>Connect Claude Code, Cursor, or Cline directly to stdapi.ai via MCP. Agents can generate text, search models, and manage files without any custom integration code.
 
 - :material-flask: **Agentic pipelines**
-  <br>Let orchestration frameworks (LangChain, LlamaIndex, CrewAI) discover and call Bedrock models dynamically. Expose only `openai_chat_completion` and `openai_model_list` to keep the tool surface minimal.
+  <br>Let orchestration frameworks (LangChain, LlamaIndex, CrewAI) discover and call Bedrock models dynamically. Include `search_models` so agents can find the right model ID, and `openai_chat_completion` for inference — keep the tool surface minimal.
 
 - :material-image-multiple: **Multimodal automation**
   <br>Give an agent access to `openai_chat_completion`, `openai_image_generation`, and `openai_audio_speech` to build self-contained pipelines that generate text, images, and audio in a single session.

@@ -16,6 +16,7 @@ from stdapi.api_providers.anthropic import TAG_ANTHROPIC
 from stdapi.auth import authenticate
 from stdapi.config import SETTINGS
 from stdapi.models import validate_model
+from stdapi.models.capabilities import register_route_capability
 from stdapi.models.chat import get_chat_model
 from stdapi.models.chat._adapters._anthropic_message import count_tokens_via_bedrock
 from stdapi.monitoring import REQUEST_ID, log_request_params, log_response_params
@@ -28,6 +29,19 @@ from stdapi.types.anthropic_messages import (
 
 if TYPE_CHECKING:
     from sse_starlette import EventSourceResponse
+
+register_route_capability(
+    "anthropic_message",
+    f"{SETTINGS.anthropic_routes_prefix}/v1/messages",
+    "TEXT",
+    "TEXT",
+)
+register_route_capability(
+    "anthropic_message_count_tokens",
+    f"{SETTINGS.anthropic_routes_prefix}/v1/messages/count_tokens",
+    "TEXT",
+    "TEXT",
+)
 
 router: APIRouter = APIRouter(
     prefix=f"{SETTINGS.anthropic_routes_prefix}/v1", tags=["Chat", TAG_ANTHROPIC]
@@ -224,7 +238,7 @@ async def count_tokens(
     return log_response_params(
         MessageTokensCount(
             input_tokens=await count_tokens_via_bedrock(
-                request, model.get_id(inference_profile=False), model.regions[0]
+                request, model.get_id(), model.regions[0]
             )
         )
     )

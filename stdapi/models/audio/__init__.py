@@ -19,6 +19,7 @@ from fastapi import Response
 from stdapi.api_errors import ApiError, UnsupportedParameterError
 from stdapi.config import SETTINGS
 from stdapi.models import ModelBase, get_model, load_model_plugins
+from stdapi.models.capabilities import Capability
 from stdapi.utils import language_code_to_name
 
 if TYPE_CHECKING:
@@ -178,6 +179,22 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
         """
         msg = f"Audio transcription and translation is not supported by {self.model.id}"
         raise ApiError(msg)
+
+    @classmethod
+    def get_supported_operations(cls) -> Capability:
+        """Auto-detect supported audio operations from method override presence.
+
+        Returns:
+            Capability flags for operations this audio model implements.
+        """
+        ops = Capability(0)
+        if cls.tts is not AudioModelBase.tts:
+            ops |= Capability.TTS
+        if cls.stt is not AudioModelBase.stt:
+            ops |= Capability.STT
+        if cls.stt_translate is not AudioModelBase.stt_translate:
+            ops |= Capability.STT_TRANSLATE
+        return ops
 
     @staticmethod
     async def _format_subtitle_response(

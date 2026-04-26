@@ -15,12 +15,17 @@ from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
 from stdapi.config import SETTINGS
 from stdapi.models import validate_model
+from stdapi.models.capabilities import register_route_capability
 from stdapi.models.chat import get_chat_model
 from stdapi.monitoring import REQUEST_ID, REQUEST_TIME, log_request_params
 from stdapi.types.openai_responses import Response, ResponseCreateParams
 
 if TYPE_CHECKING:
     from sse_starlette import EventSourceResponse
+
+register_route_capability(
+    "openai_response", f"{SETTINGS.openai_routes_prefix}/v1/responses", "TEXT", "TEXT"
+)
 
 router = APIRouter(
     prefix=f"{SETTINGS.openai_routes_prefix}/v1/responses",

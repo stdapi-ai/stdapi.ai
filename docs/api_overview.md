@@ -46,6 +46,12 @@ stdapi.ai provides multiple interfaces for exploring and testing the API—choos
 | **📁 Files**      | `POST/GET/DELETE /v1/files`     | Upload, list, retrieve, download, delete files                | [Files →](api_openai_files.md)                         |
 |                   | `POST /v1/uploads`              | Multipart upload sessions for large files                     | [Files →](api_openai_files.md)                         |
 
+### :material-magnify: stdapi.ai Native Extensions
+
+| Category | Endpoint | Capability | Documentation |
+|----------|----------|------------|---------------|
+| **🔍 Models** | `GET /search_models` | Search models by capability: modality, route, MCP tool, region, streaming, legacy status | [Search Models →](api_search_models.md) |
+
 ### ![Anthropic](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Anthropic-Compatible API
 
 | Category        | Endpoint                                   | Capability                                                    | Documentation                           |
@@ -93,9 +99,11 @@ When `ENABLE_MCP_STREAMABLE_HTTP=true` or `ENABLE_MCP_SSE=true` is configured, s
 | `anthropic_files_get`             | `GET /anthropic/v1/files/{file_id}`     |
 | `anthropic_files_delete`          | `DELETE /anthropic/v1/files/{file_id}`  |
 | `anthropic_file_content`          | `GET /anthropic/v1/files/{file_id}/content` |
+| **Native Extension Tools**        |                                         |
+| `search_models`                   | `GET /search_models`                    |
 
 !!! tip "Filtering MCP Tools"
-    Use `MCP_INCLUDE_TOOLS` or `MCP_EXCLUDE_TOOLS` environment variables to control which tools are exposed. See [Operations Configuration →](operations_configuration.md#mcp-model-context-protocol) for details.
+    Use `MCP_INCLUDE_TOOLS` or `MCP_EXCLUDE_TOOLS` environment variables to control which tools are exposed. Always include `search_models` so agents can discover the right model ID dynamically. See [Operations Configuration →](operations_configuration.md#mcp-model-context-protocol) for details.
 
 ## :material-connection: Using stdapi.ai
 
@@ -130,6 +138,7 @@ Your Anthropic SDK applications continue to work without any code changes—just
 - :material-music: [**Audio**](api_openai_audio_speech.md) — Text-to-speech, transcription, and translation
 - :material-vector-polyline: [**Embeddings**](api_openai_embeddings.md) — Vector embeddings for search and RAG
 - :material-format-list-bulleted: [**Models**](api_openai_models.md) — List and discover available models
+- :material-magnify: [**Search Models**](api_search_models.md) — Filter models by capability, modality, route, or MCP tool
 - :material-message: [**Messages**](api_anthropic_messages.md) — Anthropic-compatible conversational AI with tool calling
 - :material-check-all: [**Features**](features.md) — Full capabilities and AWS integrations
 - :material-rocket-launch: [**Getting Started**](operations_getting_started.md) — Deploy to AWS with Terraform
