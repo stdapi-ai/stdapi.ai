@@ -2,11 +2,16 @@
 
 from re import compile as re_compile
 from types import MappingProxyType
+from typing import TYPE_CHECKING
 
 from stdapi.models.chat._anthropic_claude import (
     _BETA_COMPUTER_USE_2024,
     AnthropicClaudeChatModel,
 )
+
+if TYPE_CHECKING:
+    from stdapi.types import JsonMapping
+    from stdapi.types.openai_chat_completions import ReasoningEffort
 
 
 class ChatModel(AnthropicClaudeChatModel):
@@ -29,3 +34,20 @@ class ChatModel(AnthropicClaudeChatModel):
             "computer": "computer_20241022",
         }
     )
+
+    def _req_configure_reasoning(
+        self,
+        additional_request_fields: JsonMapping,  # noqa:ARG002
+        reasoning_effort: ReasoningEffort | None = None,  # noqa:ARG002
+        budget_tokens: int | None = None,  # noqa:ARG002
+        max_tokens: int | None = None,  # noqa: ARG002
+    ) -> None:
+        """No reasoning support for Anthropic Claude 3.5.
+
+        Args:
+            additional_request_fields: Additional request fields dict to update.
+            reasoning_effort: The reasoning effort level.
+            budget_tokens: Maximum token budget for reasoning.
+            max_tokens: Unused.
+        """
+        return

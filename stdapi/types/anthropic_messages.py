@@ -65,6 +65,9 @@ SERVER_TOOL_NAMES: frozenset[ServerTools] = frozenset(
     }
 )
 
+#: Thinking effort level
+ThinkingEffort = Literal["low", "medium", "high", "xhigh", "max"]
+
 
 # Ref: anthropic.types.citation_char_location.CitationCharLocation
 class CitationCharLocation(BaseModelResponse):
@@ -2613,7 +2616,7 @@ class JSONOutputFormatParam(BaseModelRequest):
 class OutputConfigParam(BaseModelRequest):
     """Configuration options for the model's output."""
 
-    effort: Literal["low", "medium", "high", "max"] | None = Field(
+    effort: ThinkingEffort | None = Field(
         default=None, description="Effort level for the model's output processing."
     )
     format: JSONOutputFormatParam | None = Field(

@@ -1,5 +1,6 @@
 """Common base for all Anthropic Claude chat model implementations."""
 
+from re import compile as re_compile
 from types import MappingProxyType
 from typing import TYPE_CHECKING, ClassVar
 
@@ -13,8 +14,10 @@ if TYPE_CHECKING:
         ToolConfigurationTypeDef,
     )
 
+    from stdapi.models import ModelDetails
     from stdapi.types import JsonMapping
-    from stdapi.types.anthropic_messages import ServerTools
+    from stdapi.types.anthropic_messages import ServerTools, ThinkingEffort
+    from stdapi.types.openai_chat_completions import ReasoningEffort
 
 #: ``anthropic_beta`` flag for computer-use tools (2025-01-24 version)
 _BETA_COMPUTER_USE_2025 = "computer-use-2025-01-24"
@@ -40,6 +43,12 @@ _SERVER_TOOL_SERIALIZE_EXCLUDE: frozenset[str] = frozenset(
 
 #: Claude server tool keys
 _SERVER_TOOL_KEYS = frozenset({"name", "type"})
+
+#: Default reasoning config for Claude models
+_REASONING_CONFIG: dict[str, str] = {"type": "adaptive"}
+
+#: Regex to match a date suffix in model ID
+_DATE_SUFFIX = re_compile(r"^(.+)-(\d{8})$")
 
 
 def _has_tool_result(bedrock_messages: list[MessageTypeDef]) -> bool:
@@ -91,6 +100,7 @@ def _forward_tool_choice_to_additional_request_fields(
 class AnthropicClaudeChatModel(_BaseChatModel):
     """Shared functionality for all Anthropic Claude model generations."""
 
+    ALIAS_MATCHER = re_compile(r"^anthropic\.(.+?)(?:-v\d+(?::\d+)?)?$")
     PROMPT_CACHING_SUPPORTED = True
     PROMPT_CACHING_TOOL_SUPPORTED = True
     PASSTHROUGH_HEADERS = MappingProxyType(
@@ -104,6 +114,11 @@ class AnthropicClaudeChatModel(_BaseChatModel):
 
     #: Maps Claude server tool name to its versioned type (e.g. ``bash`` → ``bash_20250124``).
     SERVER_TOOL_NAME_TO_TYPE: ClassVar[MappingProxyType[str, str]]
+
+    #: OpenAI to Anthropic reasoning effort override - subclass to customize
+    REASONING_OVERRIDE: ClassVar[dict[ReasoningEffort | None, ThinkingEffort]] = {
+        "minimal": "low"
+    }
 
     def _req_extract_server_tools(
         self, tool_config: ToolConfigurationTypeDef | None
@@ -256,3 +271,66 @@ class AnthropicClaudeChatModel(_BaseChatModel):
             else:
                 del additional_request_fields["anthropic_beta"]
         return additional_request_fields
+
+    def _req_configure_reasoning(
+        self,
+        additional_request_fields: JsonMapping,
+        reasoning_effort: ReasoningEffort | None = None,
+        budget_tokens: int | None = None,
+        max_tokens: int | None = None,  # noqa: ARG002
+    ) -> None:
+        """Configure reasoning parameters for Claude models.
+
+        When ``budget_tokens`` is explicitly provided (> 0), uses budget-based
+        reasoning. Otherwise uses adaptive reasoning with an optional effort level.
+
+        Args:
+            additional_request_fields: Additional request fields dict to update.
+            reasoning_effort: The reasoning effort level.
+            budget_tokens: Maximum token budget for reasoning.
+            max_tokens: Unused.
+        """
+        if budget_tokens:
+            additional_request_fields["reasoning_config"] = {
+                "type": "enabled",
+                "budget_tokens": budget_tokens,
+            }
+        else:
+            additional_request_fields["reasoning_config"] = _REASONING_CONFIG  # type: ignore[assignment]
+            if reasoning_effort:
+                additional_request_fields["output_config"] = {
+                    "effort": self.REASONING_OVERRIDE.get(
+                        reasoning_effort, reasoning_effort
+                    )
+                }
+
+    @classmethod
+    def get_aliases(cls, all_models: dict[str, ModelDetails]) -> dict[str, str]:
+        """Return API model name aliases mapped to model IDs.
+
+        Extends the base aliases with:
+        - For Claude >= 4, A date-stripped alias for the most recent dated variant
+          (e.g. ``claude-haiku-4-5-20251001`` -> ``claude-haiku-4-5``).
+        - For Claude < 4, a ``-latest`` suffixed alias for the most recent dated variant
+          (e.g. ``claude-3-7-sonnet-20250219`` -> ``claude-3-7-sonnet-latest``).
+
+        Args:
+            all_models: All available models keyed by Bedrock model ID.
+
+        Returns:
+            A dict mapping model alias to model ID.
+        """
+        aliases = super().get_aliases(all_models)
+        newest: dict[str, tuple[str, str]] = {}
+        for alias, model_id in aliases.items():
+            if match := _DATE_SUFFIX.match(alias):
+                base, date = match[1], match[2]
+                if date > newest.get(base, ("",))[0]:
+                    newest[base] = (date, model_id)
+
+        for base, (_, model_id) in newest.items():
+            aliases.setdefault(
+                f"{base}-latest" if base.startswith("claude-3-") else base, model_id
+            )
+
+        return aliases
