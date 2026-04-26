@@ -579,10 +579,9 @@ def _make_model_details(available_regions: list[str]) -> Any:  # noqa: ANN401
         id=MODEL,
         name=MODEL,
         provider="Amazon",
-        region=available_regions[0],  # type: ignore[arg-type]
         input_modalities=["TEXT"],
         output_modalities=["TEXT"],
-        available_regions=available_regions,  # type: ignore[arg-type]
+        regions=available_regions,  # type: ignore[arg-type]
     )
 
 

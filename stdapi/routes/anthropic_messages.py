@@ -222,7 +222,7 @@ async def count_tokens(
     return log_response_params(
         MessageTokensCount(
             input_tokens=await count_tokens_via_bedrock(
-                request, model.get_id(inference_profile=False), model.region
+                request, model.get_id(inference_profile=False), model.regions[0]
             )
         )
     )

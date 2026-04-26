@@ -52,7 +52,7 @@ def format_bedrock_model_to_openai(model: ModelDetails) -> Model:
         created=(
             int(model.start_of_life_time.timestamp()) if model.start_of_life_time else 0
         ),
-        owned_by=f"{model.provider} ({model.service} {model.region})",
+        owned_by=model.provider,
     )
 
 

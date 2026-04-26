@@ -153,7 +153,7 @@ async def initialize_polly_models() -> None:
                 id=model_id,
                 name=f"Polly {engine.capitalize()}",
                 provider="Amazon",
-                region=polly.meta.region_name,  # type: ignore[arg-type]
+                regions=[polly.meta.region_name],  # type: ignore[list-item]
                 service="AWS Polly",
                 input_modalities=["TEXT"],
                 output_modalities=["SPEECH"],

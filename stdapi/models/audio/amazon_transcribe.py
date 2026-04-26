@@ -126,7 +126,7 @@ async def initialize_transcribe_models() -> None:
         id=AWS_TRANSCRIBE_MODEL_ID,
         name="Transcribe",
         provider="Amazon",
-        region=transcribe.meta.region_name,  # type: ignore[arg-type]
+        regions=[transcribe.meta.region_name],  # type: ignore[list-item]
         service="AWS Transcribe",
         input_modalities=["SPEECH"],
         output_modalities=["TEXT"],

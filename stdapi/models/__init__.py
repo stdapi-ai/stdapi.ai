@@ -139,7 +139,6 @@ class ModelDetails(BaseModel):
         id: Bedrock model identifier.
         name: Human-readable model name.
         provider: Model provider name (e.g. Anthropic, Amazon).
-        region: Primary AWS region where this model entry was discovered.
         service: AWS service hosting the model.
         input_modalities: Accepted input types (e.g. TEXT, IMAGE).
         output_modalities: Produced output types (e.g. TEXT, IMAGE).
@@ -149,16 +148,14 @@ class ModelDetails(BaseModel):
         end_of_life_time: Deprecation date, if known.
         legacy_time: Date the model was marked legacy, if known.
         public_extended_access_time: Extended public-access end date, if known.
-        inference_profile: Default cross-region inference profile ARN, if any.
         aliases: Alternative model IDs that resolve to this model.
-        available_regions: All regions where the model is accessible.
-        inference_profiles_by_region: Per-region inference profile ARNs.
+        regions: All regions where the model is accessible.
+        inference_profiles: Per-region inference profile ARNs.
     """
 
     id: str
     name: str
     provider: str
-    region: RegionName
     service: str = "AWS Bedrock"
     input_modalities: list[str]
     output_modalities: list[str]
@@ -168,21 +165,21 @@ class ModelDetails(BaseModel):
     end_of_life_time: AwareDatetime | None = None
     legacy_time: AwareDatetime | None = None
     public_extended_access_time: AwareDatetime | None = None
-    inference_profile: str | None = None
     aliases: list[str] | None = None
-    available_regions: list[RegionName] = []
-    inference_profiles_by_region: dict[RegionName, str] = {}
+    regions: list[RegionName]
+    inference_profiles: dict[RegionName, str] = {}
 
     def get_id(self, *, inference_profile: bool = False) -> str:
         """Return the model ID, preferring the inference profile when requested.
 
         Args:
-            inference_profile: When ``True``, return ``self.inference_profile`` if set.
+            inference_profile: When ``True``, return the first inference profile if set.
 
         Returns:
             Model or inference-profile identifier.
         """
-        return (self.inference_profile or self.id) if inference_profile else self.id
+        default_profile = next(iter(self.inference_profiles.values()), None)
+        return (default_profile or self.id) if inference_profile else self.id
 
     def get_id_for_region(
         self, region: RegionName, *, inference_profile: bool = False
@@ -197,9 +194,10 @@ class ModelDetails(BaseModel):
             The appropriate model identifier for the given region.
         """
         if inference_profile:
-            if profile := self.inference_profiles_by_region.get(region):
+            if profile := self.inference_profiles.get(region):
                 return profile
-            return self.inference_profile or self.id
+            default_profile = next(iter(self.inference_profiles.values()), None)
+            return default_profile or self.id
         return self.id
 
 
@@ -768,11 +766,13 @@ async def _get_bedrock_models_from_region(region: RegionName) -> list[ModelDetai
             id=model["modelId"],
             name=model["modelName"],
             provider=model["providerName"],
-            region=region,
+            regions=[region],
             input_modalities=model["inputModalities"],  # type: ignore[arg-type]
             output_modalities=model["outputModalities"],  # type: ignore[arg-type]
             response_streaming=model.get("responseStreamingSupported", False),
-            inference_profile=profiles.get(model["modelId"]),
+            inference_profiles={region: profiles.get(model["modelId"])}  # type: ignore[dict-item]
+            if profiles.get(model["modelId"])
+            else {},
             legacy=model["modelLifecycle"]["status"] == "LEGACY",
             start_of_life_time=model["modelLifecycle"].get("startOfLifeTime"),
             end_of_life_time=model["modelLifecycle"].get("endOfLifeTime"),
@@ -916,11 +916,13 @@ def _apply_user_profiles(all_models: dict[str, ModelDetails]) -> dict[str, str]:
                 "Model not found in available Bedrock models"
             )
             continue
-        model.inference_profile = arn
         if arn_match := (
             match_bedrock_app_profile_arn(arn) or match_bedrock_prompt_router_arn(arn)
         ):
-            model.region = arn_match.group("region")  # type: ignore[assignment]
+            inferred_region: RegionName = arn_match.group("region")  # type: ignore[assignment]
+            if inferred_region not in model.regions:
+                model.regions.append(inferred_region)
+            model.inference_profiles[inferred_region] = arn
     return invalid_arn_mappings
 
 
@@ -1007,14 +1009,13 @@ async def _filter_model(
         models: Accumulator dict updated in-place.
         unavailable_models: Accumulator for models that fail the availability check.
     """
+    model_region = model.regions[0] if model.regions else None
     if model.id in models:
         existing = models[model.id]
-        if model.region not in existing.available_regions:
-            existing.available_regions.append(model.region)
-            if model.inference_profile:
-                existing.inference_profiles_by_region[model.region] = (
-                    model.inference_profile
-                )
+        if model_region is not None and model_region not in existing.regions:
+            existing.regions.append(model_region)
+            if model_profile := model.inference_profiles.get(model_region):
+                existing.inference_profiles[model_region] = model_profile
         return
 
     availability = await bedrock_client.get_foundation_model_availability(
@@ -1029,12 +1030,9 @@ async def _filter_model(
             or availability["agreementAvailability"]["status"] == "AVAILABLE"
         )
     ):
-        model.available_regions = [model.region]
-        if model.inference_profile:
-            model.inference_profiles_by_region = {model.region: model.inference_profile}
         models[model.id] = model
-    else:
-        unavailable_models.setdefault(model.id, {})[model.region] = [
+    elif model_region is not None:
+        unavailable_models.setdefault(model.id, {})[model_region] = [
             issue
             for issue, value, expected in (
                 ("unauthorized", availability["authorizationStatus"], "AUTHORIZED"),
@@ -1183,7 +1181,7 @@ async def _compute_candidate_regions(
     if region:
         return [region]
     model = await get_model_details(model_id)
-    available = model.available_regions or [model.region]
+    regions = model.regions
 
     if s3_input_regions := get_s3_input_regions():
         if priority := [
@@ -1191,34 +1189,32 @@ async def _compute_candidate_regions(
             for r in sorted(
                 s3_input_regions, key=s3_input_regions.__getitem__, reverse=True
             )
-            if r in available
+            if r in regions
         ]:
             # Single region only — S3 content blocks are terminal and cannot be re-resolved.
             return priority[:1]
-        if bucketed := [
-            r for r in available if get_s3_bucket_for_region(r) is not None
-        ]:
+        if bucketed := [r for r in regions if get_s3_bucket_for_region(r) is not None]:
             # No overlap: fall back to the first model region that has a bucket so the
             # S3 object can be copied there before invocation.
             return bucketed[:1]
         msg = (
             f"S3 input data is located in {sorted(s3_input_regions)} but model "
-            f"'{model_id}' is only available in {sorted(available)}."
+            f"'{model_id}' is only available in {sorted(regions)}."
         )
         raise ApiError(msg)
 
     if s3_required:
         if s3_capable := [
-            r for r in available if get_s3_bucket_for_region(r) is not None
+            r for r in regions if get_s3_bucket_for_region(r) is not None
         ]:
             return s3_capable
         msg = (
             f"Model '{model_id}' requires an S3 bucket but none is configured for its "
-            f"available regions {sorted(available)}."
+            f"available regions {sorted(regions)}."
         )
         raise ApiError(msg)
 
-    return available
+    return regions
 
 
 async def _route_and_execute[T](
@@ -1602,8 +1598,9 @@ async def _validate_model_from_arn(arn: str) -> ModelDetails | None:
                 msg = f"model {model_id} not found for ARN: {arn}"
                 raise ApiError(msg) from None
         model = base_model.model_copy()
-        model.inference_profile = arn
-        model.region = region
+        if region not in model.regions:
+            model.regions.append(region)
+        model.inference_profiles[region] = arn
         _USER_PROFILES[arn] = (model, SETTINGS.now() + _CACHE["update_interval"])
         return model
 
