@@ -4,12 +4,60 @@ from typing import Literal
 
 from pydantic import Field
 
-from stdapi.types import BaseModelResponse
+from stdapi.input_file import InputFile  # noqa: TC001
+from stdapi.types import BaseModelRequest, BaseModelResponse
 
 #: Valid values for the ``purpose`` field on a file upload or filter.
 FilePurpose = Literal[
     "assistants", "batch", "fine-tune", "vision", "user_data", "evals"
 ]
+
+#: Description shared by all JSON-body ``file`` fields.
+_FILE_FIELD_DESCRIPTION = (
+    "The file content as a base64 string, data URI (``data:<mime>;base64,<data>``), "
+    "HTTPS URL, or S3 URI (``s3://bucket/key``). "
+    "The server auto-detects the encoding and MIME type."
+)
+
+
+class FileUploadJsonBody(BaseModelRequest):
+    """Request body for file upload via ``application/json``.
+
+    Alternative to ``multipart/form-data`` for MCP tools and HTTP clients that
+    cannot construct multipart requests. The ``file`` field accepts a base64
+    string, a data URI, an HTTPS URL, or an S3 URI — the same sources that
+    ``InputFile`` accepts from strings.
+    """
+
+    file: InputFile = Field(description=_FILE_FIELD_DESCRIPTION)
+    purpose: FilePurpose = Field(
+        default="assistants",
+        description=(
+            "The intended purpose of the uploaded file.\n\n"
+            "Supported values:\n"
+            "- `assistants`: Used in the Assistants API\n"
+            "- `batch`: Used in the Batch API\n"
+            "- `fine-tune`: Used for fine-tuning\n"
+            "- `vision`: Images used for vision fine-tuning\n"
+            "- `user_data`: Flexible file type for any purpose\n"
+            "- `evals`: Used for eval data sets"
+        ),
+    )
+    expires_after_anchor: Literal["created_at"] | None = Field(
+        default=None,
+        description="Anchor timestamp after which the expiration policy applies. Supported anchors: `created_at`.",
+    )
+    expires_after_seconds: int | None = Field(
+        default=None,
+        ge=3600,
+        le=2592000,
+        description=(
+            "The number of seconds after the anchor time that the file will expire.\n"
+            "Must be between 3600 (1 hour) and 2592000 (30 days).\n"
+            "By default, files with `purpose=batch` expire after 30 days and all other files "
+            "are persisted until manually deleted."
+        ),
+    )
 
 
 # Ref: openai.types.file_object.FileObject

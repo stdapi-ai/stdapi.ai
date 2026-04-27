@@ -4,7 +4,8 @@ from typing import Literal
 
 from pydantic import Field
 
-from stdapi.types import BaseModelResponse
+from stdapi.input_file import InputFile  # noqa: TC001
+from stdapi.types import BaseModelRequest, BaseModelResponse
 
 
 # Ref: anthropic.types.beta.FileMetadata
@@ -51,4 +52,22 @@ class FileListResponse(BaseModelResponse):
     )
     last_id: str | None = Field(
         default=None, description="ID of the last file in this page of results."
+    )
+
+
+class AnthropicFileUploadJsonBody(BaseModelRequest):
+    """Request body for Anthropic file upload via ``application/json``.
+
+    Alternative to ``multipart/form-data`` for MCP tools and HTTP clients that
+    cannot construct multipart requests. The ``file`` field accepts a base64
+    string, a data URI, an HTTPS URL, or an S3 URI — the same sources that
+    ``InputFile`` accepts from strings.
+    """
+
+    file: InputFile = Field(
+        description=(
+            "The file content as a base64 string, data URI (``data:<mime>;base64,<data>``), "
+            "HTTPS URL, or S3 URI (``s3://bucket/key``). "
+            "The server auto-detects the encoding and MIME type."
+        )
     )

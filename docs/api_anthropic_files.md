@@ -45,6 +45,7 @@ Upload and manage files via an Anthropic-compatible interface. Files are stored 
 |--------------------------|:----------------------------------------:|------------------------------------------------------------------|
 | **Upload**               |                                          |                                                                  |
 | `file` (multipart)       |   :material-check-circle:{ .success }    | Required binary form field                                       |
+| `file` (JSON body)       | :material-plus-circle:{ .extra-feature } | Base64, data URI, HTTPS URL, or S3 URI — for MCP / AI agents    |
 | **Listing**              |                                          |                                                                  |
 | `after_id` cursor        |   :material-check-circle:{ .success }    | Forward cursor: returns files newer than the given ID            |
 | `before_id` cursor       |   :material-check-circle:{ .success }    | Backward cursor: returns files older than the given ID           |
@@ -89,6 +90,32 @@ curl -X POST "$BASE/v1/files" \
   "downloadable": true
 }
 ```
+
+### Upload via JSON Body (MCP and AI Agents)
+
+When using MCP tools or HTTP clients that cannot construct `multipart/form-data` requests, pass the file as a base64 string, data URI, HTTPS URL, or S3 URI in a JSON body instead.
+
+**Data URI (inline content):**
+
+```bash
+curl -X POST "$BASE/v1/files" \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "anthropic-beta: files-api-2025-04-14" \
+  -H "Content-Type: application/json" \
+  -d '{"file": "data:text/plain;base64,SGVsbG8gV29ybGQ="}'
+```
+
+**HTTPS URL (server fetches the file):**
+
+```bash
+curl -X POST "$BASE/v1/files" \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "anthropic-beta: files-api-2025-04-14" \
+  -H "Content-Type: application/json" \
+  -d '{"file": "https://example.com/document.pdf"}'
+```
+
+All variants return the same `FileMetadata` response as a multipart upload.
 
 ### Retrieve Metadata
 

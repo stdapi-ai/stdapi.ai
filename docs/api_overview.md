@@ -66,6 +66,9 @@ stdapi.ai provides multiple interfaces for exploring and testing the API—choos
 
 When `ENABLE_MCP_STREAMABLE_HTTP=true` or `ENABLE_MCP_SSE=true` is configured, stdapi.ai exposes all its endpoints as MCP tools. The tool names follow the pattern `provider_action`.
 
+!!! tip "JSON body support for file and audio tools"
+    MCP tools send JSON bodies — they cannot construct `multipart/form-data`. All file upload, audio, and upload-part tools therefore accept the file or audio content as a base64 string, data URI (`data:<mime>;base64,<data>`), HTTPS URL, or S3 URI in the `file` / `data` field instead of a binary attachment. The full multipart upload workflow (`openai_upload` → `openai_upload_part` → `openai_upload_complete`) is fully MCP-compatible this way.
+
 | MCP Tool                          | Endpoint                                |
 |-----------------------------------|-----------------------------------------|
 | **OpenAI Tools**                  |                                         |

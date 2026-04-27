@@ -40,6 +40,7 @@ Translate audio from any language to English text with AWS Transcribe + Translat
 |-------------------------|:---------------------------------------:|-------------------------------|
 | **Input**               |                                         |                               |
 | Audio file upload       |   :material-check-circle:{ .success }   | Multipart file upload         |
+| JSON body input         | :material-plus-circle:{ .extra-feature }| Base64, data URI, HTTPS URL, or S3 URI — for MCP / AI agents |
 | Auto language detection |   :material-check-circle:{ .success }   | Automatic source detection    |
 | **Output Formats**      |                                         |                               |
 | `json`                  |   :material-check-circle:{ .success }   | Structured translation        |
@@ -128,6 +129,32 @@ curl -X POST "$BASE/v1/audio/translations" \
   -F file=@spanish-interview.mp3 \
   -F model=amazon.transcribe \
   -F response_format=json
+```
+
+**Translate via JSON body (MCP and AI agents):**
+
+When using MCP tools or HTTP clients that cannot construct multipart requests, pass the audio as a data URI or URL:
+
+```bash
+# Data URI (inline base64)
+curl -X POST "$BASE/v1/audio/translations" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "file": "data:audio/mp3;base64,<base64-encoded-audio>",
+    "model": "amazon.transcribe"
+  }'
+```
+
+```bash
+# HTTPS URL (server fetches the audio)
+curl -X POST "$BASE/v1/audio/translations" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "file": "https://example.com/audio.mp3",
+    "model": "amazon.transcribe"
+  }'
 ```
 
 **Translate foreign audio to English subtitles:**

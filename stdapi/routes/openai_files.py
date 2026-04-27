@@ -2,8 +2,9 @@
 
 from typing import TYPE_CHECKING, Annotated, Literal
 
-from fastapi import APIRouter, Depends, File, Form, Path, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Path, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
+from pydantic import AliasChoices
 
 from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
@@ -23,8 +24,10 @@ from stdapi.types.openai_files import (
     FileDeleted,
     FileObject,
     FilePurpose,
+    FileUploadJsonBody,
     ListFilesResponse,
 )
+from stdapi.utils import missing_file_error, validation_error_handler
 
 
 def _strip(fid: str) -> str:
@@ -78,6 +81,16 @@ def _to_file_object(record: FileRecord) -> FileObject:
         "Uploads a file and returns a `FileObject` with the assigned file ID (OpenAI Files API).\n\n"
         "The returned `file_id` (format: `file-<32 hex chars>`) can be referenced in other tools "
         "such as `openai_image_edit` and `openai_image_variation` to supply images without re-uploading.\n\n"
+        "**Providing the file:** Two request formats are accepted:\n"
+        "- `multipart/form-data`: standard binary file upload via the `file` field.\n"
+        "- `application/json`: pass `file` as a base64 string, data URI "
+        "(`data:<mime>;base64,<data>`), HTTPS URL, or S3 URI — preferred for **MCP tools** and "
+        "AI agents that cannot construct multipart requests.\n\n"
+        "**MCP / AI agent usage:** Call this tool with a JSON body. "
+        "To upload inline content use a data URI: "
+        '`{"file": "data:text/plain;base64,SGVsbG8h", "purpose": "user_data"}`. '
+        "To ingest a remote file pass its URL: "
+        '`{"file": "https://example.com/document.pdf", "purpose": "assistants"}`.\n\n'
         "**File expiry:** Files with `purpose=batch` expire after 30 days by default. "
         "All other files persist until manually deleted. "
         "Use `expires_after[seconds]` (1 hour-30 days) to set a custom TTL.\n\n"
@@ -105,16 +118,47 @@ def _to_file_object(record: FileRecord) -> FileObject:
                             "value": {"purpose": "fine-tune"},
                         },
                     }
-                }
+                },
+                "application/json": {
+                    "examples": {
+                        "data_uri": {
+                            "summary": "Inline content via data URI (MCP / AI agent)",
+                            "value": {
+                                "file": "data:text/plain;base64,SGVsbG8gV29ybGQ=",
+                                "purpose": "user_data",
+                            },
+                        },
+                        "url": {
+                            "summary": "Fetch from URL",
+                            "value": {
+                                "file": "https://example.com/document.pdf",
+                                "purpose": "assistants",
+                            },
+                        },
+                        "base64": {
+                            "summary": "Raw base64",
+                            "value": {
+                                "file": "SGVsbG8gV29ybGQ=",
+                                "purpose": "user_data",
+                            },
+                        },
+                    }
+                },
             }
         }
     },
 )
 async def upload(
+    http_request: Request,
     file: Annotated[
-        UploadFile,
-        File(..., description="The File object (not file name) to be uploaded."),
-    ],
+        UploadFile | None,
+        File(
+            description=(
+                "The File object (not file name) to be uploaded. "
+                "Use an ``application/json`` body to pass a base64 string, data URI, or URL instead."
+            )
+        ),
+    ] = None,
     purpose: Annotated[
         FilePurpose,
         Form(
@@ -133,14 +177,18 @@ async def upload(
     expires_after_anchor: Annotated[  # noqa: ARG001
         Literal["created_at"] | None,
         Form(
-            alias="expires_after[anchor]",
+            validation_alias=AliasChoices(
+                "expires_after_anchor", "expires_after[anchor]"
+            ),
             description="Anchor timestamp after which the expiration policy applies. Supported anchors: `created_at`.",
         ),
     ] = None,
     expires_after_seconds: Annotated[
         int | None,
         Form(
-            alias="expires_after[seconds]",
+            validation_alias=AliasChoices(
+                "expires_after_seconds", "expires_after[seconds]"
+            ),
             ge=3600,
             le=2592000,
             description=(
@@ -154,12 +202,30 @@ async def upload(
 ) -> FileObject:
     """Upload a file.
 
+    Accepts ``multipart/form-data`` (binary upload) or ``application/json``
+    (base64, data URI, HTTPS URL, or S3 URI in the ``file`` field).
+
     Returns:
         FileObject with metadata for the uploaded file.
 
     Raises:
         ApiError: If the upload parameters are invalid or S3 is not configured.
     """
+    if "application/json" in http_request.headers.get("content-type", ""):
+        with validation_error_handler():
+            body = FileUploadJsonBody.model_validate(await http_request.json())
+        log_request_params({"purpose": body.purpose})
+        return log_response_params(
+            _to_file_object(
+                await upload_file(body.file, body.purpose, body.expires_after_seconds)
+            )
+        )
+    if file is None:
+        missing_file_error()
+    if expires_after_seconds is None and (
+        raw := (await http_request.form()).get("expires_after[seconds]")
+    ):
+        expires_after_seconds = int(str(raw))
     log_request_params({"purpose": purpose, "filename": file.filename})
     return log_response_params(
         _to_file_object(

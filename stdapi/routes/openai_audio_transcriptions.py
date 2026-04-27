@@ -2,7 +2,7 @@
 
 from typing import TYPE_CHECKING, Annotated
 
-from fastapi import APIRouter, Depends, File, Form, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
 from sse_starlette import EventSourceResponse, JSONServerSentEvent
 
 from stdapi.api_providers.openai import TAG_OPENAI
@@ -16,6 +16,7 @@ from stdapi.models.capabilities import Capability, register_route_capability
 from stdapi.monitoring import log_request_params, log_request_stream_event
 from stdapi.types.openai_audio import (
     AudioResponseFormat,
+    AudioTranscriptionJsonBody,
     ChunkingStrategy,
     TranscriptionCreateParams,
     TranscriptionCreateResponse,
@@ -24,7 +25,7 @@ from stdapi.types.openai_audio import (
     TranscriptionTextDeltaEvent,
     TranscriptionTextDoneEvent,
 )
-from stdapi.utils import validation_error_handler
+from stdapi.utils import missing_file_error, validation_error_handler
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -66,8 +67,16 @@ async def _transcript_audio_sse(
     operation_id="openai_audio_transcription",
     description=(
         "Transcribes audio into the input language (OpenAI Audio Transcriptions API).\n\n"
-        "Accepts an audio file upload (`multipart/form-data`) and returns the transcription "
-        "as plain text, JSON with metadata, subtitle formats (SRT/VTT), or a stream of SSE events.\n\n"
+        "**Providing the audio file:** Two request formats are accepted:\n"
+        "- `multipart/form-data`: standard binary file upload via the `file` field.\n"
+        "- `application/json`: pass `file` as a base64 string, data URI "
+        "(`data:audio/<fmt>;base64,<data>`), HTTPS URL, or S3 URI — preferred for **MCP tools** and "
+        "AI agents that cannot construct multipart requests.\n\n"
+        "**MCP / AI agent usage:** Call this tool with a JSON body containing the audio as a "
+        "data URI or URL, along with `model` and any other parameters. Example: "
+        '`{"file": "data:audio/mp3;base64,<data>", "model": "amazon.transcribe", "response_format": "json"}`.\n\n'
+        "Returns the transcription as plain text, JSON with metadata, subtitle formats (SRT/VTT), "
+        "or a stream of SSE events.\n\n"
         "**Extended output format (beyond original OpenAI API):**\n"
         "- **`diarized_json`**: Speaker diarization — returns labelled segments identifying "
         "which speaker said what, with timestamps.\n\n"
@@ -101,20 +110,43 @@ async def _transcript_audio_sse(
                             "value": {"stream": True},
                         },
                     }
-                }
+                },
+                "application/json": {
+                    "examples": {
+                        "data_uri": {
+                            "summary": "Audio via data URI (MCP / AI agent)",
+                            "value": {
+                                "file": "data:audio/mp3;base64,<base64-encoded-audio>",
+                                "model": "amazon.transcribe",
+                                "response_format": "json",
+                            },
+                        },
+                        "url": {
+                            "summary": "Audio from URL",
+                            "value": {
+                                "file": "https://example.com/audio.mp3",
+                                "model": "amazon.transcribe",
+                            },
+                        },
+                    }
+                },
             }
         }
     },
     response_model_exclude_none=True,
 )
 async def create_transcription(
+    http_request: Request,
     file: Annotated[
-        UploadFile,
+        UploadFile | None,
         File(
-            ...,
-            description="The audio file object (not file name) to transcribe, in one of these formats: flac, mp3, mp4, mpeg, mpga, m4a, ogg, wav, or webm.",
+            description=(
+                "The audio file to transcribe, in one of these formats: "
+                "flac, mp3, mp4, mpeg, mpga, m4a, ogg, wav, or webm. "
+                "Use an ``application/json`` body to pass a base64 string, data URI, or URL instead."
+            )
         ),
-    ],
+    ] = None,
     *,
     model: Annotated[
         str,
@@ -234,13 +266,12 @@ async def create_transcription(
 ):
     """Transcribes audio into the input language.
 
-    Converts audio to text in the same language as the source audio. The model will
-    use the specified language or automatically detect the language if not provided.
-    Supports multiple output formats including plain text, JSON with metadata, and
-    subtitle formats for video content.
+    Accepts ``multipart/form-data`` (binary upload) or ``application/json``
+    (base64, data URI, HTTPS URL, or S3 URI in the ``file`` field).
 
     Args:
-        file: The audio file to transcribe.
+        http_request: FastAPI request object used to detect content-type.
+        file: The audio file to transcribe (multipart only).
         model: The transcription model to use. Available models: amazon.transcribe.
         language: The language of the input audio (ISO-639-1 code, e.g. `en`). Improves accuracy and latency when provided.
         prompt: Optional style guidance for the model. UNSUPPORTED on this implementation.
@@ -259,22 +290,35 @@ async def create_transcription(
     Raises:
         ApiError: When transcription fails or invalid parameters are provided.
     """
-    with validation_error_handler():
-        request = TranscriptionCreateParams(
-            model=model,
-            language=language,
-            prompt=prompt,
-            chunking_strategy=chunking_strategy,
-            response_format=response_format,
-            timestamp_granularities=(
-                timestamp_granularities.split(",") if timestamp_granularities else []  # type: ignore[arg-type]
-            ),
-            include=include,
-            temperature=temperature,
-            stream=stream,
-            known_speaker_names=known_speaker_names,
-            known_speaker_references=known_speaker_references,
-        )
+    request: TranscriptionCreateParams
+    if "application/json" in http_request.headers.get("content-type", ""):
+        with validation_error_handler():
+            request = AudioTranscriptionJsonBody.model_validate(
+                await http_request.json()
+            )
+        audio_content = request.file
+    elif file is None:
+        missing_file_error()
+    else:
+        audio_content = InputFile(file)
+        with validation_error_handler():
+            request = TranscriptionCreateParams(
+                model=model,
+                language=language,
+                prompt=prompt,
+                chunking_strategy=chunking_strategy,
+                response_format=response_format,
+                timestamp_granularities=(
+                    timestamp_granularities.split(",")
+                    if timestamp_granularities
+                    else []  # type: ignore[arg-type]
+                ),
+                include=include,
+                temperature=temperature,
+                stream=stream,
+                known_speaker_names=known_speaker_names,
+                known_speaker_references=known_speaker_references,
+            )
     log_request_params(request)
 
     model = (
@@ -291,7 +335,7 @@ async def create_transcription(
             await log_request_stream_event(
                 _transcript_audio_sse(
                     get_audio_model(model).stt_stream(
-                        audio_content=InputFile(file),
+                        audio_content=audio_content,
                         response_format=request.response_format,
                         language=request.language,
                         temperature=request.temperature,
@@ -303,7 +347,7 @@ async def create_transcription(
         )
 
     return await get_audio_model(model).stt(
-        audio_content=InputFile(file),
+        audio_content=audio_content,
         response_format=request.response_format,
         language=request.language,
         timestamp_granularities=request.timestamp_granularities,

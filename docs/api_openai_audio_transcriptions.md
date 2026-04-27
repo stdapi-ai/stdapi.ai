@@ -40,6 +40,7 @@ Transcribe audio to text with AWS Transcribe or AWS Bedrock audio-capable models
 |----------------------------|:---------------------------------------:|------------------------------------------------------|
 | **Input**                  |                                         |                                                      |
 | Audio file upload          |   :material-check-circle:{ .success }   | Multipart file upload                                |
+| JSON body input            | :material-plus-circle:{ .extra-feature }| Base64, data URI, HTTPS URL, or S3 URI — for MCP / AI agents |
 | **Output Formats**         |                                         |                                                      |
 | `json`                     |   :material-check-circle:{ .success }   | Structured transcription                             |
 | `text`                     |   :material-check-circle:{ .success }   | Plain text output                                    |
@@ -137,6 +138,33 @@ curl -X POST "$BASE/v1/audio/transcriptions" \
   -F file=@meeting-recording.mp3 \
   -F model=amazon.transcribe \
   -F response_format=json
+```
+
+**Transcribe via JSON body (MCP and AI agents):**
+
+When using MCP tools or HTTP clients that cannot construct multipart requests, pass the audio as a data URI or URL:
+
+```bash
+# Data URI (inline base64)
+curl -X POST "$BASE/v1/audio/transcriptions" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "file": "data:audio/mp3;base64,<base64-encoded-audio>",
+    "model": "amazon.transcribe",
+    "response_format": "json"
+  }'
+```
+
+```bash
+# HTTPS URL (server fetches the audio)
+curl -X POST "$BASE/v1/audio/transcriptions" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "file": "https://example.com/audio.mp3",
+    "model": "amazon.transcribe"
+  }'
 ```
 
 **Generate subtitles:**

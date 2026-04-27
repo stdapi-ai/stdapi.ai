@@ -4,6 +4,7 @@ from typing import Literal
 
 from pydantic import Field
 
+from stdapi.input_file import InputFile  # noqa: TC001
 from stdapi.types import (
     PART_ID_PATTERN,
     UPLOAD_ID_PATTERN,
@@ -30,6 +31,22 @@ class CreateUploadBody(BaseModelRequest):
     )
     purpose: FilePurpose = Field(
         description="The intended purpose of the uploaded file."
+    )
+
+
+class AddUploadPartJsonBody(BaseModelRequest):
+    """Request body for ``POST /v1/uploads/{upload_id}/parts`` via ``application/json``.
+
+    Alternative to ``multipart/form-data`` for MCP tools and HTTP clients that
+    cannot construct multipart requests.  The ``data`` field accepts a base64
+    string, a data URI, an HTTPS URL, or an S3 URI.
+    """
+
+    data: InputFile = Field(
+        description=(
+            "The chunk of bytes as a base64 string, data URI "
+            "(``data:<mime>;base64,<data>``), HTTPS URL, or S3 URI (``s3://bucket/key``)."
+        )
     )
 
 

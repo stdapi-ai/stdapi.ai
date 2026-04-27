@@ -179,11 +179,10 @@ async def create_speech(
         )
     ).id
 
-    resp_format = request.response_format
     tts_response = await get_audio_model(model_id).tts(
         text=request.input,
         voice=request.voice,
-        resp_format=resp_format,
+        resp_format=request.response_format,
         speed=request.speed,
         extra_params=get_extra_model_parameters(model_id, request),
     )
@@ -196,6 +195,6 @@ async def create_speech(
 
     return StreamingResponse(
         content=_speech_audio_bytestream(audio_stream),
-        media_type=f"audio/{_FORMAT_CONTENT_TYPE.get(resp_format, resp_format)}",
-        headers={"Content-Disposition": f"attachment; filename=speech.{resp_format}"},
+        media_type=f"audio/{_FORMAT_CONTENT_TYPE.get(fmt := request.response_format, fmt)}",
+        headers={"Content-Disposition": f"attachment; filename=speech.{fmt}"},
     )

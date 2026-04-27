@@ -5,6 +5,7 @@ from typing import Annotated, Literal, Self
 from pydantic import AliasChoices, BaseModel, Field, model_validator
 
 from stdapi.api_errors import UnsupportedParameterError
+from stdapi.input_file import InputFile  # noqa: TC001
 from stdapi.types import BaseModelRequest, BaseModelRequestWithExtra, BaseModelResponse
 from stdapi.types.openai import Auto
 
@@ -480,7 +481,7 @@ class TranscriptionCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=
         "`0.2` will make it more focused and deterministic.",
     )
     timestamp_granularities: list[AudioTimestampGranularities] = Field(
-        default=["segment"],
+        default_factory=list,
         description="The timestamp granularities to populate for this transcription.\n"
         "`response_format` must be set `verbose_json` to use timestamp granularities.\n"
         "Either or both of these options are supported: `word`, or `segment`.",
@@ -539,3 +540,33 @@ class TranslationCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=Tr
         "Higher values like `0.8` will make the output more random, while lower values like "
         "`0.2` will make it more focused and deterministic.",
     )
+
+
+#: Shared description for the ``file`` field in audio JSON body models.
+_AUDIO_FILE_FIELD_DESCRIPTION = (
+    "The audio file as a base64 string, data URI (``data:audio/<fmt>;base64,<data>``), "
+    "HTTPS URL, or S3 URI (``s3://bucket/key``). "
+    "Supported formats: flac, mp3, mp4, mpeg, mpga, m4a, ogg, wav, webm."
+)
+
+
+class AudioTranscriptionJsonBody(TranscriptionCreateParams):
+    """Request body for audio transcription via ``application/json``.
+
+    Alternative to ``multipart/form-data`` for MCP tools and HTTP clients that
+    cannot construct multipart requests. The ``file`` field accepts a base64
+    string, a data URI, an HTTPS URL, or an S3 URI.
+    """
+
+    file: InputFile = Field(description=_AUDIO_FILE_FIELD_DESCRIPTION)
+
+
+class AudioTranslationJsonBody(TranslationCreateParams):
+    """Request body for audio translation via ``application/json``.
+
+    Alternative to ``multipart/form-data`` for MCP tools and HTTP clients that
+    cannot construct multipart requests. The ``file`` field accepts a base64
+    string, a data URI, an HTTPS URL, or an S3 URI.
+    """
+
+    file: InputFile = Field(description=_AUDIO_FILE_FIELD_DESCRIPTION)

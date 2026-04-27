@@ -49,6 +49,7 @@ Upload and manage files via an OpenAI-compatible interface. Files are stored in 
 |----------------------------|:----------------------------------------:|-----------------------------------------------------------------|
 | **Upload**                 |                                          |                                                                 |
 | `file` (multipart)         |   :material-check-circle:{ .success }    | Required binary form field                                      |
+| `file` (JSON body)         | :material-plus-circle:{ .extra-feature } | Base64, data URI, HTTPS URL, or S3 URI — for MCP / AI agents   |
 | `purpose`                  |   :material-minus-circle:{ .partial }    | Accepted as any string; informational only                      |
 | `expires_after[anchor]`    |   :material-check-circle:{ .success }    | Only `"created_at"` is accepted                                 |
 | `expires_after[seconds]`   |   :material-check-circle:{ .success }    | Range: 3 600 – 2 592 000 (1 hour – 30 days)                     |
@@ -99,6 +100,48 @@ curl -X POST "$BASE/v1/files" \
   "status": "processed"
 }
 ```
+
+### Upload via JSON Body (MCP and AI Agents)
+
+When using MCP tools or HTTP clients that cannot construct `multipart/form-data` requests, pass the file as a base64 string, data URI, HTTPS URL, or S3 URI in a JSON body instead.
+
+**Data URI (inline content):**
+
+```bash
+curl -X POST "$BASE/v1/files" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "file": "data:text/plain;base64,SGVsbG8gV29ybGQ=",
+    "purpose": "user_data"
+  }'
+```
+
+**HTTPS URL (server fetches the file):**
+
+```bash
+curl -X POST "$BASE/v1/files" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "file": "https://example.com/document.pdf",
+    "purpose": "assistants"
+  }'
+```
+
+**Raw base64:**
+
+```bash
+curl -X POST "$BASE/v1/files" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "file": "SGVsbG8gV29ybGQ=",
+    "purpose": "user_data"
+  }'
+```
+
+All three variants return the same `FileObject` response as a multipart upload.
 
 ### Upload with Expiry
 
@@ -207,10 +250,25 @@ curl -X POST "$BASE/v1/uploads" \
 
 Each part except the last must be at least 5 MiB (S3 minimum part size). The last part may be any size.
 
+**Binary upload (multipart/form-data):**
+
 ```bash
 curl -X POST "$BASE/v1/uploads/upload_0190c51c7de7455d9b8c2efe27dfbf67/parts" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -F "data=@part1.bin"
+```
+
+**JSON body (MCP and AI agents):**
+
+When using MCP tools or HTTP clients that cannot construct `multipart/form-data`, pass the chunk as a base64 string, data URI, HTTPS URL, or S3 URI:
+
+```bash
+curl -X POST "$BASE/v1/uploads/upload_0190c51c7de7455d9b8c2efe27dfbf67/parts" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "data": "data:application/octet-stream;base64,AAEC..."
+  }'
 ```
 
 **Response:**
@@ -282,6 +340,8 @@ curl -X POST "$BASE/v1/uploads/upload_0190c51c7de7455d9b8c2efe27dfbf67/cancel" \
 | `filename`               |   :material-check-circle:{ .success }    | Carried through to the final file object                     |
 | `mime_type`              |   :material-check-circle:{ .success }    | Set as the S3 `ContentType` for the assembled object         |
 | `purpose`                |   :material-check-circle:{ .success }    | Echoed to the final file object                              |
+| Part data (binary)       |   :material-check-circle:{ .success }    | Standard `multipart/form-data` binary upload via the `data` field |
+| Part data (JSON body)    | :material-plus-circle:{ .extra-feature } | Base64, data URI, HTTPS URL, or S3 URI — for MCP / AI agents |
 | Part ordering            |   :material-check-circle:{ .success }    | Caller controls order via `part_ids` list at completion      |
 | `md5` checksum           | :material-close-circle:{ .unsupported }  | Accepted but not validated                                   |
 | Session TTL              |   :material-check-circle:{ .success }    | 1 day from creation                                          |

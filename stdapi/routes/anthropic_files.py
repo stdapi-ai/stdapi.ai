@@ -2,7 +2,7 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Path, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Path, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 
 from stdapi.api_providers.anthropic import TAG_ANTHROPIC
@@ -19,7 +19,13 @@ from stdapi.files import (
 from stdapi.input_file import InputFile
 from stdapi.monitoring import log_request_params, log_response_params
 from stdapi.types import FILE_ID_PATTERN
-from stdapi.types.anthropic_files import DeletedFile, FileListResponse, FileMetadata
+from stdapi.types.anthropic_files import (
+    AnthropicFileUploadJsonBody,
+    DeletedFile,
+    FileListResponse,
+    FileMetadata,
+)
+from stdapi.utils import missing_file_error, validation_error_handler
 
 
 def _strip(fid: str) -> str:
@@ -64,16 +70,58 @@ def _to_file_metadata(record: FileRecord) -> FileMetadata:
         "Uploads a file and returns `FileMetadata` with the assigned file ID (Anthropic Files API).\n\n"
         "The returned `id` (format: `file_<32 hex chars>`) can be referenced in `anthropic_message` "
         "requests to supply documents or images without re-uploading them.\n\n"
+        "**Providing the file:** Two request formats are accepted:\n"
+        "- `multipart/form-data`: standard binary file upload via the `file` field.\n"
+        "- `application/json`: pass `file` as a base64 string, data URI "
+        "(`data:<mime>;base64,<data>`), HTTPS URL, or S3 URI — preferred for **MCP tools** and "
+        "AI agents that cannot construct multipart requests.\n\n"
+        "**MCP / AI agent usage:** Call this tool with a JSON body. "
+        "To upload inline content use a data URI: "
+        '`{"file": "data:text/plain;base64,SGVsbG8h"}`. '
+        "To ingest a remote file pass its URL: "
+        '`{"file": "https://example.com/document.pdf"}`.\n\n'
         "**File expiry:** Files persist until manually deleted unless an expiry is configured."
     ),
     response_description="The file metadata.",
     response_model_exclude_none=True,
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "data_uri": {
+                            "summary": "Inline content via data URI (MCP / AI agent)",
+                            "value": {
+                                "file": "data:text/plain;base64,SGVsbG8gV29ybGQ="
+                            },
+                        },
+                        "url": {
+                            "summary": "Fetch from URL",
+                            "value": {"file": "https://example.com/document.pdf"},
+                        },
+                    }
+                }
+            }
+        }
+    },
 )
 async def upload(
-    file: Annotated[UploadFile, File(..., description="The file to upload.")],
+    http_request: Request,
+    file: Annotated[
+        UploadFile | None,
+        File(
+            description=(
+                "The file to upload. "
+                "Use an ``application/json`` body to pass a base64 string, data URI, or URL instead."
+            )
+        ),
+    ] = None,
     _: Annotated[None, Depends(authenticate)] = None,
 ) -> FileMetadata:
     """Upload a file.
+
+    Accepts ``multipart/form-data`` (binary upload) or ``application/json``
+    (base64, data URI, HTTPS URL, or S3 URI in the ``file`` field).
 
     Returns:
         FileMetadata for the uploaded file.
@@ -81,6 +129,12 @@ async def upload(
     Raises:
         ApiError: If S3 is not configured.
     """
+    if "application/json" in http_request.headers.get("content-type", ""):
+        with validation_error_handler():
+            body = AnthropicFileUploadJsonBody.model_validate(await http_request.json())
+        return log_response_params(_to_file_metadata(await upload_file(body.file)))
+    if file is None:
+        missing_file_error()
     log_request_params({"filename": file.filename})
     return log_response_params(_to_file_metadata(await upload_file(InputFile(file))))
 

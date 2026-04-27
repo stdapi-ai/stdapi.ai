@@ -6,10 +6,14 @@ and integration with Anthropic messages.
 
 import io
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 import pytest
 from anthropic import Anthropic
 from anthropic import NotFoundError as AnthropicNotFoundError
+
+if TYPE_CHECKING:
+    from openai import OpenAI
 
 #: Minimal valid PDF bytes for testing document endpoints.
 _MINIMAL_PDF: bytes = (
@@ -252,3 +256,49 @@ class TestAnthropicFiles:
             assert len(response.content[0].text) > 0
         finally:
             anthropic_client.beta.files.delete(f.id)
+
+
+class TestAnthropicFilesJsonBody:
+    """Tests for POST /anthropic/v1/files using an application/json body.
+
+    Verifies that the JSON body path (base64, data URI, URL) is accepted and
+    behaves identically to the multipart form upload.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _skip_on_official_api(self, use_official_api: bool) -> None:
+        """JSON body input is an extension not supported by the official API."""
+        if use_official_api:
+            pytest.skip("JSON body input not supported by the official Anthropic API")
+
+    def test_json_body_missing_file_returns_400(
+        self, openai_client: OpenAI, anthropic_client: Anthropic
+    ) -> None:
+        """JSON body without the required file field returns 400."""
+        http_client = openai_client._client  # noqa: SLF001
+        response = http_client.post(
+            f"{anthropic_client.base_url}v1/files",
+            json={},
+            headers={"Authorization": f"Bearer {openai_client.api_key}"},
+        )
+        assert response.status_code == 400
+
+    def test_json_body_upload_with_data_uri(
+        self, openai_client: OpenAI, anthropic_client: Anthropic
+    ) -> None:
+        """Upload via JSON body with a data URI creates a FileMetadata object."""
+        http_client = openai_client._client  # noqa: SLF001
+        response = http_client.post(
+            f"{anthropic_client.base_url}v1/files",
+            json={"file": "data:text/plain;base64,SGVsbG8gV29ybGQ="},
+            headers={"Authorization": f"Bearer {openai_client.api_key}"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["id"].startswith("file_")
+        assert body["type"] == "file"
+        # Clean up: use the Anthropic client to delete
+        http_client.delete(
+            f"{anthropic_client.base_url}v1/files/{body['id']}",
+            headers={"Authorization": f"Bearer {openai_client.api_key}"},
+        )

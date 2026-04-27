@@ -2,7 +2,7 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Path, UploadFile
+from fastapi import APIRouter, Depends, File, Path, Request, UploadFile
 
 from stdapi.auth import authenticate
 from stdapi.config import SETTINGS
@@ -18,11 +18,13 @@ from stdapi.routes.openai_files import OPENAI_FILES_TAGS, _to_file_object
 from stdapi.types import UPLOAD_ID_PATTERN
 from stdapi.types.openai_files import FileObject  # noqa: TC001
 from stdapi.types.openai_uploads import (
+    AddUploadPartJsonBody,
     CompleteUploadBody,
     CreateUploadBody,
     Upload,
     UploadPart,
 )
+from stdapi.utils import missing_file_error, validation_error_handler
 
 router = APIRouter(prefix=f"{SETTINGS.openai_routes_prefix}/v1", tags=OPENAI_FILES_TAGS)
 
@@ -105,23 +107,30 @@ async def create_upload_endpoint(
     description=(
         "Adds a binary chunk (Part) to an existing multipart upload session (OpenAI Uploads API).\n\n"
         "**Prerequisite:** Create an upload session first with `openai_upload`. "
-        "Call this endpoint once per chunk, then finalise with `openai_upload_complete`."
+        "Call this endpoint once per chunk, then finalise with `openai_upload_complete`.\n\n"
+        "**MCP / AI agent usage:** Pass the chunk as a JSON body with ``data`` set to a base64 string, "
+        "data URI (``data:<mime>;base64,<data>``), HTTPS URL, or S3 URI."
     ),
     response_description="The upload Part object.",
     response_model_exclude_none=True,
 )
 async def add_upload_part(
+    http_request: Request,
     upload_id: _UploadId,
     data: Annotated[
-        UploadFile, File(..., description="The chunk of bytes for this Part.")
-    ],
+        UploadFile | None, File(description="The chunk of bytes for this Part.")
+    ] = None,
     _: Annotated[None, Depends(authenticate)] = None,
 ) -> UploadPart:
     """Upload a part (chunk of bytes) to an existing upload session.
 
+    Accepts ``multipart/form-data`` (binary upload) or ``application/json``
+    (base64, data URI, HTTPS URL, or S3 URI in the ``data`` field).
+
     Args:
+        http_request: FastAPI request object used to detect content-type.
         upload_id: Upload session identifier.
-        data: File chunk to upload.
+        data: File chunk to upload (multipart only).
 
     Returns:
         UploadPart object for the uploaded chunk.
@@ -130,7 +139,15 @@ async def add_upload_part(
         ApiError: If the upload is not found (404) or not pending (400).
     """
     log_request_params({"upload_id": upload_id})
-    part_id, created_at = await add_part(upload_id, await data.read())
+    if "application/json" in http_request.headers.get("content-type", ""):
+        with validation_error_handler():
+            body = AddUploadPartJsonBody.model_validate(await http_request.json())
+        chunk = await body.data.to_bytes()
+    elif data is None:
+        missing_file_error()
+    else:
+        chunk = await data.read()
+    part_id, created_at = await add_part(upload_id, chunk)
     return log_response_params(
         UploadPart(id=part_id, created_at=created_at, upload_id=upload_id)
     )

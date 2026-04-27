@@ -13,6 +13,7 @@ from typing import (
     TYPE_CHECKING,
     Literal,
     LiteralString,
+    Never,
     NotRequired,
     Protocol,
     TypedDict,
@@ -99,6 +100,14 @@ def validation_error_handler() -> Generator[None]:
         yield
     except ValidationError as error:
         raise RequestValidationError(error.errors()) from error
+
+
+def missing_file_error() -> Never:
+    """Raise a validation error for a missing required ``file`` body field."""
+    msg = "ValidationError"
+    raise ValidationError.from_exception_data(
+        msg, [{"type": "missing", "loc": ("body", "file"), "input": None, "ctx": {}}]
+    )
 
 
 def format_language_code(language: str) -> str:

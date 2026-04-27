@@ -5,6 +5,7 @@ expiry enforcement, chat integration, and the full multipart upload
 lifecycle (create, add parts, complete, cancel, error cases).
 """
 
+import base64
 import io
 import time
 from contextlib import suppress
@@ -566,3 +567,124 @@ class TestOpenAIUploads:
             openai_client.uploads.parts.create(
                 upload_id=fake_id, data=io.BytesIO(_PART_A)
             )
+
+
+class TestOpenAIUploadsJsonBody:
+    """Tests for POST /v1/uploads/{upload_id}/parts using an application/json body.
+
+    Verifies that the JSON body path (base64, data URI) is accepted and allows
+    MCP agents to perform multipart uploads end-to-end without multipart/form-data.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _skip_on_official_api(self, use_official_api: bool) -> None:
+        """JSON body input is an extension not supported by the official API."""
+        if use_official_api:
+            pytest.skip("JSON body input not supported by the official OpenAI API")
+
+    def test_json_body_missing_data_returns_400(self, openai_client: OpenAI) -> None:
+        """JSON body without the required data field returns 400."""
+        http_client = openai_client._client  # noqa: SLF001
+        upload = openai_client.uploads.create(
+            bytes=len(_PART_A),
+            filename="json_missing.bin",
+            mime_type="application/octet-stream",
+            purpose="assistants",
+        )
+        try:
+            response = http_client.post(
+                f"{openai_client.base_url}uploads/{upload.id}/parts",
+                json={},
+                headers={"Authorization": f"Bearer {openai_client.api_key}"},
+            )
+            assert response.status_code == 400
+        finally:
+            openai_client.uploads.cancel(upload.id)
+
+    def test_json_body_part_upload_with_data_uri(self, openai_client: OpenAI) -> None:
+        """Full multipart upload workflow using JSON body for the parts endpoint."""
+        http_client = openai_client._client  # noqa: SLF001
+        data_uri = (
+            f"data:application/octet-stream;base64,{base64.b64encode(_PART_A).decode()}"
+        )
+        upload = openai_client.uploads.create(
+            bytes=len(_PART_A),
+            filename="json_part.bin",
+            mime_type="application/octet-stream",
+            purpose="assistants",
+        )
+        try:
+            response = http_client.post(
+                f"{openai_client.base_url}uploads/{upload.id}/parts",
+                json={"data": data_uri},
+                headers={"Authorization": f"Bearer {openai_client.api_key}"},
+            )
+            assert response.status_code == 200
+            part = response.json()
+            assert part["object"] == "upload.part"
+            assert part["upload_id"] == upload.id
+            assert part["id"].startswith("part_")
+
+            completed = openai_client.uploads.complete(
+                upload_id=upload.id, part_ids=[part["id"]]
+            )
+            assert completed.status == "completed"
+            assert completed.file is not None
+        finally:
+            with suppress(OpenAINotFoundError, BadRequestError):
+                openai_client.uploads.cancel(upload.id)
+
+
+class TestOpenAIFilesJsonBody:
+    """Tests for POST /v1/files using an application/json body.
+
+    Verifies that the JSON body path (base64, data URI, URL) is accepted and
+    behaves identically to the multipart form upload.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _skip_on_official_api(self, use_official_api: bool) -> None:
+        """JSON body input is an extension not supported by the official API."""
+        if use_official_api:
+            pytest.skip("JSON body input not supported by the official OpenAI API")
+
+    def test_json_body_missing_file_returns_400(self, openai_client: OpenAI) -> None:
+        """JSON body without the required file field returns 400."""
+        http_client = openai_client._client  # noqa: SLF001
+        response = http_client.post(
+            f"{openai_client.base_url}files",
+            json={"purpose": "user_data"},
+            headers={"Authorization": f"Bearer {openai_client.api_key}"},
+        )
+        assert response.status_code == 400
+
+    def test_json_body_upload_with_data_uri(self, openai_client: OpenAI) -> None:
+        """Upload via JSON body with a data URI creates a FileObject."""
+        http_client = openai_client._client  # noqa: SLF001
+        response = http_client.post(
+            f"{openai_client.base_url}files",
+            json={
+                "file": "data:text/plain;base64,SGVsbG8gV29ybGQ=",
+                "purpose": "user_data",
+            },
+            headers={"Authorization": f"Bearer {openai_client.api_key}"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["id"].startswith("file-")
+        assert body["object"] == "file"
+        assert body["purpose"] == "user_data"
+        openai_client.files.delete(body["id"])
+
+    def test_json_body_upload_with_raw_base64(self, openai_client: OpenAI) -> None:
+        """Upload via JSON body with a raw base64 string creates a FileObject."""
+        http_client = openai_client._client  # noqa: SLF001
+        response = http_client.post(
+            f"{openai_client.base_url}files",
+            json={"file": "SGVsbG8gV29ybGQ=", "purpose": "user_data"},
+            headers={"Authorization": f"Bearer {openai_client.api_key}"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["id"].startswith("file-")
+        openai_client.files.delete(body["id"])

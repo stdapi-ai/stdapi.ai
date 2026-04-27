@@ -279,3 +279,68 @@ class TestAudioTranslations:
         except BadRequestError:
             # Expected behavior for invalid/minimal audio - translation service should handle gracefully
             pass
+
+
+class TestAudioTranslationsJsonBody:
+    """Tests for POST /v1/audio/translations using an application/json body.
+
+    Verifies that the JSON body path (data URI, base64 string) is accepted and
+    routes correctly through the handler without requiring multipart form data.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _skip_on_official_api(self, use_official_api: bool) -> None:
+        """JSON body input is an extension not supported by the official API."""
+        if use_official_api:
+            pytest.skip("JSON body input not supported by the official OpenAI API")
+
+    def test_json_body_missing_file_returns_400(
+        self, openai_client: OpenAI, transcription_model: str
+    ) -> None:
+        """JSON body without the required file field returns 400."""
+        http_client = openai_client._client  # noqa: SLF001
+        response = http_client.post(
+            f"{openai_client.base_url}audio/translations",
+            json={"model": transcription_model},
+            headers={"Authorization": f"Bearer {openai_client.api_key}"},
+        )
+        assert response.status_code == 400
+
+    def test_json_body_invalid_model_returns_404(self, openai_client: OpenAI) -> None:
+        """JSON body path reaches model validation — invalid model returns 404.
+
+        Uses a dummy audio data URI to satisfy input validation; model lookup
+        runs before any audio decoding so the file content is irrelevant.
+        """
+        http_client = openai_client._client  # noqa: SLF001
+        response = http_client.post(
+            f"{openai_client.base_url}audio/translations",
+            json={
+                "file": "data:audio/wav;base64,dGVzdA==",
+                "model": "nonexistent-model-xyz",
+            },
+            headers={"Authorization": f"Bearer {openai_client.api_key}"},
+        )
+        assert response.status_code == 404
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert error["code"] == "model_not_found"
+
+    @pytest.mark.expensive
+    def test_json_body_translation(
+        self,
+        openai_client: OpenAI,
+        sample_audio_file_base64: str,
+        transcription_model: str,
+    ) -> None:
+        """JSON body with audio data URI translates correctly."""
+        http_client = openai_client._client  # noqa: SLF001
+        response = http_client.post(
+            f"{openai_client.base_url}audio/translations",
+            json={"file": sample_audio_file_base64, "model": transcription_model},
+            headers={"Authorization": f"Bearer {openai_client.api_key}"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert isinstance(body.get("text"), str)
+        assert len(body["text"].strip()) > 0
