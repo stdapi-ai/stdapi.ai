@@ -16,7 +16,7 @@ from sse_starlette import JSONServerSentEvent
 
 from stdapi.api_errors import ApiError
 from stdapi.aws_bedrock import build_system_blocks, set_inference_configuration
-from stdapi.input_file import InputFile
+from stdapi.input_file import FileIdInputFile, InputFile
 from stdapi.models import validate_model
 from stdapi.models.chat._adapters import _openai_common
 from stdapi.models.image import get_image_model
@@ -599,8 +599,12 @@ async def _convert_input_content(part: ResponseInputContent) -> ContentBlockType
     match part:
         case ResponseInputText(text=text) | ResponseOutputTextContent(text=text):
             return {"text": text}
+        case ResponseInputImage(file_id=fid) if fid is not None:
+            return await FileIdInputFile(fid).to_bedrock_content_block("image")
         case ResponseInputImage(image_url=url) if url is not None:
             return await InputFile(url).to_bedrock_content_block("image")
+        case ResponseInputFile(file_id=fid) if fid is not None:
+            return await FileIdInputFile(fid).to_bedrock_content_block()
         case ResponseInputFile(file_url=url) if url is not None:
             return await InputFile(url).to_bedrock_content_block()
         case ResponseInputFile(file_data=data) if data is not None:
