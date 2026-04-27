@@ -62,11 +62,17 @@ async def _transcript_audio_sse(
 @router.post(
     "/transcriptions",
     response_model=None,
-    summary="OpenAI - /v1/audio/transcriptions",
+    summary="Transcribe audio to text (OpenAI format)",
     operation_id="openai_audio_transcription",
     description=(
-        "Transcribes audio into the input language.\n\n"
-        "Returns a transcription object in json, diarized_json, or verbose_json format, or a stream of transcript events."
+        "Transcribes audio into the input language (OpenAI Audio Transcriptions API).\n\n"
+        "Accepts an audio file upload (`multipart/form-data`) and returns the transcription "
+        "as plain text, JSON with metadata, subtitle formats (SRT/VTT), or a stream of SSE events.\n\n"
+        "**Extended output format (beyond original OpenAI API):**\n"
+        "- **`diarized_json`**: Speaker diarization — returns labelled segments identifying "
+        "which speaker said what, with timestamps.\n\n"
+        "**Find compatible models:** Call `search_models` with `mcp_tool=openai_audio_transcription` "
+        "to discover model IDs that support speech-to-text."
     ),
     response_description="Returns transcription in the specified format",
     responses={

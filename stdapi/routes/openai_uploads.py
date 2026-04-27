@@ -56,12 +56,16 @@ def _to_upload(
 
 @router.post(
     "/uploads",
-    summary="OpenAI - POST /v1/uploads",
+    summary="Create a multipart upload session for large files (OpenAI format)",
     operation_id="openai_upload",
     description=(
-        "Creates an intermediate Upload object that you can add Parts to.\n\n"
-        "Once you complete the Upload, we will create a File object that contains all the parts you uploaded."
-        "This File is usable in the rest of our platform as a regular File object."
+        "Creates a multipart upload session for uploading large files in chunks (OpenAI Uploads API).\n\n"
+        "**Multipart upload workflow:**\n"
+        "1. Call `openai_upload` to create a session and get an `upload_id`.\n"
+        "2. Upload file chunks with `openai_upload_part` (one call per chunk).\n"
+        "3. Call `openai_upload_complete` with the ordered list of part IDs to assemble the final file.\n"
+        "4. Optionally call `openai_upload_cancel` to abort a pending session.\n\n"
+        "For small files, use `openai_file` instead — it uploads in a single request."
     ),
     response_description="The Upload object.",
     response_model_exclude_none=True,
@@ -96,9 +100,13 @@ async def create_upload_endpoint(
 
 @router.post(
     "/uploads/{upload_id}/parts",
-    summary="OpenAI - POST /v1/uploads/{upload_id}/parts",
+    summary="Upload a chunk in a multipart upload session (OpenAI format)",
     operation_id="openai_upload_part",
-    description="Adds a Part to an Upload object.",
+    description=(
+        "Adds a binary chunk (Part) to an existing multipart upload session (OpenAI Uploads API).\n\n"
+        "**Prerequisite:** Create an upload session first with `openai_upload`. "
+        "Call this endpoint once per chunk, then finalise with `openai_upload_complete`."
+    ),
     response_description="The upload Part object.",
     response_model_exclude_none=True,
 )
@@ -130,9 +138,14 @@ async def add_upload_part(
 
 @router.post(
     "/uploads/{upload_id}/complete",
-    summary="OpenAI - POST /v1/uploads/{upload_id}/complete",
+    summary="Complete a multipart upload and create the final file (OpenAI format)",
     operation_id="openai_upload_complete",
-    description="Completes the Upload. Only call this when all parts have been uploaded.",
+    description=(
+        "Assembles all uploaded parts into a final `File` object and marks the session as completed (OpenAI Uploads API).\n\n"
+        "**Prerequisite:** All parts must have been uploaded via `openai_upload_part`. "
+        "Provide the ordered list of part IDs returned by those calls. "
+        "The resulting file behaves like a file uploaded with `openai_file`."
+    ),
     response_description="The completed Upload object with a nested File object.",
     response_model_exclude_none=True,
 )
@@ -163,9 +176,12 @@ async def complete_upload_endpoint(
 
 @router.post(
     "/uploads/{upload_id}/cancel",
-    summary="OpenAI - POST /v1/uploads/{upload_id}/cancel",
+    summary="Cancel a pending multipart upload session (OpenAI format)",
     operation_id="openai_upload_cancel",
-    description="Cancels the Upload. No Parts may be added after an Upload is cancelled.",
+    description=(
+        "Cancels a pending multipart upload session; no further parts can be added (OpenAI Uploads API).\n\n"
+        "**Prerequisite:** The session must have been created with `openai_upload` and not yet completed or cancelled."
+    ),
     response_description="The cancelled Upload object.",
     response_model_exclude_none=True,
 )

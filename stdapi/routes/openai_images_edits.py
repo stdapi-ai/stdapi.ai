@@ -122,9 +122,18 @@ def _merge_image_parameters(
 @router.post(
     "/images/edits",
     response_model=None,
-    summary="OpenAI - /v1/images/edits",
+    summary="Edit or extend an image using inpainting (OpenAI format)",
     operation_id="openai_image_edit",
-    description="Creates an edited or extended image given one or more source images and a prompt.",
+    description=(
+        "Edits or extends an image based on a text prompt and optional mask (OpenAI Images Edits API).\n\n"
+        "Accepts one or more source images with an optional mask for inpainting, then generates "
+        "an edited version. Supports streaming via SSE for incremental partial-image previews.\n\n"
+        "**Providing images:** Use `multipart/form-data` for direct binary uploads, or "
+        "`application/json` to reference images by Files API ID (obtained from `openai_file`) "
+        "or by URL/data URL.\n\n"
+        "**Find compatible models:** Call `search_models` with `mcp_tool=openai_image_edit` "
+        "to discover model IDs that support image editing."
+    ),
     response_description="The response from the image generation endpoint.",
     responses={
         200: {"description": "Images successfully edited."},

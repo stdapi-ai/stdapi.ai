@@ -147,9 +147,16 @@ async def stream_generator(
 @router.post(
     "/images/generations",
     response_model=ImagesResponse,
-    summary="OpenAI - /v1/images/generations",
+    summary="Generate images from a text prompt (OpenAI format)",
     operation_id="openai_image_generation",
-    description="Creates an image given a prompt.",
+    description=(
+        "Creates one or more images from a text prompt (OpenAI Images Generations API).\n\n"
+        "Returns image URLs or base64-encoded data (`b64_json`). Supports streaming via SSE "
+        "for incremental partial-image previews while generation is in progress (`stream=true`). "
+        "Multiple images can be requested with the `n` parameter.\n\n"
+        "**Find compatible models:** Call `search_models` with `mcp_tool=openai_image_generation` "
+        "to discover model IDs that support image generation."
+    ),
     response_description="The response from the image generation endpoint.",
     responses={
         200: {"description": "Images successfully generated."},

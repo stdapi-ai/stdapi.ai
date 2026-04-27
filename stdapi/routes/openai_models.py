@@ -58,9 +58,14 @@ def format_bedrock_model_to_openai(model: ModelDetails) -> Model:
 
 @router.get(
     "/models",
-    summary="OpenAI - /v1/models",
+    summary="List available models (OpenAI format)",
     operation_id="openai_model_list",
-    description="Lists the currently available models, and provides basic information about each one such as the owner and availability.",
+    description=(
+        "Lists all currently available models with basic metadata (owner, creation date) "
+        "(OpenAI Models API).\n\n"
+        "**Agent note:** For richer filtering — by modality, route, MCP tool, region, or "
+        "legacy status — use `search_models` instead."
+    ),
     response_description="Describes model offerings that can be used with the API",
     response_model_exclude_none=True,
     responses={
@@ -122,9 +127,13 @@ async def list_models(_: Annotated[None, Depends(authenticate)]) -> ModelsRespon
 
 @router.get(
     "/models/{model}",
-    summary="OpenAI - /v1/models/{model}",
+    summary="Retrieve details for a specific model by ID (OpenAI format)",
     operation_id="openai_model_get",
-    description="Retrieves a model instance, providing basic information about the model such as the owner.",
+    description=(
+        "Retrieves basic metadata (owner, creation date) for a single model by ID (OpenAI Models API).\n\n"
+        "**Agent note:** Use `search_models` to look up modalities, supported routes, regions, "
+        "and other extended metadata not available here."
+    ),
     response_description="Describes a model offering that can be used with the API.",
     responses={
         200: {

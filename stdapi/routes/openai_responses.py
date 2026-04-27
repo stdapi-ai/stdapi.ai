@@ -35,12 +35,24 @@ router = APIRouter(
 
 @router.post(
     "",
-    summary="OpenAI - /v1/responses",
+    summary="Generate a model response using the Responses API (OpenAI format)",
     operation_id="openai_response",
     description=(
-        "Creates a model response. Provide text or other input and the model "
-        "will generate a response. Compatible with the OpenAI Responses API.\n\n"
-        "Supports streaming, tool calling, and structured outputs."
+        "Creates a model response (OpenAI Responses API).\n\n"
+        "Supports streaming, tool calling, and structured outputs. "
+        "Returns a `Response` object, or a stream of `ResponseStreamEvent` objects when `stream=true`.\n\n"
+        "**Supported input modalities:**\n"
+        "- **Text:** Plain strings or `input_text` content blocks.\n"
+        "- **Images:** `input_image` content blocks with a URL, data URI, base64 image, "
+        "or Files API `file_id` obtained from `openai_file`.\n"
+        "- **Files:** `input_file` content blocks with a URL, base64 data, "
+        "or Files API `file_id` obtained from `openai_file`.\n"
+        "- **Audio input** is not supported — use `openai_chat_completion` for audio input.\n\n"
+        "**When to use:** This is the newer OpenAI API style. For the classic `messages`-array format, "
+        "use `openai_chat_completion` instead. For Anthropic SDK compatibility, use `anthropic_message`.\n\n"
+        "**Find compatible models:** Call `search_models` with `mcp_tool=openai_response` "
+        "to discover model IDs that support this endpoint. "
+        "For image inputs, also add `input_modalities=IMAGE` to the filter."
     ),
     response_description="A model response.",
     status_code=200,

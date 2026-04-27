@@ -58,9 +58,14 @@ def _to_file_metadata(record: FileRecord) -> FileMetadata:
 
 @router.post(
     "/files",
-    summary="Anthropic - POST /v1/files",
+    summary="Upload a file for use in other API endpoints (Anthropic format)",
     operation_id="anthropic_file",
-    description="Upload a file that can be used across various endpoints.",
+    description=(
+        "Uploads a file and returns `FileMetadata` with the assigned file ID (Anthropic Files API).\n\n"
+        "The returned `id` (format: `file_<32 hex chars>`) can be referenced in `anthropic_message` "
+        "requests to supply documents or images without re-uploading them.\n\n"
+        "**File expiry:** Files persist until manually deleted unless an expiry is configured."
+    ),
     response_description="The file metadata.",
     response_model_exclude_none=True,
 )
@@ -82,9 +87,9 @@ async def upload(
 
 @router.get(
     "/files",
-    summary="Anthropic - GET /v1/files",
+    summary="List uploaded files (Anthropic format)",
     operation_id="anthropic_file_list",
-    description="Returns a list of files.",
+    description="Returns a paginated list of uploaded files with metadata (Anthropic Files API).",
     response_description="A list of file metadata objects.",
     response_model_exclude_none=True,
 )
@@ -148,9 +153,9 @@ async def list_files_endpoint(
 
 @router.get(
     "/files/{file_id}",
-    summary="Anthropic - GET /v1/files/{file_id}",
+    summary="Retrieve metadata for an uploaded file (Anthropic format)",
     operation_id="anthropic_files_get",
-    description="Returns metadata for a specific file.",
+    description="Returns metadata (name, size, MIME type, creation date) for a specific file by ID (Anthropic Files API).",
     response_description="The file metadata.",
     response_model_exclude_none=True,
 )
@@ -174,9 +179,9 @@ async def retrieve_file(
 
 @router.delete(
     "/files/{file_id}",
-    summary="Anthropic - DELETE /v1/files/{file_id}",
+    summary="Delete an uploaded file (Anthropic format)",
     operation_id="anthropic_files_delete",
-    description="Delete a file.",
+    description="Permanently deletes a file by ID and returns a deletion confirmation (Anthropic Files API).",
     response_description="Deletion status.",
     response_model_exclude_none=True,
 )
@@ -202,9 +207,9 @@ async def delete_file_endpoint(
 
 @router.get(
     "/files/{file_id}/content",
-    summary="Anthropic - GET /v1/files/{file_id}/content",
+    summary="Download the raw content of an uploaded file (Anthropic format)",
     operation_id="anthropic_file_content",
-    description="Returns the contents of the specified file.",
+    description="Returns the raw binary content of a file as a streaming download (Anthropic Files API).",
     response_description="The raw file content.",
 )
 async def get_content(

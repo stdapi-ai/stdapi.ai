@@ -2726,6 +2726,9 @@ export MCP_EXCLUDE_TOOLS="openai_files_delete,anthropic_files_delete"
 
 See [API Overview → MCP Tools](api_overview.md#mcp-model-context-protocol) for the full list of available tool names.
 
+!!! warning "Token Usage for Complex API Tools"
+    `anthropic_message`, `openai_chat_completion`, and `openai_response` map to large, complex APIs that may use many tokens (prompt, completion, and tool definitions). Select these tools only if your workflow requires the full API capabilities.
+
 #### `MCP_EXCLUDE_TOOLS` { #mcp-exclude-tools }
 
 :octicons-package-24: **Purpose**

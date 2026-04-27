@@ -50,13 +50,28 @@ router = APIRouter(
 
 @router.post(
     "/completions",
-    summary="OpenAI - /v1/chat/completions",
+    summary="Generate a text response for a chat conversation (OpenAI format)",
     operation_id="openai_chat_completion",
     description=(
-        "Creates a model response for the given chat conversation. Learn more in the text generation, vision, and audio guides.\n"
-        "Parameter support can differ depending on the model used to generate the response, particularly for newer reasoning models. "
-        "Parameters that are only supported for reasoning models are noted below.\n"
-        "Returns a chat completion object, or a streamed sequence of chat completion chunk objects if the request is streamed."
+        "Creates a model response for the given chat conversation (OpenAI Chat Completions API).\n\n"
+        "Supports streaming, tool/function calling, and reasoning models. "
+        "Returns a `ChatCompletion` object, or a stream of `ChatCompletionChunk` objects when `stream=true`.\n\n"
+        "**Extended multimodal inputs (beyond original OpenAI API):**\n"
+        "- **Text, images, and vision:** Pass images via URL, data URI, base64, or Files API `file_id` "
+        "in the `content` array.\n"
+        "- **Audio input:** Include audio content parts (`type: input_audio`) with `wav`/`mp3` data.\n"
+        "- **File references:** Reference uploaded files directly via `type: file` with a `file_id` "
+        "obtained from `openai_file`.\n"
+        '- **Audio output:** Request spoken audio alongside text by setting `modalities: ["text", "audio"]` '
+        "and an `audio` config with the desired voice and format.\n\n"
+        "**When to use:** Prefer this endpoint for OpenAI SDK compatibility or when using the "
+        "`messages` array format. For the newer stateless Responses API, use `openai_response` instead. "
+        "For Anthropic SDK compatibility, use `anthropic_message`.\n\n"
+        "**Find compatible models:** Call `search_models` with `mcp_tool=openai_chat_completion` "
+        "to discover model IDs that support this endpoint. "
+        "When using extended multimodal inputs, also filter by the required modality — for example, "
+        "add `input_modalities=IMAGE` for vision requests or `input_modalities=SPEECH` for audio input, "
+        "so only models that support both the route and the modality are returned."
     ),
     response_description="Represents a chat completion response returned by model, based on the provided input.",
     status_code=200,

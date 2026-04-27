@@ -36,9 +36,18 @@ router = APIRouter(
 @router.post(
     "/translations",
     response_model=None,
-    summary="OpenAI - /v1/audio/translations",
+    summary="Transcribe and translate audio to English text (OpenAI format)",
     operation_id="openai_audio_translation",
-    description="Translates audio into English.",
+    description=(
+        "Transcribes audio from any supported language and translates the result into English "
+        "(OpenAI Audio Translations API).\n\n"
+        "**Output is always English** — regardless of the source language. "
+        "If you want the transcription in the original language, use `openai_audio_transcription` instead.\n\n"
+        "Accepts an audio file upload (`multipart/form-data`) and returns the English text "
+        "as plain text, JSON, or subtitle format (SRT/VTT).\n\n"
+        "**Find compatible models:** Call `search_models` with `mcp_tool=openai_audio_translation` "
+        "to discover model IDs that support speech-to-text translation."
+    ),
     response_description="Returns translation in the specified format",
     responses={
         200: {"description": "Translation completed."},

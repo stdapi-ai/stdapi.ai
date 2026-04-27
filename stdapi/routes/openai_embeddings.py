@@ -40,9 +40,21 @@ router = APIRouter(
 
 @router.post(
     "/embeddings",
-    summary="OpenAI - /v1/embeddings",
+    summary="Generate text embeddings as numeric vectors (OpenAI format)",
     operation_id="openai_embedding",
-    description="Creates an embedding vector representing the input text.",
+    description=(
+        "Creates embedding vector(s) for the input text (OpenAI Embeddings API).\n\n"
+        "Accepts a single string or an array of strings for batch processing. "
+        "Returns fixed-dimensional float vectors (or base64-encoded when `encoding_format=base64`) "
+        "suitable for semantic search, clustering, and retrieval-augmented generation.\n\n"
+        "**Extended input support (beyond original OpenAI API):**\n"
+        "- **Multimodal inputs:** For models that support it, pass URLs, S3 URIs, or data URIs "
+        "instead of plain strings to embed images or other media.\n\n"
+        "**Find compatible models:** Call `search_models` with `mcp_tool=openai_embedding` "
+        "to discover model IDs that support embeddings. "
+        "For multimodal inputs (URLs, S3 URIs), also add `input_modalities=IMAGE` to find models "
+        "that accept both the embedding route and image input."
+    ),
     response_description="Embedding response.",
     responses={
         200: {"description": "Embeddings successfully created."},

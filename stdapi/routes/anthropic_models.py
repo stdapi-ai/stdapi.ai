@@ -56,11 +56,13 @@ if SETTINGS.anthropic_routes_prefix != SETTINGS.openai_routes_prefix:
 
     @router.get(
         "/models",
-        summary="Anthropic - /v1/models",
+        summary="List available text generation models (Anthropic format)",
         operation_id="anthropic_model_list",
         description=(
-            "List available models.\n"
-            "The Models API response can be used to determine which models are available for use in the API."
+            "Lists all available text generation models with display name and creation date "
+            "(Anthropic Models API). Only models that support text input and output are included.\n\n"
+            "**Agent note:** For richer filtering — by modality, route, MCP tool, region, or "
+            "legacy status — use `search_models` instead."
         ),
         response_description="A paginated list of available models.",
         response_model_exclude_none=True,
@@ -162,10 +164,14 @@ if SETTINGS.anthropic_routes_prefix != SETTINGS.openai_routes_prefix:
 
     @router.get(
         "/models/{model_id}",
-        summary="Anthropic - /v1/models/{model_id}",
+        summary="Retrieve details for a specific model by ID (Anthropic format)",
         operation_id="anthropic_model_get",
-        description="Get a specific model.\n"
-        "The Models API response can be used to determine information about a specific model or resolve a model alias to a model ID.",
+        description=(
+            "Retrieves metadata (display name, creation date) for a single model by ID "
+            "(Anthropic Models API).\n\n"
+            "**Agent note:** Use `search_models` to look up modalities, supported routes, regions, "
+            "and other extended metadata not available here."
+        ),
         response_description="Model information.",
         responses={
             200: {

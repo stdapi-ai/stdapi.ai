@@ -50,11 +50,27 @@ router: APIRouter = APIRouter(
 
 @router.post(
     "/messages",
-    summary="Anthropic - /v1/messages",
+    summary="Generate a message response (Anthropic format)",
     operation_id="anthropic_message",
     description=(
-        "Send a structured list of input messages with text and / or image content, and the model will generate the next message in the conversation.\n"
-        "The Messages API can be used for either single queries or stateless multi-turn conversations."
+        "Creates a message response (Anthropic Messages API).\n\n"
+        "Accepts a structured list of input messages and generates the next message in the conversation. "
+        "Returns a `Message` object, or a stream of `MessageStreamEvent` objects when `stream=true`.\n\n"
+        "**Extended multimodal inputs (beyond original Anthropic API):**\n"
+        "- **Images:** Supply images inline (base64/URL) or by Files API `file_id` obtained from `anthropic_file`.\n"
+        "- **Documents:** Supply PDFs (base64/URL), plain text, or files by `file_id`. "
+        "Citation extraction is supported.\n\n"
+        "**Extended capabilities:**\n"
+        "- **Extended thinking:** Control reasoning depth via `thinking` or `output_config.effort` "
+        "(`low`, `medium`, `high`, `xhigh`, `max`).\n"
+        "- **Server tools:** Built-in tools such as `web_search` can be enabled without custom implementations.\n\n"
+        "**When to use:** Use this endpoint for Anthropic SDK compatibility or when you need "
+        "extended thinking, citations, or Anthropic-specific features. "
+        "For OpenAI SDK compatibility, use `openai_chat_completion` or `openai_response` instead.\n\n"
+        "**Find compatible models:** Call `search_models` with `mcp_tool=anthropic_message` "
+        "to discover model IDs that support this endpoint. "
+        "When supplying images or documents, also add `input_modalities=IMAGE` to the filter "
+        "so only models that support both the route and image input are returned."
     ),
     response_description="Represents a response returned by model, based on the provided input.",
     status_code=200,
@@ -162,12 +178,15 @@ async def create_message(
 
 @router.post(
     "/messages/count_tokens",
-    summary="Anthropic - /v1/messages/count_tokens",
+    summary="Count input tokens for a message without generating a response (Anthropic format)",
     operation_id="anthropic_message_count_tokens",
     description=(
-        "Count the number of tokens in a Message.\n"
-        "The Token Count API can be used to count the number of tokens in a Message, "
-        "including tools, images, and documents, without creating it."
+        "Counts the number of tokens a given request would consume, without creating a message.\n\n"
+        "Accounts for all inputs — messages, system prompt, tools, images, and documents. "
+        "Useful for estimating costs or checking whether a prompt fits within a model's context window "
+        "before making a full `anthropic_message` call.\n\n"
+        "**Find compatible models:** Call `search_models` with `mcp_tool=anthropic_message_count_tokens` "
+        "to discover model IDs that support this endpoint."
     ),
     response_description="Token count for the provided message parameters.",
     status_code=200,

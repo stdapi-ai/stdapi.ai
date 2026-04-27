@@ -105,11 +105,14 @@ async def _speech_audio_sse(
 
 @router.post(
     "/speech",
-    summary="OpenAI - /v1/audio/speech",
+    summary="Convert text to speech audio (OpenAI format)",
     operation_id="openai_audio_speech",
     description=(
-        "Generates audio from the input text.\n\n"
-        "Returns the audio file content, or a stream of audio events."
+        "Generates audio from the input text (OpenAI Audio Speech API).\n\n"
+        "Returns the audio file as a streaming download in the requested format, "
+        "or a stream of SSE audio events when `stream_format=sse`.\n\n"
+        "**Find compatible models:** Call `search_models` with `mcp_tool=openai_audio_speech` "
+        "to discover model IDs that support text-to-speech."
     ),
     response_description="Returns audio file in the specified format",
     responses={

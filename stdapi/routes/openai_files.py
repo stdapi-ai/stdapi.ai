@@ -72,9 +72,19 @@ def _to_file_object(record: FileRecord) -> FileObject:
 
 @router.post(
     "/files",
-    summary="OpenAI - POST /v1/files",
+    summary="Upload a file for use in other API endpoints (OpenAI format)",
     operation_id="openai_file",
-    description="Upload a file that can be used across various endpoints.",
+    description=(
+        "Uploads a file and returns a `FileObject` with the assigned file ID (OpenAI Files API).\n\n"
+        "The returned `file_id` (format: `file-<32 hex chars>`) can be referenced in other tools "
+        "such as `openai_image_edit` and `openai_image_variation` to supply images without re-uploading.\n\n"
+        "**File expiry:** Files with `purpose=batch` expire after 30 days by default. "
+        "All other files persist until manually deleted. "
+        "Use `expires_after[seconds]` (1 hour-30 days) to set a custom TTL.\n\n"
+        "For files larger than a few MB, prefer the multipart upload workflow: "
+        "create a session with `openai_upload`, add parts with `openai_upload_part`, "
+        "then finalise with `openai_upload_complete`."
+    ),
     response_description="The uploaded File object.",
     response_model_exclude_none=True,
     openapi_extra={
@@ -160,9 +170,9 @@ async def upload(
 
 @router.get(
     "/files",
-    summary="OpenAI - GET /v1/files",
+    summary="List uploaded files (OpenAI format)",
     operation_id="openai_file_list",
-    description="Returns a list of files.",
+    description="Returns a paginated list of uploaded files, optionally filtered by purpose (OpenAI Files API).",
     response_description="A list of File objects.",
     response_model_exclude_none=True,
 )
@@ -224,9 +234,9 @@ async def list_files_endpoint(
 
 @router.get(
     "/files/{file_id}",
-    summary="OpenAI - GET /v1/files/{file_id}",
+    summary="Retrieve metadata for an uploaded file (OpenAI format)",
     operation_id="openai_files_get",
-    description="Returns information about a specific file.",
+    description="Returns metadata (name, size, purpose, creation time) for a specific file by ID (OpenAI Files API).",
     response_description="The File object.",
     response_model_exclude_none=True,
 )
@@ -250,9 +260,9 @@ async def retrieve_file(
 
 @router.delete(
     "/files/{file_id}",
-    summary="OpenAI - DELETE /v1/files/{file_id}",
+    summary="Delete an uploaded file (OpenAI format)",
     operation_id="openai_files_delete",
-    description="Delete a file.",
+    description="Permanently deletes a file by ID and returns a deletion confirmation (OpenAI Files API).",
     response_description="Deletion status.",
     response_model_exclude_none=True,
 )
@@ -278,9 +288,9 @@ async def delete_file_endpoint(
 
 @router.get(
     "/files/{file_id}/content",
-    summary="OpenAI - GET /v1/files/{file_id}/content",
+    summary="Download the raw content of an uploaded file (OpenAI format)",
     operation_id="openai_file_content",
-    description="Returns the contents of the specified file.",
+    description="Returns the raw binary content of a file as a streaming download (OpenAI Files API).",
     response_description="The raw file content.",
 )
 async def get_content(

@@ -390,6 +390,9 @@ export MCP_INCLUDE_TOOLS="openai_chat_completion,search_models,openai_embedding,
 
 In all cases, file deletion tools (`openai_files_delete`, `anthropic_files_delete`) are intentionally omitted — add them only when your workflow explicitly requires cleanup.
 
+!!! warning "Token Usage for Complex API Tools"
+    `anthropic_message`, `openai_chat_completion`, and `openai_response` map to large, complex APIs that may use many tokens (prompt, completion, and tool definitions). Select these tools only if your workflow requires the full API capabilities.
+
 See [Configuration Reference → MCP](operations_configuration.md#mcp-model-context-protocol) for the full tool list and selection guidance.
 
 ---

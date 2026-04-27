@@ -105,6 +105,9 @@ When `ENABLE_MCP_STREAMABLE_HTTP=true` or `ENABLE_MCP_SSE=true` is configured, s
 !!! tip "Filtering MCP Tools"
     Use `MCP_INCLUDE_TOOLS` or `MCP_EXCLUDE_TOOLS` environment variables to control which tools are exposed. Always include `search_models` so agents can discover the right model ID dynamically. See [Operations Configuration →](operations_configuration.md#mcp-model-context-protocol) for details.
 
+!!! warning "Token Usage for Complex API Tools"
+    `anthropic_message`, `openai_chat_completion`, and `openai_response` map to large, complex APIs that may use many tokens (prompt, completion, and tool definitions). Select these tools only if your workflow requires the full API capabilities.
+
 ## :material-connection: Using stdapi.ai
 
 stdapi.ai is a **drop-in replacement** for both OpenAI and Anthropic APIs. Any application that works with either provider—chatbots, coding assistants, automation tools, custom scripts—works with stdapi.ai by simply changing the API base URL.

@@ -50,9 +50,19 @@ _KNOWN_PARAMS = set(ImageVariationParams.model_fields.keys()) | {"image"}
 
 @router.post(
     "/images/variations",
-    summary="OpenAI - /v1/images/variations",
+    summary="Create variations of an existing image (OpenAI format)",
     operation_id="openai_image_variation",
-    description="Creates a variation of a given image.",
+    description=(
+        "Creates one or more stylistic variations of a given image (OpenAI Images Variations API).\n\n"
+        "**Providing the source image:** Use `multipart/form-data` for a direct binary upload, or "
+        "`application/json` body to reference the image by Files API ID (obtained from `openai_file`) "
+        "or by URL/data URL.\n\n"
+        "Returns image URLs or base64-encoded data. Multiple variations can be requested with `n`. "
+        "**Note:** Streaming is not supported for this endpoint — "
+        "use `openai_image_generation` or `openai_image_edit` if you need streaming with partial previews.\n\n"
+        "**Find compatible models:** Call `search_models` with `mcp_tool=openai_image_variation` "
+        "to discover model IDs that support image variation."
+    ),
     response_description="The response from the image generation endpoint.",
     responses={
         200: {"description": "Image variations successfully created."},
