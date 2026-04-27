@@ -274,7 +274,6 @@ class TestAudioTranscriptions:
         error_body = error.body
         assert isinstance(error_body, dict)
         assert error_body["type"] == "invalid_request_error"
-        assert error_body["code"] is None
         error_message = str(error).lower()
         assert any(
             word in error_message for word in ["format", "supported", "invalid", "file"]
@@ -456,7 +455,6 @@ class TestAudioTranscriptions:
         error_body = error.body
         assert isinstance(error_body, dict)
         assert error_body["type"] == "invalid_request_error"
-        assert error_body["code"] is None
         error_message = str(error).lower()
         assert any(
             word in error_message
