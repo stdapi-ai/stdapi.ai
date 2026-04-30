@@ -1448,9 +1448,9 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
 
     # Extra validations
     _UNSUPPORTED: ClassVar[set[str]] = {
+        # Ignored silently: "store"
         "logprobs",
         "prediction",
-        "store",
         "verbosity",
         "web_search_options",
         "translation_options",
