@@ -357,7 +357,7 @@ Many MCP clients—including Claude Code and Cursor—configure servers via a `m
 
 - Replace `YOUR_STDAPI_URL` with your stdapi.ai deployment URL (e.g., `https://api.example.com` or `http://localhost:8000` for local)
 - The `Authorization` header (and `YOUR_API_KEY`) is only required if your deployment uses API key authentication; omit the `headers` block for local development without a key
-- For ![Anthropic](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } **Claude Code**, add this to `~/.claude/settings.json`
+- For ![Anthropic](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } **Claude Code**, add this to `~/.claude.json`
 
 !!! tip "SSE Transport (Legacy)"
     For older MCP clients that do not support Streamable HTTP, use `"type": "sse"` with the `/sse` endpoint instead. Requires `ENABLE_MCP_SSE=true` on the server.
