@@ -70,6 +70,14 @@ terraform output docs_url
 
 ## :material-check-circle: Make Your First API Call
 
+**Want to explore the API without writing code?** Use the `docs_url` from `terraform output docs_url` to open the interactive Swagger documentation in your browser — you can browse all available endpoints and make live API calls directly from the page, no code required.
+
+!!! warning "503 on the docs page?"
+    If the interactive documentation returns a **503 error**, the ECS service is still starting up. Wait a few minutes and refresh — the container will be ready shortly.
+
+!!! warning "Browser security warning on the docs page?"
+    The endpoint uses the default ELB domain (e.g. `*.elb.amazonaws.com`), which does not have a trusted TLS certificate. Your browser may display a security warning when opening the `docs_url`. You can safely proceed past the warning for testing purposes. To use a custom domain with a valid HTTPS certificate, the [Terraform module](https://github.com/stdapi-ai/terraform-aws-stdapi-ai) supports configuring a custom domain name with ACM certificate management.
+
 stdapi.ai is compatible with both OpenAI and Anthropic SDKs. If you've used either before, you already know how to use it.
 
 === "OpenAI SDK"
