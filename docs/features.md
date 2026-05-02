@@ -128,22 +128,22 @@ Access every model available on AWS Bedrock through a single, consistent API.
 <div class="grid cards" markdown>
 
 - ![Claude](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } **Anthropic Claude**
-  <br>Claude 4.6, Claude Sonnet, Claude Haiku — including reasoning models. Use official Anthropic model names (e.g., `claude-opus-4-6`) — they resolve automatically.
+  <br>Claude Opus, Claude Sonnet, Claude Haiku — including reasoning models. Use official Anthropic model names (e.g., `claude-opus-4-6`) — they resolve automatically.
 
 - ![Amazon Nova](styles/logo_amazon_nova.svg){ style="height: 1.2em; vertical-align: text-bottom;" } **Amazon Nova**
-  <br>Nova Micro, Lite, Pro, Premier, Nova 2 with reasoning. Canvas for images. Multimodal embeddings. Built-in web grounding and code interpreter.
+  <br>Nova — including reasoning-capable variants. Canvas for images. Multimodal embeddings. Built-in web grounding and code interpreter.
 
 - ![Meta Llama](styles/logo_meta.svg){ style="height: 1.2em; vertical-align: text-bottom;" } **Meta Llama**
-  <br>Llama 4 Scout, Maverick, and earlier Llama 3 variants.
+  <br>Llama Scout, Maverick, and earlier Llama variants.
 
 - ![Qwen](styles/logo_qwen.svg){ style="height: 1.2em; vertical-align: text-bottom;" } **Alibaba Qwen**
-  <br>Qwen3 and Qwen Coder — including thinking mode.
+  <br>Qwen and Qwen Coder — including thinking mode.
 
 - ![DeepSeek](styles/logo_deepSeek.svg){ style="height: 1.2em; vertical-align: text-bottom;" } **DeepSeek**
   <br>Latest DeepSeek V3 models with automatic reasoning content surfacing.
 
-- ![Kimi](styles/logo_moonshot.svg){ style="height: 1.2em; vertical-align: text-bottom;" } **Moonshot Kimi K2**
-  <br>Kimi K2 with optional thinking mode.
+- ![Kimi](styles/logo_moonshot.svg){ style="height: 1.2em; vertical-align: text-bottom;" } **Moonshot Kimi**
+  <br>Kimi with optional thinking mode.
 
 - ![Mistral](styles/logo_mistralai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } **Mistral AI**
   <br>Mistral, Mixtral, and Mistral Large variants.
@@ -155,7 +155,7 @@ Access every model available on AWS Bedrock through a single, consistent API.
   <br>Stable Diffusion 3.5, SD3 Ultra, and specialty models (upscale, style, search).
 
 - ![MiniMax](styles/logo_minimax.svg){ style="height: 1.2em; vertical-align: text-bottom;" } **MiniMax & more**
-  <br>MiniMax M2.5, Writer Palmyra, AI21 Jamba, TwelveLabs Marengo video embeddings, and others.
+  <br>MiniMax, Writer Palmyra, AI21 Jamba, TwelveLabs Marengo video embeddings, and others.
 
 </div>
 
@@ -270,7 +270,7 @@ Configure multiple AWS regions to scale your throughput and maximize availabilit
 | Feature                            | Description                                                                                                             |
 |------------------------------------|-------------------------------------------------------------------------------------------------------------------------|
 | **Prompt Caching**                 | Cache system prompts, messages, and tools; granular section control; configurable TTL; cache metrics in every response  |
-| **Reasoning Modes**                | Extended thinking with effort levels (minimal → xhigh) for Claude and Nova 2; `thinking_budget` for token-level control |
+| **Reasoning Modes**                | Extended thinking with effort levels (minimal → xhigh) for Claude and Nova; `thinking_budget` for token-level control |
 | **Bedrock Guardrails**             | Content filtering and safety policies with configurable trace levels                                                    |
 | **Service Tiers**                  | Priority, default, and flex latency tiers per request                                                                   |
 | **Application Inference Profiles** | Custom profiles for workload isolation and cost attribution                                                             |
@@ -352,7 +352,7 @@ stdapi.ai is a drop-in replacement in hundreds of applications and frameworks. C
   <br>Open WebUI, LobeHub, LibreChat, Chatbot UI — private ChatGPT-style experiences on AWS
 
 - :material-code-braces: **AI Coding Assistants**
-  <br>Claude Code, Continue.dev, Cline, Cursor, Windsurf, Aider — backed by Claude 4.6, Kimi K2, Qwen Coder
+  <br>Claude Code, Continue.dev, Cline, Cursor, Windsurf, Aider — backed by Claude, Kimi, Qwen Coder
 
 - :material-graph-outline: **Workflow Automation**
   <br>n8n, Make, Zapier — connect AI to your business processes
@@ -539,7 +539,7 @@ All four solutions below expose an OpenAI-compatible API in front of AWS Bedrock
 </div>
 
 [^1]: Full Bedrock catalog supported; each model must be declared in config (applies to auto-discovery)
-[^2]: Subset of Bedrock models — Claude 3.x/4.x, Nova, Llama, AI21, Cohere, and Stability AI (images) not available; supports mostly newer open-weight models (DeepSeek, Gemma, Qwen, Kimi K2, MiniMax, newer Mistral, etc.) — see [AWS endpoint availability](https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html)
+[^2]: Subset of Bedrock models — Claude 3.x/4.x, Nova, Llama, AI21, Cohere, and Stability AI (images) not available; supports mostly newer open-weight models (DeepSeek, Gemma, Qwen, Kimi, MiniMax, newer Mistral, etc.) — see [AWS endpoint availability](https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html)
 [^3]: CDK reference sample — no WAF, auto-scaling, monitoring, or commercial support
 [^4]: Covered through your existing AWS Support plan
 [^5]: Generalist multi-cloud proxy covering 100+ providers; AWS-specific Bedrock features and security integrations may lag behind dedicated solutions

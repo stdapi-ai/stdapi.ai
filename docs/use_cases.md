@@ -11,7 +11,7 @@ Discover how to integrate stdapi.ai with popular AI applications and tools. stda
 **Why use stdapi.ai for integrations?**
 
 - **No code changes required** - Just update the API endpoint in your application settings
-- **Access 80+ models** - Claude 4.6+, Kimi K2, MiniMax M2.5, Qwen3, GLM 5, Nova 2, Llama 4, Stability AI, and more
+- **Access 80+ models** - Claude, Kimi, MiniMax, Qwen, GLM, Nova, Llama, Stability AI, and more
 - **Enterprise data control** - All processing stays in your AWS account
 - **Pay-per-use pricing** - No subscriptions, pay only AWS Bedrock rates for actual usage
 - **AWS-native features** - Leverage prompt caching, reasoning modes, and guardrails through standard OpenAI and Anthropic APIs
@@ -57,7 +57,7 @@ Integrate AWS Bedrock AI into your business processes and automation workflows. 
 
 ### :material-code-braces: Developer Tools — AI Coding Assistants
 
-Enhance your development workflow with AI-powered coding assistants. stdapi.ai integrates seamlessly with popular IDEs and AI development frameworks, allowing you to leverage AWS Bedrock models (Claude, Kimi K2 thinking, Qwen Coder Next) for code completion, generation, and intelligent assistance.
+Enhance your development workflow with AI-powered coding assistants. stdapi.ai integrates seamlessly with popular IDEs and AI development frameworks, allowing you to leverage AWS Bedrock models (Claude, Kimi thinking, Qwen Coder Next) for code completion, generation, and intelligent assistance.
 
 **What you can do:**
 

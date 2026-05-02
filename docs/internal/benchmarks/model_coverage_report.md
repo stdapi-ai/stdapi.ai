@@ -230,7 +230,7 @@ One representative model per provider family, covering basic generation, streami
 >
 > ³ **Pixtral vision — non-deterministic colour identification:** `mistral.pixtral-large-2502-v1:0` non-deterministically misidentifies the colour of the 1×1 red PNG.  Marked `xfail(strict=False)` in the test suite; the model failed on this run (XFAIL).  `writer.palmyra-vision-7b` carries the same xfail mark but passed on this run (XPASS ✅).
 >
-> ⁴ **Kimi K2.5 streaming — intermittent `incomplete` stop reason:** `moonshotai.kimi-k2.5` occasionally returns `stop_reason: incomplete` on non-tool streaming responses.  This is a non-standard Bedrock stop reason; the server correctly maps it to Responses API `status: "incomplete"` with `incomplete_details.reason: "max_output_tokens"`.  Marked `xfail(strict=False)` in `_BASIC_MODELS` because the T2 test asserts `status == "completed"`; passes on most runs (XPASS ✅).
+> ⁴ **Kimi.5 streaming — intermittent `incomplete` stop reason:** `moonshotai.kimi-k2.5` occasionally returns `stop_reason: incomplete` on non-tool streaming responses.  This is a non-standard Bedrock stop reason; the server correctly maps it to Responses API `status: "incomplete"` with `incomplete_details.reason: "max_output_tokens"`.  Marked `xfail(strict=False)` in `_BASIC_MODELS` because the T2 test asserts `status == "completed"`; passes on most runs (XPASS ✅).
 
 ---
 
@@ -462,7 +462,7 @@ Same T-CC3 parameter-mapping task at `--effort low` and `--effort high`.  Measur
 - **Nova 2 Lite prompt caching**: removing `DISABLE_PROMPT_CACHING` enables Nova 2's Bedrock prompt caching.  Cached tokens reach 495K per test (T-CC5-low), leaving fresh `input_tokens` in the single digits.  Output tokens are the meaningful work metric for Nova 2.
 - **Token counts vs cost**: `cost_usd` from Claude Code was replaced by `in`/`out` token counts.  The cost field used Claude Sonnet pricing for all models (including Nova, Qwen, etc.), making cross-model cost comparisons misleading.  Token counts are model-agnostic and directly reflect the work done.
 - **MiniMax M2.5 flakiness**: MiniMax M2.5 produced a hard failure (non-zero exit / unparseable output) on T-CC3 in one run, then passed in a retry.  The `¹` marker in the T-CC3 table reflects this.  All other models passed every run consistently.
-- **Run-to-run variance**: Agentic turn counts are non-deterministic. Multiple runs of the same model on the same task have produced notably different counts: Kimi K2.5 pipeline trace was 2 turns on one run and 13 turns on another; Qwen3-coder-next pipeline trace was 2 turns on one run and 15 turns on another.  The figures in the tables above reflect the most recent successful run for each model.  The numbers reflect exploration depth on a given invocation, not a stable scalar.
+- **Run-to-run variance**: Agentic turn counts are non-deterministic. Multiple runs of the same model on the same task have produced notably different counts: Kimi.5 pipeline trace was 2 turns on one run and 13 turns on another; Qwen3-coder-next pipeline trace was 2 turns on one run and 15 turns on another.  The figures in the tables above reflect the most recent successful run for each model.  The numbers reflect exploration depth on a given invocation, not a stable scalar.
 
 ---
 

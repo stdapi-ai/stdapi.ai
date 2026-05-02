@@ -1,12 +1,12 @@
 ---
 title: AI Coding Assistants - AWS Bedrock for IDEs
-description: Connect Continue.dev, Cursor, Cline, Claude Code, and other AI coding assistants to AWS Bedrock via stdapi.ai. Use Claude, Kimi K2 thinking, and Qwen Coder in VS Code and JetBrains IDEs.
+description: Connect Continue.dev, Cursor, Cline, Claude Code, and other AI coding assistants to AWS Bedrock via stdapi.ai. Use Claude, Kimi thinking, and Qwen Coder in VS Code and JetBrains IDEs.
 keywords: AI coding assistant AWS, Continue.dev AWS Bedrock, Cursor AWS integration, VS Code AI AWS, AI pair programming, coding copilot AWS, IDE AI integration, private Copilot, Claude Code AWS Bedrock
 ---
 
 # :material-code-braces: AI Coding Assistants Integration
 
-Connect your favorite AI coding assistants to AWS Bedrock models through stdapi.ai. Get intelligent code completions, chat assistance, and codebase understanding with powerful AWS models like Claude, Kimi K2 thinking, and Qwen Coder Next—no vendor lock-in required.
+Connect your favorite AI coding assistants to AWS Bedrock models through stdapi.ai. Get intelligent code completions, chat assistance, and codebase understanding with powerful AWS models like Claude, Kimi thinking, and Qwen Coder Next—no vendor lock-in required.
 
 ## :material-information-outline: About AI Coding Assistants
 
@@ -31,7 +31,7 @@ AI coding assistants are IDE extensions and terminal tools that leverage large l
   <br>Almost any coding assistant that supports OpenAI or Anthropic compatible APIs works with stdapi.ai. Continue.dev, Cursor, Cline, Claude Code, Windsurf, Aider—all compatible with AWS Bedrock models.
 
 - :material-brain: __Best-in-Class Coding Models__
-  <br>Claude 4.6+ for reasoning and architecture, Kimi K2 thinking for complex problem-solving, Qwen Coder Next for specialized coding tasks. Choose the right model for each task.
+  <br>Claude for reasoning and architecture, Kimi thinking for complex problem-solving, Qwen Coder Next for specialized coding tasks. Choose the right model for each task.
 
 - :material-lock: __Code Privacy Guaranteed__
   <br>Your code never leaves your AWS account. Perfect for proprietary codebases, enterprise security requirements, or compliance-sensitive projects.
@@ -92,7 +92,7 @@ Most AI coding assistants follow a similar configuration pattern. The exact menu
     **Recommended models for different tasks:**
 
     - **Advanced reasoning & architecture**: `anthropic.claude-opus-4-7`
-    - **Complex problem-solving**: Kimi K2 thinking models
+    - **Complex problem-solving**: Kimi thinking models
     - **Specialized coding tasks**: `qwen2-coder-next-1-5-instruct-v1:0` (Qwen Coder Next)
     - **Fast completions**: Amazon Nova Micro or Nova Lite
 
@@ -271,7 +271,7 @@ Claude Code is optimized for Claude models and enables reasoning by default. Whe
 }
 ```
 
-**Models without reasoning support** (Qwen, Kimi K2, Mistral, etc.) — disable all Claude-specific features:
+**Models without reasoning support** (Qwen, Kimi, Mistral, etc.) — disable all Claude-specific features:
 
 ```json
 {

@@ -1,6 +1,6 @@
 ---
 title: stdapi.ai - OpenAI & Anthropic Compatible AI Gateway for AWS Bedrock
-description: Run your favorite OpenAI and Anthropic-compatible apps on AWS Bedrock. Access 80+ models including Claude, Kimi K2, MiniMax with enterprise compliance and pay-per-use pricing. 14-day free trial on AWS Marketplace.
+description: Run your favorite OpenAI and Anthropic-compatible apps on AWS Bedrock. Access 80+ models including Claude, Kimi, MiniMax with enterprise compliance and pay-per-use pricing. 14-day free trial on AWS Marketplace.
 keywords: OpenAI API gateway, Anthropic API gateway, AWS Bedrock API, OpenAI compatible API, Anthropic compatible API, AWS AI gateway, OpenAI AWS integration, Anthropic AWS integration, enterprise AI API, AWS Bedrock integration, OpenAI alternative, Anthropic alternative, private AI deployment, HIPAA compliant AI
 hide:
   - toc
@@ -36,8 +36,8 @@ Drop-in API gateway for AWS Bedrock and AI services. Build private AI products o
 - :material-aws: __Purpose-built for AWS Bedrock__
   <br>Deep integration with prompt caching, reasoning modes, guardrails, service tiers, inference profiles, and prompt routers. Not a generic proxy—built to leverage every Bedrock feature.
 
-- :material-brain: __Claude, Kimi K2, MiniMax, and 80+ more__
-  <br>Claude 4.6+ (reasoning), Kimi K2, MiniMax M2.5, Qwen3, Llama 4, GLM 5, Nova 2, Stability AI, and more. Switch models instantly—no vendor lock-in.
+- :material-brain: __Claude, Kimi, MiniMax, and 80+ more__
+  <br>Claude (reasoning), Kimi, MiniMax, Qwen, Llama, GLM, Nova, Stability AI, and more. Switch models instantly—no vendor lock-in.
 
 - :material-rocket-launch: __Deploy in 5 minutes__
   <br>3 lines of Terraform for production on AWS. Or run Docker locally for development. Production-ready infrastructure with HTTPS, WAF, auto-scaling, and monitoring included.
@@ -185,7 +185,7 @@ flowchart LR
 **2. Point your application to stdapi.ai** — just change the base URL in your existing OpenAI or Anthropic SDK code.
 
 **3. Access any Bedrock model immediately**
-Use Claude, Kimi K2, MiniMax, or any Bedrock model. Switch between models, regions, and providers without changing application code.
+Use Claude, Kimi, MiniMax, or any Bedrock model. Switch between models, regions, and providers without changing application code.
 
 **Zero lock-in:** Standard OpenAI and Anthropic APIs mean you can switch back or to another provider anytime.
 
@@ -200,7 +200,7 @@ Use Claude, Kimi K2, MiniMax, or any Bedrock model. Switch between models, regio
   <br>[:octicons-arrow-right-24: Resilience & Failover](operations_resilience.md)
 
 - :material-star-settings: __Advanced Bedrock capabilities__
-  <br>Reasoning modes (Claude 4.6+, Nova 2), prompt caching, guardrails, service tiers, application inference profiles, and prompt routers—all through standard OpenAI API parameters.
+  <br>Reasoning modes (Claude, Nova), prompt caching, guardrails, service tiers, application inference profiles, and prompt routers—all through standard OpenAI API parameters.
 
 - :material-api: __Complete multi-modal API__
   <br>Chat completions, embeddings, image generation/editing/variations, audio speech/transcription/translation. Every route maps OpenAI parameters to Bedrock equivalents.
@@ -230,7 +230,7 @@ Use Claude, Kimi K2, MiniMax, or any Bedrock model. Switch between models, regio
   <br>[:octicons-arrow-right-24: Open WebUI guide](use_cases_openwebui.md) · [:octicons-arrow-right-24: All use cases](use_cases.md)
 
 - :material-code-braces: __Developers & AI Engineers__
-  <br>Use Claude, Kimi K2 thinking, and Qwen Coder Next in VS Code (Continue.dev, Cline, Cursor), JetBrains IDEs, or any OpenAI-compatible tool. Test locally with Docker, deploy to production with Terraform.
+  <br>Use Claude, Kimi thinking, and Qwen Coder Next in VS Code (Continue.dev, Cline, Cursor), JetBrains IDEs, or any OpenAI-compatible tool. Test locally with Docker, deploy to production with Terraform.
   <br>[:octicons-arrow-right-24: Coding assistants guide](use_cases_coding_assistants.md)
 
 - :material-robot: __Workflow Automation Teams__
@@ -242,7 +242,7 @@ Use Claude, Kimi K2, MiniMax, or any Bedrock model. Switch between models, regio
   <br>[:octicons-arrow-right-24: Data Sovereignty & Compliance](operations_compliance.md)
 
 - :material-cash-multiple: __Cost-conscious Organizations__
-  <br>Switch from subscription-based AI services to pay-per-use AWS Bedrock pricing. Pay only for actual usage with no monthly commitments while accessing leading models (Claude, Kimi K2, MiniMax, Qwen3).
+  <br>Switch from subscription-based AI services to pay-per-use AWS Bedrock pricing. Pay only for actual usage with no monthly commitments while accessing leading models (Claude, Kimi, MiniMax, Qwen).
 
 - :material-application-brackets: __Teams Migrating from OpenAI or Anthropic__
   <br>LangChain, LlamaIndex, Haystack, Claude SDK, or custom apps work immediately. Gradual migration supported—run both APIs in parallel during transition.
