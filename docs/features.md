@@ -496,6 +496,7 @@ All four solutions below expose an OpenAI-compatible API in front of AWS Bedrock
 | **OpenAI Files & Uploads API**              |  :material-check:{ .green-check }   |                    —                    |                    —                    |                    —                    |
 | **OpenAI Realtime API**                     |                  —                  |    :material-check:{ .green-check }     |                    —                    |                    —                    |
 | **Cohere Rerank API**                       |                  —                  |    :material-check:{ .green-check }     |                    —                    |                    —                    |
+| **Integrated MCP server**                   |  :material-check:{ .green-check }   |                    —                    |                    —                    |                    —                    |
 | **Bedrock Full model catalog**              |  :material-check:{ .green-check }   | :material-check:{ .yellow-check } [^1]  | :material-check:{ .yellow-check } [^10] | :material-check:{ .yellow-check } [^2]  |
 | **Multimodal inputs**                       | text · image · audio · video · docs |           text · image · docs           |              text · image               |              text · image               |
 | **Multi-region quota multiplication**       |  :material-check:{ .green-check }   | :material-check:{ .yellow-check } [^8]  |                    —                    |                    —                    |
@@ -516,7 +517,7 @@ All four solutions below expose an OpenAI-compatible API in front of AWS Bedrock
 | **Multi-provider support**                  |                  —                  | :material-check:{ .green-check } [^11]  |                    —                    |                    —                    |
 | **Open-source community**                   |                Small                |             Large - ~40k+ ★             |             Medium - ~1k ★              |                    —                    |
 | **Source license**                          |  AGPL-3.0 (community) · commercial  |                   MIT                   |                  MIT-0                  |               AWS service               |
-| **Distribution & supply chain**             |         Marketplace · GHCR          |                pip/PyPI                 |             GitHub (MIT-0)              |               AWS-managed               |
+| **Distribution & supply chain**             |       AWS Marketplace · GHCR        |                pip/PyPI                 |             GitHub (MIT-0)              |               AWS-managed               |
 
 !!! info "About the alternatives"
 
