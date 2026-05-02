@@ -624,6 +624,7 @@ class _DataUriSource(_FileSource):
         Args:
             value: The full ``data:`` URI.
         """
+        self._filename = None
         self._value = value
         self._data_start = value.index(",") + 1
         self._repr = f"{value[: self._data_start + _B64_REPR_LIMIT]}..."
@@ -635,7 +636,6 @@ class _DataUriSource(_FileSource):
         else:  # pragma: no cover
             msg = f"Invalid data URI: {self._value}"
             raise ApiError(msg)
-        self._filename = None
         self._size = b64_decoded_len(self._value, self._data_start)
 
     async def _read(self) -> bytes:
