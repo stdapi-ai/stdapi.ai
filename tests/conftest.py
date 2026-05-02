@@ -113,6 +113,8 @@ environ.update(
         "otel_enabled": "true",
         "tokens_estimation": "true",
         "trusted_hosts": '["*"]',
+        # Model-specific extra configuration
+        "aws_bedrock_legacy": "true",
         "aws_bedrock_model_region_restrict": dumps(
             {
                 # Required for system tools (Like "nova_grounding")
