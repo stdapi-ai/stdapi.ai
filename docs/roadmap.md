@@ -6,13 +6,13 @@ keywords: stdapi.ai releases, AI gateway updates, AWS Bedrock features, API gate
 
 # :material-timeline: Releases & Roadmap
 
-**stdapi.ai is under active development** with regular feature releases. Ten major releases delivered since launch (v1.0-v1.10) with continuous improvements.
+**stdapi.ai is under active development** with regular feature releases.
 
 ## :material-tag-multiple: Recent Releases
 
 See [Release History below](#release-history) for the full changelog of all releases.
 
-**Latest: v1.10** – OpenAI Responses API (full `/v1/responses` endpoint with streaming, function tools, built-in tools, extended reasoning, structured output, and prompt caching)
+**Latest: v1.11** – MCP server, agent discovery, `/search_models` endpoint, and `xhigh` reasoning effort support
 
 ---
 
@@ -127,6 +127,51 @@ The following features may be implemented in future releases based on community 
 ---
 
 ## :material-history: Release History
+
+### v1.11.0 – MCP Server, Agent Discovery & Model Search
+
+This release introduces a **Model Context Protocol (MCP) server**, making all stdapi.ai API endpoints directly accessible as MCP tools for AI agents and agentic workflows. A new `/search_models` endpoint enables precise discovery of models by route, MCP tool, region, streaming support, and legacy status. Agent-friendly discovery metadata is now exposed via RFC 8288 Link headers and an RFC 9727 machine-readable API catalog at `/.well-known/api-catalog`. Endpoints that previously required binary `multipart/form-data` uploads now also accept an `application/json` body for MCP and HTTP client compatibility. The Anthropic Messages API now accepts `xhigh` as a `reasoning_effort` value.
+
+#### :material-robot-outline: MCP Server
+
+| Feature                            | Description                                                                                                                                        |
+|------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------|
+| MCP server (Streamable HTTP & SSE) | All API endpoints exposed as MCP tools; Streamable HTTP and SSE transports can be independently enabled or disabled via configuration              |
+| Configurable MCP tool exposure     | Individual MCP tools can be selectively enabled or restricted via configuration                                                                    |
+| JSON body for binary endpoints     | Audio transcription, audio translation, and image edit endpoints now accept `application/json` with files as base64, data URI, HTTP URL, or S3 URI |
+
+#### :material-magnify: Model Search
+
+| Feature          | Description                                                                                                                                                                                                                                                                                      |
+|------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `/search_models` | New official endpoint to filter models by route, MCP tool name, input/output modalities, region, streaming, and legacy status; returns richer metadata than `/v1/models` or Anthropic `/v1/models`, designed for LLM-driven model selection (replaces BETA and undocumented `/available_models`) |
+
+#### :material-access-point: Agent Discovery
+
+| Feature                                               | Description                                                                                   |
+|-------------------------------------------------------|-----------------------------------------------------------------------------------------------|
+| RFC 8288 Link headers                                 | Root (`/`) endpoint returns Link headers for resource discovery                               |
+| RFC 9727 API catalog (`/.well-known/api-catalog`)     | Machine-readable API catalog for automated agent and tool discovery                           |
+| MCP Server Card (`/.well-known/mcp/server-card.json`) | Advertises available MCP transports and capabilities to AI agents (SEP-1649)                  |
+| `robots.txt` AI signals                               | Updated `robots.txt` with `Content-Signal` directives and explicit `/.well-known/` allow rule |
+
+#### :material-chat: Chat Completions & Messages
+
+| Provider                                                                                | Endpoint/Feature                                           | AWS Backend                                                                                                            |
+|-----------------------------------------------------------------------------------------|------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------|
+| ![Anthropic](styles/logo_anthropic.svg){: style="height:20px;width:20px"} **Anthropic** | `/v1/messages` `reasoning_effort=xhigh` support            | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - Claude models     |
+
+#### :material-label-off: Deprecation Mappings
+
+- Added automatic fallback for `amazon.nova-reel-v1:0` and `anthropic.claude-3-haiku-20240307-v1:0` to their respective replacements
+
+#### Fixes
+
+- Fix reasoning token double-counting in usage calculation in OpenAI Responses API adapter
+- Fix missing `file_id` inputs for image and file processing in OpenAI Responses API adapter
+- Remove `store` parameter from unsupported validations in chat completions to ensure client compatibility
+
+---
 
 ### v1.10.0 – OpenAI Responses API
 
@@ -506,23 +551,23 @@ The initial release establishes core OpenAI API compatibility with AWS Bedrock b
 
 | Feature                                     | AWS Backend                                                                                                                                                                                                                                 |
 |---------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **Bedrock Features**                     |                                                                                                                                                                                                                                             |
+| **Bedrock Features**                        |                                                                                                                                                                                                                                             |
 | Content filtering and safety                | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock Guardrails                                                                                                                               |
 | Cross-region inference                      | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - global/regional                                                                                                                        |
 | Application inference profiles              | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - inference profiles                                                                                                                     |
 | Model parameters (temperature, top_p, etc.) | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - native parameters                                                                                                                      |
 | Multi-region failover                       | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - multi-region                                                                                                                           |
 | Bedrock guardrails                          | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock Guardrails                                                                                                                               |
-| **AWS Services**                         |                                                                                                                                                                                                                                             |
+| **AWS Services**                            |                                                                                                                                                                                                                                             |
 | File storage                                | ![Amazon S3](styles/logo_amazon_s3.svg){: style="height:20px;width:20px"} Amazon S3 - presigned URLs, Transfer Acceleration                                                                                                                 |
-| **Authentication**                       |                                                                                                                                                                                                                                             |
+| **Authentication**                          |                                                                                                                                                                                                                                             |
 | Static token authentication                 | ![AWS Systems Manager](styles/logo_amazon_systems_manager.svg){: style="height:20px;width:20px"} AWS SSM Parameter Store / ![AWS Secrets Manager](styles/logo_amazon_secrets_manager.svg){: style="height:20px;width:20px"} Secrets Manager |
 | Development mode (no auth)                  |                                                                                                                                                                                                                                             |
-| **Observability**                        |                                                                                                                                                                                                                                             |
+| **Observability**                           |                                                                                                                                                                                                                                             |
 | Distributed tracing                         | ![AWS X-Ray](styles/logo_amazon_xray.svg){: style="height:20px;width:20px"} AWS X-Ray + OpenTelemetry                                                                                                                                       |
 | Structured logging                          | ![Amazon CloudWatch](styles/logo_amazon_cloudwatch.svg){: style="height:20px;width:20px"} Amazon CloudWatch (When running on ECS/EKS)                                                                                                       |
-| Health check endpoint                      |                                                                                                                                                                                                                                             |
-| **HTTP/Security**                        |                                                                                                                                                                                                                                             |
+| Health check endpoint                       |                                                                                                                                                                                                                                             |
+| **HTTP/Security**                           |                                                                                                                                                                                                                                             |
 | CORS support                                |                                                                                                                                                                                                                                             |
 | Trusted host validation                     |                                                                                                                                                                                                                                             |
 | Proxy headers (X-Forwarded-*)               |                                                                                                                                                                                                                                             |
