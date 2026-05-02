@@ -2408,7 +2408,8 @@ class MessageCreateParams(BaseModelRequestWithExtra):
     cacheable block in the request.
     """,
     )
-    max_tokens: int = Field(
+    max_tokens: int | None = Field(
+        default=None,
         ge=1,
         validation_alias=AliasChoices("max_tokens", "maxTokens"),
         description="""The maximum number of tokens to generate before stopping.
