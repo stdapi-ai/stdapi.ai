@@ -589,34 +589,6 @@ curl -X POST "$BASE/v1/chat/completions" \
   }'
 ```
 
-**Using Python SDK:**
-
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    api_key="your-api-key",
-    base_url="https://your-endpoint/v1"
-)
-
-# OpenAI-style reasoning (predefined effort levels)
-response = client.chat.completions.create(
-    model="anthropic.claude-opus-4-7",
-    reasoning_effort="high",
-    messages=[{"role": "user", "content": "Complex problem..."}]
-)
-
-# Qwen-style reasoning (fine-grained control)
-response = client.chat.completions.create(
-    model="anthropic.claude-sonnet-4-5-20250929-v1:0",
-    messages=[{"role": "user", "content": "Complex problem..."}],
-    extra_body={
-        "enable_thinking": True,
-        "thinking_budget": 2000
-    }
-)
-```
-
 !!! note "Reasoning Output"
     Models that support reasoning will include their thinking process in `reasoning_content` fields in the response.
 

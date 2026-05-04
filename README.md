@@ -24,6 +24,8 @@ Run your favorite OpenAI and Anthropic-compatible applications on AWS Bedrock. A
 
 ---
 [![Documentation](https://img.shields.io/badge/Documentation-stdapi.ai-526CFE?logo=materialformkdocs&logoColor=ffffff)](https://stdapi.ai)
+[![Samples](https://img.shields.io/badge/Examples-stdapi.ai--samples-24292E?logo=github&logoColor=ffffff)](https://github.com/stdapi-ai/samples)
+[![Lint](https://github.com/stdapi-ai/stdapi.ai/actions/workflows/lint.yml/badge.svg)](https://github.com/stdapi-ai/stdapi.ai/actions/workflows/lint.yml)
 [![Code quality](https://app.codacy.com/project/badge/Grade/a6036988660e47e7bf59821f55105464)](https://app.codacy.com/gh/stdapi-ai/stdapi.ai/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
 
 </div>
@@ -44,43 +46,48 @@ docker run --rm -p 8000:8000 \
 
 > **Podman on Fedora/RHEL (SELinux):** Add `--userns=keep-id` and use `:ro,z` instead of `:ro`
 
-Then make your first API call:
+Open **[http://localhost:8000/docs](http://localhost:8000/docs)** in your browser — Swagger UI lets you explore all endpoints and send live requests without writing any code.
 
-**OpenAI SDK:**
+Or test from the terminal with `curl`:
 
-```python
-from openai import OpenAI
+**List available models:**
 
-client = OpenAI(
-    api_key="not-needed-locally",
-    base_url="http://localhost:8000/v1"
-)
+```bash
+# All discovered models with capabilities, modalities, and supported routes
+curl http://localhost:8000/search_models
 
-response = client.chat.completions.create(
-    model="anthropic.claude-opus-4-6-v1",
-    messages=[{"role": "user", "content": "Hello from AWS Bedrock!"}]
-)
+# Filter — e.g. vision-capable chat models only
+curl "http://localhost:8000/search_models?route=/v1/chat/completions&input_modalities=IMAGE"
 
-print(response.choices[0].message.content)
+# OpenAI-compatible model list
+curl http://localhost:8000/v1/models
 ```
 
-**Anthropic SDK:**
+**OpenAI-compatible chat:**
 
-```python
-from anthropic import Anthropic
-
-client = Anthropic(
-    api_key="not-needed-locally",
-    base_url="http://localhost:8000/anthropic"
-)
-
-message = client.messages.create(
-    model="anthropic.claude-opus-4-6-v1",
-    messages=[{"role": "user", "content": "Hello from AWS Bedrock!"}]
-)
-
-print(message.content[0].text)
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "amazon.nova-micro-v1:0",
+    "messages": [{"role": "user", "content": "Hello from AWS Bedrock!"}]
+  }'
 ```
+
+**Anthropic-compatible chat:**
+
+```bash
+curl http://localhost:8000/anthropic/v1/messages \
+  -H "anthropic-version: 2023-06-01" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "amazon.nova-micro-v1:0",
+    "max_tokens": 1000,
+    "messages": [{"role": "user", "content": "Hello from AWS Bedrock!"}]
+  }'
+```
+
+**Using the official SDKs?** Point `base_url` at `http://localhost:8000/v1` (OpenAI SDK) or `http://localhost:8000/anthropic` (Anthropic SDK) — no other code changes.
 
 **[Local development guide →](https://stdapi.ai/operations_getting_started_local/)**
 
@@ -213,6 +220,6 @@ We welcome contributions! Whether it's bug reports, new features, documentation 
 
 **Ready to run 80+ AI models securely on AWS?**
 
-[Start 14-Day Free Trial](https://stdapi.ai/operations_getting_started/) · [Try Locally with Docker](#-try-it-locally-with-docker)
+[Start 14-Day Free Trial on AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo) · [Deployment guide](https://stdapi.ai/operations_getting_started/) · [Terraform examples](https://github.com/stdapi-ai/samples) · [Try Locally with Docker](#-try-it-locally-with-docker)
 
 </div>

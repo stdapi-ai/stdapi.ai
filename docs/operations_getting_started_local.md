@@ -74,19 +74,27 @@ flowchart LR
 # Check health
 curl http://localhost:8000/health
 
-# List available models
-curl http://localhost:8000/v1/models
+# List all available models
+curl http://localhost:8000/search_models
+
+# Search models by capability (e.g. streaming-capable chat models only)
+curl "http://localhost:8000/search_models?route=/v1/chat/completions&streaming=true"
 
 # Chat completion
 curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "anthropic.claude-opus-4-7",
+    "model": "amazon.nova-micro-v1:0",
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```
 
 **Interactive API docs:** Open [http://localhost:8000/docs](http://localhost:8000/docs) for Swagger UI with all available endpoints.
+
+!!! tip "Try other models"
+    `amazon.nova-micro-v1:0` is a fast, low-cost model — great for confirming the pipeline works. Once you see a response, switch the `model` field to `anthropic.claude-opus-4-7`, `anthropic.claude-sonnet-4-6`, or any other Bedrock model available in your configured regions.
+
+    **Default model discovery:** `GET /search_models` (no parameters) returns every model the gateway has discovered, with full details — provider, input/output modalities, supported routes, regions, streaming and legacy status. Add query parameters to filter by capability (e.g. `?input_modalities=IMAGE&route=/v1/chat/completions` for vision-capable chat models). This is also the recommended endpoint for AI agents to pick the right model ID before invoking another endpoint — see the [Search Models API](api_search_models.md) reference. `GET /v1/models` is also available for strict OpenAI SDK compatibility.
 
 ---
 
@@ -100,6 +108,7 @@ stdapi.ai works with any OpenAI or Anthropic-compatible tool. Here are popular i
 - :material-robot: [**n8n Workflows**](use_cases_n8n.md) — AI-powered automation with 400+ integrations
 - :material-code-braces: [**AI Coding Assistants**](use_cases_coding_assistants.md) — Claude Code, Continue.dev, Cline, Cursor, Aider with AWS Bedrock models
 - :material-book-open-variant: [**API Overview**](api_overview.md) — All endpoints, parameters, and usage examples
+- :material-wrench: [**Troubleshooting**](operations_troubleshooting.md) — Podman/SELinux, auth, model-not-found, and other common errors
 
 </div>
 

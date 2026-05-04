@@ -46,6 +46,11 @@ theme:
 nav:
   - Home: index.md
   - Features: features.md
+  - Get Started:
+      - Overview: getting_started.md
+      - Deploy on AWS: operations_getting_started.md
+      - Run Locally with Docker: operations_getting_started_local.md
+      - Troubleshooting: operations_troubleshooting.md
   - Documentation:
       - API:
           - Overview: api_overview.md
@@ -69,8 +74,8 @@ nav:
           - Native Extensions:
             - Search Models: api_search_models.md
       - Operations:
-          - Getting started: operations_getting_started.md
-          - Local Development: operations_getting_started_local.md
+          - Deploy on AWS: operations_getting_started.md
+          - Run Locally with Docker: operations_getting_started_local.md
           - Advanced Deployment: operations_deploy_advanced.md
           - Configuration: operations_configuration.md
           - Authentication & Security: operations_authentication_security.md
@@ -78,6 +83,7 @@ nav:
           - Logging & Monitoring: operations_logging_monitoring.md
           - Resilience & Failover: operations_resilience.md
           - Data Sovereignty & Compliance: operations_compliance.md
+          - Troubleshooting: operations_troubleshooting.md
       - Use cases:
           - Overview: use_cases.md
           - OpenWebUI integration: use_cases_openwebui.md
@@ -150,6 +156,8 @@ extra:
       link: getting_started.md
     - label: API overview
       link: api_overview.md
+    - label: Troubleshooting
+      link: operations_troubleshooting.md
     - label: View on GitHub
       link: https://github.com/stdapi-ai/stdapi.ai
     - label: AWS Marketplace

@@ -348,44 +348,39 @@ curl -X POST "$BASE/v1/uploads/upload_0190c51c7de7455d9b8c2efe27dfbf67/cancel" \
 
 </div>
 
-### Using the OpenAI Python SDK (Uploads)
+### End-to-End Example (Uploads)
 
-```python
-from openai import OpenAI
-import io
+```bash
+# 1. Create an upload session
+UPLOAD_ID=$(curl -s -X POST "$BASE/v1/uploads" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "bytes": 6291456,
+    "filename": "large_file.bin",
+    "mime_type": "application/octet-stream",
+    "purpose": "assistants"
+  }' | jq -r .id)
 
-client = OpenAI(base_url="http://localhost:8000/v1", api_key="...")
+# 2. Upload parts (first part >= 5 MiB, last part any size)
+PART_A_ID=$(curl -s -X POST "$BASE/v1/uploads/$UPLOAD_ID/parts" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -F "data=@part1.bin" | jq -r .id)
 
-MIN_PART = 5 * 1024 * 1024  # 5 MiB — S3 minimum non-last part size
+PART_B_ID=$(curl -s -X POST "$BASE/v1/uploads/$UPLOAD_ID/parts" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -F "data=@part2.bin" | jq -r .id)
 
-with open("large_file.bin", "rb") as fh:
-    content = fh.read()
-
-# Create upload session
-upload = client.uploads.create(
-    bytes=len(content),
-    filename="large_file.bin",
-    mime_type="application/octet-stream",
-    purpose="assistants",
-)
-
-# Upload parts (first part >= 5 MiB, last part any size)
-part_a = client.uploads.parts.create(
-    upload_id=upload.id, data=io.BytesIO(content[:MIN_PART])
-)
-part_b = client.uploads.parts.create(
-    upload_id=upload.id, data=io.BytesIO(content[MIN_PART:])
-)
-
-# Complete — file is immediately available
-completed = client.uploads.complete(
-    upload_id=upload.id, part_ids=[part_a.id, part_b.id]
-)
-file_id = completed.file.id
-print(f"File ready: {file_id}")
+# 3. Complete — file is immediately available
+FILE_ID=$(curl -s -X POST "$BASE/v1/uploads/$UPLOAD_ID/complete" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{\"part_ids\": [\"$PART_A_ID\", \"$PART_B_ID\"]}" | jq -r .file.id)
+echo "File ready: $FILE_ID"
 
 # Cleanup
-client.files.delete(file_id)
+curl -X DELETE "$BASE/v1/files/$FILE_ID" \
+  -H "Authorization: Bearer $OPENAI_API_KEY"
 ```
 
 ## Chat Completions Integration
@@ -422,36 +417,34 @@ curl -X POST "$BASE/v1/chat/completions" \
 !!! info "Model Support"
     Document and image file types are supported by models that accept those input modalities. Use a vision-capable model (e.g. Claude Haiku or Sonnet) when passing PDFs or images via `file_id`. Amazon Nova models do not currently support document inputs.
 
-## Using the OpenAI Python SDK
+## End-to-End Example
 
-```python
-from openai import OpenAI
-import io
+```bash
+# 1. Upload the file
+FILE_ID=$(curl -s -X POST "$BASE/v1/files" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -F "file=@document.pdf;type=application/pdf" \
+  -F "purpose=assistants" | jq -r .id)
 
-client = OpenAI(base_url="http://localhost:8000/v1", api_key="...")
+# 2. Reference in a chat completion
+curl -X POST "$BASE/v1/chat/completions" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"model\": \"anthropic.claude-haiku-4-5-20251001-v1:0\",
+    \"max_tokens\": 512,
+    \"messages\": [{
+      \"role\": \"user\",
+      \"content\": [
+        {\"type\": \"text\", \"text\": \"What is the key finding in this document?\"},
+        {\"type\": \"file\", \"file\": {\"file_id\": \"$FILE_ID\"}}
+      ]
+    }]
+  }"
 
-# Upload
-with open("document.pdf", "rb") as f:
-    file = client.files.create(file=f, purpose="assistants")
-
-# Reference in chat
-response = client.chat.completions.create(
-    model="anthropic.claude-haiku-4-5-20251001-v1:0",
-    max_tokens=512,
-    messages=[
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "What is the key finding in this document?"},
-                {"type": "file", "file": {"file_id": file.id}},
-            ],
-        }
-    ],
-)
-print(response.choices[0].message.content)
-
-# Cleanup
-client.files.delete(file.id)
+# 3. Cleanup
+curl -X DELETE "$BASE/v1/files/$FILE_ID" \
+  -H "Authorization: Bearer $OPENAI_API_KEY"
 ```
 
 ## Error Reference

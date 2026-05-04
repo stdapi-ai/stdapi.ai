@@ -262,19 +262,19 @@ resource "aws_lb_target_group" "stdapi" {
        ```
 
     3. **Access via Service Discovery** (optional):
-       ```python
-       # If service discovery is enabled, access via private DNS
-       # OpenAI SDK
-       client = OpenAI(
-           api_key="YOUR_API_KEY",
-           base_url="http://stdapi.your-namespace.local:8000/v1"
-       )
+       ```bash
+       # OpenAI-compatible endpoint
+       curl -X POST "http://stdapi.your-namespace.local:8000/v1/chat/completions" \
+         -H "Authorization: Bearer YOUR_API_KEY" \
+         -H "Content-Type: application/json" \
+         -d '{"model": "anthropic.claude-sonnet-4-6", "messages": [{"role": "user", "content": "Hello"}]}'
 
-       # Anthropic SDK
-       client = Anthropic(
-           api_key="YOUR_API_KEY",
-           base_url="http://stdapi.your-namespace.local:8000/anthropic"
-       )
+       # Anthropic-compatible endpoint
+       curl -X POST "http://stdapi.your-namespace.local:8000/anthropic/v1/messages" \
+         -H "x-api-key: YOUR_API_KEY" \
+         -H "anthropic-version: 2023-06-01" \
+         -H "Content-Type: application/json" \
+         -d '{"model": "anthropic.claude-sonnet-4-6", "max_tokens": 1024, "messages": [{"role": "user", "content": "Hello"}]}'
        ```
 
     **Use cases:**

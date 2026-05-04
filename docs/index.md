@@ -14,11 +14,11 @@ hide:
 
 Drop-in API gateway for AWS Bedrock and AI services. Build private AI products on AWS — without exposing your data to third-party AI providers, without subscriptions, and without rewriting your applications. Your existing OpenAI and Anthropic applications work immediately — just change the base URL. Access 80+ models with enterprise privacy, compliance controls, and pay-per-use AWS pricing.
 
-**14-day free trial included — free for local development.**
+**Two ways to try it:** 14-day free trial on AWS Marketplace for production, or **free forever** with the community Docker image for local development.
 
 <div class="buttons" markdown>
-[Start 14-Day Free Trial](operations_getting_started.md){ .md-button .md-button--primary }
-[Try Community Edition](operations_getting_started_local.md){ .md-button }
+[Start 14-Day Free Trial on AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo){ .md-button .md-button--primary }
+[Try Locally with Docker](operations_getting_started_local.md){ .md-button }
 </div>
 </div>
 
@@ -176,16 +176,25 @@ flowchart LR
 
 </div>
 
-**1. Deploy to AWS with Terraform** — use our Terraform module or a managed deployment service.
+### Two paths to your first response
 
-!!! tip "Prefer a hands-off setup?"
+=== ":material-docker: 30 seconds — local Docker"
+
+    One `docker run` command, your existing AWS credentials, and you have a working OpenAI-compatible endpoint on `localhost:8000`. Free community image, AGPL-3.0.
+
+    [:octicons-arrow-right-24: Run Locally with Docker](operations_getting_started_local.md)
+
+=== ":material-aws: 5 minutes — production on AWS"
+
+    Three Terraform commands deploy a production-ready stack: ECS Fargate, HTTPS, WAF, auto-scaling, CloudWatch alarms — all IP-restricted to your current address out of the box. Hardened container from AWS Marketplace with a 14-day free trial.
+
+    [:octicons-arrow-right-24: Deploy on AWS](operations_getting_started.md)
+
+**Then point your application to stdapi.ai** — just change the base URL in your existing OpenAI or Anthropic SDK code. Use Claude, Kimi, MiniMax, or any Bedrock model. Switch between models, regions, and providers without changing application code.
+
+!!! tip "Prefer a hands-off AWS setup?"
 
     A [managed deployment service](https://aws.amazon.com/marketplace/pp/prodview-xknxzjgl7zi5s) can deploy stdapi.ai into your AWS account — no Terraform required.
-
-**2. Point your application to stdapi.ai** — just change the base URL in your existing OpenAI or Anthropic SDK code.
-
-**3. Access any Bedrock model immediately**
-Use Claude, Kimi, MiniMax, or any Bedrock model. Switch between models, regions, and providers without changing application code.
 
 **Zero lock-in:** Standard OpenAI and Anthropic APIs mean you can switch back or to another provider anytime.
 
@@ -288,11 +297,11 @@ Use Claude, Kimi, MiniMax, or any Bedrock model. Switch between models, regions,
 <div class="cta-banner" markdown>
 <strong>Ready to run 80+ AI models securely on AWS?</strong>
 <div class="buttons" markdown>
-[Start 14-Day Free Trial](operations_getting_started.md){ .md-button .md-button--primary }
-[Try Docker Locally](operations_getting_started_local.md){ .md-button }
+[Start 14-Day Free Trial on AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo){ .md-button .md-button--primary }
+[Try Locally with Docker](operations_getting_started_local.md){ .md-button }
 </div>
 
-**Production:** Terraform module with ECS + hardened container via AWS Marketplace (14-day free trial)<br>
+**Production:** Terraform module with ECS + hardened container via AWS Marketplace (14-day free trial, $0.10/container-hour, no markup on model usage)<br>
 **Community:** Free Docker image for local development and open-source projects (AGPL-3.0)
 
 </div>

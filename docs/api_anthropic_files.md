@@ -236,61 +236,37 @@ curl -X POST "$BASE/v1/messages" \
   }'
 ```
 
-## Using the Anthropic Python SDK
+## End-to-End Example
 
-```python
-import io
-from anthropic import Anthropic
+```bash
+# 1. Upload a file
+FILE_ID=$(curl -s -X POST "$BASE/v1/files" \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "anthropic-beta: files-api-2025-04-14" \
+  -F "file=@document.pdf;type=application/pdf" | jq -r .id)
+echo "Uploaded: $FILE_ID"
 
-client = Anthropic(base_url="http://localhost:8000", api_key="...")
+# 2. Reference in a message
+curl -X POST "$BASE/v1/messages" \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "anthropic-beta: files-api-2025-04-14" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"model\": \"anthropic.claude-haiku-4-5-20251001-v1:0\",
+    \"max_tokens\": 512,
+    \"messages\": [{
+      \"role\": \"user\",
+      \"content\": [
+        {\"type\": \"document\", \"source\": {\"type\": \"file\", \"file_id\": \"$FILE_ID\"}},
+        {\"type\": \"text\", \"text\": \"What is the key finding in this document?\"}
+      ]
+    }]
+  }"
 
-# Upload
-file = client.beta.files.upload(
-    file=("document.pdf", open("document.pdf", "rb"), "application/pdf")
-)
-print(f"Uploaded: {file.id}")
-
-# Reference in a message
-response = client.beta.messages.create(
-    model="anthropic.claude-haiku-4-5-20251001-v1:0",
-    max_tokens=512,
-    messages=[
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "document",
-                    "source": {"type": "file", "file_id": file.id},
-                },
-                {
-                    "type": "text",
-                    "text": "What is the key finding in this document?",
-                },
-            ],
-        }
-    ],
-)
-print(response.content[0].text)
-
-# Cleanup
-client.beta.files.delete(file.id)
-```
-
-### Paginating with the SDK
-
-The Anthropic SDK's `Page` object supports forward and backward traversal:
-
-```python
-# List all files (auto-paginated)
-page = client.beta.files.list(limit=50)
-for file in page.data:
-    print(file.id, file.filename)
-
-# Forward cursor
-next_page = client.beta.files.list(after_id=page.last_id)
-
-# Backward cursor
-prev_page = client.beta.files.list(before_id=page.first_id)
+# 3. Cleanup
+curl -X DELETE "$BASE/v1/files/$FILE_ID" \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "anthropic-beta: files-api-2025-04-14"
 ```
 
 ## Error Reference
