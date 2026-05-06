@@ -28,8 +28,7 @@ register_route_capability(
 )
 
 router = APIRouter(
-    prefix=f"{SETTINGS.openai_routes_prefix}/v1/responses",
-    tags=["Responses", TAG_OPENAI],
+    prefix=f"{SETTINGS.openai_routes_prefix}/v1/responses", tags=["Chat", TAG_OPENAI]
 )
 
 
