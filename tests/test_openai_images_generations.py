@@ -363,7 +363,7 @@ class TestImageGeneration:
         """
         response = openai_client.images.generate(
             prompt="A geometric shape", model=image_generation_model, n=1, size=size
-        )  # type: ignore[call-overload]
+        )
 
         assert response.created is not None
         validate_timestamp(response.created)
@@ -510,7 +510,7 @@ class TestImageGeneration:
     ) -> None:
         """Test error handling for invalid size parameter."""
         with pytest.raises(BadRequestError) as exc_info:
-            openai_client.images.generate(  # type: ignore[call-overload]
+            openai_client.images.generate(
                 prompt="A test image",
                 model=image_generation_model,
                 n=1,
