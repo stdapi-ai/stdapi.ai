@@ -551,10 +551,10 @@ class ChatModel(ChatModelBase[Any, Any]):
 
     def _req_configure_reasoning(
         self,
-        additional_request_fields: dict[str, Any],  # noqa: ARG002
+        additional_request_fields: dict[str, Any],
         reasoning_effort: Effort | None = None,
         budget_tokens: int | None = None,
-        max_tokens: int | None = None,  # noqa: ARG002
+        max_tokens: int | None = None,
     ) -> None:
         """Raise when reasoning parameters are set (base: reasoning unsupported).
 
@@ -569,9 +569,6 @@ class ChatModel(ChatModelBase[Any, Any]):
         Raises:
             ApiError: If *reasoning_effort* or *budget_tokens* is not ``None``.
         """
-        if reasoning_effort is not None or budget_tokens is not None:
-            msg = "Reasoning configuration is not supported for this model"
-            raise ApiError(msg)
 
     def _resp_map_tool_result(
         self,

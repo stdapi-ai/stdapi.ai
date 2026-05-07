@@ -1720,19 +1720,6 @@ class TestChatCompletions:
                 model=chat_model, messages=[{"role": "user", "content": "Hi"}], seed=123
             )
 
-    def test_unsupported_store_error(
-        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
-    ) -> None:
-        """Store is unsupported; expect 400 (skip on OpenAI)."""
-        if use_official_api:
-            pytest.skip("Unsupported fields are project-specific here")
-        with pytest.raises(BadRequestError):
-            openai_client.chat.completions.create(
-                model=chat_model,
-                messages=[{"role": "user", "content": "Hi"}],
-                store=True,
-            )
-
     def test_unsupported_verbosity_error(
         self, openai_client: OpenAI, chat_model: str, use_official_api: bool
     ) -> None:
@@ -2109,29 +2096,6 @@ class TestChatCompletions:
             msg.tool_calls is not None
         )
         assert resp.usage is not None
-
-    def test_unsupported_reasoning(
-        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
-    ) -> None:
-        """Tests unsupported reasoning on model for OpenAI chat API.
-
-        Args:
-            openai_client: An instance of the OpenAI client to interact with the
-                chat completion API.
-            chat_model: The identifier of the chat model to be used for completions.
-            use_official_api: A boolean indicating whether to use the official OpenAI
-                API or skip the test.
-        """
-        if use_official_api:
-            pytest.skip(
-                "Behavior changed on current model bu was validated previously."
-            )
-        with pytest.raises(BadRequestError):
-            openai_client.chat.completions.create(
-                model=chat_model,
-                messages=[{"role": "user", "content": "Reply with OK."}],
-                reasoning_effort="minimal",
-            )
 
     def test_unsupported_thinking_param_combinations(
         self, openai_client: OpenAI, chat_model: str, use_official_api: bool

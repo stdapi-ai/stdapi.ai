@@ -254,10 +254,7 @@ When you pin a non-Claude Bedrock model ID, Claude Code may not recognize it and
 
 #### :material-robot: Using Non-Claude Models
 
-Claude Code is optimized for Claude models and enables reasoning by default. When routing non-Claude models through stdapi.ai, this can cause API errors if the model does not support reasoning parameters. Configure based on the model's capabilities:
-
-!!! warning "Reasoning Enabled by Default"
-    Claude Code sends reasoning parameters to the model by default. If the model does not support them, this causes an API error. Always configure reasoning support explicitly when using non-Claude models.
+Claude Code is optimized for Claude models and enables reasoning by default. When routing non-Claude models through stdapi.ai, incompatible reasoning parameters are silently ignored — no special configuration is needed to avoid API errors.
 
 **Models with effort support** (Nova 2, DeepSeek V3) — declare `effort` capability:
 
@@ -265,31 +262,14 @@ Claude Code is optimized for Claude models and enables reasoning by default. Whe
 {
   "env": {
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "amazon.nova-2-lite-v1:0",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES": "effort",
-    "DISABLE_PROMPT_CACHING": "1"
+    "ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES": "effort"
   }
 }
 ```
-
-**Models without reasoning support** (Qwen, Kimi, Mistral, etc.) — disable all Claude-specific features:
-
-```json
-{
-  "env": {
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "moonshot.kimi-k2-instruct",
-    "DISABLE_PROMPT_CACHING": "1",
-    "MAX_THINKING_TOKENS": "0"
-  }
-}
-```
-
-!!! warning "`MAX_THINKING_TOKENS=0` disables all reasoning"
-    Setting `MAX_THINKING_TOKENS=0` disables **all** reasoning — including effort-mode thinking. Do **not** use it alongside `effort` capability; it suppresses the model's reasoning even when effort is declared.
 
 Common configuration issues with non-Claude models:
 
 - **Prompt caching** — Claude Code sends `cache_control` headers that can cause errors on models that handle caching differently. Set `DISABLE_PROMPT_CACHING=1` to suppress them.
-- **Extended thinking** — Claude Code enables reasoning by default. For models without any reasoning support, set `MAX_THINKING_TOKENS=0` to disable it entirely.
 - **Output token limit** — Claude Code defaults to requesting up to 32 000 output tokens, which exceeds the maximum for many non-Claude models. Set `CLAUDE_CODE_MAX_OUTPUT_TOKENS` to a value within the model's limit to avoid `max_tokens` validation errors.
 
 ```json
@@ -297,7 +277,6 @@ Common configuration issues with non-Claude models:
   "env": {
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "moonshot.kimi-k2-instruct",
     "DISABLE_PROMPT_CACHING": "1",
-    "MAX_THINKING_TOKENS": "0",
     "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "128000"
   }
 }

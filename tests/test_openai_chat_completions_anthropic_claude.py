@@ -1617,25 +1617,6 @@ class TestAnthropicClaudeChatCompletions:
         assert len(resp.choices) >= 1
         assert resp.choices[0].message.role == "assistant"
 
-    def test_reasoning_effort_on_non_claude_model_error(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
-        """reasoning_effort on a non-Claude model raises a BadRequestError."""
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
-
-        with pytest.raises(BadRequestError) as exc_info:
-            openai_client.chat.completions.create(
-                model=_NON_CLAUDE_MODEL,
-                messages=[{"role": "user", "content": "Reply with OK."}],
-                reasoning_effort="medium",
-            )
-        error = exc_info.value
-        assert error.status_code == 400
-        error_body = error.body
-        assert isinstance(error_body, dict)
-        assert error_body["type"] == "invalid_request_error"
-
     def test_claude_streaming_with_reasoning(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
