@@ -14,10 +14,10 @@ hide:
 
 Drop-in API gateway for AWS Bedrock and AI services. Build private AI products on AWS — without exposing your data to third-party AI providers, without subscriptions, and without rewriting your applications. Your existing OpenAI and Anthropic applications work immediately — just change the base URL. Access 80+ models with enterprise privacy, compliance controls, and pay-per-use AWS pricing.
 
-**Two ways to try it:** 14-day free trial on AWS Marketplace for production, or **free forever** with the community Docker image for local development.
+**Two ways to try it:** 14-day free trial on AWS Marketplace for production, or free for local development.
 
 <div class="buttons" markdown>
-[Start 14-Day Free Trial on AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo){ .md-button .md-button--primary }
+[Start 14-Day Free Trial on AWS Marketplace](operations_getting_started.md){ .md-button .md-button--primary }
 [Try Locally with Docker](operations_getting_started_local.md){ .md-button }
 </div>
 </div>
@@ -290,14 +290,14 @@ flowchart LR
     - Terraform module for production-ready deployment in minutes
     - Streamlined AWS billing
 
-    [:octicons-arrow-right-24: Start 14-Day Free Trial](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo)
+    [:octicons-arrow-right-24: Start 14-Day Free Trial](operations_getting_started.md)
 
 </div>
 
 <div class="cta-banner" markdown>
 <strong>Ready to run 80+ AI models securely on AWS?</strong>
 <div class="buttons" markdown>
-[Start 14-Day Free Trial on AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo){ .md-button .md-button--primary }
+[Start 14-Day Free Trial on AWS Marketplace](operations_getting_started.md){ .md-button .md-button--primary }
 [Try Locally with Docker](operations_getting_started_local.md){ .md-button }
 </div>
 
