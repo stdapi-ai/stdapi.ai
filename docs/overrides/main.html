@@ -9,7 +9,7 @@
   <meta property="og:url" content="{{ page.canonical_url }}">
   <meta property="og:title" content="{% if page.meta and page.meta.title %}{{ page.meta.title }}{% elif page.title and not page.is_homepage %}{{ page.title }} - {{ config.site_name }}{% else %}{{ config.site_name }}{% endif %}">
   <meta property="og:description" content="{% if page.meta and page.meta.description %}{{ page.meta.description }}{% else %}{{ config.site_description }}{% endif %}">
-  <meta property="og:image" content="{{ config.site_url }}styles/logo.svg">
+  <meta property="og:image" content="{{ config.site_url }}styles/og-image.svg">
   <meta property="og:locale" content="en_US">
 
   {# Twitter Card Meta Tags #}
@@ -17,7 +17,7 @@
   <meta name="twitter:site" content="@stdapi_ai">
   <meta name="twitter:title" content="{% if page.meta and page.meta.title %}{{ page.meta.title }}{% elif page.title and not page.is_homepage %}{{ page.title }} - {{ config.site_name }}{% else %}{{ config.site_name }}{% endif %}">
   <meta name="twitter:description" content="{% if page.meta and page.meta.description %}{{ page.meta.description }}{% else %}{{ config.site_description }}{% endif %}">
-  <meta name="twitter:image" content="{{ config.site_url }}styles/logo.svg">
+  <meta name="twitter:image" content="{{ config.site_url }}styles/og-image.svg">
 
   {# Meta Keywords - Optional but included for legacy SEO tools #}
   {% if page.meta and page.meta.keywords %}
