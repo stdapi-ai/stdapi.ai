@@ -545,7 +545,8 @@ class TranslationCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=Tr
 #: Shared description for the ``file`` field in audio JSON body models.
 _AUDIO_FILE_FIELD_DESCRIPTION = (
     "The audio file as a base64 string, data URI (``data:audio/<fmt>;base64,<data>``), "
-    "HTTPS URL, or S3 URI (``s3://bucket/key``). "
+    "HTTPS URL, S3 URI (``s3://bucket/key``), or a Files API reference "
+    "(``file-id:<file-id>``). "
     "Supported formats: flac, mp3, mp4, mpeg, mpga, m4a, ogg, wav, webm."
 )
 

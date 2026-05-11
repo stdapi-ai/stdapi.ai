@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 
 from aiohttp import ClientError as AIOHTTPClientError
 from aiohttp import ClientSession
+from botocore.exceptions import ClientError
 from magic import from_buffer, from_file
 from pydantic_core.core_schema import (
     chain_schema,
@@ -21,7 +22,7 @@ from pydantic_core.core_schema import (
 )
 from starlette.datastructures import UploadFile
 
-from stdapi.api_errors import ApiError
+from stdapi.api_errors import ApiError, FileNotExistError
 from stdapi.aws import get_client
 from stdapi.aws_bedrock import (
     MIME_TYPES_TO_AUDIO_TYPE,
@@ -37,9 +38,10 @@ from stdapi.aws_s3 import (
     put_s3_object,
 )
 from stdapi.config import DOWNLOAD_TIMEOUT, SETTINGS
-from stdapi.files import resolve_file_bucket
+from stdapi.files import file_id_s3_key, parse_file_id, resolve_file_bucket
 from stdapi.security import validate_url_ssrf
 from stdapi.server import HTTP_CLIENT_HEADERS
+from stdapi.types import FILE_ID_PATTERN
 from stdapi.utils import (
     b64_decoded_len,
     b64decode,
@@ -148,7 +150,10 @@ _DATA_URI_RE = compile_regex(
 ).match
 
 #: JSON-schema pattern for URL-only InputFile variants
-_URL_ONLY_SCHEMA_PATTERN: str = r"^(?:https?://|s3://|data:)"
+_URL_ONLY_SCHEMA_PATTERN: str = r"^(?:https?://|s3://|data:|file-id:)"
+
+#: URI prefix that references a Files API object by ID (project-local scheme).
+_FILE_ID_URI_PREFIX: str = "file-id:"
 
 #: Accepted S3 buckets
 _ACCEPTED_BUCKETS: frozenset[str] = frozenset(
@@ -188,11 +193,17 @@ class _FileOrigin(IntEnum):
     HTTP_URL = 2
     S3_URI = 3
     UPLOAD = 4
+    FILE_ID = 5
 
 
-# URL only origins
+#: Origins that represent URL-like references rather than inline content.
 _URL_ONLY_ORIGINS: frozenset[_FileOrigin] = frozenset(
-    {_FileOrigin.HTTP_URL, _FileOrigin.S3_URI, _FileOrigin.DATA_URI}
+    {
+        _FileOrigin.DATA_URI,
+        _FileOrigin.FILE_ID,
+        _FileOrigin.HTTP_URL,
+        _FileOrigin.S3_URI,
+    }
 )
 
 
@@ -360,34 +371,52 @@ class _FileSource(ABC):
 class _S3Source(_FileSource):
     """Source backend for ``s3://`` URIs."""
 
-    __slots__ = ("_bucket", "_key", "_uri")
+    __slots__ = ("_bucket", "_file_id", "_key", "_uri")
 
     _uri: str
     _bucket: str
     _key: str
+    _file_id: str | None
 
-    def __init__(self, uri: str, bucket: str, key: str) -> None:
+    def __init__(
+        self, uri: str, bucket: str, key: str, *, file_id: str | None = None
+    ) -> None:
         """Initialize with the S3 file.
 
         Args:
             uri: S3 URI.
             bucket: S3 bucket name.
             key: S3 object key.
+            file_id: Bare Files API identifier (32-char payload, without the
+                ``file-``/``file_`` prefix) when this source resolves a
+                ``file-id:`` URI; ``None`` for plain S3 references.
         """
         self._bucket = bucket
         self._key = key
         self._region = BUCKET_TO_REGION[bucket]
         self._uri = self._repr = uri
+        self._file_id = file_id
 
     async def _resolve_metadata(self) -> None:
         """Resolve content type and size via S3 ``HeadObject``.
 
         Raises:
+            FileNotExistError: When the source resolves a Files API ID whose
+                underlying object is missing or expired.
             ApiError: When the S3 object cannot be found or accessed.
         """
-        head = await get_client("s3", self._region).head_object(
-            Bucket=self._bucket, Key=self._key
-        )
+        try:
+            head = await get_client("s3", self._region).head_object(
+                Bucket=self._bucket, Key=self._key
+            )
+        except ClientError as exc:
+            if self._file_id is not None and exc.response["Error"]["Code"] in (
+                "404",
+                "NoSuchKey",
+            ):
+                msg = f"File 'file-{self._file_id}' not found or expired."
+                raise FileNotExistError(msg) from exc
+            raise
         self._size = head["ContentLength"]
         self._content_type = head["ContentType"]
         self._filename = (
@@ -856,6 +885,7 @@ class InputFile:
         {
             _FileOrigin.BASE64,
             _FileOrigin.DATA_URI,
+            _FileOrigin.FILE_ID,
             _FileOrigin.HTTP_URL,
             _FileOrigin.S3_URI,
         }
@@ -885,10 +915,14 @@ class InputFile:
                 in ``ALLOWED_ORIGINS``.
         """
         if isinstance(value, str):
-            origin, normalised, bucket, key = cls._normalize_and_detect_origin(value)
+            origin, normalised, bucket, key, file_id = cls._normalize_and_detect_origin(
+                value
+            )
             instance = super().__new__(cls)
             instance._origin = origin
-            instance._source = cls._build_source(origin, normalised, bucket, key)
+            instance._source = cls._build_source(
+                origin, normalised, bucket, key, file_id
+            )
             if content_type:
                 instance._source._content_type = content_type  # noqa: SLF001
             _track_current_input_files(instance)
@@ -905,20 +939,28 @@ class InputFile:
     @classmethod
     def _normalize_and_detect_origin(
         cls, value: str
-    ) -> tuple[_FileOrigin, str, str, str]:
+    ) -> tuple[_FileOrigin, str, str, str, str | None]:
         """Detect origin and normalise value.
 
         Args:
             value: Raw input string (URL, data URI, base64, etc.).
 
         Returns:
-            A ``(origin, normalised_value, bucket, key)`` tuple.
+            A ``(origin, normalised_value, bucket, key, file_id)`` tuple where
+            ``file_id`` is the bare Files API payload for ``FILE_ID`` origins
+            and ``None`` otherwise.
 
         Raises:
             ValueError: When the detected origin is not in ``ALLOWED_ORIGINS``.
         """
+        file_id: str | None = None
         if value.startswith("data:"):
             origin, normalised, bucket, key = _FileOrigin.DATA_URI, value, "", ""
+        elif value.startswith(_FILE_ID_URI_PREFIX):
+            file_id = parse_file_id(value[len(_FILE_ID_URI_PREFIX) :])
+            bucket = resolve_file_bucket(file_id)
+            key = file_id_s3_key(file_id)
+            origin, normalised = _FileOrigin.FILE_ID, f"s3://{bucket}/{key}"
         elif match := _S3_URI_RE(value):
             origin, normalised, bucket, key = (
                 _FileOrigin.S3_URI,
@@ -944,11 +986,11 @@ class InputFile:
             allowed = ", ".join(o.name for o in sorted(cls.ALLOWED_ORIGINS))
             msg = f"Expected one of [{allowed}], got {origin.name}."
             raise ValueError(msg)
-        return origin, normalised, bucket, key
+        return origin, normalised, bucket, key, file_id
 
     @staticmethod
     def _build_source(
-        origin: _FileOrigin, normalised: str, bucket: str, key: str
+        origin: _FileOrigin, normalised: str, bucket: str, key: str, file_id: str | None
     ) -> _FileSource:
         """Construct the appropriate ``FileSource`` for *origin*.
 
@@ -957,13 +999,17 @@ class InputFile:
             normalised: Normalised string value.
             bucket: S3 bucket name (empty for non-S3 origins).
             key: S3 object key (empty for non-S3 origins).
+            file_id: Bare Files API payload for ``FILE_ID`` origin; ``None``
+                for every other origin.
 
         Returns:
             A concrete ``FileSource`` instance.
         """
         match origin:
-            case _FileOrigin.S3_URI:
-                return _S3Source(uri=normalised, bucket=bucket, key=key)
+            case _FileOrigin.S3_URI | _FileOrigin.FILE_ID:
+                return _S3Source(
+                    uri=normalised, bucket=bucket, key=key, file_id=file_id
+                )
             case _FileOrigin.HTTP_URL:
                 return _HttpSource(url=normalised)
             case _FileOrigin.DATA_URI:
@@ -1017,7 +1063,12 @@ class InputFile:
         if (
             bool(
                 cls.ALLOWED_ORIGINS
-                & {_FileOrigin.HTTP_URL, _FileOrigin.S3_URI, _FileOrigin.DATA_URI}
+                & {
+                    _FileOrigin.DATA_URI,
+                    _FileOrigin.FILE_ID,
+                    _FileOrigin.HTTP_URL,
+                    _FileOrigin.S3_URI,
+                }
             )
             and _FileOrigin.BASE64 not in cls.ALLOWED_ORIGINS
         ):
@@ -1248,10 +1299,15 @@ class InputFile:
 
 
 class InputFileUrl(InputFile):
-    """``InputFile`` variant that only accepts URL schemes (http(s), s3, data URI)."""
+    """``InputFile`` variant that only accepts URL schemes (http(s), s3, data, file-id)."""
 
     ALLOWED_ORIGINS: frozenset[_FileOrigin] = frozenset(
-        {_FileOrigin.DATA_URI, _FileOrigin.HTTP_URL, _FileOrigin.S3_URI}
+        {
+            _FileOrigin.DATA_URI,
+            _FileOrigin.FILE_ID,
+            _FileOrigin.HTTP_URL,
+            _FileOrigin.S3_URI,
+        }
     )
 
 
@@ -1282,14 +1338,17 @@ class FileIdInputFile(InputFile):
             A new ``FileIdInputFile`` backed by the corresponding S3 object.
 
         Raises:
-            ApiError: If no S3 bucket is configured (503).
+            ApiError: If *value* is not a valid Files API identifier (400) or
+                no S3 bucket is configured (503).
         """
-        payload = value[5:]  # strip 5-char prefix (file- or file_)
-        bucket = resolve_file_bucket(payload)
-        key = f"{SETTINGS.aws_s3_files_prefix}{payload}"
+        file_id = parse_file_id(value)
+        bucket = resolve_file_bucket(file_id)
+        key = file_id_s3_key(file_id)
         instance: Self = object.__new__(cls)
         instance._origin = _FileOrigin.S3_URI
-        instance._source = _S3Source(f"s3://{bucket}/{key}", bucket, key)
+        instance._source = _S3Source(
+            f"s3://{bucket}/{key}", bucket, key, file_id=file_id
+        )
         _track_current_input_files(instance)
         return instance
 
@@ -1308,7 +1367,7 @@ class FileIdInputFile(InputFile):
         """
         return chain_schema(
             [
-                str_schema(pattern=r"^file[-_][a-z2-7]{32}$"),
+                str_schema(pattern=FILE_ID_PATTERN),
                 no_info_plain_validator_function(
                     cls,
                     serialization=plain_serializer_function_ser_schema(
@@ -1332,6 +1391,27 @@ class FileIdInputFile(InputFile):
             A JSON schema dict for ``file-`` or ``file_`` identifier strings.
         """
         return {"type": "string", "pattern": r"^file[-_]"}
+
+
+class IngestInputFile(InputFile):
+    """``InputFile`` variant for Files-API ingest endpoints.
+
+    Ingest endpoints (``/v1/files``, ``/v1/uploads/{id}/parts``, Anthropic
+    ``/v1/files``) accept inline content only.  Resolving ``file-id:`` here
+    would clone an existing Files API object into a new one, duplicating
+    storage and skewing metering, so ``FILE_ID`` is excluded from the
+    allowed origins.  Callers must pass the actual file body (base64, data
+    URI, HTTPS URL, or S3 URI).
+    """
+
+    ALLOWED_ORIGINS: frozenset[_FileOrigin] = frozenset(
+        {
+            _FileOrigin.BASE64,
+            _FileOrigin.DATA_URI,
+            _FileOrigin.HTTP_URL,
+            _FileOrigin.S3_URI,
+        }
+    )
 
 
 def get_s3_input_regions() -> dict[RegionName, int]:

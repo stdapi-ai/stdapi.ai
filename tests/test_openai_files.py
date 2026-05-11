@@ -385,6 +385,56 @@ class TestOpenAIFiles:
         finally:
             openai_client.files.delete(f.id)
 
+    def test_file_id_uri_scheme_in_chat_image_url(
+        self,
+        openai_client: OpenAI,
+        chat_vision_model: str,
+        sample_image_file: bytes,
+        use_official_api: bool,
+    ) -> None:
+        """Reference an uploaded file via the ``file-id:`` URI scheme.
+
+        Uploads a small PNG via the Files API, then passes
+        ``file-id:<file-id>`` as the ``image_url.url`` (string-overloaded
+        field) of a chat completion content part.  This exercises the
+        project-local ``file-id:`` resolver end-to-end without any
+        monkey-patching.
+
+        Validates:
+            - The string-overloaded ``image_url.url`` accepts ``file-id:``.
+            - The chat completion returns a non-empty assistant message
+              when run against the local server.
+        """
+        if use_official_api:
+            pytest.skip("`file-id:` is a project-local URI scheme")
+        uploaded = openai_client.files.create(
+            file=("image.png", io.BytesIO(sample_image_file), "image/png"),
+            purpose="vision",
+        )
+        try:
+            response = openai_client.chat.completions.create(
+                model=chat_vision_model,
+                max_completion_tokens=50,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Describe this image briefly."},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"file-id:{uploaded.id}"},
+                            },
+                        ],
+                    }
+                ],
+            )
+            assert len(response.choices) > 0
+            content = response.choices[0].message.content
+            assert content is not None
+            assert len(content) > 0
+        finally:
+            openai_client.files.delete(uploaded.id)
+
 
 class TestOpenAIUploads:
     """Test suite for the OpenAI-compatible /v1/uploads endpoints."""

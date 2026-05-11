@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import Field
 
-from stdapi.input_file import InputFile  # noqa: TC001
+from stdapi.input_file import IngestInputFile  # noqa: TC001
 from stdapi.types import (
     PART_ID_PATTERN,
     UPLOAD_ID_PATTERN,
@@ -42,7 +42,7 @@ class AddUploadPartJsonBody(BaseModelRequest):
     string, a data URI, an HTTPS URL, or an S3 URI.
     """
 
-    data: InputFile = Field(
+    data: IngestInputFile = Field(
         description=(
             "The chunk of bytes as a base64 string, data URI "
             "(``data:<mime>;base64,<data>``), HTTPS URL, or S3 URI (``s3://bucket/key``)."

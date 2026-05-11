@@ -65,7 +65,8 @@ class EmbeddingCreateParams(BaseModelRequestWithExtra):
         ...,
         description="Input text to embed, as a single string or an array of strings.\n"
         "For multimodal models, non-text inputs can be passed as a URL (`https://...`), "
-        "S3 URI (`s3://bucket/key`), or base64 data URI (`data:[<mediatype>][;base64],<data>`).\n"
+        "S3 URI (`s3://bucket/key`), base64 data URI (`data:[<mediatype>][;base64],<data>`), "
+        "or a Files API reference (`file-id:<file-id>`).\n"
         "To embed multiple inputs in a single request, "
         "pass an array of strings or array of token arrays.\n"
         "Token arrays are UNSUPPORTED on this implementation.",

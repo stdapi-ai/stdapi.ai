@@ -292,6 +292,26 @@ Simply reference your S3 images using the `s3://` URI scheme in `image_url` fiel
 - Performance - Optimized data transfer within AWS infrastructure
 - Large images - No size limitations of data URIs or base64 encoding
 
+### :material-file-link: Files API References (`file-id:`)
+
+The string-overloaded `image_url.url`, `file.file_data`, and `input_audio.data` fields also accept the project-local `file-id:` URI scheme to reference files previously uploaded via the [Files API](api_openai_files.md):
+
+```json
+{
+  "model": "anthropic.claude-opus-4-7",
+  "messages": [{
+    "role": "user",
+    "content": [
+      {"type": "text", "text": "Describe this image"},
+      {"type": "image_url", "image_url": {"url": "file-id:file-0190c51c7de7455d9b8c2efe27dfbf67"}}
+    ]
+  }]
+}
+```
+
+!!! info "Two equivalent ways to reference an uploaded file"
+    The OpenAI-native typed path `{"type": "file", "file": {"file_id": "file-…"}}` is unchanged and still preferred when a typed object is acceptable. The `file-id:` URI is the equivalent for the *string-overloaded* `image_url.url` / `file.file_data` / `input_audio.data` fields, where today you would otherwise pass an `s3://`, `https://`, or `data:` URI. See [Referencing Uploaded Files via the `file-id:` URI Scheme](api_openai_files.md#referencing-uploaded-files-via-the-file-id-uri-scheme).
+
 ### AWS Bedrock System Tools
 
 AWS Bedrock system tools are built-in capabilities that foundation models can use directly, without requiring you to implement backend integrations.

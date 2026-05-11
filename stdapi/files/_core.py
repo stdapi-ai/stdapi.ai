@@ -37,6 +37,7 @@ from stdapi.aws_s3 import (
     track_temporary_s3_objects,
 )
 from stdapi.config import SETTINGS
+from stdapi.types import FILE_ID_PATTERN
 from stdapi.utils import now_utc_timestamp, parse_content_disposition_filename
 
 if TYPE_CHECKING:
@@ -62,6 +63,9 @@ _FILENAME_MAX_LEN: int = 500
 
 #: CRC32 fingerprint → bucket name, for O(1) file-ID bucket resolution.
 _BUCKET_CRC32: dict[int, str] = {_crc32(b.encode()): b for b in BUCKET_TO_REGION}
+
+#: Compiled matcher for prefixed Files API identifiers.
+_FILE_ID_RE = re_compile(FILE_ID_PATTERN).match
 
 
 @dataclass(slots=True)
@@ -117,9 +121,27 @@ def _require_bucket() -> str:
     raise ApiError(msg, status=503)
 
 
-def _s3_key(payload: str) -> str:
+def file_id_s3_key(payload: str) -> str:
     """Return the S3 object key for the bare 32-char *payload*, e.g. ``{prefix}{payload}``."""
     return f"{SETTINGS.aws_s3_files_prefix}{payload}"
+
+
+def parse_file_id(fid: str) -> str:
+    """Validate a prefixed Files API identifier and return its bare 32-char payload.
+
+    Args:
+        fid: Files API identifier prefixed with ``file-`` or ``file_``.
+
+    Returns:
+        Bare 32-char base32 payload (no prefix).
+
+    Raises:
+        ApiError: When *fid* does not match :data:`stdapi.types.FILE_ID_PATTERN`.
+    """
+    if not _FILE_ID_RE(fid):
+        msg = "Invalid file ID."
+        raise ApiError(msg, status=400)
+    return fid[5:]
 
 
 def _file_id_from_bucket(bucket: str) -> str:
@@ -207,7 +229,7 @@ async def upload_file(
     """
     bucket = require_s3_bucket_for_region(region) if region else _require_bucket()
     payload = _file_id_from_bucket(bucket)
-    s3_key = _s3_key(payload)
+    s3_key = file_id_s3_key(payload)
     expires_at = (
         now_utc_timestamp() + expires_after if expires_after is not None else None
     )
@@ -245,7 +267,7 @@ async def _get_file_impl(payload: str) -> tuple[FileRecord, str, S3Client]:
         _FileNotFoundError: Not found or expired.
     """
     bucket = resolve_file_bucket(payload)
-    key = _s3_key(payload)
+    key = file_id_s3_key(payload)
     s3: S3Client = get_client("s3", BUCKET_TO_REGION.get(bucket))
     try:
         record = _record_from_head(
@@ -281,7 +303,7 @@ async def delete_file(payload: str) -> None:
         _FileNotFoundError: Not found or expired.
     """
     _, bucket, s3 = await _get_file_impl(payload)
-    await s3.delete_object(Bucket=bucket, Key=_s3_key(payload))
+    await s3.delete_object(Bucket=bucket, Key=file_id_s3_key(payload))
 
 
 async def get_file_content(payload: str) -> tuple[AsyncIterator[bytes], str]:
@@ -292,7 +314,7 @@ async def get_file_content(payload: str) -> tuple[AsyncIterator[bytes], str]:
     """
     record, bucket, s3 = await _get_file_impl(payload)
     return (
-        (await s3.get_object(Bucket=bucket, Key=_s3_key(payload)))[
+        (await s3.get_object(Bucket=bucket, Key=file_id_s3_key(payload)))[
             "Body"
         ].iter_chunks(),
         record.content_type,
@@ -403,7 +425,7 @@ async def list_files(
 
     # Efficient path: ascending without purpose filter or before cursor
     if order == "asc" and before is None and purpose is None:
-        start_after = _s3_key(after) if after else None
+        start_after = file_id_s3_key(after) if after else None
         per_bucket = await gather(
             *[_scan_bucket_page(b, prefix, start_after, limit + 1) for b in buckets]
         )
@@ -415,7 +437,7 @@ async def list_files(
         return await _records_for_keys(keys[:limit]), len(keys) > limit
 
     # Slow path: full scan needed for desc order, before cursor, or purpose filter
-    start_after = _s3_key(after) if order == "asc" and after else None
+    start_after = file_id_s3_key(after) if order == "asc" and after else None
     all_keys = [
         k
         for k in sorted(
@@ -437,9 +459,9 @@ async def list_files(
     ]
 
     if order == "desc" and after:
-        all_keys = [k for k in all_keys if k < _s3_key(after)]
+        all_keys = [k for k in all_keys if k < file_id_s3_key(after)]
     if before:
-        all_keys = [k for k in all_keys if k < _s3_key(before)]
+        all_keys = [k for k in all_keys if k < file_id_s3_key(before)]
 
     if purpose is not None:
         filtered = [

@@ -447,6 +447,46 @@ curl -X DELETE "$BASE/v1/files/$FILE_ID" \
   -H "Authorization: Bearer $OPENAI_API_KEY"
 ```
 
+## Referencing Uploaded Files via the `file-id:` URI Scheme
+
+The native `file_id` JSON field shown above is the OpenAI-compatible way to reference an uploaded file in routes that have a typed `file_id` slot (chat completions content parts, responses content parts, image edits, …). For **string-overloaded** file fields that already accept URI schemes like `s3://`, `https://`, or `data:` — and therefore do **not** have a typed `file_id` slot — this implementation defines an additional project-local URI scheme:
+
+```
+file-id:<file-id>
+```
+
+!!! tip "Project-local URI scheme — `file-id:`"
+    `file-id:` is an **extension beyond the original OpenAI API**, parallel to the existing `s3://`, `https://`, and `data:` schemes already accepted on the same fields. It lets a client upload a file once via `/v1/files` and reuse it across embeddings, transcriptions, image edits, chat completions and other routes — without re-uploading or exposing an S3 URL.
+
+    * **Where accepted:** any string-overloaded file field (e.g. `image_url.url`, `input_audio.data`, `file.file_data` in chat completions; `input` on `/v1/embeddings`; `file` on audio transcription/translation; `image_url`/`mask` on image edits/variations; Anthropic image/document `source.url` and `source.data`).
+    * **Where rejected:** the ingest endpoints (`POST /v1/files`, `POST /v1/uploads/{id}/parts`) return **400** for `file-id:` inputs, because resolving them there would silently clone an existing file.
+    * **Where unchanged:** JSON fields that already accept a typed `file_id` (e.g. chat content parts `{"type":"file","file":{"file_id":"file-…"}}`) keep working exactly as in the OpenAI API; do not wrap those bare IDs in the `file-id:` prefix.
+    * **Detection:** match is **case-sensitive** (`file-id:`, lowercase) with no whitespace stripping; the payload after the prefix must be a valid Files API ID, otherwise the request fails with `400 invalid_request_error`.
+    * **Resolution:** the file is fetched from its underlying S3 object using the same code path as `s3://` URIs. A missing or expired file returns `404 not_found`. Content-type validation is delegated to each route, so an audio file passed to an image-only field is rejected the same way an `https://…/foo.mp3` URL would be.
+
+### Worked example — embed an uploaded file
+
+```bash
+# 1. Upload the file once.
+FILE_ID=$(curl -s -X POST "$BASE/v1/files" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -F "file=@research_paper.pdf;type=application/pdf" \
+  -F "purpose=assistants" | jq -r .id)
+
+# 2. Reference it via file-id: in another route.
+curl -X POST "$BASE/v1/embeddings" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"model\": \"amazon.nova-2-multimodal-embeddings-v1:0\",
+    \"input\": \"file-id:${FILE_ID}\"
+  }"
+
+# 3. (Optional) delete the file when no longer needed.
+curl -X DELETE "$BASE/v1/files/${FILE_ID}" \
+  -H "Authorization: Bearer $OPENAI_API_KEY"
+```
+
 ## Error Reference
 
 | HTTP | Cause                                                              |

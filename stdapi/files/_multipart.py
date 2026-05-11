@@ -40,7 +40,7 @@ from stdapi.files._core import (
     FileRecord,
     _record_from_head,
     _require_bucket,
-    _s3_key,
+    file_id_s3_key,
     resolve_file_bucket,
 )
 from stdapi.utils import now_utc_timestamp
@@ -218,7 +218,7 @@ async def _load_multipart_session(
         upload_id=upload_id,
         file_id=file_id,
         s3_bucket=bucket,
-        s3_key=_s3_key(file_id),
+        s3_key=file_id_s3_key(file_id),
         filename=meta["filename"],
         mime_type=meta["mime-type"],
         purpose=meta["purpose"],
@@ -320,7 +320,7 @@ async def create_multipart_session(
     """
     bucket = _require_bucket()
     upload_id, file_id = _multipart_ids_from_bucket(bucket)
-    s3_key = _s3_key(file_id)
+    s3_key = file_id_s3_key(file_id)
     s3: S3Client = get_client("s3", BUCKET_TO_REGION.get(bucket))
     created_at = _created_at_from_upload_id(upload_id)
 
@@ -380,7 +380,7 @@ async def add_part(upload_id: str, data: bytes) -> tuple[str, int]:
     """
     file_id = _file_id_from_upload_id(upload_id)
     bucket = resolve_file_bucket(file_id)
-    s3_key = _s3_key(file_id)
+    s3_key = file_id_s3_key(file_id)
     s3: S3Client = get_client("s3", BUCKET_TO_REGION.get(bucket))
 
     if not (cached := _cache_get(upload_id)):
@@ -426,7 +426,7 @@ async def complete_multipart_session(
     """
     file_id = _file_id_from_upload_id(upload_id)
     bucket = resolve_file_bucket(file_id)
-    s3_key = _s3_key(file_id)
+    s3_key = file_id_s3_key(file_id)
     s3: S3Client = get_client("s3", BUCKET_TO_REGION.get(bucket))
 
     session, s3_upload_id = await gather(
@@ -474,7 +474,7 @@ async def cancel_multipart_session(upload_id: str) -> MultipartSession:
     """
     file_id = _file_id_from_upload_id(upload_id)
     bucket = resolve_file_bucket(file_id)
-    s3_key = _s3_key(file_id)
+    s3_key = file_id_s3_key(file_id)
     s3: S3Client = get_client("s3", BUCKET_TO_REGION.get(bucket))
 
     session, s3_upload_id = await gather(

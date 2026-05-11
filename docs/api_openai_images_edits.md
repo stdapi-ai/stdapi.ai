@@ -225,7 +225,7 @@ curl -X POST "$BASE/v1/images/edits" \
 | Field       | Type   | Description                                              |
 |-------------|--------|----------------------------------------------------------|
 | `file_id`   | string | Files API file identifier (`file-*` or `file_*` prefix)  |
-| `image_url` | string | HTTP/HTTPS URL or data URI (`data:image/png;base64,...`) |
+| `image_url` | string | HTTP/HTTPS URL, data URI (`data:image/png;base64,...`), S3 URI (`s3://bucket/key`), or Files API reference (`file-id:file-<id>` — see [Files API](api_openai_files.md#referencing-uploaded-files-via-the-file-id-uri-scheme)) |
 
 Exactly one of `file_id` or `image_url` must be provided per `ImageRef`.
 

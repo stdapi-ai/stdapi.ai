@@ -167,6 +167,19 @@ curl -X POST "$BASE/v1/audio/transcriptions" \
   }'
 ```
 
+```bash
+# Files API reference (file-id: URI scheme)
+curl -X POST "$BASE/v1/audio/transcriptions" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "file": "file-id:file-0190c51c7de7455d9b8c2efe27dfbf67",
+    "model": "amazon.transcribe"
+  }'
+```
+
+See [Files API → Referencing Uploaded Files](api_openai_files.md#referencing-uploaded-files-via-the-file-id-uri-scheme) for the full description of the `file-id:` URI scheme.
+
 **Generate subtitles:**
 
 ```bash

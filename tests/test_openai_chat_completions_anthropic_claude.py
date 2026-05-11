@@ -24,7 +24,7 @@ import json
 from typing import TYPE_CHECKING
 
 import pytest
-from openai import BadRequestError, NotFoundError
+from openai import NotFoundError
 
 from stdapi.models.chat._adapters._openai_chat_completion import (
     build_tool_config,

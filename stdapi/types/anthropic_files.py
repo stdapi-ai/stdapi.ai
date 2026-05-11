@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import Field
 
-from stdapi.input_file import InputFile  # noqa: TC001
+from stdapi.input_file import IngestInputFile  # noqa: TC001
 from stdapi.types import BaseModelRequest, BaseModelResponse
 
 
@@ -64,7 +64,7 @@ class AnthropicFileUploadJsonBody(BaseModelRequest):
     ``InputFile`` accepts from strings.
     """
 
-    file: InputFile = Field(
+    file: IngestInputFile = Field(
         description=(
             "The file content as a base64 string, data URI (``data:<mime>;base64,<data>``), "
             "HTTPS URL, or S3 URI (``s3://bucket/key``). "

@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import Field
 
-from stdapi.input_file import InputFile  # noqa: TC001
+from stdapi.input_file import IngestInputFile  # noqa: TC001
 from stdapi.types import BaseModelRequest, BaseModelResponse
 
 #: Valid values for the ``purpose`` field on a file upload or filter.
@@ -29,7 +29,7 @@ class FileUploadJsonBody(BaseModelRequest):
     ``InputFile`` accepts from strings.
     """
 
-    file: InputFile = Field(description=_FILE_FIELD_DESCRIPTION)
+    file: IngestInputFile = Field(description=_FILE_FIELD_DESCRIPTION)
     purpose: FilePurpose = Field(
         default="assistants",
         description=(

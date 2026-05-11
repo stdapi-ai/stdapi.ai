@@ -269,6 +269,50 @@ curl -X DELETE "$BASE/v1/files/$FILE_ID" \
   -H "anthropic-beta: files-api-2025-04-14"
 ```
 
+## Referencing Uploaded Files via the `file-id:` URI Scheme
+
+The native `{"type": "file", "file_id": "..."}` source shown above is the Anthropic-compatible way to reference an uploaded file in Messages content blocks. For **string-overloaded** file fields that already accept URI schemes like `s3://`, `https://`, or `data:` — for example image and document content blocks with `source.type` `url` or `base64` — this implementation defines an additional project-local URI scheme:
+
+```
+file-id:<file-id>
+```
+
+!!! tip "Project-local URI scheme — `file-id:`"
+    `file-id:` is an **extension beyond the original Anthropic API**, parallel to the existing `s3://`, `https://`, and `data:` schemes already accepted on the same fields. It lets a client upload a file once and reuse it across Messages content blocks (image / document `source.url` and `source.data`), as well as the OpenAI-compatible routes — without re-uploading.
+
+    * **Where accepted:** any string-overloaded file field. For Anthropic Messages: image and document content blocks where `source.type` is `url` (with `source.url: "file-id:<id>"`) or `base64` (with `source.data: "file-id:<id>"`).
+    * **Where unchanged:** the typed `{"type": "file", "file_id": "..."}` source already accepted by the Anthropic API stays exactly as-is — do not wrap those bare IDs in `file-id:`.
+    * **Where rejected:** the Files API ingest endpoint (`POST /v1/files`) returns **400** for `file-id:` inputs, because resolving it there would silently clone an existing file.
+    * **Detection:** match is **case-sensitive** (`file-id:`, lowercase) with no whitespace stripping; the payload after the prefix must be a valid Files API ID, otherwise the request fails with `400 invalid_request_error`. A missing or expired file returns `404 not_found`.
+
+### Worked example — send an uploaded image in Messages
+
+```bash
+# 1. Upload the file once.
+FILE_ID=$(curl -s -X POST "$BASE/v1/files" \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "anthropic-beta: files-api-2025-04-14" \
+  -F "file=@chart.png;type=image/png" | jq -r .id)
+
+# 2. Reference it via file-id: in a Messages request.
+curl -X POST "$BASE/v1/messages" \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"model\": \"anthropic.claude-haiku-4-5-20251001-v1:0\",
+    \"max_tokens\": 256,
+    \"messages\": [{
+      \"role\": \"user\",
+      \"content\": [
+        {\"type\": \"text\", \"text\": \"Describe this chart.\"},
+        {\"type\": \"image\", \"source\": {\"type\": \"url\", \"url\": \"file-id:${FILE_ID}\"}}
+      ]
+    }]
+  }"
+```
+
+See the [OpenAI Files API documentation](api_openai_files.md#referencing-uploaded-files-via-the-file-id-uri-scheme) for the full list of supported routes — the same scheme works identically across both API surfaces.
+
 ## Error Reference
 
 | HTTP | Cause                             |

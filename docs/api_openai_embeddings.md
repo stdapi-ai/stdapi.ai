@@ -264,6 +264,20 @@ curl -X POST "$BASE/v1/embeddings" \
     - The stdapi.ai server **must have read access** to the S3 object
     - For TwelveLabs Marengo models: S3 bucket **must be in the same AWS account** as the STDAPI server
 
+**Option 3: Files API reference (`file-id:`)**
+
+Reference a file previously uploaded via the [Files API](api_openai_files.md#referencing-uploaded-files-via-the-file-id-uri-scheme) using the project-local `file-id:` URI scheme:
+
+```bash
+curl -X POST "$BASE/v1/embeddings" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "amazon.nova-2-multimodal-embeddings-v1:0",
+    "input": "file-id:file-0190c51c7de7455d9b8c2efe27dfbf67"
+  }'
+```
+
 ### Example: PDF Document Embedding
 
 For PDFs, convert each page to an image and send via inputs along with page metadata (e.g., file_name, entities) in adjacent text parts. **For RAG applications, smaller chunks often improve retrieval accuracy and reduce costs.**

@@ -269,6 +269,23 @@ Simply reference your S3 images using the `s3://` URI scheme in image source fie
 - Performance - Optimized data transfer within AWS infrastructure
 - Large images - No size limitations of data URIs or base64 encoding
 
+### :material-file-link: Files API References (`file-id:`)
+
+Image and document content blocks also accept the project-local `file-id:` URI scheme in their string-overloaded `source.url` and `source.data` fields, to reference a file previously uploaded via the [Anthropic Files API](api_anthropic_files.md):
+
+```json
+{
+  "type": "image",
+  "source": {
+    "type": "url",
+    "url": "file-id:file_0190c51c7de7455d9b8c2efe27dfbf67"
+  }
+}
+```
+
+!!! info "When to use which path"
+    The Anthropic-native `{"type": "file", "file_id": "file_…"}` source (typed JSON) is unchanged and preferred for new code. The `file-id:` URI is the equivalent for the *string-overloaded* `source.url` / `source.data` fields, used alongside `s3://`, `https://`, and `data:` URIs. See [Files API → Referencing Uploaded Files](api_anthropic_files.md#referencing-uploaded-files-via-the-file-id-uri-scheme).
+
 ### Document Input
 
 Send documents as context for the model to analyze and reference. Supports multiple source types:
