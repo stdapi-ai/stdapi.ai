@@ -40,3 +40,16 @@ class TestNovaResponses:
             model=model, input="Reply with OK.", reasoning={"effort": "low"}
         )
         assert resp.output_text
+
+    @pytest.mark.expensive
+    @pytest.mark.parametrize("model", NOVA_ALL)
+    def test_reasoning_effort_none_explicit_disable(
+        self, openai_client: OpenAI, use_official_api: bool, model: str
+    ) -> None:
+        """reasoning.effort='none' explicitly disables reasoning on Nova models."""
+        if use_official_api:
+            pytest.skip("Amazon Nova is not supported on the official API")
+        resp = openai_client.responses.create(
+            model=model, input="Reply with OK.", reasoning={"effort": "none"}
+        )
+        assert resp.output_text

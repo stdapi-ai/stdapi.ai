@@ -33,3 +33,21 @@ class TestDeepseekChatCompletions:
         assert len(resp.choices) >= 1
         msg = resp.choices[0].message
         assert msg.role == "assistant"
+
+    @pytest.mark.expensive
+    @pytest.mark.parametrize("model", DEEPSEEK_SAMPLE)
+    def test_reasoning_effort_none_explicit_disable(
+        self, openai_client: OpenAI, use_official_api: bool, model: str
+    ) -> None:
+        """reasoning_effort='none' explicitly disables reasoning."""
+        if use_official_api:
+            pytest.skip("Deepseek is not supported on the official API")
+        resp = openai_client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": "Reply with OK."}],
+            reasoning_effort="none",
+        )
+        assert hasattr(resp, "choices")
+        assert len(resp.choices) >= 1
+        msg = resp.choices[0].message
+        assert msg.role == "assistant"

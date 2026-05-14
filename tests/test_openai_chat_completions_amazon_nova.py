@@ -47,6 +47,24 @@ class TestNovaChatCompletions:
         assert msg.role == "assistant"
         assert msg.reasoning_content  # type: ignore[attr-defined]
 
+    @pytest.mark.expensive
+    @pytest.mark.parametrize("model", NOVA_ALL)
+    def test_reasoning_effort_none_explicit_disable(
+        self, openai_client: OpenAI, use_official_api: bool, model: str
+    ) -> None:
+        """reasoning_effort='none' explicitly disables reasoning on Nova models."""
+        if use_official_api:
+            pytest.skip("Amazon Nova is not supported on the official API")
+        resp = openai_client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": "Reply with OK."}],
+            reasoning_effort="none",
+        )
+        assert hasattr(resp, "choices")
+        assert len(resp.choices) >= 1
+        msg = resp.choices[0].message
+        assert msg.role == "assistant"
+
     # --- System tool routing ---
 
     def test_nova_grounding_tool_name_auto_promoted_to_system_tool(

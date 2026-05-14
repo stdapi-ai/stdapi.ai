@@ -58,14 +58,19 @@ class ChatModel(_BaseChatModel):
     def _req_configure_reasoning(
         self,
         additional_request_fields: JsonMapping,
+        *,
+        enabled: bool,
         reasoning_effort: Effort | None = None,
         budget_tokens: int | None = None,
         max_tokens: int | None = None,  # noqa: ARG002
     ) -> None:
         """Configure Nova reasoning parameters.
 
+        When ``enabled`` is ``False``, reasoning is explicitly disabled.
+
         Args:
             additional_request_fields: Mutated with the ``reasoningConfig`` entry.
+            enabled: Whether reasoning is explicitly enabled.
             reasoning_effort: Effort level; defaults to ``"medium"`` when ``None``.
             budget_tokens: Not supported; raises if set.
             max_tokens: Unused.
@@ -74,6 +79,9 @@ class ChatModel(_BaseChatModel):
             ApiError: If *budget_tokens* is not ``None``.
         """
         self._validate_no_budget_tokens(budget_tokens)
+        if not enabled:
+            additional_request_fields["reasoningConfig"] = {"type": "disabled"}
+            return
         additional_request_fields["reasoningConfig"] = {
             "type": "enabled",
             "maxReasoningEffort": _REASONING_OVERRIDE.get(reasoning_effort, "medium"),

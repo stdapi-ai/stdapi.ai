@@ -679,6 +679,17 @@ class QwenTranslationMemory(BaseModelRequest):
     target: str = Field(description="Target translation statement")
 
 
+class MoonshotThinkingOptions(BaseModelRequest):
+    """Thinking configuration for Moonshot models.
+
+    Controls whether thinking is enabled for the model.
+    """
+
+    type: Literal["enabled", "disabled"] = Field(
+        description="Enable or disable thinking capability."
+    )
+
+
 class QwenTranslationOptions(BaseModelRequest):
     """Translation options for Qwen models with translation capabilities.
 
@@ -1444,6 +1455,13 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
         "and domain hints for specialized translation tasks.\n"
         "Extra field from Qwen Chat Completion API.\n"
         "UNSUPPORTED on this implementation.",
+    )
+
+    # Moonshot Chat Completion API fields.
+    thinking: MoonshotThinkingOptions | None = Field(
+        default=None,
+        description="Controls whether thinking is enabled for the model.\n"
+        "Extra field from Moonshot Chat Completion API.",
     )
 
     # Extra validations

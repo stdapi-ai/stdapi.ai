@@ -58,6 +58,8 @@ class ChatModel(AnthropicClaudeChatModel):
     def _req_configure_reasoning(
         self,
         additional_request_fields: JsonMapping,
+        *,
+        enabled: bool,
         reasoning_effort: Effort | None = None,
         budget_tokens: int | None = None,
         max_tokens: int | None = None,
@@ -66,13 +68,19 @@ class ChatModel(AnthropicClaudeChatModel):
 
         Uses budget-based reasoning configuration. If ``budget_tokens`` is not
         provided, it is calculated from ``reasoning_effort``.
+        When ``enabled`` is ``False``, reasoning is explicitly disabled.
 
         Args:
             additional_request_fields: Request fields to modify with reasoning config.
+            enabled: Whether reasoning is explicitly enabled.
             reasoning_effort: The reasoning effort level.
             budget_tokens: Optional explicit token budget for reasoning.
             max_tokens: Maximum number of tokens allowed for the model.
         """
+        if not enabled:
+            additional_request_fields["reasoning_config"] = {"type": "disabled"}
+            return
+
         if budget_tokens is None:
             budget_tokens = (
                 _REASONING_BUDGET_MINIMAL

@@ -63,9 +63,10 @@ Generate conversational AI responses with AWS Bedrock foundation models—includ
 | `logit_bias`                             |       :material-cog:{ .model-dep }       | Not all models support biasing                                  |
 | `top_logprobs`                           |       :material-cog:{ .model-dep }       | Token probability output                                        |
 | `top_k` (From Qwen API)                  |       :material-cog:{ .model-dep }       | Candidate token set size for sampling                           |
-| `reasoning_effort`                       |       :material-cog:{ .model-dep }       | Reasoning control (minimal/low/medium/high)                     |
-| `enable_thinking` (From Qwen API)        |       :material-cog:{ .model-dep }       | Enable thinking mode                                            |
-| `thinking_budget` (From Qwen API)        |       :material-cog:{ .model-dep }       | Thinking token budget                                           |
+| `reasoning_effort` (OpenAI API-compatible) |       :material-cog:{ .model-dep }       | Reasoning control: none/minimal/low/medium/high/xhigh (all models) |
+| `enable_thinking` (Qwen API-compatible)  |       :material-cog:{ .model-dep }       | Enable/disable thinking mode (all reasoning models)            |
+| `thinking_budget` (Qwen API-compatible)  |       :material-cog:{ .model-dep }       | Thinking token budget (all reasoning models)                   |
+| `thinking` (Moonshot API-compatible)     |       :material-cog:{ .model-dep }       | Thinking config: {"type": "enabled"/"disabled"} (all models)   |
 | `n` (multiple choices)                   |   :material-minus-circle:{ .partial }    | Generate multiple responses, not supported with streaming       |
 | `logprobs`                               | :material-close-circle:{ .unsupported }  | Log probabilities                                               |
 | `prediction`                             | :material-close-circle:{ .unsupported }  | Static predicted output content                                 |
@@ -556,9 +557,9 @@ This API supports two different approaches to control [AWS Bedrock reasoning](ht
     - **Amazon Nova 2 models**: `reasoning_effort` parameter only
     - **DeepSeek V3 models**: `reasoning_effort` parameter only
 
-#### ![OpenAI](styles/logo_openai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } OpenAI-Style reasoning parameters
+#### ![OpenAI](styles/logo_openai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } OpenAI API-compatible reasoning parameters
 
-Use the `reasoning_effort` parameter with predefined effort levels. This approach works with all AWS Bedrock models that support reasoning, providing a simple way to control reasoning depth.
+Use the `reasoning_effort` parameter with predefined effort levels. This is an OpenAI API-compatible format that works with all AWS Bedrock models supporting reasoning.
 
 **Available Levels:**
 
@@ -581,15 +582,17 @@ curl -X POST "$BASE/v1/chat/completions" \
   }'
 ```
 
-#### ![Qwen](styles/logo_qwen.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Qwen-Style reasoning parameters
+!!! note "Compatibility"
+    This format is accepted for all reasoning-capable models. Models that don't support this parameter will ignore it.
 
-Use explicit `enable_thinking` & `thinking_budget` parameters for fine-grained control over thinking mode. This approach works with all AWS Bedrock models that support reasoning, offering precise control over reasoning behavior and token budgets.
+#### ![Qwen](styles/logo_qwen.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Qwen API-compatible reasoning parameters
+
+Use explicit `enable_thinking` & `thinking_budget` parameters for fine-grained control over thinking mode. This is a Qwen API-compatible format that works with all AWS Bedrock models supporting reasoning.
 
 **Parameters:**
 
 - `enable_thinking` (boolean): Enable or disable thinking mode
     - Default: Model-specific (usually `false`)
-    - Some models have reasoning always enabled
 - `thinking_budget` (integer): Maximum thinking process length in tokens
     - Only effective when `enable_thinking` is `true`
     - Passed to the model as `budget_tokens`
@@ -609,28 +612,43 @@ curl -X POST "$BASE/v1/chat/completions" \
   }'
 ```
 
-!!! note "Reasoning Output"
-    Models that support reasoning will include their thinking process in `reasoning_content` fields in the response.
+!!! note "Compatibility"
+    This format is accepted for all reasoning-capable models. Models that don't support these parameters will ignore them.
 
-#### ![DeepSeek](styles/logo_deepSeek.svg){ style="height: 1.2em; vertical-align: text-bottom;" } DeepSeek reasoning responses
+#### ![DeepSeek](styles/logo_deepSeek.svg){ style="height: 1.2em; vertical-align: text-bottom;" } DeepSeek API-compatible reasoning parameters
 
-DeepSeek models with reasoning capabilities are automatically handled—their chain-of-thought reasoning appears in `reasoning_content` fields without any special configuration, just like DeepSeek's native chat completions endpoint.
+Use `reasoning_effort` to control reasoning intensity. This is a DeepSeek API-compatible format that works with all AWS Bedrock models supporting reasoning.
 
 !!! info "Documentation"
-    See [DeepSeek API - Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion) for more information about DeepSeek's reasoning capabilities.
+    See [DeepSeek API - Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion) for more information.
+
+**Parameters:**
+
+- `reasoning_effort` (string): Reasoning effort level
+    - Values: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`
+    - Default: Model-specific
 
 **What You Get:**
 
-- **Automatic reasoning**: DeepSeek reasoning models automatically include their thinking process
-- **`reasoning_content` field**: Receive visible reasoning text in assistant messages
-- **Streaming support**: Get `choices[].delta.reasoning_content` chunks in real-time as the model thinks
-- **Compatible format**: Uses the same DeepSeek-compatible response format
+- **`reasoning_content` field**: Models include their thinking process in response
+- **Streaming support**: Get `choices[].delta.reasoning_content` chunks in real-time
 
-**How It Works:**
+!!! note "Compatibility"
+    This format is accepted for all reasoning-capable models. Models that don't support this parameter will ignore it.
 
-- When using DeepSeek reasoning models, the API automatically surfaces their chain-of-thought
-- Non-reasoning models simply omit the `reasoning_content` field
-- No special parameters needed—just use the model and reasoning appears automatically
+#### ![Moonshot](styles/logo_moonshot.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Moonshot API-compatible thinking control
+
+The `thinking` parameter provides a Moonshot API-compatible format for controlling thinking/reasoning on models that support it.
+
+!!! info "Documentation"
+    See [Moonshot Kimi API](https://platform.kimi.ai/docs/api/chat) for more information.
+
+**Parameters:**
+
+- `thinking={"type": "enabled"}` — Enable thinking mode
+- `thinking={"type": "disabled"}` — Disable thinking mode
+
+This format is accepted for all reasoning-capable models. Models that don't support this parameter will ignore it.
 
 ## Available Request Headers
 

@@ -1647,6 +1647,48 @@ class TestAnthropicClaudeChatCompletions:
         assert len(chunks) > 0
         assert len(accumulated_content) > 0
 
+    @pytest.mark.expensive
+    def test_reasoning_effort_none_explicit_disable(
+        self, openai_client: OpenAI, use_official_api: bool
+    ) -> None:
+        """reasoning_effort='none' explicitly disables reasoning on Claude models."""
+        if use_official_api:
+            pytest.skip("Anthropic Claude is not supported on the official API")
+        resp = openai_client.chat.completions.create(
+            model=_CLAUDE_CHEAP,
+            messages=[{"role": "user", "content": "Reply with OK."}],
+            reasoning_effort="none",
+            max_completion_tokens=4096,
+        )
+        assert hasattr(resp, "choices")
+        assert len(resp.choices) >= 1
+        msg = resp.choices[0].message
+        assert msg.role == "assistant"
+
+    @pytest.mark.expensive
+    @pytest.mark.parametrize("model", CLAUDE_ALL)
+    def test_reasoning_effort_none_explicit_disable_all_models(
+        self, openai_client: OpenAI, use_official_api: bool, model: str
+    ) -> None:
+        """reasoning_effort='none' explicitly disables reasoning on all Claude models."""
+        if use_official_api:
+            pytest.skip("Anthropic Claude is not supported on the official API")
+        try:
+            resp = openai_client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": "Reply with OK."}],
+                reasoning_effort="none",
+                max_completion_tokens=4096,
+            )
+        except NotFoundError as exc:
+            if "Legacy" in str(exc):
+                pytest.xfail(str(exc))
+
+        assert hasattr(resp, "choices")
+        assert len(resp.choices) >= 1
+        msg = resp.choices[0].message
+        assert msg.role == "assistant"
+
     # --- Response structure fields ---
 
     def test_response_id_format(

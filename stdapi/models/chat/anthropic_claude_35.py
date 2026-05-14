@@ -37,17 +37,19 @@ class ChatModel(AnthropicClaudeChatModel):
 
     def _req_configure_reasoning(
         self,
-        additional_request_fields: JsonMapping,  # noqa:ARG002
-        reasoning_effort: Effort | None = None,  # noqa:ARG002
-        budget_tokens: int | None = None,  # noqa:ARG002
-        max_tokens: int | None = None,  # noqa: ARG002
+        additional_request_fields: JsonMapping,
+        *,
+        enabled: bool,
+        reasoning_effort: Effort | None = None,
+        budget_tokens: int | None = None,
+        max_tokens: int | None = None,
     ) -> None:
         """No reasoning support for Anthropic Claude 3.5.
 
         Args:
             additional_request_fields: Additional request fields dict to update.
+            enabled: Whether reasoning is explicitly enabled.
             reasoning_effort: The reasoning effort level.
             budget_tokens: Maximum token budget for reasoning.
             max_tokens: Unused.
         """
-        return

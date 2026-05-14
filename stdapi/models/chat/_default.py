@@ -133,9 +133,19 @@ class ChatModel(ChatModelBase[Any, Any]):
             bedrock_messages=bedrock_messages,
         )
 
-        if request.reasoning_effort not in (None, "none") or request.enable_thinking:
+        if (
+        request.reasoning_effort is not None
+        or request.enable_thinking is not None
+        or request.thinking is not None
+    ):
+            reasoning_enabled = (
+                request.reasoning_effort is not None and request.reasoning_effort != "none"
+            ) or request.enable_thinking is True or (
+                request.thinking is not None and request.thinking.type == "enabled"
+            )
             self._req_configure_reasoning(
                 additional_request_fields=additional_request_fields,
+                enabled=reasoning_enabled,
                 reasoning_effort=request.reasoning_effort,
                 budget_tokens=request.thinking_budget,
                 max_tokens=request.max_completion_tokens or request.max_tokens,
@@ -237,12 +247,20 @@ class ChatModel(ChatModelBase[Any, Any]):
             bedrock_messages=bedrock_messages,
         )
 
-        if (request.thinking is not None and request.thinking.type != "disabled") or (
+        if request.thinking is not None or (
             request.output_config is not None
             and request.output_config.effort is not None
         ):
+            reasoning_enabled = (
+                request.thinking is not None
+                and request.thinking.type in ("enabled", "adaptive")
+            ) or (
+                request.output_config is not None
+                and request.output_config.effort is not None
+            )
             self._req_configure_reasoning(
                 additional_request_fields=additional_request_fields,
+                enabled=reasoning_enabled,
                 reasoning_effort=request.output_config.effort
                 if request.output_config is not None
                 else None,
@@ -348,12 +366,15 @@ class ChatModel(ChatModelBase[Any, Any]):
             bedrock_messages=bedrock_messages,
         )
 
-        if request.reasoning is not None and request.reasoning.effort not in (
-            None,
-            "none",
-        ):
+        if request.reasoning is not None:
+            reasoning_enabled = request.reasoning.effort not in (
+                None,
+                "none",
+                "disabled",
+            )
             self._req_configure_reasoning(
                 additional_request_fields=additional_request_fields,
+                enabled=reasoning_enabled,
                 reasoning_effort=request.reasoning.effort,
                 max_tokens=request.max_output_tokens,
             )
@@ -552,22 +573,24 @@ class ChatModel(ChatModelBase[Any, Any]):
     def _req_configure_reasoning(
         self,
         additional_request_fields: dict[str, Any],
+        *,
+        enabled: bool,
         reasoning_effort: Effort | None = None,
         budget_tokens: int | None = None,
         max_tokens: int | None = None,
     ) -> None:
-        """Raise when reasoning parameters are set (base: reasoning unsupported).
-
-        Override this method in model subclasses that support reasoning.
+        """Override this method in model subclasses that support reasoning.
 
         Args:
-            additional_request_fields: Unused in base; mutable in overrides.
+            additional_request_fields: Mutable in overrides.
+            enabled: Whether reasoning is explicitly enabled.
             reasoning_effort: Reasoning effort level.
             budget_tokens: Explicit token budget for reasoning.
-            max_tokens: Unused in base; used by overrides to derive budget.
+            max_tokens: Used by overrides to derive budget.
 
         Raises:
-            ApiError: If *reasoning_effort* or *budget_tokens* is not ``None``.
+            ApiError: If *enabled* is ``True`` and *reasoning_effort* or *budget_tokens*
+                is not ``None``.
         """
 
     def _resp_map_tool_result(
