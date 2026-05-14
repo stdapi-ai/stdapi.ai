@@ -1054,32 +1054,6 @@ def _stream_delta_chunk(
     return chunk, end
 
 
-def _stream_extract_usage_from_metadata(
-    stream_event: ConverseStreamOutputTypeDef,
-) -> CompletionUsage | None:
-    """Extract usage data from a stream metadata event.
-
-    Args:
-        stream_event: The stream event containing metadata.
-
-    Returns:
-        CompletionUsage if metadata found, otherwise None.
-    """
-    if "metadata" not in stream_event:
-        return None
-    usage = stream_event["metadata"]["usage"]
-    completion_usage = CompletionUsage(
-        completion_tokens=usage["outputTokens"],
-        prompt_tokens=usage["inputTokens"],
-        total_tokens=usage["totalTokens"],
-    )
-    if (cached := usage.get("cacheReadInputTokens")) is not None:
-        completion_usage.prompt_tokens_details = PromptTokensDetails(
-            cached_tokens=cached
-        )
-    return completion_usage
-
-
 def _suppress_system_tool_event(
     event: ConverseStreamOutputTypeDef,
     suppress_tool_names: frozenset[str],
@@ -1172,10 +1146,12 @@ async def format_stream(
         )
         end_state |= end
         if end_state:
-            if include_usage and chunk:
-                usage = _stream_extract_usage_from_metadata(event)
-                if usage:
-                    chunk.usage = usage
+            if (
+                include_usage
+                and chunk
+                and (usage := _openai_common.extract_stream_usage(event))
+            ):
+                chunk.usage = usage
         elif chunk:
             yield JSONServerSentEvent(
                 data=chunk.model_dump(mode="json", exclude_none=True)

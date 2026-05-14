@@ -26,11 +26,11 @@ if TYPE_CHECKING:
         MessageCreateParams,
         ThinkingEffort,
     )
+    from stdapi.types.openai_chat_completions import ChatCompletion, ReasoningEffort
     from stdapi.types.openai_chat_completions import (
-        ChatCompletion,
-        CompletionCreateParams,
-        ReasoningEffort,
+        CompletionCreateParams as ChatCompletionCreateParams,
     )
+    from stdapi.types.openai_completions import Completion, CompletionCreateParams
     from stdapi.types.openai_responses import Response, ResponseCreateParams
 
     #: Merged reasoning effort type
@@ -42,7 +42,7 @@ class ChatModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
 
     @abstractmethod
     async def create_completion(
-        self, request: CompletionCreateParams, completion_id: str, created: int
+        self, request: ChatCompletionCreateParams, completion_id: str, created: int
     ) -> ChatCompletion | EventSourceResponse:
         """Create a chat completion.
 
@@ -54,6 +54,22 @@ class ChatModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
         Returns:
             - ChatCompletion when stream is False.
             - AsyncGenerator streaming ChatCompletionChunk events when stream is True.
+        """
+
+    @abstractmethod
+    async def create_text_completion(
+        self, request: CompletionCreateParams, completion_id: str, created: int
+    ) -> Completion | EventSourceResponse:
+        """Handle a completion request (OpenAI ``POST /v1/completions``).
+
+        Args:
+            request: Completion creation request following the OpenAI spec.
+            completion_id: Stable identifier for the completion.
+            created: Unix timestamp (seconds) of the request.
+
+        Returns:
+            ``Completion`` when ``stream`` is ``False``, otherwise an
+            ``EventSourceResponse`` streaming completion chunks.
         """
 
     @abstractmethod

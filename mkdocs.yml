@@ -58,6 +58,7 @@ nav:
           - OpenAI Compatible:
             - Responses: api_openai_responses.md
             - Chat Completions: api_openai_chat_completions.md
+            - Completions: api_openai_completions.md
             - Files: api_openai_files.md
             - Images Generations: api_openai_images_generations.md
             - Images Edits: api_openai_images_edits.md

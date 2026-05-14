@@ -345,32 +345,45 @@ Many MCP clients—including Claude Code and Cursor—configure servers via a `m
 
 By default, all tools are exposed. Restrict the tool set for better performance — LLMs work better with fewer choices, and many providers cap active tools per session.
 
-`openai_chat_completion` and `anthropic_message` reach the same Bedrock models through different protocol adapters — pick one based on which API your client uses. The examples below use the OpenAI tools; replace with `anthropic_message,search_models,anthropic_file,anthropic_file_list,anthropic_files_get,anthropic_file_content` if you prefer the Anthropic protocol.
+**Choose the model-calling tool by task shape:**
 
-Always include `search_models` in your tool set — it lets the agent discover available model IDs dynamically rather than relying on hardcoded values. Use it instead of `openai_model_list` or `anthropic_model_list`: it returns richer metadata and supports capability-based filtering (by modality, route, region, and more).
+- **`openai_completion`** (`/v1/completions`) — the smallest schema and smallest token footprint per tool call. **Recommended for text-first coding agents**: code generation, completion, refactoring, explanation, Q&A. Supports batch prompts, streaming, and a single-request multimodal collapse (`["instruction", <file>, …]`) for analysing screenshots or reference documents.
+- **`openai_chat_completion`** (`/v1/chat/completions`) — use when the agent needs multi-turn conversations with system prompts, built-in function calling, or structured multimodal messages.
+- **`openai_response`** (`/v1/responses`) — modern stateless API with tool calling and structured output.
+- **`anthropic_message`** (`/v1/messages`) — Anthropic SDK compatibility; same Bedrock models, different protocol.
 
-**Coding agent (text and code only)** — chat, model discovery, and file operations; no image/audio, no destructive tools:
+Always include `search_models` — it lets the agent discover available model IDs dynamically rather than relying on hardcoded values. Use it instead of `openai_model_list` or `anthropic_model_list`: it returns richer metadata and supports capability-based filtering (by modality, route, region, and more).
+
+The examples below use the OpenAI tools; replace with the matching `anthropic_*` tools if you prefer the Anthropic protocol.
+
+**Coding agent (text and code only)** — completions, model discovery, and file operations; no image/audio, no destructive tools:
+
+```bash
+export MCP_INCLUDE_TOOLS="openai_completion,search_models,openai_embedding,openai_file,openai_file_list,openai_files_get,openai_file_content"
+```
+
+**Coding agent with tool calling / multi-turn chat** — when your agent uses OpenAI-style function calling or stateful conversations:
 
 ```bash
 export MCP_INCLUDE_TOOLS="openai_chat_completion,search_models,openai_embedding,openai_file,openai_file_list,openai_files_get,openai_file_content"
 ```
 
-**Coding agent with image support** — same baseline plus image generation and editing:
+**Coding agent with image support** — completions plus image generation and editing:
 
 ```bash
-export MCP_INCLUDE_TOOLS="openai_chat_completion,search_models,openai_embedding,openai_file,openai_file_list,openai_files_get,openai_file_content,openai_image_generation,openai_image_edit,openai_image_variation"
+export MCP_INCLUDE_TOOLS="openai_completion,search_models,openai_embedding,openai_file,openai_file_list,openai_files_get,openai_file_content,openai_image_generation,openai_image_edit,openai_image_variation"
 ```
 
-**Coding agent with audio support** — same baseline plus transcription, translation, and speech synthesis:
+**Coding agent with audio support** — completions plus transcription, translation, and speech synthesis:
 
 ```bash
-export MCP_INCLUDE_TOOLS="openai_chat_completion,search_models,openai_embedding,openai_file,openai_file_list,openai_files_get,openai_file_content,openai_audio_transcription,openai_audio_translation,openai_audio_speech"
+export MCP_INCLUDE_TOOLS="openai_completion,search_models,openai_embedding,openai_file,openai_file_list,openai_files_get,openai_file_content,openai_audio_transcription,openai_audio_translation,openai_audio_speech"
 ```
 
 In all cases, file deletion tools (`openai_files_delete`, `anthropic_files_delete`) are intentionally omitted — add them only when your workflow explicitly requires cleanup.
 
-!!! warning "Token Usage for Complex API Tools"
-    `anthropic_message`, `openai_chat_completion`, and `openai_response` map to large, complex APIs that may use many tokens (prompt, completion, and tool definitions). Select these tools only if your workflow requires the full API capabilities.
+!!! warning "Token usage — complex API tools"
+    `openai_chat_completion`, `openai_response`, and `anthropic_message` expose large schemas (messages, tool definitions, multimodal content parts). Each tool invocation can cost hundreds of extra tokens just to describe the schema. Select them only when your workflow actually needs multi-turn chat, function calling, or structured output — for text-first code Q&A, `openai_completion` is significantly cheaper per call.
 
 See [Configuration Reference → MCP](operations_configuration.md#mcp-model-context-protocol) for the full tool list and selection guidance.
 

@@ -10,7 +10,7 @@ from botocore.exceptions import ClientError, HTTPClientError
 from botocore.exceptions import ConnectionError as BotocoreConnectionError
 from fastapi import Request  # noqa: TC002
 from pydantic import AwareDatetime, BaseModel, JsonValue
-from sse_starlette import JSONServerSentEvent
+from sse_starlette import JSONServerSentEvent, ServerSentEvent
 
 from stdapi import server
 from stdapi.api_errors import ApiError
@@ -454,8 +454,8 @@ async def log_request_stream_event[T](stream: AsyncGenerator[T]) -> AsyncGenerat
 
 
 async def log_request_sse_stream_event(
-    stream: AsyncGenerator[JSONServerSentEvent],
-) -> AsyncGenerator[JSONServerSentEvent]:
+    stream: AsyncGenerator[ServerSentEvent],
+) -> AsyncGenerator[ServerSentEvent]:
     """Log, monitor, and error-guard an SSE stream for use with ``EventSourceResponse``.
 
     Combines :func:`log_request_stream_event` and an SSE error boundary into a

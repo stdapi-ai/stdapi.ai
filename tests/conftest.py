@@ -135,6 +135,7 @@ MODEL_MAPPINGS = {
         "transcription_diarize": "amazon.transcribe",
         "speech_standard": "amazon.polly-standard",
         "chat": "amazon.nova-micro-v1:0",
+        "completion": "amazon.nova-micro-v1:0",
         "chat_vision": "anthropic.claude-haiku-4-5-20251001-v1:0",
         "chat_legacy": "anthropic.claude-haiku-4-5-20251001-v1:0",
         "chat_reasoning": "anthropic.claude-sonnet-4-5-20250929-v1:0",
@@ -154,6 +155,7 @@ MODEL_MAPPINGS = {
         "transcription_diarize": "gpt-4o-transcribe-diarize",
         "speech_standard": "tts-1",
         "chat": "gpt-5-nano",
+        "completion": "gpt-3.5-turbo-instruct",
         "chat_vision": "gpt-5-nano",
         "chat_legacy": "gpt-4o-mini",
         "chat_reasoning": "gpt-5-nano",
@@ -280,6 +282,12 @@ def speech_standard_model(models: dict[str, str]) -> str:
 def chat_model(models: dict[str, str]) -> str:
     """Provide the appropriate chat model."""
     return models["chat"]
+
+
+@pytest.fixture(scope="session")
+def completion_model(models: dict[str, str]) -> str:
+    """Provide the appropriate chat model."""
+    return models["completion"]
 
 
 @pytest.fixture(scope="session")

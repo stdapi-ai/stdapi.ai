@@ -25,6 +25,7 @@ from stdapi.models.chat import ChatModelBase
 from stdapi.models.chat._adapters import _anthropic_message as anthropic_adapter
 from stdapi.models.chat._adapters import _openai_chat_completion as openai_adapter
 from stdapi.models.chat._adapters import _openai_common
+from stdapi.models.chat._adapters import _openai_completion as text_completion_adapter
 from stdapi.models.chat._adapters import _openai_responses as responses_adapter
 from stdapi.monitoring import REQUEST, log_request_sse_stream_event, log_response_params
 from stdapi.types.anthropic_messages import (
@@ -43,6 +44,7 @@ if TYPE_CHECKING:
     )
     from types_aiobotocore_bedrock_runtime.type_defs import (
         ContentBlockTypeDef,
+        ConverseResponseTypeDef,
         InferenceConfigurationTypeDef,
         JsonSchemaDefinitionTypeDef,
         MessageTypeDef,
@@ -62,10 +64,11 @@ if TYPE_CHECKING:
         MessageCreateParams,
         ServerTools,
     )
+    from stdapi.types.openai_chat_completions import ChatCompletion
     from stdapi.types.openai_chat_completions import (
-        ChatCompletion,
-        CompletionCreateParams,
+        CompletionCreateParams as ChatCompletionCreateParams,
     )
+    from stdapi.types.openai_completions import Completion, CompletionCreateParams
     from stdapi.types.openai_responses import Response, ResponseCreateParams
 
 
@@ -96,7 +99,7 @@ class ChatModel(ChatModelBase[Any, Any]):
     )
 
     async def create_completion(
-        self, request: CompletionCreateParams, completion_id: str, created: int
+        self, request: ChatCompletionCreateParams, completion_id: str, created: int
     ) -> ChatCompletion | EventSourceResponse:
         """Handle a chat completion request via the OpenAI route.
 
@@ -134,18 +137,23 @@ class ChatModel(ChatModelBase[Any, Any]):
         )
 
         if (
-        request.reasoning_effort is not None
-        or request.enable_thinking is not None
-        or request.thinking is not None
-    ):
-            reasoning_enabled = (
-                request.reasoning_effort is not None and request.reasoning_effort != "none"
-            ) or request.enable_thinking is True or (
-                request.thinking is not None and request.thinking.type == "enabled"
-            )
+            request.reasoning_effort is not None
+            or request.enable_thinking is not None
+            or request.thinking is not None
+        ):
             self._req_configure_reasoning(
                 additional_request_fields=additional_request_fields,
-                enabled=reasoning_enabled,
+                enabled=(
+                    (
+                        request.reasoning_effort is not None
+                        and request.reasoning_effort != "none"
+                    )
+                    or request.enable_thinking is True
+                    or (
+                        request.thinking is not None
+                        and request.thinking.type == "enabled"
+                    )
+                ),
                 reasoning_effort=request.reasoning_effort,
                 budget_tokens=request.thinking_budget,
                 max_tokens=request.max_completion_tokens or request.max_tokens,
@@ -201,6 +209,93 @@ class ChatModel(ChatModelBase[Any, Any]):
             request.audio,
             request.modalities or openai_adapter.DEFAULT_OUTPUT_MODALITIES,  # type: ignore[arg-type]
             self.SUPPORTED_SYSTEM_TOOLS or None,
+        )
+
+    async def create_text_completion(
+        self, request: CompletionCreateParams, completion_id: str, created: int
+    ) -> Completion | EventSourceResponse:
+        """Handle a completion request (OpenAI ``POST /v1/completions``).
+
+        Args:
+            request: Completion creation request following the OpenAI spec.
+            completion_id: Stable identifier for the completion.
+            created: Unix timestamp (seconds) of the request.
+
+        Returns:
+            ``Completion`` when ``stream`` is ``False``, otherwise an
+            ``EventSourceResponse`` streaming completion chunks.
+        """
+        await prefetch_all_content_types()
+        user_messages = await text_completion_adapter.build_user_messages(
+            request.prompt
+        )
+
+        (
+            inference_cfg,
+            additional_request_fields,
+            bedrock_service_tier,
+            openai_service_tier,
+            n,
+            request_metadata,
+        ) = text_completion_adapter.translate_request(request, self._model_id)
+
+        prompt_caching = _openai_common.parse_prompt_cache_key(request.prompt_cache_key)
+        prompt_caching_ttl = _openai_common.CACHE_TTL.get(
+            request.prompt_cache_retention
+        )
+
+        bedrock_requests: list[ConverseRequestBaseTypeDef] = []
+        for user_message in user_messages:
+            messages = [user_message]
+            if prompt_caching:
+                self._req_enable_prompt_caching(
+                    system_blocks=None,
+                    tool_config=None,
+                    bedrock_messages=messages,
+                    prompt_caching=prompt_caching,
+                    prompt_caching_ttl=prompt_caching_ttl,
+                )
+            bedrock_requests.append(
+                await self._prepare_converse_request(
+                    bedrock_messages=messages,
+                    inference_cfg=inference_cfg,
+                    system_blocks=None,
+                    tool_config=None,
+                    additional_request_fields=additional_request_fields,
+                    service_tier=bedrock_service_tier,
+                    request_metadata=request_metadata,
+                )
+            )
+
+        if request.stream:
+            stream_responses = await gather(
+                *(
+                    self.converse_stream(req)
+                    for req in bedrock_requests
+                    for _ in range(n)
+                )
+            )
+            return EventSourceResponse(
+                log_request_sse_stream_event(
+                    text_completion_adapter.format_stream(
+                        completion_id,
+                        created,
+                        self._model_id,
+                        [r["stream"] for r in stream_responses],
+                        openai_service_tier,
+                        include_usage=(
+                            request.stream_options is not None
+                            and request.stream_options.include_usage is True
+                        ),
+                    )
+                )
+            )
+
+        responses: list[ConverseResponseTypeDef] = await gather(
+            *(self.converse(req) for req in bedrock_requests for _ in range(n))
+        )
+        return text_completion_adapter.format_response(
+            completion_id, created, self._model_id, responses, openai_service_tier
         )
 
     async def create_message(
@@ -466,7 +561,7 @@ class ChatModel(ChatModelBase[Any, Any]):
         self,
         bedrock_messages: list[MessageTypeDef],
         inference_cfg: InferenceConfigurationTypeDef,
-        system_blocks: list[SystemContentBlockTypeDef],
+        system_blocks: list[SystemContentBlockTypeDef] | None,
         tool_config: ToolConfigurationTypeDef | None,
         additional_request_fields: dict[str, Any],
         service_tier: ServiceTierTypeType | None,
@@ -718,7 +813,7 @@ class ChatModel(ChatModelBase[Any, Any]):
 
     def _req_enable_prompt_caching(
         self,
-        system_blocks: list[SystemContentBlockTypeDef],
+        system_blocks: list[SystemContentBlockTypeDef] | None,
         tool_config: ToolConfigurationTypeDef | None,
         bedrock_messages: list[MessageTypeDef],
         prompt_caching: set[PromptCaching] | frozenset[PromptCaching],
@@ -764,7 +859,7 @@ class ChatModel(ChatModelBase[Any, Any]):
 
     def _apply_simplified_caching(
         self,
-        system_blocks: list[SystemContentBlockTypeDef],
+        system_blocks: list[SystemContentBlockTypeDef] | None,
         tool_config: ToolConfigurationTypeDef | None,
         bedrock_messages: list[MessageTypeDef],
         prompt_caching: set[PromptCaching] | frozenset[PromptCaching],
@@ -794,7 +889,7 @@ class ChatModel(ChatModelBase[Any, Any]):
 
     def _apply_multiple_cache_checkpoints(
         self,
-        system_blocks: list[SystemContentBlockTypeDef],
+        system_blocks: list[SystemContentBlockTypeDef] | None,
         tool_config: ToolConfigurationTypeDef | None,
         bedrock_messages: list[MessageTypeDef],
         prompt_caching: set[PromptCaching] | frozenset[PromptCaching],

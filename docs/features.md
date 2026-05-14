@@ -76,21 +76,22 @@ Your existing applications, SDKs, and tools work immediately — no plugins or c
 
 **OpenAI-Compatible:**
 
-| Endpoint                   | Capability                                                       | AWS Backend                          |
-|----------------------------|------------------------------------------------------------------|--------------------------------------|
-| `/v1/chat/completions`     | Conversational AI, tool calling, multi-modal                     | AWS Bedrock Converse API             |
-| `/v1/responses`            | Stateless conversational AI with tool calling and streaming      | AWS Bedrock Converse API             |
-| `/v1/embeddings`           | Vector embeddings for search & RAG                               | AWS Bedrock Embedding Models         |
-| `/v1/images/generations`   | Text-to-image generation                                         | AWS Bedrock Image Models             |
-| `/v1/images/edits`         | Image editing, inpainting & transformations                      | AWS Bedrock Image Models             |
-| `/v1/images/variations`    | Image variations                                                 | AWS Bedrock Image Models             |
-| `/v1/audio/speech`         | Text-to-speech with SSML support                                 | Amazon Polly                         |
-| `/v1/audio/transcriptions` | Speech-to-text with speaker diarization                          | Amazon Transcribe                    |
-| `/v1/audio/translations`   | Speech-to-English translation                                    | Amazon Transcribe + Amazon Translate |
-| `/v1/models`               | Model discovery & listing                                        | AWS Bedrock                          |
-| `/v1/files`                | File upload, listing, metadata, download, deletion               | Amazon S3                            |
-| `/v1/uploads`              | Multipart upload sessions for large files                        | Amazon S3                            |
-| `/search_models`           | Search models by capability: modality, route, MCP tool, region, streaming | Internal |
+| Endpoint                   | Capability                                                                | AWS Backend                          |
+|----------------------------|---------------------------------------------------------------------------|--------------------------------------|
+| `/v1/chat/completions`     | Conversational AI, tool calling, multi-modal                              | AWS Bedrock Converse API             |
+| `/v1/completions`          | Simple prompt-to-text                                                     | AWS Bedrock Converse API             |
+| `/v1/responses`            | Stateless conversational AI with tool calling and streaming               | AWS Bedrock Converse API             |
+| `/v1/embeddings`           | Vector embeddings for search & RAG                                        | AWS Bedrock Embedding Models         |
+| `/v1/images/generations`   | Text-to-image generation                                                  | AWS Bedrock Image Models             |
+| `/v1/images/edits`         | Image editing, inpainting & transformations                               | AWS Bedrock Image Models             |
+| `/v1/images/variations`    | Image variations                                                          | AWS Bedrock Image Models             |
+| `/v1/audio/speech`         | Text-to-speech with SSML support                                          | Amazon Polly                         |
+| `/v1/audio/transcriptions` | Speech-to-text with speaker diarization                                   | Amazon Transcribe                    |
+| `/v1/audio/translations`   | Speech-to-English translation                                             | Amazon Transcribe + Amazon Translate |
+| `/v1/models`               | Model discovery & listing                                                 | AWS Bedrock                          |
+| `/v1/files`                | File upload, listing, metadata, download, deletion                        | Amazon S3                            |
+| `/v1/uploads`              | Multipart upload sessions for large files                                 | Amazon S3                            |
+| `/search_models`           | Search models by capability: modality, route, MCP tool, region, streaming | Internal                             |
 
 **Anthropic-Compatible:**
 
@@ -485,6 +486,7 @@ All four solutions below expose an OpenAI-compatible API in front of AWS Bedrock
 | Capability                                  |              stdapi.ai              |            LiteLLM (on AWS)             |         Bedrock Access Gateway          |             Bedrock Mantle              |
 |---------------------------------------------|:-----------------------------------:|:---------------------------------------:|:---------------------------------------:|:---------------------------------------:|
 | **OpenAI Chat completions**                 |  :material-check:{ .green-check }   |    :material-check:{ .green-check }     |    :material-check:{ .green-check }     | :material-check:{ .yellow-check } [^2]  |
+| **OpenAI Completions**                      |  :material-check:{ .green-check }   |    :material-check:{ .green-check }     |                    —                    |                    —                    |
 | **OpenAI Embeddings**                       |  :material-check:{ .green-check }   |    :material-check:{ .green-check }     |    :material-check:{ .green-check }     |                    —                    |
 | **Anthropic Messages API**                  |  :material-check:{ .green-check }   |    :material-check:{ .green-check }     |                    —                    | :material-check:{ .yellow-check } [^14] |
 | **OpenAI Responses API**                    |  :material-check:{ .green-check }   |                    —                    |                    —                    | :material-check:{ .yellow-check } [^2]  |

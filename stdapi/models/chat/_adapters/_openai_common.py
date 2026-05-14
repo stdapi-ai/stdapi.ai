@@ -3,6 +3,7 @@
 from typing import TYPE_CHECKING
 
 from stdapi.aws_bedrock import PROMPT_CACHING
+from stdapi.types.openai_chat_completions import CompletionUsage, PromptTokensDetails
 from stdapi.utils import try_parse_json
 
 if TYPE_CHECKING:
@@ -11,6 +12,7 @@ if TYPE_CHECKING:
         ServiceTierTypeType,
     )
     from types_aiobotocore_bedrock_runtime.type_defs import (
+        ConverseStreamOutputTypeDef,
         ToolResultContentBlockUnionTypeDef,
     )
 
@@ -88,3 +90,30 @@ def parse_prompt_cache_key(prompt_cache_key: str | None) -> set[PromptCaching]:
             set(prompt_cache_key.split(".")) & PROMPT_CACHING  # type: ignore[return-value]
         ) or PROMPT_CACHING
     return set()
+
+
+def extract_stream_usage(
+    stream_event: ConverseStreamOutputTypeDef,
+) -> CompletionUsage | None:
+    """Extract ``CompletionUsage`` from a Bedrock ``metadata`` stream event.
+
+    Args:
+        stream_event: A single event from ``ConverseStream``.
+
+    Returns:
+        Populated ``CompletionUsage`` when the event carries ``metadata.usage``,
+        else ``None``.
+    """
+    if "metadata" not in stream_event:
+        return None
+    usage = stream_event["metadata"]["usage"]
+    completion_usage = CompletionUsage(
+        completion_tokens=usage["outputTokens"],
+        prompt_tokens=usage["inputTokens"],
+        total_tokens=usage["totalTokens"],
+    )
+    if (cached := usage.get("cacheReadInputTokens")) is not None:
+        completion_usage.prompt_tokens_details = PromptTokensDetails(
+            cached_tokens=cached
+        )
+    return completion_usage

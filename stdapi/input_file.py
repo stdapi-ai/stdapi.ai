@@ -1240,13 +1240,16 @@ class InputFile:
                 }
                 return {"audio": audio_block}
             case _:
-                if format_from_mime not in _BEDROCK_DOCUMENT_FORMATS:
+                bedrock_format = MIME_TYPES_TO_DOCUMENT_TYPE.get(
+                    format_from_mime, format_from_mime
+                )
+                if bedrock_format not in _BEDROCK_DOCUMENT_FORMATS:
                     msg = f"Unsupported MIME type for Bedrock document: {await self.get_content_type()!r}"
                     raise ApiError(msg)
                 self._is_document = True
                 document_source: DocumentSourceTypeDef = self._bedrock_source  # type: ignore[assignment]
                 document_block: DocumentBlockTypeDef = {
-                    "format": MIME_TYPES_TO_DOCUMENT_TYPE.get(format_from_mime, "txt"),
+                    "format": bedrock_format,  # type: ignore[typeddict-item]
                     "name": _BEDROCK_DOC_NAME_RE.sub(
                         "", filename or await self.get_filename() or "file"
                     )[:200],
