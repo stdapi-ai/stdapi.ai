@@ -586,6 +586,45 @@ curl -X POST "$BASE/v1/messages" \
     - [Bedrock Guardrails Configuration](operations_configuration.md#bedrock-guardrails)
     - [Service Tier and Performance Configuration](operations_configuration.md#bedrock-service-tier-and-performance-configuration)
 
+## Model-specific features
+
+### ![TwelveLabs](styles/logo_twelvelabs.svg){ style="height: 1.2em; vertical-align: text-bottom;" } TwelveLabs Pegasus
+
+`twelvelabs.pegasus-1-2-v1:0` is a video-understanding model. Because Pegasus accepts exactly one video and one text prompt per call, this API adapts the conversation automatically:
+
+- The **latest video** found anywhere in the conversation (any role, any position) is forwarded as the video input.
+- The **latest contiguous run of user text** (back to the previous assistant or tool turn) is concatenated and forwarded as the text prompt.
+- `temperature` and `max_tokens` are forwarded.
+
+**Silently ignored** (no error): system prompts, tools, `top_p`, stop sequences, guardrails, service tier, and prompt caching.
+
+**Upstream format limitation:** The Anthropic Messages API does not define a `video` content block in its stable spec. To stay fully compatible with standard Anthropic clients, pass the video as an **`image`** content block with `media_type` set to the video MIME type (e.g. `video/mp4`) — the server detects the video MIME type automatically and routes it to Pegasus correctly.
+
+**Video input formats**: `data:video/mp4;base64,…`, `https://…`, `s3://bucket/key`, or `file-id:…`. Videos above 18.75 MB are automatically uploaded to S3.
+
+```bash
+curl https://api.example.com/v1/messages \
+  -H "x-api-key: $API_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "twelvelabs.pegasus-1-2-v1:0",
+    "max_tokens": 1024,
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "image",
+            "source": {"type": "url", "url": "s3://my-bucket/video.mp4"}
+          },
+          {"type": "text", "text": "Describe what happens in this video."}
+        ]
+      }
+    ]
+  }'
+```
+
 ## Try It Now
 
 **Basic message:**

@@ -1146,12 +1146,7 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
         min_length=1,
         description="A list of messages comprising the conversation so far.\n"
         "Depending on the model you use, different message types (modalities) are supported, "
-        "like text, document, video, image, and audio.\n"
-        "You can include up to 20 images. "
-        "Each image's size, height, and width must be no more than 3.75 MB, 8000 px, and 8000 px, respectively.\n"
-        "You can include up to five documents. "
-        "Each document's size must be no more than 4.5 MB.\n"
-        "Audio is UNSUPPORTED on this implementation.",
+        "like text, document, video, image, and audio.",
     )
     model: str = Field(
         ..., min_length=1, description="Model ID used to generate the response"

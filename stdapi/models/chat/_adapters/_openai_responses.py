@@ -600,9 +600,9 @@ async def _convert_input_content(part: ResponseInputContent) -> ContentBlockType
         case ResponseInputText(text=text) | ResponseOutputTextContent(text=text):
             return {"text": text}
         case ResponseInputImage(file_id=fid) if fid is not None:
-            return await FileIdInputFile(fid).to_bedrock_content_block("image")
+            return await FileIdInputFile(fid).to_bedrock_content_block()
         case ResponseInputImage(image_url=url) if url is not None:
-            return await InputFile(url).to_bedrock_content_block("image")
+            return await InputFile(url).to_bedrock_content_block()
         case ResponseInputFile(file_id=fid) if fid is not None:
             return await FileIdInputFile(fid).to_bedrock_content_block()
         case ResponseInputFile(file_url=url) if url is not None:

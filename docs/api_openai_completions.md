@@ -256,6 +256,27 @@ curl -N -X POST "$BASE/v1/completions" \
   }'
 ```
 
+## Model-specific features
+
+### ![TwelveLabs](styles/logo_twelvelabs.svg){ style="height: 1.2em; vertical-align: text-bottom;" } TwelveLabs Pegasus
+
+`twelvelabs.pegasus-1-2-v1:0` is a video-understanding model. The Completions endpoint supports multimodal input: pass an array with exactly one text instruction and one video URL as `prompt` — the server combines them into a single Pegasus request.
+
+- `temperature` and `max_tokens` are forwarded.
+- A text-only `prompt` without a video returns HTTP 400 (Pegasus requires exactly one video).
+
+**Video input formats**: `s3://bucket/key`, `https://…`, `data:video/mp4;base64,…`, or `file-id:…`. Videos above 18.75 MB are automatically uploaded to S3.
+
+```bash
+curl https://api.example.com/v1/completions \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "twelvelabs.pegasus-1-2-v1:0",
+    "prompt": ["Describe what happens in this video.", "s3://my-bucket/video.mp4"]
+  }'
+```
+
 ## Examples
 
 ### Single Prompt Completion

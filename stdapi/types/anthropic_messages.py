@@ -286,9 +286,7 @@ class Base64ImageSource(BaseModelRequest):
     """Image source for image content block."""
 
     type: Literal["base64"] = Field(description="Image source type. Always `base64`.")
-    media_type: Literal["image/jpeg", "image/png", "image/gif", "image/webp"] = Field(
-        description="Image media type."
-    )
+    media_type: str = Field(description="Image media type.")
     data: InputFile = Field(
         description="Base64 encoded image data (or data URI, S3 URI or URL)."
     )

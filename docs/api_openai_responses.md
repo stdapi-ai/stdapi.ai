@@ -495,6 +495,42 @@ curl -X POST "$BASE/v1/responses" \
     - [Bedrock Guardrails Configuration](operations_configuration.md#bedrock-guardrails)
     - [Service Tier and Performance Configuration](operations_configuration.md#bedrock-service-tier-and-performance-configuration)
 
+## Model-specific features
+
+### ![TwelveLabs](styles/logo_twelvelabs.svg){ style="height: 1.2em; vertical-align: text-bottom;" } TwelveLabs Pegasus
+
+`twelvelabs.pegasus-1-2-v1:0` is a video-understanding model. Because Pegasus accepts exactly one video and one text prompt per call, this API adapts the conversation automatically:
+
+- The **latest video** found anywhere in the conversation (any role, any position) is forwarded as the video input.
+- The **latest contiguous run of user text** (back to the previous assistant or tool turn) is concatenated and forwarded as the text prompt.
+- `temperature` and `max_output_tokens` are forwarded.
+- `text.format: json_schema` is forwarded as Pegasus's structured output.
+
+**Silently ignored** (no error): system prompt, tools, `top_p`, stop sequences, guardrails, service tier, and prompt caching.
+
+**Upstream format limitation:** The OpenAI Responses API has no `input_video` content type in its stable spec. To stay fully compatible with standard OpenAI clients, pass the video as an **`input_image`** content item — the server detects the video MIME type automatically and routes it to Pegasus correctly.
+
+**Video input formats**: `data:video/mp4;base64,…`, `https://…`, `s3://bucket/key`, or `file-id:…`. Videos above 18.75 MB are automatically uploaded to S3.
+
+```bash
+curl https://api.example.com/v1/responses \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "twelvelabs.pegasus-1-2-v1:0",
+    "input": [
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {"type": "input_image", "image_url": "s3://my-bucket/video.mp4"},
+          {"type": "input_text", "text": "Describe what happens in this video."}
+        ]
+      }
+    ]
+  }'
+```
+
 ## Try It Now
 
 **Basic response:**
