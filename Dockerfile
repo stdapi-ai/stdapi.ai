@@ -11,7 +11,7 @@ RUN apk add --no-cache tzdata libmagic && \
 WORKDIR /opt
 COPY pyproject.toml uv.lock ./
 RUN mkdir -p build && \
-    uv export --quiet --frozen --output-file requirements.txt --format requirements.txt --no-dev --extra uvicorn --extra granian --extra opentelemetry && \
+    uv export --quiet --frozen --output-file requirements.txt --format requirements.txt --no-dev --extra uvicorn --extra granian --extra opentelemetry --extra mcp && \
     uv pip sync --prefix /opt/build pyproject.toml requirements.txt && \
     mkdir -p app && \
     mv build/lib/python*/site-packages/* app/
@@ -28,11 +28,14 @@ RUN mkdir -p $TIKTOKEN_CACHE_DIR && \
 COPY stdapi /opt/app/stdapi
 
 # Optimize Python code
-# Can't remove "annotated-doc" .dist-info
+# Can't remove "annotated-doc" .dist-info - needed at runtime
+# Can't remove "mcp" .dist-info - fastapi_mcp uses importlib.metadata.version("mcp")
 RUN find . -type d -name __pycache__ -a -prune -exec rm -rf {} \; && \
     mv annotated_doc-*.dist-info /tmp/ && \
+    mv mcp-*.dist-info /tmp/ && \
     rm -rf *.virtualenv _virtualenv.pth _virtualenv.py _stdapi.pth *.dist-info  && \
     mv /tmp/annotated_doc-*.dist-info . && \
+    mv /tmp/mcp-*.dist-info . && \
     python -m compileall . -q -b -j0 -o2 && \
     find . -name "*.py" -type f -delete && \
     find /opt/app/stdapi -type f -exec chmod 644 {} + && \
