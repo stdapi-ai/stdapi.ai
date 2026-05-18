@@ -12,7 +12,7 @@ SERVER_ID = webuuid()
 SERVER_NAME = f"{gethostname()[:128]}-{getpid()}-{SERVER_ID}"
 
 #: Server version
-SERVER_VERSION = "1.11.1"
+SERVER_VERSION = "1.11.2"
 
 #: Server user agent
 USER_AGENT = f"stdapi.ai/{SERVER_VERSION}/{SERVER_ID}"
