@@ -6,7 +6,7 @@ keywords: deploy OpenAI gateway AWS, AWS Bedrock deployment, Terraform AWS AI, e
 
 # :material-rocket-launch: Deploy stdapi.ai on AWS
 
-Get a production-grade OpenAI-compatible AI gateway running on AWS in 5 minutes. Terraform handles everything — ECS Fargate, HTTPS, WAF, auto-scaling, and monitoring.
+Get a production-grade OpenAI-compatible AI gateway running on AWS in 5 minutes. Terraform handles everything — ECS Fargate, HTTPS, auto-scaling, optional WAF, and optional monitoring.
 
 !!! tip "14-Day Free Trial"
     The AWS Marketplace subscription includes a **14-day free trial**. Test the full production stack in your environment risk-free.
@@ -25,7 +25,7 @@ Get a production-grade OpenAI-compatible AI gateway running on AWS in 5 minutes.
 3. Configure [AWS credentials](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html) (`aws configure` or `aws sso login`).
 
 !!! warning "Requires AWS administrator permissions"
-    The Terraform module provisions IAM roles and policies, KMS keys, ECS/Fargate, ALB + WAF, and networking. A restricted developer profile will fail during `terraform apply`.
+    The Terraform module provisions IAM roles and policies, KMS keys, ECS/Fargate, ALB, and networking. A restricted developer profile will fail during `terraform apply`.
 
     **Strongly recommended:** deploy into a **sandbox / non-production AWS account first** to evaluate the stack, then replicate into your target account with scoped-down principals once you've validated it.
 
@@ -57,8 +57,8 @@ terraform apply
 That's it. In ~5 minutes you have:
 
 - Production-grade ECS Fargate deployment with HTTPS
-- WAF protection with rate limiting
-- CloudWatch alarms and monitoring
+- Optional WAF protection with rate limiting
+- Optional CloudWatch alarms and monitoring
 - Auto-scaling and API key authentication
 - Interactive API documentation at `/docs`
 - IP-restricted access (your IP only)
@@ -66,7 +66,7 @@ That's it. In ~5 minutes you have:
 ```mermaid
 %%{init: {'flowchart': {'htmlLabels': true}} }%%
 flowchart LR
-  openai["<img src='../styles/logo_openai.svg' style='height:64px;width:auto;vertical-align:middle;' /> OpenAI SDK"] -->|HTTPS| alb["<img src='../styles/logo_amazon_load_balancing.svg' style='height:64px;width:auto;vertical-align:middle;' /> ALB + WAF"]
+  openai["<img src='../styles/logo_openai.svg' style='height:64px;width:auto;vertical-align:middle;' /> OpenAI SDK"] -->|HTTPS| alb["<img src='../styles/logo_amazon_load_balancing.svg' style='height:64px;width:auto;vertical-align:middle;' /> ALB"]
   anthropic["<img src='../styles/logo_anthropic.svg' style='height:64px;width:auto;vertical-align:middle;' /> Anthropic SDK"] -->|HTTPS| alb
   alb --> ecs["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai<br/>ECS Fargate"]
   ecs --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Bedrock"]
