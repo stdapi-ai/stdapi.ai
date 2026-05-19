@@ -59,10 +59,11 @@ if TYPE_CHECKING:
         PromptRouterTargetModelTypeDef,
     )
     from types_aiobotocore_bedrock_runtime import BedrockRuntimeClient
-    from types_aiobotocore_bedrock_runtime.literals import TraceType
+    from types_aiobotocore_bedrock_runtime.literals import ServiceTierTypeType
     from types_aiobotocore_bedrock_runtime.type_defs import (
         ConverseResponseTypeDef,
         ConverseStreamResponseTypeDef,
+        GuardrailStreamConfigurationTypeDef,
         InvokeModelRequestTypeDef,
         ResponseStreamTypeDef,
     )
@@ -318,6 +319,8 @@ class ModelBase[RequestT, ResponseT]:
         inference_profile: bool = True,
         region: RegionName | None = None,
         s3_required: bool = False,
+        service_tier: ServiceTierTypeType | None = None,
+        guardrail: GuardrailStreamConfigurationTypeDef | None = None,
     ) -> ResponseT:
         """Invoke the model via ``InvokeModel``.
 
@@ -329,6 +332,10 @@ class ModelBase[RequestT, ResponseT]:
                 ``None``, the router selects freely across all candidate regions.
             s3_required: Restrict candidate regions to those with a configured S3
                 bucket. Ignored when *region* is provided.
+            service_tier: Service tier configuration. When provided, takes precedence
+                over context variable and settings. Defaults to None (uses fallback).
+            guardrail: Guardrail configuration. When provided, takes precedence
+                over context variable. Defaults to None (uses fallback).
 
         Returns:
             Parsed JSON response body.
@@ -345,6 +352,8 @@ class ModelBase[RequestT, ResponseT]:
                 r,
                 inference_profile=inference_profile,
                 single_region=len(candidates) == 1,
+                service_tier=service_tier,
+                guardrail=guardrail,
             ),
         )
 
@@ -371,6 +380,8 @@ class ModelBase[RequestT, ResponseT]:
         inference_profile: bool = True,
         region: RegionName | None = None,
         s3_required: bool = False,
+        service_tier: ServiceTierTypeType | None = None,
+        guardrail: GuardrailStreamConfigurationTypeDef | None = None,
     ) -> AsyncGenerator[JsonValue]:
         """Invoke the model via ``InvokeModelWithResponseStream``.
 
@@ -382,6 +393,10 @@ class ModelBase[RequestT, ResponseT]:
                 ``None``, the router selects freely across all candidate regions.
             s3_required: Restrict candidate regions to those with a configured S3
                 bucket. Ignored when *region* is provided.
+            service_tier: Service tier configuration. When provided, takes precedence
+                over context variable and settings. Defaults to None (uses fallback).
+            guardrail: Guardrail configuration. When provided, takes precedence
+                over context variable. Defaults to None (uses fallback).
 
         Yields:
             Parsed JSON chunks from the streaming response.
@@ -398,6 +413,8 @@ class ModelBase[RequestT, ResponseT]:
                 r,
                 inference_profile=inference_profile,
                 single_region=len(candidates) == 1,
+                service_tier=service_tier,
+                guardrail=guardrail,
             ),
         ):
             yield chunk
@@ -1364,6 +1381,8 @@ async def _build_invoke_kwargs(
     region: RegionName,
     *,
     inference_profile: bool,
+    service_tier: ServiceTierTypeType | None = None,
+    guardrail: GuardrailStreamConfigurationTypeDef | None = None,
 ) -> InvokeModelRequestTypeDef:
     """Build the kwargs dict for ``InvokeModel`` / ``InvokeModelWithResponseStream``.
 
@@ -1374,6 +1393,11 @@ async def _build_invoke_kwargs(
         body: JSON request payload.
         region: Target AWS region (used to resolve the model/profile ID).
         inference_profile: Use cross-region inference profile ID when available.
+        service_tier: Service tier configuration. When provided, takes precedence
+            over context variable and settings. When None, falls back to
+            PERFORMANCE_CONFIG_VAR and SETTINGS.default_model_service_tiers.
+        guardrail: Guardrail configuration. When provided, takes precedence
+            over GUARDRAIL_CONFIG_VAR context variable.
 
     Returns:
         Fully populated request kwargs dict.
@@ -1386,25 +1410,20 @@ async def _build_invoke_kwargs(
         "accept": "application/json",
         "body": to_json(body),
     }
-    try:
-        guardtrail_config = GUARDTRAIL_CONFIG_VAR.get()
-    except LookupError:
-        pass
-    else:
-        kwargs["guardrailIdentifier"] = guardtrail_config["guardrailIdentifier"]
-        kwargs["guardrailVersion"] = guardtrail_config["guardrailVersion"]
-        try:
-            # The format differs (Uppercase instead of lowercase)
-            trace: TraceType = guardtrail_config["trace"].upper()  # type: ignore[assignment]
-        except KeyError:
-            pass
-        else:
-            kwargs["trace"] = trace
-    latency, service_tier = PERFORMANCE_CONFIG_VAR.get()
+
+    if (guardrail := guardrail or GUARDTRAIL_CONFIG_VAR.get(None)) is not None:
+        kwargs["guardrailIdentifier"] = guardrail["guardrailIdentifier"]
+        kwargs["guardrailVersion"] = guardrail["guardrailVersion"]
+        if trace := guardrail.get("trace"):
+            kwargs["trace"] = trace.upper()  # type: ignore[typeddict-item]
+
+    latency, perf_service_tier = PERFORMANCE_CONFIG_VAR.get((None, None))
     if latency:
         kwargs["performanceConfigLatency"] = latency
-    if service_tier := service_tier or SETTINGS.default_model_service_tiers.get(
-        model_id
+    if service_tier := (
+        service_tier
+        or perf_service_tier
+        or SETTINGS.default_model_service_tiers.get(model_id)
     ):
         kwargs["serviceTier"] = service_tier
     return kwargs
@@ -1417,6 +1436,8 @@ async def _invoke(
     *,
     inference_profile: bool,
     single_region: bool,
+    service_tier: ServiceTierTypeType | None = None,
+    guardrail: GuardrailStreamConfigurationTypeDef | None = None,
 ) -> Mapping[str, Any]:
     """Call ``InvokeModel`` and return the parsed JSON response.
 
@@ -1426,6 +1447,8 @@ async def _invoke(
         region: AWS region to target.
         inference_profile: Use cross-region inference profile ID when available.
         single_region: Selects the botocore client (see :func:`bedrock_client`).
+        service_tier: Service tier configuration (takes precedence over context var).
+        guardrail: Guardrail configuration (takes precedence over context var).
 
     Returns:
         Parsed JSON response body.
@@ -1437,7 +1460,12 @@ async def _invoke(
         ).invoke_model(
             **(
                 await _build_invoke_kwargs(
-                    model_id, body, region, inference_profile=inference_profile
+                    model_id,
+                    body,
+                    region,
+                    inference_profile=inference_profile,
+                    service_tier=service_tier,
+                    guardrail=guardrail,
                 )
             )
         )
@@ -1469,6 +1497,8 @@ async def _open_invoke_stream(
     *,
     inference_profile: bool,
     single_region: bool,
+    service_tier: ServiceTierTypeType | None = None,
+    guardrail: GuardrailStreamConfigurationTypeDef | None = None,
 ) -> AsyncGenerator[JsonValue]:
     """Open an ``InvokeModelWithResponseStream`` connection and return a JSON chunk generator.
 
@@ -1482,6 +1512,8 @@ async def _open_invoke_stream(
         region: AWS region to target.
         inference_profile: Use cross-region inference profile ID when available.
         single_region: Selects the botocore client (see :func:`bedrock_client`).
+        service_tier: Service tier configuration (takes precedence over context var).
+        guardrail: Guardrail configuration (takes precedence over context var).
 
     Returns:
         Async generator yielding parsed JSON chunks.
@@ -1493,7 +1525,12 @@ async def _open_invoke_stream(
         ).invoke_model_with_response_stream(
             **(
                 await _build_invoke_kwargs(
-                    model_id, body, region, inference_profile=inference_profile
+                    model_id,
+                    body,
+                    region,
+                    inference_profile=inference_profile,
+                    service_tier=service_tier,
+                    guardrail=guardrail,
                 )
             )
         )

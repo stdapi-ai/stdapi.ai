@@ -506,7 +506,7 @@ curl -X POST "$BASE/v1/responses" \
 - `temperature` and `max_output_tokens` are forwarded.
 - `text.format: json_schema` is forwarded as Pegasus's structured output.
 
-**Silently ignored** (no error): system prompt, tools, `top_p`, stop sequences, guardrails, service tier, and prompt caching.
+**Silently ignored** (no error): system prompt, tools, `top_p`, stop sequences, and prompt caching.
 
 **Upstream format limitation:** The OpenAI Responses API has no `input_video` content type in its stable spec. To stay fully compatible with standard OpenAI clients, pass the video as an **`input_image`** content item — the server detects the video MIME type automatically and routes it to Pegasus correctly.
 

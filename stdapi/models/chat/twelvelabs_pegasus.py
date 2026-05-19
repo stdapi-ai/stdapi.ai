@@ -1,7 +1,7 @@
 """TwelveLabs Pegasus chat model (twelvelabs.pegasus-1-2-v1:0)."""
 
 from base64 import b64encode
-from typing import TYPE_CHECKING, ClassVar, Literal, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict
 
 from stdapi.api_errors import ApiError
 from stdapi.aws import AWS_ENVIRONMENT
@@ -11,13 +11,14 @@ from stdapi.tokenizer import estimate_token_count
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
-    from typing import Any
 
     from types_aiobotocore_bedrock.literals import RegionName
+    from types_aiobotocore_bedrock_runtime.literals import ServiceTierTypeType
     from types_aiobotocore_bedrock_runtime.type_defs import (
         ConverseResponseTypeDef,
         ConverseStreamOutputTypeDef,
         ConverseStreamResponseTypeDef,
+        GuardrailStreamConfigurationTypeDef,
         MessageTypeDef,
     )
 
@@ -202,7 +203,12 @@ class ChatModel(_BaseChatModel):
 
     async def _build_pegasus_body(
         self, request: ConverseRequestBaseTypeDef, region: RegionName
-    ) -> tuple[_PegasusRequest, str]:
+    ) -> tuple[
+        _PegasusRequest,
+        str,
+        ServiceTierTypeType | None,
+        GuardrailStreamConfigurationTypeDef | None,
+    ]:
         """Translate a fully-resolved Converse request into a Pegasus InvokeModel body.
 
         Args:
@@ -210,7 +216,9 @@ class ChatModel(_BaseChatModel):
             region: AWS region for any needed S3 upload.
 
         Returns:
-            Tuple of (pegasus_body, prompt_text) where prompt_text is used for token estimation.
+            Tuple of (pegasus_body, prompt_text, service_tier, guardrail_config).
+                service_tier is the service tier string if present, None otherwise.
+                guardrail_config is the guardrail config dict if present, None otherwise.
 
         Raises:
             ApiError: If no video is found in the conversation messages.
@@ -245,7 +253,16 @@ class ChatModel(_BaseChatModel):
                         schema=json_schema.get("schema", {}),  # type: ignore[typeddict-item]
                     )
                 )
-        return body, prompt_text
+        return (
+            body,
+            prompt_text,
+            (
+                service_tier_dict.get("type")
+                if (service_tier_dict := request.get("serviceTier"))
+                else None
+            ),
+            request.get("guardrailConfig"),
+        )
 
     async def _converse(
         self,
@@ -265,9 +282,20 @@ class ChatModel(_BaseChatModel):
             ConverseResponseTypeDef shaped like a standard Bedrock Converse response.
         """
         await self._prepare_converse_request_for_region(request, region)
-        body, prompt_text = await self._build_pegasus_body(request, region)
+        (
+            body,
+            prompt_text,
+            service_tier,
+            guardrail_config,
+        ) = await self._build_pegasus_body(request, region)
         return await _format_converse_response(
-            await self.invoke(body, region=region), prompt_text
+            await self.invoke(
+                body,
+                region=region,
+                service_tier=service_tier,
+                guardrail=guardrail_config,
+            ),
+            prompt_text,
         )
 
     async def _converse_stream(
@@ -288,8 +316,15 @@ class ChatModel(_BaseChatModel):
             ConverseStreamResponseTypeDef with an async generator in the "stream" key.
         """
         await self._prepare_converse_request_for_region(request, region)
-        body, prompt_text = await self._build_pegasus_body(request, region)
-        raw_stream = self.invoke_stream(body, region=region)
+        (
+            body,
+            prompt_text,
+            service_tier,
+            guardrail_config,
+        ) = await self._build_pegasus_body(request, region)
+        raw_stream = self.invoke_stream(
+            body, region=region, service_tier=service_tier, guardrail=guardrail_config
+        )
         return {
             "stream": _format_converse_stream(raw_stream, prompt_text),  # type: ignore[typeddict-item,arg-type]
             "ResponseMetadata": {},  # type: ignore[typeddict-item]

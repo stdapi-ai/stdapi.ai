@@ -596,7 +596,7 @@ curl -X POST "$BASE/v1/messages" \
 - The **latest contiguous run of user text** (back to the previous assistant or tool turn) is concatenated and forwarded as the text prompt.
 - `temperature` and `max_tokens` are forwarded.
 
-**Silently ignored** (no error): system prompts, tools, `top_p`, stop sequences, guardrails, service tier, and prompt caching.
+**Silently ignored** (no error): system prompts, tools, `top_p`, stop sequences, and prompt caching.
 
 **Upstream format limitation:** The Anthropic Messages API does not define a `video` content block in its stable spec. To stay fully compatible with standard Anthropic clients, pass the video as an **`image`** content block with `media_type` set to the video MIME type (e.g. `video/mp4`) — the server detects the video MIME type automatically and routes it to Pegasus correctly.
 
