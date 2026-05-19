@@ -1403,7 +1403,9 @@ async def _build_invoke_kwargs(
     latency, service_tier = PERFORMANCE_CONFIG_VAR.get()
     if latency:
         kwargs["performanceConfigLatency"] = latency
-    if service_tier:
+    if service_tier := service_tier or SETTINGS.default_model_service_tiers.get(
+        model_id
+    ):
         kwargs["serviceTier"] = service_tier
     return kwargs
 

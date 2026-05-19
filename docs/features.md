@@ -268,18 +268,18 @@ Configure multiple AWS regions to scale your throughput and maximize availabilit
 
 ### Advanced Bedrock Features
 
-| Feature                            | Description                                                                                                             |
-|------------------------------------|-------------------------------------------------------------------------------------------------------------------------|
-| **Prompt Caching**                 | Cache system prompts, messages, and tools; granular section control; configurable TTL; cache metrics in every response  |
-| **Reasoning Modes**                | Extended thinking with effort levels (minimal → xhigh) for Claude and Nova; `thinking_budget` for token-level control |
-| **Bedrock Guardrails**             | Content filtering and safety policies with configurable trace levels                                                    |
-| **Service Tiers**                  | Priority, default, and flex latency tiers per request                                                                   |
-| **Application Inference Profiles** | Custom profiles for workload isolation and cost attribution                                                             |
-| **Prompt Routers**                 | Bedrock prompt routers for intelligent model selection                                                                  |
-| **Cross-Region Inference**         | Geography-pinned (US, EU, APAC) and global profiles with data residency control                                         |
-| **System Tools (Nova)**            | Web grounding with URL citations; code interpreter                                                                      |
-| **Claude Server Tools**            | Bash, text editor, computer use (3.5+), memory (3.7+)                                                                   |
-| **Extra Model Parameters**         | Any model-specific parameter forwarded via `extra_body` or top-level field                                              |
+| Feature                            | Description                                                                                                            |
+|------------------------------------|------------------------------------------------------------------------------------------------------------------------|
+| **Prompt Caching**                 | Cache system prompts, messages, and tools; granular section control; configurable TTL; cache metrics in every response |
+| **Reasoning Modes**                | Extended thinking with effort levels (minimal → xhigh) for Claude and Nova; `thinking_budget` for token-level control  |
+| **Bedrock Guardrails**             | Content filtering and safety policies with configurable trace levels                                                   |
+| **Service Tiers**                  | Priority, default, flex, and reserved tiers per request with customizable defaults per model                           |
+| **Application Inference Profiles** | Custom profiles for workload isolation and cost attribution                                                            |
+| **Prompt Routers**                 | Bedrock prompt routers for intelligent model selection                                                                 |
+| **Cross-Region Inference**         | Geography-pinned (US, EU, APAC) and global profiles with data residency control                                        |
+| **System Tools (Nova)**            | Web grounding with URL citations; code interpreter                                                                     |
+| **Claude Server Tools**            | Bash, text editor, computer use (3.5+), memory (3.7+)                                                                  |
+| **Extra Model Parameters**         | Any model-specific parameter forwarded via `extra_body` or top-level field                                             |
 
 ### AWS AI Services Integration
 

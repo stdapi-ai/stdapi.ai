@@ -266,6 +266,7 @@ Choose **one** method (mutually exclusive):
 | [`TOKENS_ESTIMATION`](#tokens-estimation)                           | `false`                 | Estimate token counts using tiktoken when model doesn't provide them                       |
 | [`TOKENS_ESTIMATION_DEFAULT_ENCODING`](#tokens-encoding)            | `o200k_base`            | Tiktoken encoding algorithm: `o200k_base` (GPT-4o+), `cl100k_base` (GPT-4), or `p50k_base` |
 | [`DEFAULT_MODEL_PARAMS`](#default-model-params)                     | `{}`                    | JSON object with per-model default inference parameters (temperature, max_tokens, etc.)    |
+| [`DEFAULT_MODEL_SERVICE_TIERS`](#default-model-service-tiers)       | `{}`                    | JSON object with per-model default service tiers (default, flex, priority, reserved)        |
 | [`MODEL_CACHE_SECONDS`](#model-cache-seconds)                       | `900`                   | Model list cache lifetime in seconds before lazy refresh (default: 15 minutes)             |
 | [`AI_RESPONSE_TIMEOUT`](#ai-response-timeout)                       | `600`                   | Maximum seconds to wait for a model to complete a response (default: 10 minutes)           |
 | [`DROP_UNSUPPORTED_SYSTEM_PROMPT`](#drop-unsupported-system-prompt) | `true`                  | Drop system prompts for unsupported models; when `false`, return error instead             |
@@ -3775,6 +3776,88 @@ graph LR
 2. :material-numeric-2-circle: **Request parameters** override defaults if both are specified
 3. :material-numeric-3-circle: **Provider-specific fields** are forwarded to Bedrock as additional model request fields
 4. :material-numeric-4-circle: **Unsupported fields** that would change output cause HTTP 400 error; otherwise ignored
+
+---
+
+## Default Model Service Tiers
+
+Configure default service tiers applied automatically to specific Bedrock models.
+
+!!! success "What You Can Do"
+    - :material-layers: Set cost-efficient tiers for batch and agentic workloads by default
+    - :material-speedometer: Configure priority tiers for latency-sensitive models
+    - :material-cash: Optimize compute costs without modifying client requests
+
+!!! info "Available Service Tiers"
+    | Tier       | Description                                                       |
+    |------------|-------------------------------------------------------------------|
+    | `default`  | Standard compute tier (default)                                   |
+    | `flex`     | Flexible compute tier for cost optimization                       |
+    | `priority` | Priority compute tier for lower latency                           |
+    | `reserved` | Reserved capacity for dedicated resources (requires AWS contract) |
+
+!!! tip "When to Use Each Tier"
+    - **Default**: Everyday AI tasks like content generation and text analysis
+    - **Flex**: Cost-sensitive workloads like model evaluations, summarization, and agentic workflows
+    - **Priority**: Mission-critical applications requiring lowest latency
+    - **Reserved**: Predictable workloads needing 99.5% uptime guarantee (requires AWS contact)
+
+!!! warning "Model Support"
+    Not all models support all service tiers. Check the [official AWS documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/service-tiers-inference.html) for each model's supported tiers.
+
+    **Examples:**
+
+    - `amazon.nova-pro-v1:0` supports: `default`, `flex`, `priority` (not `reserved`)
+    - `amazon.nova-premier-v1:0` supports: `default`, `flex`, `priority`, `reserved`
+
+!!! info "Tier Precedence"
+    Explicit request parameters always take precedence over configured defaults.
+
+#### `DEFAULT_MODEL_SERVICE_TIERS` { #default-model-service-tiers }
+
+:octicons-package-24: **Purpose**
+:   Per-model default service tier
+
+:octicons-code-24: **Format**
+:   JSON object with model IDs as keys and tier string as value
+
+:octicons-arrow-right-24: **Default**
+:   `{}`
+
+**Supported Values:**
+
+| Value      | Description                                       |
+|------------|---------------------------------------------------|
+| `default`  | Standard compute (Bedrock default)                |
+| `flex`     | Cost-optimized flexible compute                   |
+| `priority` | Lower-latency priority compute                    |
+| `reserved` | Dedicated reserved capacity (requires AWS contract) |
+
+### Configuration Examples
+
+**Single Model:**
+
+```bash
+export DEFAULT_MODEL_SERVICE_TIERS='{
+  "amazon.nova-pro-v1:0": "flex"
+}'
+```
+
+**Multiple Models:**
+
+```bash
+export DEFAULT_MODEL_SERVICE_TIERS='{
+  "amazon.nova-pro-v1:0": "flex",
+  "amazon.nova-premier-v1:0": "priority"
+}'
+```
+
+### Service Tier Merging
+
+1. :material-numeric-1-circle: **Explicit request parameter** takes highest priority
+2. :material-numeric-2-circle: **HTTP header** (`X-Amzn-Bedrock-ServiceTier`) overrides defaults
+3. :material-numeric-3-circle: **Default from** `DEFAULT_MODEL_SERVICE_TIERS` applies if no explicit value
+4. :material-numeric-4-circle: **No service tier** passed to Bedrock if unset
 
 ---
 

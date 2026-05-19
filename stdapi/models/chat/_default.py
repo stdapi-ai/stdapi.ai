@@ -606,7 +606,11 @@ class ChatModel(ChatModelBase[Any, Any]):
             additional_request_fields
         ):
             request["additionalModelRequestFields"] = additional_request_fields
-        if service_tier := (service_tier or perf_service_tier):
+        if service_tier := (
+            service_tier
+            or perf_service_tier
+            or SETTINGS.default_model_service_tiers.get(self._model_id)
+        ):
             request["serviceTier"] = {"type": service_tier}
         if latency:
             request["performanceConfig"] = {"latency": latency}

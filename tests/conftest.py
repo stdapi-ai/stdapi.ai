@@ -124,6 +124,13 @@ environ.update(
                 "moonshotai.kimi-k2.5": ["us-west-2"],
             }
         ),
+        # Default service tier per model (used in tests for service tier defaulting)
+        "default_model_service_tiers": dumps(
+            {
+                # amazon.nova-micro-v1:0 is a lighter model used in many tests
+                "amazon.nova-micro-v1:0": "default"
+            }
+        ),
     }
 )
 

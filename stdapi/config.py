@@ -52,8 +52,10 @@ from stdapi.utils import (
 
 if TYPE_CHECKING:
     from types_aiobotocore_bedrock.literals import RegionName
+    from types_aiobotocore_bedrock_runtime.literals import ServiceTierTypeType
 else:
     type RegionName = str
+    type ServiceTierTypeType = str
 
 #: HTTP download timeout
 DOWNLOAD_TIMEOUT = ClientTimeout(total=20, connect=5)
@@ -725,6 +727,29 @@ class _Settings(BaseSettings):
             "Multiple models:\n"
             '{"amazon.nova-micro-v1:0": {"temperature": 0.3},\n'
             ' "amazon.nova-lite-v1:0": {"temperature": 0.7}}'
+        ),
+    )
+
+    default_model_service_tiers: dict[str, ServiceTierTypeType] = Field(
+        default={},
+        description=(
+            "Default service tier for specific Bedrock models. "
+            "When a model is invoked without an explicit service tier "
+            "(via header or request parameter), the configured default will be used. "
+            "This allows you to set model-specific service tier preferences "
+            "globally without requiring clients to specify them per request.\n\n"
+            "Service tiers:\n"
+            "- 'default': Standard compute tier (default)\n"
+            "- 'flex': Flexible compute tier for cost optimization\n"
+            "- 'priority': Priority compute tier for lower latency\n"
+            "- 'reserved': Reserved capacity for dedicated resources (requires AWS contact)\n\n"
+            "Important: Not all models support all service tiers. "
+            "Check the official AWS documentation for each model.\n\n"
+            "Examples:\n"
+            "- amazon.nova-pro-v1:0 supports: default, flex, priority (not reserved)\n"
+            "- amazon.nova-premier-v1:0 supports: default, flex, priority, reserved\n\n"
+            "Environment variable format: JSON string\n"
+            "Example: {'amazon.nova-pro-v1:0': 'flex'}"
         ),
     )
 
