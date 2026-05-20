@@ -16,11 +16,31 @@ from httpx import Request as HttpxRequest
 from stdapi import server
 from stdapi.config import SETTINGS, LogLevel
 from stdapi.metering import EDITION_TITLE
-from stdapi.monitoring import REQUEST_ID, log_error_details
+from stdapi.monitoring import REQUEST, REQUEST_ID, log_error_details
 from stdapi.routes.core_root import MCP_SERVER_CARD
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
+
+
+def is_mcp() -> bool:
+    """Check if the current request originates from an MCP client.
+
+    Detects MCP calls by checking both the User-Agent header and the presence
+    of the internal request ID header (to avoid spoofing). Uses the cached
+    REQUEST ContextVar from stdapi.monitoring for header access.
+
+    Returns:
+        True if the current request is from an MCP client, False otherwise.
+
+    Raises:
+        LookupError: If called outside a request context.
+    """
+    headers = REQUEST.get().headers
+    return (
+        headers.get("user-agent") == server.MCP_USER_AGENT
+        and server.INTERNAL_REQUEST_ID_HEADER in headers
+    )
 
 
 async def _inject_request_id(request: HttpxRequest) -> None:

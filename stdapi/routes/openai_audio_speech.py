@@ -10,6 +10,7 @@ from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
 from stdapi.aws_bedrock import get_extra_model_parameters
 from stdapi.config import SETTINGS
+from stdapi.mcp import is_mcp
 from stdapi.models import validate_model
 from stdapi.models.audio import get_audio_model
 from stdapi.models.capabilities import Capability, register_route_capability
@@ -159,6 +160,9 @@ async def create_speech(
     multiple voices, output formats, and playback speeds. Provides both standard
     audio file responses and real-time streaming capabilities.
 
+    When called via MCP, defaults to SSE streaming format for better compatibility
+    with MCP clients.
+
     Args:
         request: The text-to-speech request containing model, voice, and format parameters.
 
@@ -188,7 +192,9 @@ async def create_speech(
     )
 
     audio_stream = await log_request_stream_event(tts_response["audio_stream"])
-    if request.stream_format == "sse":
+    if request.stream_format == "sse" or (
+        is_mcp() and "stream_format" not in request.model_fields_set
+    ):
         return EventSourceResponse(
             _speech_audio_sse(audio_stream, tts_response["characters_count"])
         )

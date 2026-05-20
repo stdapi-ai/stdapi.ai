@@ -402,7 +402,8 @@ class SpeechCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=True):
     stream_format: Literal["audio", "sse"] = Field(
         default="audio",
         description="The format to stream the audio in.\n"
-        "Supported formats are `sse` and `audio`.",
+        "Supported formats are `sse` and `audio`. When used as an MCP tool, "
+        "defaults to `sse` for better client compatibility.",
     )
 
     @model_validator(mode="after")

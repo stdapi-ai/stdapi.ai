@@ -4,11 +4,16 @@ Comprehensive test suite that validates all features of the OpenAI Audio Speech 
 specification, ensuring compatibility with the official OpenAI API behavior.
 """
 
+from typing import TYPE_CHECKING
+
 import magic
 import pytest
 from openai import BadRequestError, NotFoundError, OpenAI
 
 from tests.conftest import SAMPLES_DIR
+
+if TYPE_CHECKING:
+    from starlette.testclient import TestClient
 
 
 class TestAudioSpeech:
@@ -599,3 +604,78 @@ class TestAudioSpeech:
         # SSE response should still provide audio content but potentially with different streaming behavior
         assert isinstance(response_sse.content, bytes)
         assert len(response_sse.content) > 0
+
+
+class TestAudioSpeechMCP:
+    """Test suite for MCP tool behavior of the /v1/audio/speech endpoint."""
+
+    def test_mcp_default_uses_sse(
+        self, test_client: TestClient, api_key: str, speech_standard_model: str
+    ) -> None:
+        """Test MCP tool defaults to SSE streaming when stream_format not specified.
+
+        Validates that when the speech endpoint is called as an MCP tool with
+        default parameters (no stream_format specified), it returns SSE format
+        for better MCP client compatibility.
+
+        Args:
+            test_client: Test client for HTTP requests
+            api_key: Authentication token
+            speech_standard_model: Standard speech model identifier
+
+        Validates:
+            - MCP tool call with default params returns SSE response
+            - Response contains speech.audio.delta events
+            - Response is properly formatted as Server-Sent Events
+        """
+        if test_client is None:
+            pytest.skip("Local only")
+
+        # Initialize MCP session
+        init_response = test_client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "pytest", "version": "1.0"},
+                },
+            },
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Accept": "application/json, text/event-stream",
+            },
+        )
+        assert init_response.status_code == 200
+        mcp_session_id = init_response.headers["mcp-session-id"]
+
+        # Call the speech tool with default parameters
+        response = test_client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": 10,
+                "method": "tools/call",
+                "params": {
+                    "name": "openai_audio_speech",
+                    "arguments": {
+                        "model": speech_standard_model,
+                        "voice": "alloy",
+                        "input": "Test MCP audio.",
+                    },
+                },
+            },
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Accept": "application/json, text/event-stream",
+                "mcp-session-id": mcp_session_id,
+            },
+        )
+        assert response.status_code == 200
+
+        # For MCP calls without explicit stream_format, should return SSE
+        response_text = response.text
+        assert "speech.audio.delta" in response_text

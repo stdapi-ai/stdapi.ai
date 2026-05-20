@@ -18,7 +18,7 @@ SERVER_VERSION = "1.11.4"
 USER_AGENT = f"stdapi.ai/{SERVER_VERSION}/{SERVER_ID}"
 
 #: User agent used by the MCP internal HTTP client
-MCP_USER_AGENT = "stdapi.ai/MCP"
+MCP_USER_AGENT = f"stdapi.ai/MCP/{SERVER_ID}"
 
 #: Default headers for HTTP clients used in the server
 HTTP_CLIENT_HEADERS = {"User-Agent": USER_AGENT}

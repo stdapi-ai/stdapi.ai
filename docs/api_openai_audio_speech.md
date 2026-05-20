@@ -119,6 +119,12 @@ Generate natural-sounding speech from text with AWS Polly through an OpenAI-comp
     - Using Polly voice IDs directly when you know the target language
     - Structuring multi-language applications to make separate API calls per language
 
+!!! tip "Default Streaming Mode: API vs MCP"
+    - **API usage**: Default is **byte streaming** (raw audio data)
+    - **MCP tool usage**: Default is **SSE streaming** (`stream_format: "sse"`)
+
+    When used as an MCP tool, the response defaults to SSE events (`speech.audio.delta`, `speech.audio.done`) for better client compatibility. Override by explicitly setting `stream_format: "audio"` in your request.
+
 ### Provider-Specific Parameters
 
 Unlock advanced AWS Polly capabilities by passing provider-specific parameters directly in your requests. These parameters are forwarded to AWS Polly's `synthesize_speech` API and allow you to access features unique to Polly.
