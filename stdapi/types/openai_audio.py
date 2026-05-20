@@ -5,6 +5,7 @@ from typing import Annotated, Literal, Self
 from pydantic import AliasChoices, BaseModel, Field, model_validator
 
 from stdapi.api_errors import UnsupportedParameterError
+from stdapi.config import SETTINGS
 from stdapi.input_file import InputFile  # noqa: TC001
 from stdapi.types import BaseModelRequest, BaseModelRequestWithExtra, BaseModelResponse
 from stdapi.types.openai import Auto
@@ -367,14 +368,14 @@ class SpeechCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=True):
         "With Amazon Polly models, the input can be a SSML document.",
     )
     model: str = Field(
-        ...,
+        default=SETTINGS.default_tts_model,
         validation_alias=AliasChoices("model", "Engine"),
         description="One of the available TTS models.\n"
         "Available models: `amazon.polly-standard`,"
         " `amazon.polly-neural`, `amazon.polly-long-form`, `amazon.polly-generative`.",
     )
     voice: str = Field(
-        ...,
+        default="alloy",
         validation_alias=AliasChoices("voice", "VoiceId"),
         description="The voice to use when generating the audio.\n"
         "Supported voices vary by model and language.",

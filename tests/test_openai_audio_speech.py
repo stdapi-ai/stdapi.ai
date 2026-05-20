@@ -193,6 +193,38 @@ class TestAudioSpeech:
         assert response.response.headers.get("content-type") == "audio/mpeg"
 
     @pytest.mark.expensive
+    @pytest.mark.parametrize("voice", ["Amy", "amy"])
+    def test_polly_voices_compatibility(
+        self,
+        openai_client: OpenAI,
+        speech_standard_model: str,
+        voice: str,
+        use_official_api: bool,
+    ) -> None:
+        """Test Polly voices works.
+
+        Args:
+            openai_client: OpenAI client instance for API calls
+            speech_standard_model: Standard speech model identifier
+            voice: The voice to test
+            use_official_api: True if using OpenAI API
+
+        Validates:
+            - All voices produce valid audio output
+            - Voice selection works across model variations
+            - Response format and content type headers are correct
+        """
+        if use_official_api:
+            pytest.skip(
+                "Amazon Polly models are not available on the official OpenAI API"
+            )
+        response = openai_client.audio.speech.create(
+            model=speech_standard_model, voice=voice, input="Test."
+        )
+
+        assert isinstance(response.content, bytes)
+
+    @pytest.mark.expensive
     @pytest.mark.parametrize("speed", [0.25, 1.0, 2.0])
     def test_speed_parameter_validation(
         self, openai_client: OpenAI, speech_standard_model: str, speed: float

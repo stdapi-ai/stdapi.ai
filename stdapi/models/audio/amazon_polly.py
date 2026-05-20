@@ -81,6 +81,7 @@ _VOICES_DESCRIPTIONS: dict[VoiceIdType, str] = {}
 _VOICES_BY_GENDERS: dict[GenderType, set[VoiceIdType]] = {}
 _VOICES_BY_LANGUAGE: dict[LanguageCodeType, set[VoiceIdType]] = {}
 _VOICES_BY_ENGINE: dict[EngineType, set[VoiceIdType]] = {}
+_VOICES_BY_NAME_LOWER: dict[str, VoiceIdType] = {}
 
 
 class _PollyExtraParams(BaseModelResponse):
@@ -126,6 +127,7 @@ async def _get_voices_per_engine(engine: EngineType) -> None:
             _VOICES_DESCRIPTIONS[voice_id] = f"{gender}, {voice['LanguageName']}"
             _VOICES_BY_GENDERS.setdefault(gender, set()).add(voice_id)
             _VOICES_BY_LANGUAGE.setdefault(voice["LanguageCode"], set()).add(voice_id)
+            _VOICES_BY_NAME_LOWER[voice_id.lower()] = voice_id
         next_token = response.get("NextToken")
         if not next_token:
             break
@@ -137,6 +139,7 @@ async def initialize_polly_models() -> None:
     _VOICES_BY_GENDERS.clear()
     _VOICES_BY_LANGUAGE.clear()
     _VOICES_BY_ENGINE.clear()
+    _VOICES_BY_NAME_LOWER.clear()
     await gather(
         *(
             _get_voices_per_engine(_engine_from_model(model))
@@ -174,8 +177,8 @@ async def _select_voice(
     Returns:
         Voice ID and optional language code.
     """
-    if voice in _VOICES_DESCRIPTIONS:
-        return voice, None
+    if (voice_lower := voice.lower()) in _VOICES_BY_NAME_LOWER:
+        return _VOICES_BY_NAME_LOWER[voice_lower], None
 
     try:
         gender: GenderType = "Female" if OPENAI_VOICES_FEMALE[voice] else "Male"
