@@ -5,6 +5,7 @@ AWS Bedrock Converse integration while maintaining full API compatibility.
 
 The module provides:
     - POST /v1/responses — create a model response
+    - POST /v1/responses/input_tokens — count input tokens without generating a response
 """
 
 from typing import TYPE_CHECKING, Annotated
@@ -17,14 +18,34 @@ from stdapi.config import SETTINGS
 from stdapi.models import validate_model
 from stdapi.models.capabilities import register_route_capability
 from stdapi.models.chat import get_chat_model
-from stdapi.monitoring import REQUEST_ID, REQUEST_TIME, log_request_params
-from stdapi.types.openai_responses import Response, ResponseCreateParams
+from stdapi.models.chat._adapters._openai_responses import (
+    count_input_tokens_via_bedrock,
+)
+from stdapi.monitoring import (
+    REQUEST_ID,
+    REQUEST_TIME,
+    log_request_params,
+    log_response_params,
+)
+from stdapi.types.openai_responses import (
+    InputTokenCountParams,
+    InputTokenCountResponse,
+    Response,
+    ResponseCreateParams,
+)
 
 if TYPE_CHECKING:
     from sse_starlette import EventSourceResponse
 
 register_route_capability(
     "openai_response", f"{SETTINGS.openai_routes_prefix}/v1/responses", "TEXT", "TEXT"
+)
+
+register_route_capability(
+    "openai_response_input_tokens",
+    f"{SETTINGS.openai_routes_prefix}/v1/responses/input_tokens",
+    "TEXT",
+    "TEXT",
 )
 
 router = APIRouter(
@@ -91,3 +112,64 @@ async def create_response(
             )
         ).id
     ).create_response(request, response_id, created_at)
+
+
+@router.post(
+    "/input_tokens",
+    summary="Count input tokens for a Responses request without generating a response (OpenAI format)",
+    operation_id="openai_response_input_tokens",
+    description=(
+        "Counts the number of tokens a given request would consume, "
+        "without creating a response.\n\n"
+        "Accepts the same input as `openai_response` (messages, instructions, "
+        "tools, images, files) and returns only the token count. Useful for "
+        "estimating costs or checking context-window fit before making a full "
+        "`openai_response` call.\n\n"
+        "**Find compatible models:** Call `search_models` with "
+        "`mcp_tool=openai_response_input_tokens` to discover model IDs that "
+        "support this endpoint."
+    ),
+    response_description="Token count for the provided input.",
+    status_code=200,
+    response_model=InputTokenCountResponse,
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {"object": "response.input_tokens", "input_tokens": 142}
+                }
+            },
+        },
+        400: {"description": "Invalid request or unsupported parameters."},
+    },
+    response_model_exclude_none=True,
+)
+async def count_input_tokens(
+    request: InputTokenCountParams, _: Annotated[None, Depends(authenticate)] = None
+) -> InputTokenCountResponse:
+    """Count the number of input tokens for a Responses request.
+
+    Uses the AWS Bedrock CountTokens API to return an accurate,
+    model-specific token count without generating a response.
+
+    Args:
+        request: Input-token count request following the OpenAI Responses spec.
+
+    Returns:
+        ResponseInputTokensCount with the input token count.
+
+    Raises:
+        ApiError: If the model is invalid or the request is unsupported.
+    """
+    log_request_params(request)
+    model = await validate_model(
+        request.model, input_modality="TEXT", output_modality="TEXT", error_status=400
+    )
+    return log_response_params(
+        InputTokenCountResponse(
+            input_tokens=await count_input_tokens_via_bedrock(
+                request, model.get_id(), model.regions[0]
+            )
+        )
+    )

@@ -4238,3 +4238,87 @@ class ResponseCreateParams(BaseModelRequest):
         for key in self._UNSUPPORTED & self.model_fields_set:
             raise UnsupportedParameterError(key)
         return self
+
+
+# Ref: openai.types.responses.input_token_count_params.InputTokenCountParams
+class InputTokenCountParams(BaseModelRequest):
+    """Request body for POST /v1/responses/input_tokens.
+
+    Counts input tokens without producing a response.
+    """
+
+    model: str = Field(description="Model ID used to generate the response.")
+    input: str | ResponseInputParam | None = Field(
+        default=None,
+        description="Text, image, or file inputs to the model, used to generate a response",
+    )
+    instructions: str | None = Field(
+        default=None,
+        description="A system (or developer) message inserted into the model's context. "
+        "When used along with `previous_response_id`, the instructions from a previous "
+        "response will not be carried over to the next response.",
+    )
+    tools: list[Tool] | None = Field(
+        default=None,
+        description="An array of tools the model may call while generating a response. "
+        "You can specify which tool to use by setting the `tool_choice` parameter.",
+    )
+    tool_choice: ToolChoice | None = Field(
+        default=None, description="Controls which tool the model should use, if any."
+    )
+    parallel_tool_calls: bool | None = Field(
+        default=None,
+        description="Whether to allow the model to run tool calls in parallel.",
+    )
+    reasoning: Reasoning | None = Field(
+        default=None, description="Configuration options for reasoning models."
+    )
+    text: ResponseTextConfig | None = Field(
+        default=None,
+        description="Configuration options for a text response from the model.\n"
+        "UNSUPPORTED on this implementation.",
+    )
+    truncation: Literal["auto", "disabled"] | None = Field(
+        default=None,
+        description="The truncation strategy to use for the model response.\n"
+        "UNSUPPORTED on this implementation.",
+    )
+    previous_response_id: str | None = Field(
+        default=None,
+        description="The unique ID of the previous response to the model. Use to create "
+        "multi-turn conversations. Cannot be used with `conversation`.\n"
+        "UNSUPPORTED on this implementation.",
+    )
+    conversation: ConversationParam = Field(
+        default=None,
+        description="The conversation that this response belongs to. Items from this conversation "
+        "are prepended to `input_items` for this response request. Cannot be used with "
+        "`previous_response_id`.\nUNSUPPORTED on this implementation.",
+    )
+
+    # Extra validations
+    _UNSUPPORTED: ClassVar[set[str]] = {
+        "text",
+        "truncation",
+        "previous_response_id",
+        "conversation",
+    }
+
+    @model_validator(mode="after")
+    def _unsupported(self) -> Self:
+        """Validate that unsupported parameters are not used.
+
+        Raises:
+            UnsupportedParameterError: If a parameter marked as unsupported is used.
+        """
+        for key in self._UNSUPPORTED & self.model_fields_set:
+            raise UnsupportedParameterError(key)
+        return self
+
+
+# Ref: openai.types.responses.input_token_count_response.InputTokenCountResponse
+class InputTokenCountResponse(BaseModelResponse):
+    """Response body for POST /v1/responses/input_tokens."""
+
+    object: Literal["response.input_tokens"] = "response.input_tokens"
+    input_tokens: int = Field(description="The total number of tokens in the input.")

@@ -28,70 +28,71 @@ Generate model responses with AWS Bedrock foundation models through an OpenAI Re
 
 ## Quick Start: Available Endpoint
 
-| Endpoint        | Method | What It Does            | Powered By               | MCP Tool          |
-|-----------------|--------|-------------------------|--------------------------|-------------------|
-| `/v1/responses` | `POST` | Create a model response | AWS Bedrock Converse API | `openai_response` |
+| Endpoint                     | Method | What It Does                                     | Powered By                  | MCP Tool                       |
+|------------------------------|--------|--------------------------------------------------|-----------------------------|--------------------------------|
+| `/v1/responses`              | `POST` | Create a model response                          | AWS Bedrock Converse API    | `openai_response`              |
+| `/v1/responses/input_tokens` | `POST` | Count input tokens without generating a response | AWS Bedrock CountTokens API | `openai_response_input_tokens` |
 
 ## Feature Compatibility
 
 <div class="feature-table" markdown>
 
-| Feature                                                               |                 Status                  | Notes                                                    |
-|-----------------------------------------------------------------------|:---------------------------------------:|----------------------------------------------------------|
-| **Input**                                                             |                                         |                                                          |
-| Plain text (`input` as string)                                        |   :material-check-circle:{ .success }   | Simple string shorthand for a single user message        |
-| Structured message array                                              |   :material-check-circle:{ .success }   | Array of `EasyInputMessage` / `InputMessage` items       |
-| `instructions` (system prompt)                                        |   :material-check-circle:{ .success }   | Injected as a Bedrock system block                       |
-| `system` / `developer` role                                           |   :material-check-circle:{ .success }   | Treated as a system instruction                          |
-| Image input (`input_image`)                                           |      :material-cog:{ .model-dep }       | HTTP URLs and base64 data URIs supported                 |
-| File input (`input_file`)                                             |      :material-cog:{ .model-dep }       | File URLs and base64 data supported                      |
-| `function_call_output`                                                |   :material-check-circle:{ .success }   | Submit tool results as input for round-trip tool calling |
-| **Tool Calling**                                                      |                                         |                                                          |
-| Function tools (`type: "function"`)                                   |   :material-check-circle:{ .success }   | Full schema mapping to Bedrock toolSpec                  |
-| `tool_choice: "auto"`                                                 |   :material-check-circle:{ .success }   | Model selects among available tools                      |
-| `tool_choice: "required"`                                             |   :material-check-circle:{ .success }   | Model must call at least one tool                        |
-| `tool_choice: "none"`                                                 |   :material-check-circle:{ .success }   | Prevents tool calls                                      |
-| Named `tool_choice` (force)                                           |   :material-check-circle:{ .success }   | Force a specific function to be called                   |
-| `parallel_tool_calls`                                                 |   :material-check-circle:{ .success }   | Echoed in response; not transmitted to Bedrock           |
-| Built-in tools (`code_interpreter`, `web_search`, `image_generation`) |      :material-cog:{ .model-dep }       | See [OpenAI Integrated Tools](#openai-integrated-tools)  |
-| `file_search` tool                                                    | :material-close-circle:{ .unsupported } | Returns `400`; no Bedrock equivalent                     |
+| Feature                                                               |                 Status                  | Notes                                                                        |
+|-----------------------------------------------------------------------|:---------------------------------------:|------------------------------------------------------------------------------|
+| **Input**                                                             |                                         |                                                                              |
+| Plain text (`input` as string)                                        |   :material-check-circle:{ .success }   | Simple string shorthand for a single user message                            |
+| Structured message array                                              |   :material-check-circle:{ .success }   | Array of `EasyInputMessage` / `InputMessage` items                           |
+| `instructions` (system prompt)                                        |   :material-check-circle:{ .success }   | Injected as a Bedrock system block                                           |
+| `system` / `developer` role                                           |   :material-check-circle:{ .success }   | Treated as a system instruction                                              |
+| Image input (`input_image`)                                           |      :material-cog:{ .model-dep }       | HTTP URLs and base64 data URIs supported                                     |
+| File input (`input_file`)                                             |      :material-cog:{ .model-dep }       | File URLs and base64 data supported                                          |
+| `function_call_output`                                                |   :material-check-circle:{ .success }   | Submit tool results as input for round-trip tool calling                     |
+| **Tool Calling**                                                      |                                         |                                                                              |
+| Function tools (`type: "function"`)                                   |   :material-check-circle:{ .success }   | Full schema mapping to Bedrock toolSpec                                      |
+| `tool_choice: "auto"`                                                 |   :material-check-circle:{ .success }   | Model selects among available tools                                          |
+| `tool_choice: "required"`                                             |   :material-check-circle:{ .success }   | Model must call at least one tool                                            |
+| `tool_choice: "none"`                                                 |   :material-check-circle:{ .success }   | Prevents tool calls                                                          |
+| Named `tool_choice` (force)                                           |   :material-check-circle:{ .success }   | Force a specific function to be called                                       |
+| `parallel_tool_calls`                                                 |   :material-check-circle:{ .success }   | Echoed in response; not transmitted to Bedrock                               |
+| Built-in tools (`code_interpreter`, `web_search`, `image_generation`) |      :material-cog:{ .model-dep }       | See [OpenAI Integrated Tools](#openai-integrated-tools)                      |
+| `file_search` tool                                                    | :material-close-circle:{ .unsupported } | Returns `400`; no Bedrock equivalent                                         |
 | `computer` / `computer_use_preview` tools                             | :material-close-circle:{ .unsupported } | Returns `400`; see [Computer Use Not Supported](#computer-use-not-supported) |
-| `mcp` tool                                                            | :material-close-circle:{ .unsupported } | Returns `400`; MCP not supported                         |
-| `local_shell` / `shell` tools                                         | :material-close-circle:{ .unsupported } | Returns `400`; local shell not supported                 |
-| `custom` / `namespace` / `tool_search` / `apply_patch` tools         | :material-close-circle:{ .unsupported } | Returns `400`; not supported                             |
-| **Generation Control**                                                |                                         |                                                          |
-| `max_output_tokens`                                                   |   :material-check-circle:{ .success }   | Maps to Bedrock `maxTokens`                              |
-| `temperature`                                                         |      :material-cog:{ .model-dep }       | 0–2 range; mapped to Bedrock inference config            |
-| `top_p`                                                               |      :material-cog:{ .model-dep }       | 0–1 range; nucleus sampling                              |
-| `top_logprobs`                                                        |      :material-cog:{ .model-dep }       | 0–20 range; token log-probability output                 |
-| `reasoning` (effort)                                                  |      :material-cog:{ .model-dep }       | Configures reasoning on models that support it           |
-| `metadata`                                                            |   :material-check-circle:{ .success }   | Forwarded to Bedrock `requestMetadata`                   |
-| `prompt_cache_key`                                                    |      :material-cog:{ .model-dep }       | Cache prompts to reduce costs and latency                |
-| `prompt_cache_retention`                                              |      :material-cog:{ .model-dep }       | Cache TTL: `in-memory` or `24h`                          |
-| `service_tier`                                                        |   :material-check-circle:{ .success }   | Maps to Bedrock service tier header                      |
-| `truncation`                                                          | :material-close-circle:{ .unsupported } | Returns `400`; Bedrock manages context automatically     |
-| `max_tool_calls`                                                      | :material-close-circle:{ .unsupported } | Returns `400`; not supported                             |
-| `background`                                                          | :material-close-circle:{ .unsupported } | Returns `400`; async background mode not supported       |
-| `store`                                                               | :material-close-circle:{ .unsupported } | Returns `400`; all responses are stateless               |
-| `stream_options`                                                      | :material-close-circle:{ .unsupported } | Returns `400`; not supported                             |
-| `conversation`                                                        | :material-close-circle:{ .unsupported } | Returns `400`; use `previous_response_id` or `input`     |
-| `prompt` (template reference)                                         | :material-close-circle:{ .unsupported } | Returns `400`; not supported                             |
-| `safety_identifier`                                                   | :material-close-circle:{ .unsupported } | Returns `400`; not supported                             |
-| **Output Format**                                                     |                                         |                                                          |
-| `text.format: "text"`                                                 |   :material-check-circle:{ .success }   | Plain text output                                        |
-| `text.format: "json_object"`                                          |      :material-cog:{ .model-dep }       | JSON object output via Bedrock outputConfig              |
-| `text.format: "json_schema"`                                          |      :material-cog:{ .model-dep }       | Structured JSON output with schema validation            |
-| **Multi-Turn**                                                        |                                         |                                                          |
-| `previous_response_id`                                                | :material-close-circle:{ .unsupported } | Not supported; pass full conversation history in `input` |
-| **Streaming**                                                         |                                         |                                                          |
-| `stream: true`                                                        |   :material-check-circle:{ .success }   | SSE stream with full lifecycle events                    |
-| `response.created`                                                    |   :material-check-circle:{ .success }   | Emitted at stream start                                  |
-| `response.in_progress`                                                |   :material-check-circle:{ .success }   | Emitted after created                                    |
-| `response.output_text.delta`                                          |   :material-check-circle:{ .success }   | Text token deltas                                        |
-| `response.output_text.done`                                           |   :material-check-circle:{ .success }   | Final text for each content part                         |
-| `response.function_call_arguments.delta`                              |   :material-check-circle:{ .success }   | Tool call argument deltas                                |
-| `response.function_call_arguments.done`                               |   :material-check-circle:{ .success }   | Finalized tool call arguments                            |
-| `response.completed`                                                  |   :material-check-circle:{ .success }   | Final complete response at stream end                    |
+| `mcp` tool                                                            | :material-close-circle:{ .unsupported } | Returns `400`; MCP not supported                                             |
+| `local_shell` / `shell` tools                                         | :material-close-circle:{ .unsupported } | Returns `400`; local shell not supported                                     |
+| `custom` / `namespace` / `tool_search` / `apply_patch` tools          | :material-close-circle:{ .unsupported } | Returns `400`; not supported                                                 |
+| **Generation Control**                                                |                                         |                                                                              |
+| `max_output_tokens`                                                   |   :material-check-circle:{ .success }   | Maps to Bedrock `maxTokens`                                                  |
+| `temperature`                                                         |      :material-cog:{ .model-dep }       | 0–2 range; mapped to Bedrock inference config                                |
+| `top_p`                                                               |      :material-cog:{ .model-dep }       | 0–1 range; nucleus sampling                                                  |
+| `top_logprobs`                                                        |      :material-cog:{ .model-dep }       | 0–20 range; token log-probability output                                     |
+| `reasoning` (effort)                                                  |      :material-cog:{ .model-dep }       | Configures reasoning on models that support it                               |
+| `metadata`                                                            |   :material-check-circle:{ .success }   | Forwarded to Bedrock `requestMetadata`                                       |
+| `prompt_cache_key`                                                    |      :material-cog:{ .model-dep }       | Cache prompts to reduce costs and latency                                    |
+| `prompt_cache_retention`                                              |      :material-cog:{ .model-dep }       | Cache TTL: `in-memory` or `24h`                                              |
+| `service_tier`                                                        |   :material-check-circle:{ .success }   | Maps to Bedrock service tier header                                          |
+| `truncation`                                                          | :material-close-circle:{ .unsupported } | Returns `400`; Bedrock manages context automatically                         |
+| `max_tool_calls`                                                      | :material-close-circle:{ .unsupported } | Returns `400`; not supported                                                 |
+| `background`                                                          | :material-close-circle:{ .unsupported } | Returns `400`; async background mode not supported                           |
+| `store`                                                               | :material-close-circle:{ .unsupported } | Returns `400`; all responses are stateless                                   |
+| `stream_options`                                                      | :material-close-circle:{ .unsupported } | Returns `400`; not supported                                                 |
+| `conversation`                                                        | :material-close-circle:{ .unsupported } | Returns `400`; use `previous_response_id` or `input`                         |
+| `prompt` (template reference)                                         | :material-close-circle:{ .unsupported } | Returns `400`; not supported                                                 |
+| `safety_identifier`                                                   | :material-close-circle:{ .unsupported } | Returns `400`; not supported                                                 |
+| **Output Format**                                                     |                                         |                                                                              |
+| `text.format: "text"`                                                 |   :material-check-circle:{ .success }   | Plain text output                                                            |
+| `text.format: "json_object"`                                          |      :material-cog:{ .model-dep }       | JSON object output via Bedrock outputConfig                                  |
+| `text.format: "json_schema"`                                          |      :material-cog:{ .model-dep }       | Structured JSON output with schema validation                                |
+| **Multi-Turn**                                                        |                                         |                                                                              |
+| `previous_response_id`                                                | :material-close-circle:{ .unsupported } | Not supported; pass full conversation history in `input`                     |
+| **Streaming**                                                         |                                         |                                                                              |
+| `stream: true`                                                        |   :material-check-circle:{ .success }   | SSE stream with full lifecycle events                                        |
+| `response.created`                                                    |   :material-check-circle:{ .success }   | Emitted at stream start                                                      |
+| `response.in_progress`                                                |   :material-check-circle:{ .success }   | Emitted after created                                                        |
+| `response.output_text.delta`                                          |   :material-check-circle:{ .success }   | Text token deltas                                                            |
+| `response.output_text.done`                                           |   :material-check-circle:{ .success }   | Final text for each content part                                             |
+| `response.function_call_arguments.delta`                              |   :material-check-circle:{ .success }   | Tool call argument deltas                                                    |
+| `response.function_call_arguments.done`                               |   :material-check-circle:{ .success }   | Finalized tool call arguments                                                |
+| `response.completed`                                                  |   :material-check-circle:{ .success }   | Final complete response at stream end                                        |
 
 </div>
 
@@ -588,6 +589,48 @@ curl -X POST "$BASE/v1/responses" \
     "max_output_tokens": 4096
   }'
 ```
+
+## Input Token Counting
+
+Count input tokens without generating a response. Useful for estimating costs or checking context-window fit before making a full response call.
+
+**Basic usage:**
+
+```bash
+curl -X POST "$BASE/v1/responses/input_tokens" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "amazon.nova-micro-v1:0",
+    "input": "Hello, how are you?"
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "object": "response.input_tokens",
+  "input_tokens": 142
+}
+```
+
+**With instructions and tools:**
+
+```bash
+curl -X POST "$BASE/v1/responses/input_tokens" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "amazon.nova-micro-v1:0",
+    "input": "What is the weather?",
+    "instructions": "You are a helpful assistant.",
+    "tools": [{"type": "function", "name": "get_weather", "description": "Get weather for a location", "parameters": {"type": "object", "properties": {"location": {"type": "string"}}, "required": ["location"]}}]
+  }'
+```
+
+!!! note "Limitations"
+    The `previous_response_id` and `conversation` parameters are not supported for token counting.
 
 ---
 

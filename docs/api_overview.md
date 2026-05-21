@@ -31,21 +31,22 @@ stdapi.ai provides multiple interfaces for exploring and testing the API—choos
 
 ### ![OpenAI](styles/logo_openai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } OpenAI-Compatible API
 
-| Category          | Endpoint                        | Capability                                                                  | Documentation                                          |
-|-------------------|---------------------------------|-----------------------------------------------------------------------------|--------------------------------------------------------|
-| **💬 Chat**       | `POST /v1/chat/completions`     | Multi-modal conversations with text, images, video, documents               | [Chat Completions →](api_openai_chat_completions.md)   |
-|                   | `POST /v1/completions`          | Simple prompt-to-text completion — recommended for MCP and text-only agents | [Completions →](api_openai_completions.md)             |
-|                   | `POST /v1/responses`            | Stateless conversational AI with tool calling and streaming                 | [Responses →](api_openai_responses.md)                 |
-| **🎨 Images**     | `POST /v1/images/generations`   | Text-to-image generation                                                    | [Generations →](api_openai_images_generations.md)      |
-|                   | `POST /v1/images/edits`         | Image editing and transformations                                           | [Edits →](api_openai_images_edits.md)                  |
-|                   | `POST /v1/images/variations`    | Generate image variations                                                   | [Variations →](api_openai_images_variations.md)        |
-| **🔊 Audio**      | `POST /v1/audio/speech`         | Text-to-speech synthesis                                                    | [Text to Speech →](api_openai_audio_speech.md)         |
-|                   | `POST /v1/audio/transcriptions` | Speech-to-text transcription                                                | [Transcriptions →](api_openai_audio_transcriptions.md) |
-|                   | `POST /v1/audio/translations`   | Speech-to-English translation                                               | [Translations →](api_openai_audio_translations.md)     |
-| **🧠 Embeddings** | `POST /v1/embeddings`           | Vector embeddings for semantic search                                       | [Embeddings →](api_openai_embeddings.md)               |
-| **📋 Models**     | `GET /v1/models`                | List available models                                                       | [Models →](api_openai_models.md)                       |
-| **📁 Files**      | `POST/GET/DELETE /v1/files`     | Upload, list, retrieve, download, delete files                              | [Files →](api_openai_files.md)                         |
-|                   | `POST /v1/uploads`              | Multipart upload sessions for large files                                   | [Files →](api_openai_files.md)                         |
+| Category          | Endpoint                          | Capability                                                                  | Documentation                                          |
+|-------------------|-----------------------------------|-----------------------------------------------------------------------------|--------------------------------------------------------|
+| **💬 Chat**       | `POST /v1/chat/completions`       | Multi-modal conversations with text, images, video, documents               | [Chat Completions →](api_openai_chat_completions.md)   |
+|                   | `POST /v1/completions`            | Simple prompt-to-text completion — recommended for MCP and text-only agents | [Completions →](api_openai_completions.md)             |
+|                   | `POST /v1/responses`              | Stateless conversational AI with tool calling and streaming                 | [Responses →](api_openai_responses.md)                 |
+|                   | `POST /v1/responses/input_tokens` | Count input tokens without generating a response                            | [Responses →](api_openai_responses.md)                 |
+| **🎨 Images**     | `POST /v1/images/generations`     | Text-to-image generation                                                    | [Generations →](api_openai_images_generations.md)      |
+|                   | `POST /v1/images/edits`           | Image editing and transformations                                           | [Edits →](api_openai_images_edits.md)                  |
+|                   | `POST /v1/images/variations`      | Generate image variations                                                   | [Variations →](api_openai_images_variations.md)        |
+| **🔊 Audio**      | `POST /v1/audio/speech`           | Text-to-speech synthesis                                                    | [Text to Speech →](api_openai_audio_speech.md)         |
+|                   | `POST /v1/audio/transcriptions`   | Speech-to-text transcription                                                | [Transcriptions →](api_openai_audio_transcriptions.md) |
+|                   | `POST /v1/audio/translations`     | Speech-to-English translation                                               | [Translations →](api_openai_audio_translations.md)     |
+| **🧠 Embeddings** | `POST /v1/embeddings`             | Vector embeddings for semantic search                                       | [Embeddings →](api_openai_embeddings.md)               |
+| **📋 Models**     | `GET /v1/models`                  | List available models                                                       | [Models →](api_openai_models.md)                       |
+| **📁 Files**      | `POST/GET/DELETE /v1/files`       | Upload, list, retrieve, download, delete files                              | [Files →](api_openai_files.md)                         |
+|                   | `POST /v1/uploads`                | Multipart upload sessions for large files                                   | [Files →](api_openai_files.md)                         |
 
 ### :material-magnify: stdapi.ai Native Extensions
 
@@ -76,6 +77,7 @@ When `ENABLE_MCP_STREAMABLE_HTTP=true` or `ENABLE_MCP_SSE=true` is configured, s
 | `openai_chat_completion`         | `POST /v1/chat/completions`                 |
 | `openai_completion`              | `POST /v1/completions`                      |
 | `openai_response`                | `POST /v1/responses`                        |
+| `openai_response_input_tokens`   | `POST /v1/responses/input_tokens`           |
 | `openai_image_generation`        | `POST /v1/images/generations`               |
 | `openai_image_edit`              | `POST /v1/images/edits`                     |
 | `openai_image_variation`         | `POST /v1/images/variations`                |

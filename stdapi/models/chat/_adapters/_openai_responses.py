@@ -15,7 +15,12 @@ from pydantic_core import to_json
 from sse_starlette import JSONServerSentEvent
 
 from stdapi.api_errors import ApiError
-from stdapi.aws_bedrock import build_system_blocks, set_inference_configuration
+from stdapi.aws import get_client
+from stdapi.aws_bedrock import (
+    build_system_blocks,
+    handle_bedrock_client_error,
+    set_inference_configuration,
+)
 from stdapi.input_file import FileIdInputFile, InputFile
 from stdapi.models import validate_model
 from stdapi.models.chat._adapters import _openai_common
@@ -33,6 +38,7 @@ from stdapi.types.openai_responses import (
     ImageGenerationCall,
     IncompleteDetails,
     InputMessage,
+    InputTokenCountParams,
     InputTokensDetails,
     OutputTokensDetails,
     ReasoningItemContent,
@@ -80,6 +86,7 @@ if TYPE_CHECKING:
         Mapping,
     )
 
+    from types_aiobotocore_bedrock.literals import RegionName
     from types_aiobotocore_bedrock_runtime.literals import (
         CacheTTLType,
         ServiceTierTypeType,
@@ -93,6 +100,8 @@ if TYPE_CHECKING:
         ContentBlockTypeDef,
         ConverseResponseTypeDef,
         ConverseStreamOutputTypeDef,
+        ConverseTokensRequestTypeDef,
+        CountTokensResponseTypeDef,
         InferenceConfigurationTypeDef,
         JsonSchemaDefinitionTypeDef,
         MessageTypeDef,
@@ -1716,3 +1725,55 @@ async def format_stream(
             type="response.completed",
         ),
     )
+
+
+async def count_input_tokens_via_bedrock(
+    request: InputTokenCountParams, model_id: str, region: RegionName
+) -> int:
+    """Count input tokens using the AWS Bedrock Runtime CountTokens API.
+
+    Builds a Converse-compatible request from the OpenAI Responses input and
+    calls Bedrock's ``count_tokens`` API for an accurate, model-specific count.
+
+    Args:
+        request: The input-token count request (model + input + tools/etc.).
+        model_id: The Bedrock model identifier.
+        region: The AWS region of the model.
+
+    Returns:
+        The total number of input tokens.
+
+    Raises:
+        ApiError: If the input exceeds the model's context window.
+    """
+    bedrock_messages, system_blocks = await map_input(
+        request.input, request.instructions
+    )
+
+    req: ConverseTokensRequestTypeDef = {"messages": bedrock_messages}
+    if system_blocks:
+        req["system"] = system_blocks
+
+    if request.tools and request.tool_choice != "none":
+        tool_specs: list[ToolTypeDef] = [
+            {
+                "toolSpec": {
+                    "name": tool.name,
+                    "description": tool.description or "function",
+                    "inputSchema": {"json": tool.parameters or _EMPTY_TOOL},
+                }
+            }
+            for tool in request.tools
+            if isinstance(tool, FunctionTool)
+        ]
+        if tool_specs:
+            tool_config: ToolConfigurationTypeDef = {"tools": tool_specs}
+            if bedrock_choice := _map_tool_choice(request.tool_choice):
+                tool_config["toolChoice"] = bedrock_choice
+            req["toolConfig"] = tool_config
+
+    with handle_bedrock_client_error():
+        resp: CountTokensResponseTypeDef = await get_client(
+            "bedrock-runtime", region
+        ).count_tokens(modelId=model_id, input={"converse": req})
+    return resp["inputTokens"]

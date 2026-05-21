@@ -152,6 +152,7 @@ MODEL_MAPPINGS = {
         "responses_json_output": "anthropic.claude-haiku-4-5-20251001-v1:0",
         "responses_web_search": "amazon.nova-2-lite-v1:0",
         "responses_code_interpreter": "amazon.nova-2-lite-v1:0",
+        "input_tokens": "anthropic.claude-3-5-sonnet-20240620-v1:0",
         "image_generation": "amazon.nova-canvas-v1:0",
         "image_generation_hd": "amazon.nova-canvas-v1:0",
         "image_generation_stream": "amazon.nova-canvas-v1:0",
@@ -172,6 +173,7 @@ MODEL_MAPPINGS = {
         "responses_json_output": "gpt-5-nano",
         "responses_web_search": "gpt-5-nano",
         "responses_code_interpreter": "gpt-5-nano",
+        "input_tokens": "gpt-4o-mini",
         "image_generation": "dall-e-2",  # Cheapest/default model
         "image_generation_hd": "dall-e-3",  # For HD & style quality features
         "image_generation_stream": "gpt-image-1",  # For streaming features
@@ -357,6 +359,12 @@ def responses_code_interpreter_model(models: dict[str, str]) -> str:
     Official API: ``gpt-5-nano`` (native Python execution via OpenAI code interpreter).
     """
     return models["responses_code_interpreter"]
+
+
+@pytest.fixture(scope="session")
+def responses_input_tokens_model(models: dict[str, str]) -> str:
+    """Provide the appropriate model for Responses API input token counting."""
+    return models["input_tokens"]
 
 
 @pytest.fixture(scope="session")

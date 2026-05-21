@@ -1931,6 +1931,182 @@ class TestImageGenerationTool:
 
 
 # ---------------------------------------------------------------------------
+# input_tokens endpoint
+# ---------------------------------------------------------------------------
+
+
+class TestOpenAIInputTokens:
+    """Test suite for POST /v1/responses/input_tokens (OpenAI Responses API).
+
+    Validates token counting for the Responses API:
+      - basic input
+      - with `instructions` (system equivalent)
+      - with `tools`
+      - multi-turn message-array input
+      - longer content yields more tokens
+      - invalid model returns 400/404
+      - structured input_text content blocks
+    """
+
+    def test_input_tokens_basic(
+        self, openai_client: OpenAI, responses_input_tokens_model: str
+    ) -> None:
+        """Test basic token counting with a simple string input.
+
+        Validates:
+            - Response contains input_tokens field
+            - Token count is a positive integer
+        """
+        response = openai_client.responses.input_tokens.count(
+            model=responses_input_tokens_model, input="Hello, how are you?"
+        )
+
+        assert response.input_tokens > 0
+        assert response.object == "response.input_tokens"
+
+    def test_input_tokens_with_instructions(
+        self, openai_client: OpenAI, responses_input_tokens_model: str
+    ) -> None:
+        """Test token counting includes instruction tokens.
+
+        Validates:
+            - Instructions contribute to token count
+            - Token count with instructions is greater than without
+        """
+        response_without = openai_client.responses.input_tokens.count(
+            model=responses_input_tokens_model, input="Hello"
+        )
+
+        response_with = openai_client.responses.input_tokens.count(
+            model=responses_input_tokens_model,
+            input="Hello",
+            instructions="You are a very detailed and verbose assistant that always provides comprehensive answers.",
+        )
+
+        assert response_with.input_tokens > response_without.input_tokens
+
+    def test_input_tokens_with_tools(
+        self, openai_client: OpenAI, responses_input_tokens_model: str
+    ) -> None:
+        """Test token counting includes tool definition tokens.
+
+        Validates:
+            - Tool definitions contribute to token count
+            - Token count with tools is greater than without
+        """
+        response_without = openai_client.responses.input_tokens.count(
+            model=responses_input_tokens_model, input="What is the weather?"
+        )
+
+        response_with = openai_client.responses.input_tokens.count(
+            model=responses_input_tokens_model,
+            input="What is the weather?",
+            tools=[
+                {  # type: ignore[list-item]
+                    "type": "function",
+                    "name": "get_weather",
+                    "description": "Get weather for a location",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"location": {"type": "string"}},
+                        "required": ["location"],
+                    },
+                }
+            ],
+        )
+
+        assert response_with.input_tokens > response_without.input_tokens
+
+    def test_input_tokens_multi_turn(
+        self, openai_client: OpenAI, responses_input_tokens_model: str
+    ) -> None:
+        """Test token counting with multi-turn conversation.
+
+        Validates:
+            - Multi-turn messages are counted
+            - More messages result in higher token count
+        """
+        response_single = openai_client.responses.input_tokens.count(
+            model=responses_input_tokens_model, input="Hello"
+        )
+
+        response_multi = openai_client.responses.input_tokens.count(
+            model=responses_input_tokens_model,
+            input=[
+                {"type": "message", "role": "user", "content": "Hello"},
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": "Hi there! How can I help you?",
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": "Tell me about Python programming.",
+                },
+            ],
+        )
+
+        assert response_multi.input_tokens > response_single.input_tokens
+
+    def test_input_tokens_longer_content_more_tokens(
+        self, openai_client: OpenAI, responses_input_tokens_model: str
+    ) -> None:
+        """Test that longer content produces more tokens.
+
+        Validates:
+            - Longer messages result in higher token counts
+        """
+        response_short = openai_client.responses.input_tokens.count(
+            model=responses_input_tokens_model, input="Hi"
+        )
+
+        response_long = openai_client.responses.input_tokens.count(
+            model=responses_input_tokens_model,
+            input="Please explain the theory of relativity in great detail, "
+            "covering both special and general relativity, their mathematical "
+            "foundations, key experiments that confirmed them, and their "
+            "implications for modern physics and cosmology.",
+        )
+
+        assert response_long.input_tokens > response_short.input_tokens
+
+    def test_input_tokens_invalid_model(self, openai_client: OpenAI) -> None:
+        """Test token counting with an invalid model returns an error.
+
+        Validates:
+            - Invalid model ID raises BadRequestError.
+        """
+        with pytest.raises(BadRequestError):
+            openai_client.responses.input_tokens.count(
+                model="nonexistent-model-xyz", input="Hello"
+            )
+
+    def test_input_tokens_input_text_blocks(
+        self, openai_client: OpenAI, responses_input_tokens_model: str
+    ) -> None:
+        """Test token counting with input_text content blocks.
+
+        Validates:
+            - Input message with input_text blocks is accepted for counting
+            - Returns a valid token count
+        """
+        response = openai_client.responses.input_tokens.count(
+            model=responses_input_tokens_model,
+            input=[
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Hello, how are you?"}],
+                }
+            ],
+        )
+
+        assert response.input_tokens > 0
+        assert response.object == "response.input_tokens"
+
+
+# ---------------------------------------------------------------------------
 # code_interpreter integrated tool
 # ---------------------------------------------------------------------------
 
