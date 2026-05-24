@@ -90,6 +90,7 @@ nav:
           - n8n integration: use_cases_n8n.md
           - AI Coding Assistants: use_cases_coding_assistants.md
       - Roadmap & Changelog: roadmap.md
+  - Contact: contact.md
 
 repo_url: https://github.com/stdapi-ai/stdapi.ai
 repo_name: stdapi-ai/stdapi.ai

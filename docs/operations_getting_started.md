@@ -11,6 +11,9 @@ Get a production-grade OpenAI-compatible AI gateway running on AWS in 5 minutes.
 !!! tip "14-Day Free Trial"
     The AWS Marketplace subscription includes a **14-day free trial**. Test the full production stack in your environment risk-free.
 
+!!! info "Need help?"
+    For questions, issue reports, or assistance, see the [Contact](contact.md) page.
+
 !!! info "Prefer a hands-off setup?"
     A [managed deployment service](https://aws.amazon.com/marketplace/pp/prodview-xknxzjgl7zi5s) is available if you'd rather not manage Terraform yourself. Choose between guided assistance (step-by-step support while you retain full control) or fully managed setup (handled on your behalf, inside your AWS account). Response time is 1 business day during the engagement.
 
