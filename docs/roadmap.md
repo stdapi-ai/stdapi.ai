@@ -171,15 +171,20 @@ This release introduces a **Model Context Protocol (MCP) server**, making all st
 - Fix missing `file_id` inputs for image and file processing in OpenAI Responses API adapter
 - Remove `store` parameter from unsupported validations in chat completions to ensure client compatibility
 
-#### Fixes & Maintenance (v1.11.1)
+#### Fixes & Maintenance (v1.11.1-v1.11.4)
+
+**v1.11.1**
 
 - Make `max_tokens` optional in Anthropic `/v1/messages` to align with the Anthropic API specification
 - Remove unsupported reasoning configuration checks for broader client compatibility
 - Rename `/v1/responses` route tag from "Responses" to "Chat" in OpenAPI documentation for consistency
 
-#### Fixes & Maintenance (v1.11.2-v1.11.4)
+**v1.11.2-v1.11.3**
 
 - Add missing MCP dependencies to container image.
+
+**v1.11.4**
+
 - Upgrade Starlette dependency to fix CVE-2026-48710.
 
 ---
