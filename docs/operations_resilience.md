@@ -247,6 +247,9 @@ Asynchronous invocations require an S3 bucket in the same region as the Bedrock 
 export AWS_S3_REGIONAL_BUCKETS='{"us-east-1": "my-bucket-use1", "us-west-2": "my-bucket-usw2"}'
 ```
 
+!!! info "Terraform Module"
+    When using the Terraform module, regional S3 buckets are configured automatically. Manual `AWS_S3_REGIONAL_BUCKETS` configuration is only needed for direct deployments.
+
 !!! note
     If a region has no configured bucket, it is excluded from async invocation routing but remains available for synchronous and streaming requests.
 

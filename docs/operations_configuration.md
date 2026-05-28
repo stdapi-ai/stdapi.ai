@@ -389,6 +389,9 @@ export AWS_S3_BUCKET=my-llm-storage-us-east-1
 !!! tip "Presigned URLs"
     Files are served via presigned URLs for secure, time-limited access. Presigned URLs expire after 1 hour by default.
 
+!!! info "Terraform Module"
+    When using the Terraform module, the main S3 bucket is created automatically — no manual configuration required.
+
 !!! warning "Startup Warning"
     If not set, a warning is logged at startup and features that require file storage (image generation, audio output, document processing) will be unavailable.
 
@@ -589,6 +592,9 @@ export AWS_S3_REGIONAL_BUCKETS='{"us-east-1": "my-bedrock-temp-us-east-1", "eu-w
 
 !!! success "Automatic Fallback"
     For the first region in `AWS_BEDROCK_REGIONS` (your primary region), if no regional bucket is specified, the service automatically falls back to `AWS_S3_BUCKET`. You only need to configure regional buckets for additional regions beyond your primary one.
+
+!!! info "Terraform Module"
+    When using the Terraform module, regional S3 buckets are created automatically for each region in `aws_bedrock_regions`. The bucket names are exposed via the `aws_s3_regional_buckets` output and passed to the container as `AWS_S3_REGIONAL_BUCKETS`. No manual configuration required.
 
 !!! tip "Best Practice"
     Apply the same [S3 Bucket Lifecycle Configuration](#s3-lifecycle) to these regional buckets as you would for the primary bucket to automatically clean up temporary files.

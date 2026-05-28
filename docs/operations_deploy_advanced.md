@@ -194,8 +194,8 @@ resource "aws_lb_target_group" "stdapi" {
     output "ecs_service_info" {
       description = "ECS service details for connecting your resources"
       value       = {
-        cluster_name      = module.stdapi_ai_integrated.ecs_cluster_name
-        service_name      = module.stdapi_ai_integrated.ecs_service_name
+        cluster_name      = module.stdapi_ai_integrated.cluster_name
+        service_name      = module.stdapi_ai_integrated.service_name
         security_group_id = module.stdapi_ai_integrated.security_group_id
         port              = module.stdapi_ai_integrated.port
         service_discovery = module.stdapi_ai_integrated.service_discovery_service_name
@@ -300,9 +300,7 @@ resource "aws_lb_target_group" "stdapi" {
 
 ## :material-shield-check: Production Deployment (Fully Featured)
 
-Enterprise-ready deployment with HTTPS endpoints, WAF protection, auto-scaling, and comprehensive monitoring.
-
-**About regional S3 buckets:** The full production example below includes multi-region Bedrock support with regional S3 buckets. This is only required for Bedrock multimodal features (images, documents) across multiple regions. For most users, the simplified single-region setup is sufficient—see the example further down.
+Enterprise-ready deployment with HTTPS endpoints, WAF protection, auto-scaling, regional S3 buckets, and comprehensive monitoring.
 
 ??? example "Full production example with multi-region Bedrock support"
 
@@ -324,19 +322,6 @@ Enterprise-ready deployment with HTTPS endpoints, WAF protection, auto-scaling, 
         "eu-west-1",
         "eu-central-1",
         "eu-north-1"
-      ]
-
-      # Regional buckets for Bedrock multimodal operations
-      # Required by some models and features, create one per extra region in aws_bedrock_regions
-      aws_s3_regional_buckets = merge(
-        module.bedrock_bucket_eu_west_1.regional_bucket_map,
-        module.bedrock_bucket_eu_central_1.regional_bucket_map,
-        module.bedrock_bucket_eu_north_1.regional_bucket_map,
-      )
-      aws_s3_buckets_kms_keys_arns = [
-        module.bedrock_bucket_eu_west_1.kms_key_arn,
-        module.bedrock_bucket_eu_central_1.kms_key_arn,
-        module.bedrock_bucket_eu_north_1.kms_key_arn,
       ]
 
       # (Optional) In case of regional compliance requirements like GDPR,
@@ -375,56 +360,12 @@ Enterprise-ready deployment with HTTPS endpoints, WAF protection, auto-scaling, 
     provider "aws" {
       region = "eu-west-3"
     }
-
-    # Additional providers for regional Bedrock buckets
-
-    provider "aws" {
-      alias  = "eu-central-1"
-      region = "eu-central-1"
-    }
-
-    provider "aws" {
-      alias  = "eu-west-1"
-      region = "eu-west-1"
-    }
-
-    provider "aws" {
-      alias  = "eu-north-1"
-      region = "eu-north-1"
-    }
-
-    # Regional S3 buckets for Bedrock operations (optional but recommended)
-    module "bedrock_bucket_eu_west_1" {
-      source  = "stdapi-ai/stdapi-ai-s3-regional-bucket/aws"
-      version = "~> 1.0"
-
-      providers = { aws = aws.eu-west-1 }
-      name_prefix = module.stdapi_ai.name_prefix
-      aws_s3_tmp_prefix = module.stdapi_ai.aws_s3_tmp_prefix
-      deletion_protection = module.stdapi_ai.deletion_protection
-    }
-
-    module "bedrock_bucket_eu_central_1" {
-      source  = "stdapi-ai/stdapi-ai-s3-regional-bucket/aws"
-      version = "~> 1.0"
-
-      providers = { aws = aws.eu-central-1 }
-      name_prefix = module.stdapi_ai.name_prefix
-      aws_s3_tmp_prefix = module.stdapi_ai.aws_s3_tmp_prefix
-      deletion_protection = module.stdapi_ai.deletion_protection
-    }
-
-    module "bedrock_bucket_eu_north_1" {
-      source  = "stdapi-ai/stdapi-ai-s3-regional-bucket/aws"
-      version = "~> 1.0"
-
-      providers = { aws = aws.eu-north-1 }
-      name_prefix = module.stdapi_ai.name_prefix
-      aws_s3_tmp_prefix = module.stdapi_ai.aws_s3_tmp_prefix
-      deletion_protection = module.stdapi_ai.deletion_protection
-    }
-
     ```
+
+??? info "Migrating from manual bucket configuration"
+    If you have an existing deployment using the deprecated `module "bedrock_bucket_*"` pattern,
+    see the [migration guide](https://github.com/stdapi-ai/terraform-aws-stdapi-ai-s3-regional-bucket#migration)
+    for step-by-step `terraform state mv` instructions.
 
 **What you get:**
 
@@ -435,7 +376,7 @@ Enterprise-ready deployment with HTTPS endpoints, WAF protection, auto-scaling, 
 - Auto-scaling 2-10 tasks based on load
 - S3 storage with lifecycle policies
 - Enhanced Container Insights
-- Regional S3 buckets for Bedrock multimodal operations in 3 regions
+- Regional S3 buckets for Bedrock multimodal operations (created automatically)
 
 ```mermaid
 %%{init: {'flowchart': {'htmlLabels': true}} }%%
@@ -506,7 +447,6 @@ For development, side projects, and non-critical workloads.
       version = "~> 1.0"
 
       # Aggressive Auto-scaling with Fargate spot
-      autoscaling_enabled            = true
       autoscaling_min_capacity       = 1
       autoscaling_max_capacity       = 3
       autoscaling_cpu_target_percent = 85
@@ -686,13 +626,12 @@ output "api_endpoint" {
 - `alb_dns_name` — ALB endpoint (if enabled)
 - `alb_arn` — ALB ARN for AWS integrations
 - `alb_security_group_id` — ALB security group
-- `alb_target_group_arn` — Target group for custom listeners
 - `application_url` — Full URL (https://domain or http://alb)
 
 **ECS Service:**
 
-- `ecs_cluster_name` — Cluster name for AWS CLI/SDK
-- `ecs_service_name` — Service name for management
+- `cluster_name` — Cluster name for AWS CLI/SDK
+- `service_name` — Service name for management
 - `security_group_id` — Security group for ingress rules
 - `service_discovery_service_name` — Private DNS name (if enabled)
 - `port` — Container port exposed by the application
@@ -706,8 +645,8 @@ output "api_endpoint" {
 
 **Security:**
 
-- `waf_web_acl_id` — WAF ACL ID (if enabled)
-- `waf_web_acl_arn` — WAF ACL ARN (if enabled)
+- `alb_waf_web_acl_id` — WAF ACL ID (if enabled)
+- `alb_waf_web_acl_arn` — WAF ACL ARN (if enabled)
 
 For the complete list of outputs, see [stdapi-ai/terraform-aws-stdapi-ai/outputs.tf](https://github.com/stdapi-ai/terraform-aws-stdapi-ai/blob/main/outputs.tf).
 

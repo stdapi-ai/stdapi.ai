@@ -60,8 +60,7 @@ terraform apply
 That's it. In ~5 minutes you have:
 
 - Production-grade ECS Fargate deployment with HTTPS
-- Optional WAF protection with rate limiting
-- Optional CloudWatch alarms and monitoring
+- Regional S3 buckets
 - Auto-scaling and API key authentication
 - Interactive API documentation at `/docs`
 - IP-restricted access (your IP only)

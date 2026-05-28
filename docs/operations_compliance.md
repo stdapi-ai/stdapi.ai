@@ -167,7 +167,7 @@ Amazon Polly, Transcribe, Comprehend, and Translate each run in an independently
 S3 is used as temporary storage for multimodal content (images, PDFs, audio files) passed to or returned from Bedrock and the AI services. Data is stored only in buckets you own and configure.
 
 - **Primary bucket** (`AWS_S3_BUCKET`) — must reside in the same AWS region as the first entry in `AWS_BEDROCK_REGIONS`.
-- **Regional buckets** (`AWS_S3_REGIONAL_BUCKETS`) — for multi-region deployments, configure one bucket per Bedrock region so each region reads and writes data locally.
+- **Regional buckets** (`AWS_S3_REGIONAL_BUCKETS`) — for multi-region deployments, one bucket per Bedrock region ensures each region reads and writes data locally. When using the Terraform module, these are created automatically.
 - **Lifecycle policies** — the Terraform module applies a 1-day lifecycle policy to the temporary prefix as a failover safeguard. The application itself removes temporary files as soon as the operation completes, so files rarely remain beyond the duration of a single request.
 
 S3 stores data within the AWS region where each bucket is created. Data does not leave that region unless you explicitly configure replication.
