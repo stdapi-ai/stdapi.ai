@@ -12,7 +12,7 @@ keywords: stdapi.ai releases, AI gateway updates, AWS Bedrock features, API gate
 
 See [Release History below](#release-history) for the full changelog of all releases.
 
-**Latest: v1.11.1** – MCP server, agent discovery, `/search_models` endpoint, `xhigh` reasoning effort support, and optional `max_tokens` in Anthropic Messages API
+**Latest: v1.11.4** – MCP server, agent discovery, `/search_models` endpoint, `xhigh` reasoning effort support, and optional `max_tokens` in Anthropic Messages API
 
 ---
 
@@ -128,7 +128,7 @@ The following features may be implemented in future releases based on community 
 
 ## :material-history: Release History
 
-### v1.11.0 – MCP Server, Agent Discovery & Model Search (with v1.11.1-v1.11.3 maintenance updates)
+### v1.11.0 – MCP Server, Agent Discovery & Model Search (with v1.11.1-v1.11.4 maintenance updates)
 
 This release introduces a **Model Context Protocol (MCP) server**, making all stdapi.ai API endpoints directly accessible as MCP tools for AI agents and agentic workflows. A new `/search_models` endpoint enables precise discovery of models by route, MCP tool, region, streaming support, and legacy status. Agent-friendly discovery metadata is now exposed via RFC 8288 Link headers and an RFC 9727 machine-readable API catalog at `/.well-known/api-catalog`. Endpoints that previously required binary `multipart/form-data` uploads now also accept an `application/json` body for MCP and HTTP client compatibility. The Anthropic Messages API now accepts `xhigh` as a `reasoning_effort` value.
 
@@ -177,9 +177,10 @@ This release introduces a **Model Context Protocol (MCP) server**, making all st
 - Remove unsupported reasoning configuration checks for broader client compatibility
 - Rename `/v1/responses` route tag from "Responses" to "Chat" in OpenAPI documentation for consistency
 
-#### Fixes & Maintenance (v1.11.2-v1.11.3)
+#### Fixes & Maintenance (v1.11.2-v1.11.4)
 
 - Add missing MCP dependencies to container image.
+- Upgrade Starlette dependency to fix CVE-2026-48710.
 
 ---
 
