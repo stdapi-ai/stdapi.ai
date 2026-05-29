@@ -35,7 +35,13 @@ VerbosityLevel = Literal["low", "medium", "high"]
 ServiceTiers = Literal["auto", "default", "flex", "scale", "priority"]
 
 #: Prompt cache retention options.
-PromptCacheRetention = Literal["in-memory", "24h"]
+PromptCacheRetention = Literal[
+    "in-memory",
+    "24h",
+    # Extra bedrock specific values
+    "1h",
+    "5m",
+]
 
 #: String-only tool-choice options.
 ToolChoiceLiteral = Literal["none", "auto", "required"]
