@@ -90,7 +90,7 @@ Common issues when deploying stdapi.ai for the first time. If your error isn't l
     - List every discovered model with full details: `GET /search_models` (the default model-discovery endpoint). Filter by capability with query parameters — e.g. `GET /search_models?input_modalities=IMAGE&route=/v1/chat/completions` returns only vision-capable chat models. See the [Search Models API](api_search_models.md) reference.
     - `GET /v1/models` is also available for strict OpenAI SDK compatibility (lighter payload, no capability metadata).
     - Verify `AWS_BEDROCK_REGIONS` includes a region that offers the model — see the [Bedrock model availability table](https://docs.aws.amazon.com/bedrock/latest/userguide/models-regions.html).
-    - For Anthropic SDK clients, use either the full Bedrock ID (`anthropic.claude-opus-4-7`) or the Anthropic alias (`claude-opus-4-6`) — both resolve automatically.
+    - For Anthropic SDK clients, use either the full Bedrock ID (`anthropic.claude-opus-4-8`) or the Anthropic alias (`claude-opus-4-8`) — both resolve automatically.
 
 ??? failure "`ThrottlingException` / too many requests immediately"
     You've hit the per-region Bedrock quota.

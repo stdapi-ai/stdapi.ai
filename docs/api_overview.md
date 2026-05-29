@@ -135,7 +135,7 @@ That's it. Your application continues to work without any code changes—just po
 
 1. **Replace the Anthropic API URL** (`https://api.anthropic.com`) with your stdapi.ai deployment URL + `/anthropic` (e.g., `https://your-endpoint.com/anthropic`)
 2. **Use the same authentication mechanism** (`x-api-key` header and `anthropic-version` header)
-3. **Use your preferred model name** — official Anthropic names (e.g., `claude-opus-4-6`) are automatically resolved to Bedrock IDs, or use Bedrock model IDs directly
+3. **Use your preferred model name** — official Anthropic names (e.g., `claude-opus-4-8`) are automatically resolved to Bedrock IDs, or use Bedrock model IDs directly
 
 Your Anthropic SDK applications continue to work without any code changes—just point them to stdapi.ai instead of Anthropic.
 

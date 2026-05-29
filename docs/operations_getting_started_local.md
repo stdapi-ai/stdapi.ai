@@ -92,7 +92,7 @@ curl http://localhost:8000/v1/chat/completions \
 **Interactive API docs:** Open [http://localhost:8000/docs](http://localhost:8000/docs) for Swagger UI with all available endpoints.
 
 !!! tip "Try other models"
-    `amazon.nova-micro-v1:0` is a fast, low-cost model — great for confirming the pipeline works. Once you see a response, switch the `model` field to `anthropic.claude-opus-4-7`, `anthropic.claude-sonnet-4-6`, or any other Bedrock model available in your configured regions.
+    `amazon.nova-micro-v1:0` is a fast, low-cost model — great for confirming the pipeline works. Once you see a response, switch the `model` field to `anthropic.claude-opus-4-8`, `anthropic.claude-sonnet-4-6`, or any other Bedrock model available in your configured regions.
 
     **Default model discovery:** `GET /search_models` (no parameters) returns every model the gateway has discovered, with full details — provider, input/output modalities, supported routes, regions, streaming and legacy status. Add query parameters to filter by capability (e.g. `?input_modalities=IMAGE&route=/v1/chat/completions` for vision-capable chat models). This is also the recommended endpoint for AI agents to pick the right model ID before invoking another endpoint — see the [Search Models API](api_search_models.md) reference. `GET /v1/models` is also available for strict OpenAI SDK compatibility.
 
