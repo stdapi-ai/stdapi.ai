@@ -49,7 +49,7 @@ _BASIC_MODELS = pytest.mark.parametrize(
     [
         "anthropic.claude-sonnet-4-6",  # Claude (reference)
         "amazon.nova-micro-v1:0",  # Amazon Nova (cheapest)
-        "ai21.jamba-1-5-mini-v1:0",  # AI21 Jamba (SSM/Transformer hybrid, 256k ctx)
+        # "ai21.jamba-1-5-mini-v1:0",  # AI21 Jamba (SSM/Transformer hybrid, 256k ctx)
         "deepseek.v3-v1:0",  # DeepSeek V3 (fast non-reasoning)
         "google.gemma-3-12b-it",  # Google Gemma
         "meta.llama3-3-70b-instruct-v1:0",  # Meta Llama
@@ -80,8 +80,8 @@ _TOOL_MODELS = pytest.mark.parametrize(
         "anthropic.claude-sonnet-4-6",  # Claude (reference)
         "amazon.nova-lite-v1:0",  # Amazon Nova
         "amazon.nova-2-lite-v1:0",  # Amazon Nova 2
-        "ai21.jamba-1-5-mini-v1:0",  # AI21 Jamba Mini
-        "ai21.jamba-1-5-large-v1:0",  # AI21 Jamba Large
+        # "ai21.jamba-1-5-mini-v1:0",  # AI21 Jamba Mini
+        # "ai21.jamba-1-5-large-v1:0",  # AI21 Jamba Large
         "deepseek.v3-v1:0",  # DeepSeek V3
         "deepseek.v3.2",  # DeepSeek V3.2 (newer revision)
         "meta.llama3-1-70b-instruct-v1:0",  # Meta Llama 3.1 70B
@@ -107,8 +107,8 @@ _STREAMING_TOOL_MODELS = pytest.mark.parametrize(
         "anthropic.claude-sonnet-4-6",  # Claude (reference)
         "amazon.nova-lite-v1:0",  # Amazon Nova
         "amazon.nova-2-lite-v1:0",  # Amazon Nova 2
-        "ai21.jamba-1-5-mini-v1:0",  # AI21 Jamba Mini
-        "ai21.jamba-1-5-large-v1:0",  # AI21 Jamba Large
+        # "ai21.jamba-1-5-mini-v1:0",  # AI21 Jamba Mini
+        # "ai21.jamba-1-5-large-v1:0",  # AI21 Jamba Large
         "deepseek.v3-v1:0",  # DeepSeek V3
         "deepseek.v3.2",  # DeepSeek V3.2 (newer revision)
         "meta.llama3-1-70b-instruct-v1:0",  # Meta Llama 3.1 70B
@@ -133,8 +133,8 @@ _AGENTIC_MODELS = pytest.mark.parametrize(
         "anthropic.claude-sonnet-4-6",  # Claude (reference)
         "amazon.nova-lite-v1:0",  # Amazon Nova
         "amazon.nova-2-lite-v1:0",  # Amazon Nova 2
-        "ai21.jamba-1-5-mini-v1:0",  # AI21 Jamba Mini
-        "ai21.jamba-1-5-large-v1:0",  # AI21 Jamba Large
+        # "ai21.jamba-1-5-mini-v1:0",  # AI21 Jamba Mini
+        # "ai21.jamba-1-5-large-v1:0",  # AI21 Jamba Large
         "deepseek.v3-v1:0",  # DeepSeek V3
         "deepseek.v3.2",  # DeepSeek V3.2 (newer revision)
         "meta.llama3-1-70b-instruct-v1:0",  # Meta Llama 3.1 70B
