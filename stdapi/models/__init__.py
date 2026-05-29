@@ -134,6 +134,27 @@ _GLOBAL_MODEL_REGISTRY: set[type[ModelBase[Any, Any]]] = set()
 _DEFAULT: dict[str, type[ModelBase[Any, Any]]] = {}
 
 
+class ModelRegionUnavailableError(Exception):
+    """Raised when a model has no valid identifier for a specific region.
+
+    Signals the region-routing layer to skip the region and try another instead
+    of sending a geographically-scoped inference profile that AWS Bedrock would
+    reject with ``ValidationException`` ("The provided model identifier is invalid.").
+    This happens transiently when a region is discovered as offering a model
+    before its inference profile has propagated there.
+    """
+
+    def __init__(self, message: str, *, region: RegionName) -> None:
+        """Store the offending region alongside the message.
+
+        Args:
+            message: Human-readable error description.
+            region: AWS region that cannot serve the model.
+        """
+        super().__init__(message)
+        self.region = region
+
+
 class ModelDetails(BaseModel):
     """Metadata and capability flags for a single Bedrock model.
 
@@ -178,7 +199,13 @@ class ModelDetails(BaseModel):
     def get_id(
         self, region: RegionName | None = None, *, inference_profile: bool = False
     ) -> str:
-        """Return the model ID or inference profile ARN for a specific region.
+        """Return the model ID or inference profile ID valid for a specific region.
+
+        A ``global.`` inference profile is valid in every region, so it is a safe
+        substitute when the target region has no profile of its own. A geo-scoped
+        profile (``us.``, ``eu.``, …) is only valid within its geography and is
+        never returned for a different region: doing so makes Bedrock reject the
+        request with ``ValidationException``.
 
         Args:
             region: Target AWS region. If ``None``, returns any available profile.
@@ -186,15 +213,28 @@ class ModelDetails(BaseModel):
 
         Returns:
             The appropriate model identifier for the given region.
+
+        Raises:
+            ModelRegionUnavailableError: When *inference_profile* is requested for a
+                specific region that has no profile of its own and no ``global.``
+                profile exists as a safe fallback.
         """
         if not inference_profile:
             return self.id
         profiles = self.inference_profiles or {}
-        return (
-            profiles.get(region)  # type: ignore[arg-type]
-            or next(iter(profiles.values()), None)
-            or self.id
-        )
+        if not profiles:
+            # On-demand model: the bare foundation-model ID is the correct identifier.
+            return self.id
+        if region is not None and (profile := profiles.get(region)):
+            return profile
+        if global_profile := next(
+            (pid for pid in profiles.values() if pid.startswith("global.")), None
+        ):
+            return global_profile
+        if region is None:
+            return next(iter(profiles.values()))
+        msg = f"Model '{self.id}' has no inference profile available in region '{region}'."
+        raise ModelRegionUnavailableError(msg, region=region)
 
     def set_inference_profile(self, region: RegionName, name: str) -> None:
         """Sets the inference profile for a specified region.
@@ -1328,6 +1368,12 @@ async def _route_and_execute[T](
     ``SETTINGS.aws_bedrock_max_retries + 1`` attempts, escalating to the next region
     on any retryable error and marking the region healthy on success.
 
+    A region that cannot serve the model — because it has no valid inference
+    profile (:class:`ModelRegionUnavailableError`) or because Bedrock reports the
+    model identifier as invalid — is skipped like any other retryable error, so a
+    transiently incomplete discovery snapshot self-heals across regions instead of
+    surfacing to the caller.
+
     Args:
         model_id: Used for router health bookkeeping.
         candidates: From ``_compute_candidate_regions``. Single-element means region-locked.
@@ -1337,22 +1383,38 @@ async def _route_and_execute[T](
         Result of the first successful ``fn`` call.
 
     Raises:
+        ApiError: When the only candidate region cannot serve the model.
         ClientError: Last non-retryable error, or last retryable error when all attempts exhausted.
         BotocoreConnectionError: Last connection error when all attempts exhausted.
         HTTPClientError: Last HTTP client error (e.g. timeout) when all attempts exhausted.
     """
     if not REGION_ROUTER or len(candidates) == 1:
-        return await fn(candidates[0])
+        try:
+            return await fn(candidates[0])
+        except ModelRegionUnavailableError as exc:
+            raise ApiError(str(exc)) from exc
 
+    last_exc: (
+        ClientError
+        | BotocoreConnectionError
+        | HTTPClientError
+        | ModelRegionUnavailableError
+    )
     for _ in range(SETTINGS.aws_bedrock_max_retries + 1):
         region = REGION_ROUTER.ordered_regions(model_id, candidates)[0]
         try:
             result = await fn(region)
         except ClientError as exc:
-            if (code := exc.response["Error"]["Code"]) not in ROUTING_RETRYABLE_CODES:
+            code = exc.response["Error"]["Code"]
+            if code not in ROUTING_RETRYABLE_CODES and not _is_invalid_model_identifier(
+                exc
+            ):
                 raise
-            last_exc: ClientError | BotocoreConnectionError | HTTPClientError = exc
+            last_exc = exc
             REGION_ROUTER.mark_error(model_id, region, code)
+        except ModelRegionUnavailableError as exc:
+            last_exc = exc
+            REGION_ROUTER.mark_error(model_id, region, exc.__class__.__name__)
         except (BotocoreConnectionError, HTTPClientError) as exc:
             last_exc = exc
             REGION_ROUTER.mark_error(model_id, region, exc.__class__.__name__)
@@ -1361,6 +1423,25 @@ async def _route_and_execute[T](
             return result
 
     raise last_exc
+
+
+def _is_invalid_model_identifier(exc: ClientError) -> bool:
+    """Return True when *exc* is a Bedrock "invalid model identifier" validation error.
+
+    Such an error means the selected region cannot serve the model (e.g. its
+    inference profile has not propagated there yet), so the request should be
+    retried in another region rather than failing outright.
+
+    Args:
+        exc: Bedrock ``ClientError`` to classify.
+
+    Returns:
+        True if the error is a ``ValidationException`` reporting an invalid model identifier.
+    """
+    error = exc.response.get("Error", {})
+    return error.get("Code") == "ValidationException" and (
+        "model identifier is invalid" in error.get("Message", "")
+    )
 
 
 def _set_effective_region(region: RegionName) -> None:

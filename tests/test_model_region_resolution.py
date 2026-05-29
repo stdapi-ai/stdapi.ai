@@ -1,0 +1,195 @@
+"""Unit tests for region-safe model identifier resolution and failover.
+
+Covers :meth:`ModelDetails.get_id` (never emit a geo-mismatched inference
+profile) and :func:`_route_and_execute` (skip a region that cannot serve the
+model instead of surfacing the error), both fast and AWS-free.
+"""
+
+from typing import TYPE_CHECKING, cast
+
+import pytest
+from botocore.exceptions import ClientError
+
+import stdapi.models as models_module
+from stdapi.api_errors import ApiError
+from stdapi.config import SETTINGS
+from stdapi.models import (
+    ModelDetails,
+    ModelRegionUnavailableError,
+    _is_invalid_model_identifier,
+    _route_and_execute,
+)
+from stdapi.monitoring import REQUEST_LOG
+from stdapi.region_routing import RegionRouter
+
+if TYPE_CHECKING:
+    from types_aiobotocore_bedrock.literals import RegionName
+
+
+def _model(
+    inference_profiles: dict[str, str] | None, regions: list[str]
+) -> ModelDetails:
+    """Build a minimal ModelDetails for identifier-resolution tests."""
+    return ModelDetails(
+        id="vendor.model-v1",
+        name="Model",
+        provider="Vendor",
+        input_modalities=["TEXT"],
+        output_modalities=["TEXT"],
+        regions=regions,  # type: ignore[arg-type]
+        inference_profiles=inference_profiles,  # type: ignore[arg-type]
+    )
+
+
+def _invalid_identifier_error() -> ClientError:
+    """Build the Bedrock ValidationException for an invalid model identifier."""
+    return ClientError(
+        {
+            "Error": {
+                "Code": "ValidationException",
+                "Message": "The provided model identifier is invalid.",
+            }
+        },
+        "InvokeModel",
+    )
+
+
+class TestGetId:
+    """ModelDetails.get_id region-safe identifier resolution."""
+
+    def test_returns_bare_id_when_inference_profile_not_requested(self) -> None:
+        """Without inference_profile, the bare foundation-model ID is returned."""
+        model = _model({"us-east-1": "us.vendor.model-v1"}, ["us-east-1"])
+        assert model.get_id("us-east-1") == "vendor.model-v1"
+
+    def test_returns_bare_id_for_on_demand_model(self) -> None:
+        """A model with no profiles resolves to its bare on-demand ID."""
+        model = _model(None, ["us-east-1", "eu-west-1"])
+        assert model.get_id("eu-west-1", inference_profile=True) == "vendor.model-v1"
+
+    def test_returns_per_region_profile_when_present(self) -> None:
+        """The profile matching the requested region is returned verbatim."""
+        model = _model(
+            {"us-east-1": "us.vendor.model-v1", "eu-west-1": "eu.vendor.model-v1"},
+            ["us-east-1", "eu-west-1"],
+        )
+        assert model.get_id("eu-west-1", inference_profile=True) == "eu.vendor.model-v1"
+
+    def test_falls_back_to_global_profile_for_missing_region(self) -> None:
+        """A global. profile is valid everywhere, so it covers a region with no entry."""
+        model = _model(
+            {"us-east-1": "global.vendor.model-v1"}, ["us-east-1", "eu-west-1"]
+        )
+        assert (
+            model.get_id("eu-west-1", inference_profile=True)
+            == "global.vendor.model-v1"
+        )
+
+    def test_raises_for_missing_region_with_only_geo_profiles(self) -> None:
+        """A geo-scoped profile is never returned for a different region."""
+        model = _model({"us-east-1": "us.vendor.model-v1"}, ["us-east-1", "eu-west-1"])
+        with pytest.raises(ModelRegionUnavailableError) as excinfo:
+            model.get_id("eu-west-1", inference_profile=True)
+        assert excinfo.value.region == "eu-west-1"
+
+    def test_returns_any_profile_when_region_unspecified(self) -> None:
+        """With region=None the caller accepts any profile (a single geo profile here)."""
+        model = _model({"us-east-1": "us.vendor.model-v1"}, ["us-east-1"])
+        assert model.get_id(inference_profile=True) == "us.vendor.model-v1"
+
+
+def test_is_invalid_model_identifier_matches_only_that_validation_error() -> None:
+    """Only a ValidationException about an invalid model identifier is recognised."""
+    assert _is_invalid_model_identifier(_invalid_identifier_error())
+    other = ClientError(
+        {
+            "Error": {
+                "Code": "ValidationException",
+                "Message": "Malformed input request.",
+            }
+        },
+        "InvokeModel",
+    )
+    assert not _is_invalid_model_identifier(other)
+
+
+@pytest.fixture
+def routed(monkeypatch: pytest.MonkeyPatch) -> RegionRouter:
+    """Install a fresh two-region router as the module singleton with retries enabled."""
+    router = RegionRouter()
+    monkeypatch.setattr(models_module, "REGION_ROUTER", router)
+    monkeypatch.setattr(SETTINGS, "aws_bedrock_max_retries", 3)
+    REQUEST_LOG.set({"level": "info"})  # type: ignore[typeddict-item]
+    return router
+
+
+_CANDIDATES = cast("list[RegionName]", ["us-east-1", "eu-west-1"])
+
+
+class TestRouteAndExecuteFailover:
+    """_route_and_execute skips regions that cannot serve the model."""
+
+    async def test_skips_region_on_invalid_model_identifier(
+        self, routed: RegionRouter
+    ) -> None:
+        """An invalid-identifier ValidationException fails over to the next region."""
+        seen: list[str] = []
+
+        async def fn(region: RegionName) -> str:
+            seen.append(region)
+            if region == "us-east-1":
+                raise _invalid_identifier_error()
+            return f"ok:{region}"
+
+        result = await _route_and_execute("vendor.model-v1", _CANDIDATES, fn)
+
+        assert result == "ok:eu-west-1"
+        assert seen == ["us-east-1", "eu-west-1"]
+        assert not routed._index.get(  # noqa: SLF001
+            "vendor.model-v1", "us-east-1"
+        ).is_usable
+
+    async def test_skips_region_on_model_region_unavailable(
+        self, routed: RegionRouter
+    ) -> None:
+        """A ModelRegionUnavailableError fails over to the next region."""
+
+        async def fn(region: RegionName) -> str:
+            if region == "us-east-1":
+                msg = "no profile"
+                raise ModelRegionUnavailableError(msg, region=region)
+            return f"ok:{region}"
+
+        result = await _route_and_execute("vendor.model-v1", _CANDIDATES, fn)
+        assert result == "ok:eu-west-1"
+
+    async def test_reraises_unrelated_validation_error(
+        self, routed: RegionRouter
+    ) -> None:
+        """A non-identifier ValidationException is not retried across regions."""
+
+        async def fn(region: RegionName) -> str:  # noqa: ARG001
+            raise ClientError(
+                {
+                    "Error": {
+                        "Code": "ValidationException",
+                        "Message": "Malformed input request.",
+                    }
+                },
+                "InvokeModel",
+            )
+
+        with pytest.raises(ClientError):
+            await _route_and_execute("vendor.model-v1", _CANDIDATES, fn)
+
+    async def test_single_region_unavailable_becomes_api_error(self) -> None:
+        """With one candidate, an unavailable region surfaces as a clean ApiError."""
+
+        async def fn(region: RegionName) -> str:
+            msg = "no profile"
+            raise ModelRegionUnavailableError(msg, region=region)
+
+        with pytest.raises(ApiError):
+            await _route_and_execute(
+                "vendor.model-v1", cast("list[RegionName]", ["us-east-1"]), fn
+            )
