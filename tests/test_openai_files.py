@@ -9,12 +9,16 @@ import base64
 import io
 import time
 from contextlib import suppress
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 import pytest
 from openai import BadRequestError, OpenAI
 from openai import NotFoundError as OpenAINotFoundError
 from openai.types import FileObject
+
+if TYPE_CHECKING:
+    from starlette.testclient import TestClient
 
 #: Minimal valid PDF bytes for testing document endpoints.
 _MINIMAL_PDF: bytes = (
@@ -320,14 +324,14 @@ class TestOpenAIFiles:
             openai_client.files.delete(fake_id)
 
     def test_expired_file_returns_404(
-        self, openai_client: OpenAI, use_official_api: bool
+        self, openai_client: OpenAI, test_client: TestClient | None
     ) -> None:
         """Upload with short expires_after; mock time past expiry; assert 404.
 
         Validates:
             - Expired files return 404 as if they don't exist
         """
-        if use_official_api:
+        if test_client is None:
             pytest.skip("requires local time control")
         f = openai_client.files.create(
             file=("exp.txt", io.BytesIO(_TEXT_FILE), "text/plain"),
