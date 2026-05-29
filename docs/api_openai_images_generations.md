@@ -253,12 +253,12 @@ curl -X POST "$BASE/v1/images/generations" \
 
 **Parameter Mapping:**
 
-| OpenAI Parameter | Maps to                                | Notes                               |
-|------------------|----------------------------------------|-------------------------------------|
-| `prompt`         | Depends on `taskType`                  | See taskType-specific mapping below |
-| `size`           | `imageGenerationConfig.width/height`   | Fixed sizes (512-2048)              |
-| `quality`        | `imageGenerationConfig.quality`        | "high" → "premium"                  |
-| `n`              | `imageGenerationConfig.numberOfImages` | 1-5 images                          |
+| OpenAI Parameter | Maps to                                | Notes                                                                       |
+|------------------|----------------------------------------|-----------------------------------------------------------------------------|
+| `prompt`         | Depends on `taskType`                  | See taskType-specific mapping below                                         |
+| `size`           | `imageGenerationConfig.width/height`   | Discrete sizes: 512, 768, 1024, 1152, 1216, 1344, 1536, 2048 (default: 512) |
+| `quality`        | `imageGenerationConfig.quality`        | "high" → "premium"                                                          |
+| `n`              | `imageGenerationConfig.numberOfImages` | 1-5 images                                                                  |
 
 **TaskType-Specific Parameter Mapping:**
 

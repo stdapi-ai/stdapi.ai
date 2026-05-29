@@ -68,7 +68,7 @@ Generate model responses with AWS Bedrock foundation models through an OpenAI Re
 | `reasoning` (effort)                                                  |      :material-cog:{ .model-dep }       | Configures reasoning on models that support it                               |
 | `metadata`                                                            |   :material-check-circle:{ .success }   | Forwarded to Bedrock `requestMetadata`                                       |
 | `prompt_cache_key`                                                    |      :material-cog:{ .model-dep }       | Cache prompts to reduce costs and latency                                    |
-| `prompt_cache_retention`                                              |      :material-cog:{ .model-dep }       | Cache TTL: `in-memory` or `24h`                                              |
+| `prompt_cache_retention`                                              |      :material-cog:{ .model-dep }       | Cache TTL: `in-memory`, `24h`, `1h`, or `5m`                                 |
 | `service_tier`                                                        |   :material-check-circle:{ .success }   | Maps to Bedrock service tier header                                          |
 | `truncation`                                                          | :material-close-circle:{ .unsupported } | Returns `400`; Bedrock manages context automatically                         |
 | `max_tool_calls`                                                      | :material-close-circle:{ .unsupported } | Returns `400`; not supported                                                 |
@@ -338,7 +338,7 @@ curl -X POST "$BASE/v1/responses" \
   }'
 ```
 
-Valid values: `in-memory` (default) or `24h`.
+Valid values: `in-memory` (default), `24h`, `1h`, or `5m`. The `1h` and `5m` values are AWS Bedrock-specific. On AWS Bedrock, `in-memory` maps to 5 minutes and `24h` maps to 1 hour.
 
 !!! note "Model Support"
     Cache retention configuration is only available on select models. See [AWS Bedrock Prompt Caching - Supported Models](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html#prompt-caching-models) for details on which models support configurable TTL.

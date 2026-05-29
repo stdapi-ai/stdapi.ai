@@ -382,7 +382,7 @@ flowchart TB
 **Auto-scaling.** Task count scales automatically based on CPU utilisation, memory utilisation, and ALB request count — whichever metric signals pressure first. Fargate Spot is optionally available for cost-sensitive deployments — see [Cost-Optimized Deployment](operations_deploy_advanced.md#cost-optimized-deployment) for the trade-offs.
 
 !!! info "Terraform Module"
-    Minimum capacity defaults to the number of deployed Availability Zones (one task per AZ). Maximum capacity is configurable (`ecs_max_capacity`, default: 10). Auto-scaling targets CPU and memory utilisation as well as ALB request count per target, so the service scales out under any of these pressure signals.
+    Minimum capacity defaults to the number of deployed Availability Zones (one task per AZ, via `autoscaling_min_capacity`). Maximum capacity is configurable (`autoscaling_max_capacity`, default: `null` — uses the AWS Application Auto Scaling default). Auto-scaling targets CPU and memory utilisation as well as ALB request count per target, so the service scales out under any of these pressure signals.
 
 **Fast startup.** The stdapi.ai container image is optimised for minimal startup time — a new task typically becomes healthy in under 30 seconds. Fast startup is critical for recovery: when ECS detects a failed task it launches a replacement immediately, keeping the degraded window short and ensuring the service restores full capacity without manual intervention.
 

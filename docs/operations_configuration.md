@@ -146,11 +146,11 @@ This section provides a quick reference of all available configuration options. 
 
 ### :material-aws: AWS Client
 
-| Variable                                                | Default         | Description                                                                                          |
-|---------------------------------------------------------|-----------------|------------------------------------------------------------------------------------------------------|
-| [`AWS_ADAPTIVE_RETRY`](#aws-adaptive-retry)             | `false`         | Enable adaptive retry mode that throttles back under congestion rather than using fixed exponential backoff |
-| [`AWS_MAX_POOL_CONNECTIONS`](#aws-max-pool-connections) | `50`            | Maximum concurrent HTTP connections per AWS service client                                                 |
-| [`AWS_CONNECT_TIMEOUT`](#aws-connect-timeout)           | `5`             | Timeout in seconds for establishing a connection to an AWS service endpoint                                |
+| Variable                                                | Default | Description                                                                                                 |
+|---------------------------------------------------------|---------|-------------------------------------------------------------------------------------------------------------|
+| [`AWS_ADAPTIVE_RETRY`](#aws-adaptive-retry)             | `false` | Enable adaptive retry mode that throttles back under congestion rather than using fixed exponential backoff |
+| [`AWS_MAX_POOL_CONNECTIONS`](#aws-max-pool-connections) | `50`    | Maximum concurrent HTTP connections per AWS service client                                                  |
+| [`AWS_CONNECT_TIMEOUT`](#aws-connect-timeout)           | `5`     | Timeout in seconds for establishing a connection to an AWS service endpoint                                 |
 
 ### :material-database: AWS Storage
 
@@ -174,34 +174,34 @@ This section provides a quick reference of all available configuration options. 
 
 ### :material-directions-fork: Resilience & Failover
 
-| Variable                                                                                                | Default    | Description                                                                                                                  |
-|---------------------------------------------------------------------------------------------------------|------------|------------------------------------------------------------------------------------------------------------------------------|
-| [`AWS_BEDROCK_REGION_ROUTING`](#bedrock-region-routing)                                                 | `ordered`  | Region routing strategy: `disabled`, `ordered`, `lowest_latency`, or `round_robin` ([details](operations_resilience.md))    |
-| [`AWS_BEDROCK_REGION_ROUTING_QUOTA_BACKOFF_SECONDS`](#bedrock-region-routing-quota-backoff)             | `60`       | Base interval in seconds for exponential quota backoff per region                                                            |
-| [`AWS_BEDROCK_REGION_ROUTING_MAX_QUOTA_BACKOFF_SECONDS`](#bedrock-region-routing-max-quota-backoff)     | `3600`     | Hard ceiling in seconds on the exponential quota backoff per region (default: 1 hour)                                        |
-| [`AWS_BEDROCK_REGION_ROUTING_QUOTA_STALE_FACTOR`](#bedrock-region-routing-quota-stale-factor)           | `2`        | Multiplier on max quota backoff to determine when the consecutive-error counter resets                                       |
-| [`AWS_BEDROCK_REGION_ROUTING_UNAVAILABLE_BACKOFF_SECONDS`](#bedrock-region-routing-unavailable-backoff) | `30`       | Seconds to avoid a region after unavailability errors                                                                        |
-| [`AWS_BEDROCK_MAX_RETRIES`](#bedrock-max-retries)                                                       | `9`        | Total retries across all regions per Bedrock invocation; retries cycle through regions in order                              |
+| Variable                                                                                                | Default   | Description                                                                                                              |
+|---------------------------------------------------------------------------------------------------------|-----------|--------------------------------------------------------------------------------------------------------------------------|
+| [`AWS_BEDROCK_REGION_ROUTING`](#bedrock-region-routing)                                                 | `ordered` | Region routing strategy: `disabled`, `ordered`, `lowest_latency`, or `round_robin` ([details](operations_resilience.md)) |
+| [`AWS_BEDROCK_REGION_ROUTING_QUOTA_BACKOFF_SECONDS`](#bedrock-region-routing-quota-backoff)             | `60`      | Base interval in seconds for exponential quota backoff per region                                                        |
+| [`AWS_BEDROCK_REGION_ROUTING_MAX_QUOTA_BACKOFF_SECONDS`](#bedrock-region-routing-max-quota-backoff)     | `3600`    | Hard ceiling in seconds on the exponential quota backoff per region (default: 1 hour)                                    |
+| [`AWS_BEDROCK_REGION_ROUTING_QUOTA_STALE_FACTOR`](#bedrock-region-routing-quota-stale-factor)           | `2`       | Multiplier on max quota backoff to determine when the consecutive-error counter resets                                   |
+| [`AWS_BEDROCK_REGION_ROUTING_UNAVAILABLE_BACKOFF_SECONDS`](#bedrock-region-routing-unavailable-backoff) | `30`      | Seconds to avoid a region after unavailability errors                                                                    |
+| [`AWS_BEDROCK_MAX_RETRIES`](#bedrock-max-retries)                                                       | `9`       | Total retries across all regions per Bedrock invocation; retries cycle through regions in order                          |
 
 ### :material-shield-check: Bedrock Advanced
 
-| Variable                                                                                          | Default | Description                                                                                        |
-|---------------------------------------------------------------------------------------------------|---------|----------------------------------------------------------------------------------------------------|
-| [`AWS_BEDROCK_CROSS_REGION_INFERENCE`](#cross-region-inference)                                   | `true`  | Allow automatic model routing to other configured regions                                          |
-| [`AWS_BEDROCK_CROSS_REGION_INFERENCE_GLOBAL`](#cross-region-global)                               | `true`  | Allow global cross-region inference routing to any region worldwide (disable for GDPR compliance)  |
+| Variable                                                                                          | Default | Description                                                                                         |
+|---------------------------------------------------------------------------------------------------|---------|-----------------------------------------------------------------------------------------------------|
+| [`AWS_BEDROCK_CROSS_REGION_INFERENCE`](#cross-region-inference)                                   | `true`  | Allow automatic model routing to other configured regions                                           |
+| [`AWS_BEDROCK_CROSS_REGION_INFERENCE_GLOBAL`](#cross-region-global)                               | `true`  | Allow global cross-region inference routing to any region worldwide (disable for GDPR compliance)   |
 | [`AWS_BEDROCK_MODEL_REGION_RESTRICT`](#bedrock-model-region-restrict)                             | `{}`    | Restrict a model to specific region(s) only (e.g. for region-specific features like Nova grounding) |
-| [`AWS_BEDROCK_LEGACY`](#bedrock-legacy)                                                           | `false` | Allow usage of deprecated/legacy Bedrock models                                                    |
+| [`AWS_BEDROCK_LEGACY`](#bedrock-legacy)                                                           | `false` | Allow usage of deprecated/legacy Bedrock models                                                     |
 | [`AWS_BEDROCK_DEPRECATED_MODEL_FALLBACK`](#bedrock-deprecated-model-fallback)                     | `true`  | Transparently reroute requests using a deprecated model ID to its recommended replacement           |
 | [`AWS_BEDROCK_DEPRECATED_MODELS`](#bedrock-deprecated-models)                                     | `{}`    | Additional deprecated model mappings merged with the built-in registry at startup                   |
-| [`AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE`](#bedrock-marketplace-auto-subscribe)                   | `true`  | Allow automatic subscription to new models in AWS Marketplace                                      |
-| [`AWS_BEDROCK_ALLOW_CROSS_REGION_INFERENCE_PROFILE_ARN`](#bedrock-allow-cross-region-profile-arn) | `false` | Allow users to pass cross-region inference profile ARNs directly as model IDs                      |
-| [`AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN`](#bedrock-allow-application-profile-arn)   | `false` | Allow users to pass application inference profile ARNs directly as model IDs                       |
-| [`AWS_BEDROCK_ALLOW_PROMPT_ROUTER_ARN`](#bedrock-allow-prompt-router-arn)                         | `false` | Allow users to pass prompt router ARNs directly as model IDs                                       |
-| [`AWS_BEDROCK_MODEL_ARN_MAPPING`](#bedrock-model-arn-mapping)                                     | `{}`    | Map model IDs to custom inference profile or prompt router ARNs (server-controlled routing)        |
-| [`AWS_BEDROCK_GUARDRAIL_IDENTIFIER`](#aws-bedrock-guardrail-identifier)                           | None    | Bedrock Guardrails ID for content filtering and safety controls                                    |
-| [`AWS_BEDROCK_GUARDRAIL_VERSION`](#aws-bedrock-guardrail-version)                                 | None    | Bedrock Guardrails version number (required with identifier)                                       |
-| [`AWS_BEDROCK_GUARDRAIL_TRACE`](#aws-bedrock-guardrail-trace)                                     | None    | Guardrails trace level: `disabled`, `enabled`, or `enabled_full`                                   |
-| [`AWS_BEDROCK_ALLOW_GUARDRAIL_OVERRIDE`](#aws-bedrock-allow-guardrail-override)                   | `false` | Allow users to override global guardrail configuration via request headers (security: default off) |
+| [`AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE`](#bedrock-marketplace-auto-subscribe)                   | `true`  | Allow automatic subscription to new models in AWS Marketplace                                       |
+| [`AWS_BEDROCK_ALLOW_CROSS_REGION_INFERENCE_PROFILE_ARN`](#bedrock-allow-cross-region-profile-arn) | `false` | Allow users to pass cross-region inference profile ARNs directly as model IDs                       |
+| [`AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN`](#bedrock-allow-application-profile-arn)   | `false` | Allow users to pass application inference profile ARNs directly as model IDs                        |
+| [`AWS_BEDROCK_ALLOW_PROMPT_ROUTER_ARN`](#bedrock-allow-prompt-router-arn)                         | `false` | Allow users to pass prompt router ARNs directly as model IDs                                        |
+| [`AWS_BEDROCK_MODEL_ARN_MAPPING`](#bedrock-model-arn-mapping)                                     | `{}`    | Map model IDs to custom inference profile or prompt router ARNs (server-controlled routing)         |
+| [`AWS_BEDROCK_GUARDRAIL_IDENTIFIER`](#aws-bedrock-guardrail-identifier)                           | None    | Bedrock Guardrails ID for content filtering and safety controls                                     |
+| [`AWS_BEDROCK_GUARDRAIL_VERSION`](#aws-bedrock-guardrail-version)                                 | None    | Bedrock Guardrails version number (required with identifier)                                        |
+| [`AWS_BEDROCK_GUARDRAIL_TRACE`](#aws-bedrock-guardrail-trace)                                     | None    | Guardrails trace level: `disabled`, `enabled`, or `enabled_full`                                    |
+| [`AWS_BEDROCK_ALLOW_GUARDRAIL_OVERRIDE`](#aws-bedrock-allow-guardrail-override)                   | `false` | Allow users to override global guardrail configuration via request headers (security: default off)  |
 
 ### :material-lock: Authentication
 
@@ -234,25 +234,25 @@ Choose **one** method (mutually exclusive):
 | Variable                                            | Default                           | Description                                                                            |
 |-----------------------------------------------------|-----------------------------------|----------------------------------------------------------------------------------------|
 | [`OTEL_ENABLED`](#otel-enabled)                     | `false`                           | Enable distributed tracing via OpenTelemetry (integrates with AWS X-Ray, Jaeger, etc.) |
-| [`OTEL_SERVICE_NAME`](#otel-service-name)           | `stdapi`                          | Service name identifier in trace visualizations                                        |
+| [`OTEL_SERVICE_NAME`](#otel-service-name)           | `stdapi.ai`                       | Service name identifier in trace visualizations                                        |
 | [`OTEL_EXPORTER_ENDPOINT`](#otel-exporter-endpoint) | `http://127.0.0.1:4318/v1/traces` | OTLP HTTP endpoint URL for trace export                                                |
 | [`OTEL_SAMPLE_RATE`](#otel-sample-rate)             | `1.0`                             | Trace sampling rate from 0.0 (none) to 1.0 (all requests)                              |
 
 ### :material-web: HTTP/Security
 
-| Variable                                                                            | Default | Description                                                                           |
-|-------------------------------------------------------------------------------------|---------|---------------------------------------------------------------------------------------|
-| [`CORS_ALLOW_ORIGINS`](#cors-allow-origins)                                         | None    | JSON array of allowed origins for browser cross-origin requests                       |
-| [`TRUSTED_HOSTS`](#trusted-hosts)                                                   | None    | JSON array of trusted Host header values (prefer ALB host-based routing; see details) |
-| [`ENABLE_PROXY_HEADERS`](#enable-proxy-headers)                                     | `false` | Trust X-Forwarded-* headers from reverse proxies (only enable behind trusted proxy)   |
-| [`GRANIAN_SSL_CERTIFICATE`](#graniansslcertificate)                                 | None      | Path to SSL certificate file for end-to-end encryption                                |
-| [`GRANIAN_SSL_KEYFILE`](#graniansslkeyfile)                                         | None      | Path to SSL private key file (PKCS#8) for end-to-end encryption                       |
-| [`GRANIAN_SSL_KEYFILE_PASSWORD`](#graniansslkeyfilepassword)                        | None      | Password for the SSL private key file                                                  |
-| [`GRANIAN_SSL_PROTOCOL_MIN`](#graniansslprotocolmin)                                | `tls1.3`  | Minimum supported TLS version (`tls1.2` or `tls1.3`)                                  |
-| [`GRANIAN_SSL_CA`](#graniansslca)                                                   | None      | Path to CA certificate bundle for client verification (mTLS)                           |
-| [`GRANIAN_SSL_CLIENT_VERIFY`](#graniansslclientverify)                              | `false`   | Enable client certificate verification (mTLS)                                          |
-| [`ENABLE_GZIP`](#enable-gzip)                                                       | `false` | Enable GZip compression for responses >1KB (prefer AWS ALB/CloudFront compression)    |
-| [`SSRF_PROTECTION_BLOCK_PRIVATE_NETWORKS`](#ssrf-protection-block-private-networks) | `true`  | Block requests to private/local networks for SSRF protection                          |
+| Variable                                                                            | Default  | Description                                                                           |
+|-------------------------------------------------------------------------------------|----------|---------------------------------------------------------------------------------------|
+| [`CORS_ALLOW_ORIGINS`](#cors-allow-origins)                                         | None     | JSON array of allowed origins for browser cross-origin requests                       |
+| [`TRUSTED_HOSTS`](#trusted-hosts)                                                   | None     | JSON array of trusted Host header values (prefer ALB host-based routing; see details) |
+| [`ENABLE_PROXY_HEADERS`](#enable-proxy-headers)                                     | `false`  | Trust X-Forwarded-* headers from reverse proxies (only enable behind trusted proxy)   |
+| [`GRANIAN_SSL_CERTIFICATE`](#graniansslcertificate)                                 | None     | Path to SSL certificate file for end-to-end encryption                                |
+| [`GRANIAN_SSL_KEYFILE`](#graniansslkeyfile)                                         | None     | Path to SSL private key file (PKCS#8) for end-to-end encryption                       |
+| [`GRANIAN_SSL_KEYFILE_PASSWORD`](#graniansslkeyfilepassword)                        | None     | Password for the SSL private key file                                                 |
+| [`GRANIAN_SSL_PROTOCOL_MIN`](#graniansslprotocolmin)                                | `tls1.3` | Minimum supported TLS version (`tls1.2` or `tls1.3`)                                  |
+| [`GRANIAN_SSL_CA`](#graniansslca)                                                   | None     | Path to CA certificate bundle for client verification (mTLS)                          |
+| [`GRANIAN_SSL_CLIENT_VERIFY`](#graniansslclientverify)                              | `false`  | Enable client certificate verification (mTLS)                                         |
+| [`ENABLE_GZIP`](#enable-gzip)                                                       | `false`  | Enable GZip compression for responses >1KB (prefer AWS ALB/CloudFront compression)    |
+| [`SSRF_PROTECTION_BLOCK_PRIVATE_NETWORKS`](#ssrf-protection-block-private-networks) | `true`   | Block requests to private/local networks for SSRF protection                          |
 
 ### :material-cog: Application Behavior
 
@@ -2902,7 +2902,7 @@ export OTEL_ENABLED=true
 :   Service identifier in trace visualizations
 
 :octicons-gear-24: **Default**
-:   `stdapi`
+:   `stdapi.ai`
 
 :octicons-check-circle-24: **Best Practice**
 :   Use descriptive names with environment information

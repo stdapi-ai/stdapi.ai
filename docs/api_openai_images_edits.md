@@ -36,43 +36,43 @@ Edit images using inpainting with AWS Bedrock image models through an OpenAI-com
 
 <div class="feature-table" markdown>
 
-| Feature                        |                  Status                  | Notes                                                        |
-|--------------------------------|:----------------------------------------:|--------------------------------------------------------------|
-| **Editing**                    |                                          |                                                              |
-| Image-to-image (`/edits`)      |   :material-check-circle:{ .success }    | Edit images with prompts and masks                           |
-| **Request Formats**            |                                          |                                                              |
-| Multipart form-data            |   :material-check-circle:{ .success }    | Binary file uploads via `image` / `image[]` / `mask` fields  |
-| JSON body                      |   :material-check-circle:{ .success }    | Structured `images` array with Files API IDs or URLs         |
-| **Parameters**                 |                                          |                                                              |
-| `image` / `image[]`            |   :material-check-circle:{ .success }    | PNG image(s) to edit (multipart: binary upload, 1+ images)   |
-| `images` (JSON)                |   :material-check-circle:{ .success }    | Array of `{file_id}` or `{image_url}` references (JSON body) |
-| `prompt`                       |   :material-check-circle:{ .success }    | Text description of desired changes                          |
-| `mask`                         |   :material-check-circle:{ .success }    | Optional mask defining edit regions                          |
-| `n` (number of images)         |   :material-check-circle:{ .success }    | Generate multiple variations per request (1-10)              |
-| `size` (WIDTHxHEIGHT)          |   :material-check-circle:{ .success }    | Output dimensions (default: 1024x1024, format validated)     |
-| `model`                        |   :material-check-circle:{ .success }    | Required parameter                                           |
-| `response_format`              |   :material-check-circle:{ .success }    | `url` or `b64_json` (default: `url`)                         |
-| `output_format`                |   :material-check-circle:{ .success }    | `png`, `jpeg`, or `webp` (model-specific)                    |
-| `output_compression`           |   :material-check-circle:{ .success }    | Compression level 1-100% (default: 100)                      |
-| `quality`                      |   :material-check-circle:{ .success }    | Quality setting (default: `auto`, model-specific values)     |
-| `stream`                       |   :material-check-circle:{ .success }    | Generate images in streaming mode with partial results       |
-| `partial_images`               |       :material-cog:{ .model-dep }       | Number of partial images in stream (0-3, model-specific)     |
-| `background`                   | :material-close-circle:{ .unsupported }  | Always `auto`, transparent backgrounds unsupported           |
-| `input_fidelity`               | :material-close-circle:{ .unsupported }  | Ignored, always `low`                                        |
-| **Output**                     |                                          |                                                              |
-| URL response format            |   :material-check-circle:{ .success }    | Temporary URLs to edited images (requires AWS_S3_BUCKET)     |
-| Base64 JSON format             |   :material-check-circle:{ .success }    | Inline base64-encoded images                                 |
-| PNG format                     |   :material-check-circle:{ .success }    | Lossless image output                                        |
-| JPEG format                    |       :material-cog:{ .model-dep }       | Lossy compression (model-specific)                           |
-| WEBP format                    |       :material-cog:{ .model-dep }       | Modern format with compression (model-specific)              |
-| Streaming response             |   :material-check-circle:{ .success }    | Server-sent events with partial and final images             |
-| **Usage tracking**             |                                          |                                                              |
-| Input text tokens              |   :material-check-circle:{ .success }    | Estimated from prompt                                        |
-| Input image tokens             |   :material-check-circle:{ .success }    | Count of input images (image + mask)                         |
-| Output image tokens            |   :material-check-circle:{ .success }    | Image count (billing unit)                                   |
-| **Other**                      |                                          |                                                              |
-| `user`                         |   :material-minus-circle:{ .partial }    | Logged but not used for abuse monitoring                     |
-| Extra parameters via form data | :material-plus-circle:{ .extra-feature } | Provider-specific parameters passed through                  |
+| Feature                        |                  Status                  | Notes                                                                                                                                          |
+|--------------------------------|:----------------------------------------:|------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Editing**                    |                                          |                                                                                                                                                |
+| Image-to-image (`/edits`)      |   :material-check-circle:{ .success }    | Edit images with prompts and masks                                                                                                             |
+| **Request Formats**            |                                          |                                                                                                                                                |
+| Multipart form-data            |   :material-check-circle:{ .success }    | Binary file uploads via `image` / `image[]` / `mask` fields                                                                                    |
+| JSON body                      |   :material-check-circle:{ .success }    | Structured `images` array with Files API IDs or URLs                                                                                           |
+| **Parameters**                 |                                          |                                                                                                                                                |
+| `image` / `image[]`            |   :material-check-circle:{ .success }    | PNG image(s) to edit (multipart: binary upload, 1+ images)                                                                                     |
+| `images` (JSON)                |   :material-check-circle:{ .success }    | Array of `{file_id}` or `{image_url}` references (JSON body)                                                                                   |
+| `prompt`                       |   :material-check-circle:{ .success }    | Text description of desired changes                                                                                                            |
+| `mask`                         |   :material-check-circle:{ .success }    | Optional mask defining edit regions                                                                                                            |
+| `n` (number of images)         |   :material-check-circle:{ .success }    | Multiple images per request; accepted range is 1-10, but the effective maximum is model-dependent (e.g. Amazon Titan and Nova Canvas cap at 5) |
+| `size` (WIDTHxHEIGHT)          |   :material-check-circle:{ .success }    | Output dimensions (default: 1024x1024, format validated)                                                                                       |
+| `model`                        |   :material-check-circle:{ .success }    | Required parameter                                                                                                                             |
+| `response_format`              |   :material-check-circle:{ .success }    | `url` or `b64_json` (default: `url`)                                                                                                           |
+| `output_format`                |   :material-check-circle:{ .success }    | `png`, `jpeg`, or `webp` (model-specific)                                                                                                      |
+| `output_compression`           |   :material-check-circle:{ .success }    | Compression level 1-100% (default: 100)                                                                                                        |
+| `quality`                      |   :material-check-circle:{ .success }    | Quality setting (default: `auto`, model-specific values)                                                                                       |
+| `stream`                       |   :material-check-circle:{ .success }    | Generate images in streaming mode with partial results                                                                                         |
+| `partial_images`               |       :material-cog:{ .model-dep }       | Number of partial images in stream (0-3, model-specific)                                                                                       |
+| `background`                   |   :material-minus-circle:{ .partial }    | Accepts `auto` (default) and `opaque`; `transparent` is unsupported                                                                            |
+| `input_fidelity`               | :material-close-circle:{ .unsupported }  | Ignored, always `low`                                                                                                                          |
+| **Output**                     |                                          |                                                                                                                                                |
+| URL response format            |   :material-check-circle:{ .success }    | Temporary URLs to edited images (requires AWS_S3_BUCKET)                                                                                       |
+| Base64 JSON format             |   :material-check-circle:{ .success }    | Inline base64-encoded images                                                                                                                   |
+| PNG format                     |   :material-check-circle:{ .success }    | Lossless image output                                                                                                                          |
+| JPEG format                    |       :material-cog:{ .model-dep }       | Lossy compression (model-specific)                                                                                                             |
+| WEBP format                    |       :material-cog:{ .model-dep }       | Modern format with compression (model-specific)                                                                                                |
+| Streaming response             |   :material-check-circle:{ .success }    | Server-sent events with partial and final images                                                                                               |
+| **Usage tracking**             |                                          |                                                                                                                                                |
+| Input text tokens              |   :material-check-circle:{ .success }    | Estimated from prompt                                                                                                                          |
+| Input image tokens             |   :material-check-circle:{ .success }    | Count of input images (image + mask)                                                                                                           |
+| Output image tokens            |   :material-check-circle:{ .success }    | Image count (billing unit)                                                                                                                     |
+| **Other**                      |                                          |                                                                                                                                                |
+| `user`                         |   :material-minus-circle:{ .partial }    | Logged but not used for abuse monitoring                                                                                                       |
+| Extra parameters via form data | :material-plus-circle:{ .extra-feature } | Provider-specific parameters passed through                                                                                                    |
 
 </div>
 

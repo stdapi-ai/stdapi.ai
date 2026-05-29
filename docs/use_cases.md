@@ -102,7 +102,7 @@ Deploy intelligent AI assistants to your team's communication platforms powered 
 **Compatible platforms:** Slack, Discord, Microsoft Teams, Botpress
 
 !!! tip "Getting started"
-    Build bots using the OpenAI or Anthropic SDK, pointing to your stdapi.ai endpoint. No dedicated guide yet — [see the API overview](api_overview.md) and [use cases guide](use_cases.md) for connection details.
+    Build bots using the OpenAI or Anthropic SDK, pointing to your stdapi.ai endpoint. No dedicated guide yet — [see the API overview](api_overview.md) for connection details.
 
 ---
 
@@ -120,7 +120,7 @@ Build self-directed AI agents that can plan, execute, and refine complex tasks a
 
 **Compatible frameworks:** OpenClaw, LangChain, LlamaIndex, LangGraph, CrewAI, AutoGPT, Semantic Kernel
 
-All agent frameworks that support OpenAI or Anthropic SDKs work immediately — point the SDK's base URL to stdapi.ai. See the [AI Coding Assistants Guide](use_cases_coding_assistants.md) for framework configuration patterns.
+All agent frameworks that support OpenAI or Anthropic SDKs work immediately — point the SDK's base URL to stdapi.ai. See the [API overview](api_overview.md) for connection details.
 
 ---
 

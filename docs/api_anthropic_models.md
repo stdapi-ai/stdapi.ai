@@ -8,8 +8,14 @@ keywords: AWS Bedrock models, Claude models, list models API, Anthropic models A
 
 Discover and list available AWS Bedrock chat models through an Anthropic-compatible interface.
 
-!!! warning "Route Prefix"
+!!! warning "Route Prefix & Base URL"
     By default, all Anthropic-compatible routes are prefixed with `/anthropic`. This means the Models API is available at `/anthropic/v1/models` instead of `/v1/models`. You can customize this prefix using the `ANTHROPIC_ROUTES_PREFIX` configuration variable documented in [Operations Configuration](operations_configuration.md#anthropic-routes-prefix).
+
+    The `curl` examples below use a `$BASE` variable that **must include this prefix** — set it to your scheme and host followed by `ANTHROPIC_ROUTES_PREFIX`:
+
+    ```bash
+    export BASE="https://your-host/anthropic"  # <scheme>://<host> + ANTHROPIC_ROUTES_PREFIX
+    ```
 
     **Note:** If `ANTHROPIC_ROUTES_PREFIX` is set to the same value as `OPENAI_ROUTES_PREFIX`, this Anthropic-compatible Models API route will be disabled to avoid conflicts with the OpenAI-compatible Models API.
 
@@ -72,6 +78,8 @@ curl -X GET "$BASE/v1/models?limit=10" \
   -H "x-api-key: $ANTHROPIC_API_KEY" \
   -H "anthropic-version: 2023-06-01"
 ```
+
+The `limit` query parameter accepts values from `1` to `1000` and defaults to `1000`.
 
 **Get details for a specific model:**
 

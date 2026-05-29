@@ -1,7 +1,7 @@
 ---
 title: Troubleshooting - Common stdapi.ai deployment issues
-description: Fixes for the most common errors encountered when deploying and running stdapi.ai - Terraform failures, 503/403/404 responses, Bedrock throttling, S3 bucket errors, VPC connectivity, and more.
-keywords: stdapi.ai troubleshooting, AWS Bedrock errors, Terraform apply failed, 503 ECS service, 403 API key, 404 model not found, ThrottlingException Bedrock, S3 bucket region, ElastiCache capacity, VPC endpoint timeout, podman SELinux
+description: Fixes for the most common errors encountered when deploying and running stdapi.ai - Terraform failures, 400/401/403/404/429/503 responses, Bedrock throttling, IAM permission errors, S3 bucket errors, VPC connectivity, and more.
+keywords: stdapi.ai troubleshooting, AWS Bedrock errors, Terraform apply failed, 503 ECS service, 401 API key, 403 permission IAM, AccessDeniedException, 404 model not found, ThrottlingException Bedrock, S3 bucket region, ElastiCache capacity, VPC endpoint timeout, podman SELinux
 ---
 
 # :material-wrench: Troubleshooting
@@ -63,7 +63,7 @@ Common issues when deploying stdapi.ai for the first time. If your error isn't l
 
 ## :material-api: Runtime / First API call
 
-??? failure "`503 Service Unavailable` on the /docs page or any endpoint"
+??? failure "`503 Service Unavailable` — on the /docs page or any endpoint"
     The ECS service is still starting up. Health checks take a few minutes.
 
     - Wait 2–3 minutes after deployment and refresh.
@@ -75,7 +75,7 @@ Common issues when deploying stdapi.ai for the first time. If your error isn't l
 
     - For a production-grade certificate, configure a custom domain — the [Terraform module](https://github.com/stdapi-ai/terraform-aws-stdapi-ai) supports ACM-managed certificates via `alb_domain_name`.
 
-??? failure "`403 Unauthorized` on all requests"
+??? failure "`401 Unauthorized` — client API key missing or wrong"
     The API key is missing, wrong, or not configured.
 
     - Pass the key in the `Authorization: Bearer <key>` header (OpenAI-style) or `X-API-Key` header.
@@ -83,7 +83,21 @@ Common issues when deploying stdapi.ai for the first time. If your error isn't l
     - If `api_key_create = true` was not set, no API key is configured and requests pass through without authentication by default (useful for testing behind IP-restricted ALB, not for production).
     - See [Authentication & Security](operations_authentication_security.md) for all options.
 
-??? failure "`404 Not Found` / model not available"
+??? failure "`403 Forbidden` — IAM permission denied on API calls"
+    The gateway reached AWS Bedrock, but the **ECS task role** (or your local AWS credentials) lacks permission for the requested action. AWS returns `AccessDeniedException`, which stdapi.ai maps to HTTP `403` with error type `permission_error`. This is an IAM misconfiguration, **not** a client API-key problem.
+
+    - Confirm the task role grants `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream` (and the `bedrock:Converse*` actions) for the target model ARNs.
+    - For models invoked through an inference profile, allow both the profile ARN and the underlying foundation-model ARNs in the policy.
+    - Some models require one-time activation in the **Bedrock console → Model access** page before they can be invoked.
+    - Audio, embeddings, and file features need permissions for the relevant services (Polly, Transcribe, Translate, Comprehend, S3) — see [Configuration → IAM Permissions](operations_configuration.md#iam-permissions) for the full IAM reference.
+
+??? failure "`401 Unauthorized` — AWS credentials invalid or expired (often local Docker)"
+    stdapi.ai's **own** AWS credentials are missing, invalid, or expired — AWS returns `UnrecognizedClientException`, `InvalidSignatureException`, or `ExpiredTokenException`, which stdapi.ai maps to HTTP `401` with error type `authentication_error`. This is distinct from the client-facing API-key `401` above (which concerns your `Authorization` / `X-API-Key` header).
+
+    - Locally: refresh with `aws sso login` (or update `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN`) and restart the container.
+    - On ECS: confirm the task is assuming its IAM role rather than relying on stale static keys.
+
+??? failure "`404 Not Found` — model not available"
     The model ID isn't available in your configured region(s).
 
     - Start with a low-friction model to confirm the pipeline works: `amazon.nova-micro-v1:0` (available in all standard Bedrock regions).
@@ -92,12 +106,18 @@ Common issues when deploying stdapi.ai for the first time. If your error isn't l
     - Verify `AWS_BEDROCK_REGIONS` includes a region that offers the model — see the [Bedrock model availability table](https://docs.aws.amazon.com/bedrock/latest/userguide/models-regions.html).
     - For Anthropic SDK clients, use either the full Bedrock ID (`anthropic.claude-opus-4-8`) or the Anthropic alias (`claude-opus-4-8`) — both resolve automatically.
 
-??? failure "`ThrottlingException` / too many requests immediately"
-    You've hit the per-region Bedrock quota.
+??? failure "`429 Too Many Requests` — Bedrock throttling / quota"
+    AWS returned `ThrottlingException`, `TooManyRequestsException`, or `ServiceQuotaExceededException` — mapped to HTTP `429` with error type `rate_limit_error`. You've hit the per-region Bedrock quota.
 
     - Add more regions to `AWS_BEDROCK_REGIONS`. Each region has its own independent quota — three regions ≈ triple the throughput.
     - See [Resilience & Failover](operations_resilience.md) for multi-region routing configuration.
     - Check quotas in the AWS Service Quotas console for **Amazon Bedrock**.
+
+??? failure "`400 Bad Request` — invalid parameters from Bedrock"
+    Bedrock rejected the request parameters (`ValidationException` / `BadRequestException`), mapped to HTTP `400` with error type `invalid_request_error` — for example an unsupported parameter for the chosen model, an out-of-range value, or content that exceeds the model's limits.
+
+    - Read the message detail returned in the response (correlate with `x-request-id` in the server logs).
+    - Confirm the parameter is supported by the model — see the per-API **Feature Compatibility** tables.
 
 ??? failure "S3 error on image generation or audio transcription"
     The S3 bucket is missing, unreachable, or in the wrong region.
@@ -112,6 +132,22 @@ Common issues when deploying stdapi.ai for the first time. If your error isn't l
     - Confirm the ECS task's security group allows outbound HTTPS (port 443).
     - If using **VPC endpoints** (the commercial Terraform default), verify the endpoint security groups and policies permit traffic from the ECS task subnet.
     - If ECS runs in a private subnet without VPC endpoints, confirm the NAT gateway / route table is configured.
+
+### AWS error → HTTP status mapping
+
+stdapi.ai translates upstream AWS error codes into standard HTTP responses with an OpenAI/Anthropic-style error type. Use this table to map a status code back to its likely AWS cause:
+
+| HTTP  | Error type              | AWS error codes                                                                                         | Typical cause                                 |
+|-------|-------------------------|---------------------------------------------------------------------------------------------------------|-----------------------------------------------|
+| `400` | `invalid_request_error` | `ValidationException`, `BadRequestException`                                                            | Unsupported/invalid request parameters        |
+| `401` | `authentication_error`  | `UnrecognizedClientException`, `InvalidSignatureException`, `ExpiredTokenException`                     | stdapi.ai's AWS credentials missing/expired   |
+| `403` | `permission_error`      | `AccessDeniedException`                                                                                 | IAM task role lacks permission / model access |
+| `404` | `not_found_error`       | `ResourceNotFoundException`                                                                             | Model or resource not available in the region |
+| `429` | `rate_limit_error`      | `ThrottlingException`, `TooManyRequestsException`, `ServiceQuotaExceededException`                      | Bedrock quota / throttling                    |
+| `503` | `server_error`          | `ServiceUnavailableException`, `InternalServerException`, `ServiceFailureException`, `ReadTimeoutError` | Transient AWS-side error — retry              |
+
+!!! note "Where to find the detail"
+    For security, `401` and `403` responses returned to clients contain only a generic message. The full diagnostic detail is captured in the server logs under `error_detail` and can be correlated via the `x-request-id` response header — see [Logging & Monitoring](operations_logging_monitoring.md).
 
 ---
 

@@ -166,7 +166,7 @@ The two most common first-deployment hiccups:
 ??? failure "Browser TLS warning on the `docs_url`"
     The auto-generated ALB domain (`*.elb.amazonaws.com`) has no trusted certificate. Safe to bypass for testing. For a production-grade certificate, set `alb_domain_name` in the Terraform module to use an ACM-managed certificate on your own domain.
 
-:material-arrow-right: **Full troubleshooting guide:** [Troubleshooting](operations_troubleshooting.md) — 403 auth errors, 404 model not found, ThrottlingException, S3 errors, VPC connectivity, Terraform IAM failures, and more.
+:material-arrow-right: **Full troubleshooting guide:** [Troubleshooting](operations_troubleshooting.md) — 401 auth errors, 404 model not found, ThrottlingException, S3 errors, VPC connectivity, Terraform IAM failures, and more.
 
 ---
 

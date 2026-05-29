@@ -241,7 +241,7 @@ Your commercial license activates automatically upon deployment.
     **Common patterns for ISVs and MSPs:**
 
     - **One instance per customer** — each customer gets their own stdapi.ai deployment in their AWS account (or a dedicated account you manage). Each instance has its own Marketplace subscription billed to the owning account.
-    - **Shared multi-tenant instance** — one instance serves multiple customers. One subscription covers the shared deployment. Use the `user` or `safety_identifier` field in API requests to tag traffic per customer for audit trails and usage attribution.
+    - **Shared multi-tenant instance** — one instance serves multiple customers. One subscription covers the shared deployment. Use the `safety_identifier` field (or the deprecated `user` field) in API requests to tag traffic per customer for audit trails and usage attribution.
 
     For questions about volume deployments or enterprise licensing, contact [sales@stdapi.ai](mailto:sales@stdapi.ai).
 

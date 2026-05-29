@@ -55,6 +55,7 @@ Generate natural-sounding speech from text with AWS Polly through an OpenAI-comp
 | OGG (Vorbis)                | :material-plus-circle:{ .extra-feature } | Native Polly format                                             |
 | **Control**                 |                                          |                                                                 |
 | `speed` parameter           |   :material-check-circle:{ .success }    | 0.2x to 2.0x playback speed                                     |
+| `instructions` parameter    | :material-close-circle:{ .unsupported }  | Accepted for OpenAI API compatibility but ignored by AWS Polly  |
 | Extra model-specific params | :material-plus-circle:{ .extra-feature } | Extra model-specific parameters not supported by the OpenAI API |
 | **Streaming**               |                                          |                                                                 |
 | Byte streaming              |   :material-check-circle:{ .success }    | Default streaming mode                                          |

@@ -54,7 +54,7 @@ Generate text completions with AWS Bedrock foundation models—including Claude,
 | Streaming with n>1                 |   :material-check-circle:{ .success }    | Deltas interleave; `choices[0].index` identifies each choice     |
 | **Other**                          |                                          |                                                                  |
 | Service tiers                      |   :material-check-circle:{ .success }    | Mapped to Bedrock service tiers                                  |
-| `user` / `safety_identifier`       |   :material-minus-circle:{ .partial }    | Logged                                                           |
+| `user` / `safety_identifier`       |   :material-minus-circle:{ .partial }    | Forwarded to AWS Bedrock as `requestMetadata`                    |
 
 </div>
 

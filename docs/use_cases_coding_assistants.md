@@ -93,7 +93,7 @@ Most AI coding assistants follow a similar configuration pattern. The exact menu
 
     - **Advanced reasoning & architecture**: `anthropic.claude-opus-4-8`
     - **Complex problem-solving**: Kimi thinking models
-    - **Specialized coding tasks**: `qwen2-coder-next-1-5-instruct-v1:0` (Qwen Coder Next)
+    - **Specialized coding tasks**: `qwen.qwen3-coder-next` (Qwen Coder Next)
     - **Fast completions**: Amazon Nova Micro or Nova Lite
 
     **Configuration tips:**
@@ -187,11 +187,11 @@ Claude Code supports [effort levels](https://code.claude.com/docs/en/model-confi
 
 **Supported models via stdapi.ai:**
 
-| Model | Effort levels | Notes |
-|---|---|---|
-| Claude Sonnet 4.6 / Opus 4.6 | `low` `medium` `high` `max` | Full adaptive reasoning; `max` is Opus-only |
-| Amazon Nova 2 | `low` `medium` `high` | Maps to `maxReasoningEffort` in Bedrock |
-| DeepSeek V3 | `low` `medium` `high` | Passed as a string literal to Bedrock |
+| Model                         | Effort levels               | Notes                                       |
+|-------------------------------|-----------------------------|---------------------------------------------|
+| Claude Sonnet 4.6 / Opus 4.6+ | `low` `medium` `high` `max` | Full adaptive reasoning; `max` is Opus-only |
+| Amazon Nova 2                 | `low` `medium` `high`       | Maps to `maxReasoningEffort` in Bedrock     |
+| DeepSeek V3                   | `low` `medium` `high`       | Passed as a string literal to Bedrock       |
 
 **Setting effort level:**
 
@@ -217,13 +217,13 @@ During a session, use `/effort low`, `/effort medium`, `/effort high`, or `/effo
 
 When you pin a non-Claude Bedrock model ID, Claude Code may not recognize it and will silently disable effort and thinking features. Use `ANTHROPIC_DEFAULT_*_MODEL_SUPPORTED_CAPABILITIES` to declare what the model actually supports:
 
-| Capability value | Enables |
-|---|---|
-| `effort` | Effort levels and the `/effort` command |
-| `max_effort` | The `max` effort level (Opus 4.6 only) |
-| `thinking` | Extended thinking blocks |
-| `adaptive_thinking` | Dynamic token budget allocation |
-| `interleaved_thinking` | Thinking between tool calls |
+| Capability value       | Enables                                 |
+|------------------------|-----------------------------------------|
+| `effort`               | Effort levels and the `/effort` command |
+| `max_effort`           | The `max` effort level (Opus 4.6+ only) |
+| `thinking`             | Extended thinking blocks                |
+| `adaptive_thinking`    | Dynamic token budget allocation         |
+| `interleaved_thinking` | Thinking between tool calls             |
 
 **Example — Nova 2 with effort enabled:**
 
@@ -275,7 +275,7 @@ Common configuration issues with non-Claude models:
 ```json
 {
   "env": {
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "moonshot.kimi-k2-instruct",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "moonshot.kimi-k2-thinking",
     "DISABLE_PROMPT_CACHING": "1",
     "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "128000"
   }
@@ -292,7 +292,7 @@ Use `ANTHROPIC_CUSTOM_MODEL_OPTION` to add a single custom entry to the `/model`
 ```json
 {
   "env": {
-    "ANTHROPIC_CUSTOM_MODEL_OPTION": "moonshot.kimi-k2-instruct",
+    "ANTHROPIC_CUSTOM_MODEL_OPTION": "moonshot.kimi-k2-thinking",
     "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME": "Kimi K2",
     "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION": "Moonshot Kimi K2 via stdapi.ai"
   }

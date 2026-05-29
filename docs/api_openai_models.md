@@ -22,7 +22,7 @@ Discover and list available AWS Bedrock models across all configured regions thr
   <br>Combines models from all configured AWS regions in one list. See which models are available in each region.
 
 - :material-aws: __Comprehensive Coverage__
-  <br>Includes Bedrock foundation models plus AWS AI services (Polly, Transcribe, Translate) in one unified API.
+  <br>Includes Bedrock foundation models plus AWS AI services (Polly, Transcribe) in one unified API.
 
 </div>
 
@@ -42,7 +42,7 @@ Discover and list available AWS Bedrock models across all configured regions thr
 
 ### What's Different from OpenAI?
 
-- **Detailed ownership**: `owned_by` field shows provider and region (e.g., `Amazon (AWS Bedrock us-east-1)`)
+- **Provider ownership**: `owned_by` field shows the model provider (e.g., `Amazon`, `Anthropic`, `Mistral AI`)
 - **Model-specific capabilities**: Modalities and context windows vary by model—consult AWS documentation for specifics
 
 !!! info "Created Date (`created`)"

@@ -188,7 +188,7 @@ terraform apply
 
 ## :material-alert-outline: Known Issues
 
-Open WebUI may list all available models in the chat model selector, including models that do not support chat completions (Like image or embedding models). Disable incompatible models in the Open WebUI admin panel.
+Open WebUI may list all available models in the chat model selector, including models that do not support chat completions (like image or embedding models). Disable incompatible models in the Open WebUI admin panel.
 
 ## :material-arrow-right: Next Steps
 

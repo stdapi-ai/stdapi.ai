@@ -28,9 +28,9 @@ Generate vector embeddings for semantic search and RAG applications with AWS Bed
 
 ## Quick Start: Available Endpoint
 
-| Endpoint         | Method | What It Does                         | Powered By                   | MCP Tool            |
-|------------------|--------|--------------------------------------|------------------------------|---------------------|
-| `/v1/embeddings` | POST   | Transform text into semantic vectors | AWS Bedrock Embedding Models | `openai_embedding`  |
+| Endpoint         | Method | What It Does                                                | Powered By                   | MCP Tool           |
+|------------------|--------|-------------------------------------------------------------|------------------------------|--------------------|
+| `/v1/embeddings` | POST   | Transform text and multimodal content into semantic vectors | AWS Bedrock Embedding Models | `openai_embedding` |
 
 ## Feature Compatibility
 
@@ -131,7 +131,7 @@ Add provider-specific fields at the top level of your request body alongside sta
 **Amazon Titan Embed v2 - Normalization:**
 ```json
 {
-  "model": "amazon.nova-2-multimodal-embeddings-v1:0",
+  "model": "amazon.titan-embed-text-v2:0",
   "input": "Product description for similarity matching",
   "normalize": true
 }

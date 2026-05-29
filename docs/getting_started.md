@@ -17,7 +17,8 @@ Pick the path that fits where you are right now. Both use the same OpenAI and An
     **Best for:** First look, local development, evaluation, open-source projects.
 
     - One `docker run` command — no AWS infrastructure to provision
-    - Uses your local AWS credentials to reach Bedrock
+    - Uses your local AWS credentials (mounted from `~/.aws`) to reach Bedrock
+    - No authentication or IP restriction by default — intended for local use only
     - Free **community image** (AGPL-3.0)
     - Full API compatibility — same endpoints as production
 

@@ -36,29 +36,29 @@ Create variations of existing images using AWS Bedrock image models through an O
 
 <div class="feature-table" markdown>
 
-| Feature                        |                  Status                  | Notes                                                                    |
-|--------------------------------|:----------------------------------------:|--------------------------------------------------------------------------|
-| **Variations**                 |                                          |                                                                          |
-| Image-to-image (`/variations`) |   :material-check-circle:{ .success }    | Create variations of existing images                                     |
-| **Parameters**                 |                                          |                                                                          |
-| `image`                        |   :material-check-circle:{ .success }    | Source image file (required)                                             |
-| `model`                        |   :material-check-circle:{ .success }    | Required parameter                                                       |
-| `n` (number of images)         |   :material-check-circle:{ .success }    | Generate multiple variations per request (1-10, default: 1)              |
-| `size` (WIDTHxHEIGHT)          |   :material-check-circle:{ .success }    | Output dimensions (default: 1024x1024, format validated)                 |
-| `response_format`              |   :material-check-circle:{ .success }    | `url` or `b64_json` (default: `url`)                                     |
-| **Output**                     |                                          |                                                                          |
-| URL response format            |   :material-check-circle:{ .success }    | Temporary URLs to variation images (requires AWS_S3_BUCKET)              |
-| Base64 JSON format             |   :material-check-circle:{ .success }    | Inline base64-encoded images                                             |
-| PNG format                     |   :material-check-circle:{ .success }    | Lossless image output                                                    |
-| JPEG format                    |       :material-cog:{ .model-dep }       | Lossy compression (model-specific)                                       |
-| WEBP format                    |       :material-cog:{ .model-dep }       | Modern format with compression (model-specific)                          |
-| **Usage tracking**             |                                          |                                                                          |
-| Input image tokens             |   :material-check-circle:{ .success }    | Count of input images (always 1 for variations)                          |
-| Output image tokens            |   :material-check-circle:{ .success }    | Number of variations generated (`n` parameter)                           |
-| **Other**                      |                                          |                                                                          |
-| `user`                         |   :material-minus-circle:{ .partial }    | Logged but not used for abuse monitoring                                 |
-| Extra parameters via form data | :material-plus-circle:{ .extra-feature } | Provider-specific parameters passed through                              |
-| JSON body request format       | :material-plus-circle:{ .extra-feature } | Reference images via Files API ID or URL instead of file upload          |
+| Feature                        |                  Status                  | Notes                                                                                                                                                           |
+|--------------------------------|:----------------------------------------:|-----------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Variations**                 |                                          |                                                                                                                                                                 |
+| Image-to-image (`/variations`) |   :material-check-circle:{ .success }    | Create variations of existing images                                                                                                                            |
+| **Parameters**                 |                                          |                                                                                                                                                                 |
+| `image`                        |   :material-check-circle:{ .success }    | Source image file (required)                                                                                                                                    |
+| `model`                        |   :material-check-circle:{ .success }    | Required parameter                                                                                                                                              |
+| `n` (number of images)         |   :material-check-circle:{ .success }    | Multiple variations per request; accepted range is 1-10 (default: 1), but the effective maximum is model-dependent (e.g. Amazon Titan and Nova Canvas cap at 5) |
+| `size` (WIDTHxHEIGHT)          |   :material-check-circle:{ .success }    | Output dimensions (default: 1024x1024, format validated)                                                                                                        |
+| `response_format`              |   :material-check-circle:{ .success }    | `url` or `b64_json` (default: `url`)                                                                                                                            |
+| **Output**                     |                                          |                                                                                                                                                                 |
+| URL response format            |   :material-check-circle:{ .success }    | Temporary URLs to variation images (requires AWS_S3_BUCKET)                                                                                                     |
+| Base64 JSON format             |   :material-check-circle:{ .success }    | Inline base64-encoded images                                                                                                                                    |
+| PNG format                     |   :material-check-circle:{ .success }    | Lossless image output                                                                                                                                           |
+| JPEG format                    |       :material-cog:{ .model-dep }       | Lossy compression (model-specific)                                                                                                                              |
+| WEBP format                    |       :material-cog:{ .model-dep }       | Modern format with compression (model-specific)                                                                                                                 |
+| **Usage tracking**             |                                          |                                                                                                                                                                 |
+| Input image tokens             |   :material-check-circle:{ .success }    | Count of input images (always 1 for variations)                                                                                                                 |
+| Output image tokens            |   :material-check-circle:{ .success }    | Number of variations generated (`n` parameter)                                                                                                                  |
+| **Other**                      |                                          |                                                                                                                                                                 |
+| `user`                         |   :material-minus-circle:{ .partial }    | Logged but not used for abuse monitoring                                                                                                                        |
+| Extra parameters via form data | :material-plus-circle:{ .extra-feature } | Provider-specific parameters passed through                                                                                                                     |
+| JSON body request format       | :material-plus-circle:{ .extra-feature } | Reference images via Files API ID or URL instead of file upload                                                                                                 |
 
 </div>
 
@@ -266,7 +266,7 @@ curl -X POST "$BASE/v1/images/variations" \
 |------------------|----------------------------------------|-------------------------------------|
 | `image`          | Depends on `taskType`                  | See taskType-specific mapping below |
 | `size`           | `imageGenerationConfig.width/height`   | Flexible (320-4096)                 |
-| `style`          | `textToImageParams.style`              | For TEXT_IMAGE task                 |
+| `style`          | `textToImageParams.style`              | Not a standard variations field — pass via extra param `textToImageParams[style]` (TEXT_IMAGE task) |
 | `n`              | `imageGenerationConfig.numberOfImages` | 1-5 variations                      |
 
 **TaskType-Specific Parameter Mapping:**

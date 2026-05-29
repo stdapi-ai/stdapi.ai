@@ -373,7 +373,7 @@ Enterprise-ready deployment with HTTPS endpoints, WAF protection, auto-scaling, 
 - HTTPS with automatic SSL certificate
 - WAF protection with AWS managed rules
 - 5 CloudWatch alarms (memory, health, CPU anomaly, capacity, error logs)
-- Auto-scaling 2-10 tasks based on load
+- Auto-scaling based on load (min defaults to the number of AZs)
 - S3 storage with lifecycle policies
 - Enhanced Container Insights
 - Regional S3 buckets for Bedrock multimodal operations (created automatically)

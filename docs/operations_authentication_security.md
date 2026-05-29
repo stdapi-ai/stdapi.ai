@@ -39,7 +39,7 @@ stdapi.ai provides flexible authentication options and built-in security mechani
 
 The API key authentication method uses a single API key that mimics the behavior of upstream OpenAI and Anthropic authentication. It must be provided by clients in the `Authorization: Bearer <key>` or `X-API-Key` header.
 
-Three mutually exclusive sources are supported — configure exactly one:
+Three sources are supported — configure exactly one. If more than one is set, the first match in this precedence order is used (the others are ignored): **Direct value → SSM Parameter Store → Secrets Manager**.
 
 - **SSM Parameter Store** (`API_KEY_SSM_PARAMETER`) — the parameter must already exist before startup.
 - **Secrets Manager** (`API_KEY_SECRETSMANAGER_SECRET`) — the secret must already exist; supports a configurable key within the JSON secret via `API_KEY_SECRETSMANAGER_KEY`.

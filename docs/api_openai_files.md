@@ -45,23 +45,23 @@ Upload and manage files via an OpenAI-compatible interface. Files are stored in 
 
 <div class="feature-table" markdown>
 
-| Feature                    |                  Status                  | Notes                                                           |
-|----------------------------|:----------------------------------------:|-----------------------------------------------------------------|
-| **Upload**                 |                                          |                                                                 |
-| `file` (multipart)         |   :material-check-circle:{ .success }    | Required binary form field                                      |
-| `file` (JSON body)         | :material-plus-circle:{ .extra-feature } | Base64, data URI, HTTPS URL, or S3 URI — for MCP / AI agents   |
-| `purpose`                  |   :material-minus-circle:{ .partial }    | Accepted as any string; informational only                      |
-| `expires_after[anchor]`    |   :material-check-circle:{ .success }    | Only `"created_at"` is accepted                                 |
-| `expires_after[seconds]`   |   :material-check-circle:{ .success }    | Range: 3 600 – 2 592 000 (1 hour – 30 days)                     |
-| **Listing**                |                                          |                                                                 |
-| `order=asc` / `order=desc` |   :material-check-circle:{ .success }    | Ascending and descending supported; default `desc`              |
-| `after` cursor             |   :material-check-circle:{ .success }    | Forward cursor pagination                                       |
-| `limit`                    |   :material-check-circle:{ .success }    | 1 – 10 000; default 10 000                                      |
-| `purpose` filter           |   :material-check-circle:{ .success }    | Filter results by uploaded purpose                              |
-| **File size cap**          | :material-plus-circle:{ .extra-feature } | No artificial limit; S3 object limit (~5 TB)                    |
-| **Expiry enforcement**     |   :material-check-circle:{ .success }    | Expired files return 404 at read time; S3 Lifecycle as backstop |
-| **Chat integration**       |   :material-check-circle:{ .success }    | Use `file_id` in `type: "file"` content parts                   |
-| `status` field             |   :material-check-circle:{ .success }    | Always `"processed"` — no async processing pipeline             |
+| Feature                    |                  Status                  | Notes                                                                                         |
+|----------------------------|:----------------------------------------:|-----------------------------------------------------------------------------------------------|
+| **Upload**                 |                                          |                                                                                               |
+| `file` (multipart)         |   :material-check-circle:{ .success }    | Required binary form field                                                                    |
+| `file` (JSON body)         | :material-plus-circle:{ .extra-feature } | Base64, data URI, HTTPS URL, or S3 URI — for MCP / AI agents                                  |
+| `purpose`                  |   :material-minus-circle:{ .partial }    | One of `assistants`, `batch`, `fine-tune`, `vision`, `user_data`, `evals`; informational only |
+| `expires_after[anchor]`    |   :material-check-circle:{ .success }    | Only `"created_at"` is accepted; expiry is computed from `expires_after[seconds]`             |
+| `expires_after[seconds]`   |   :material-check-circle:{ .success }    | Range: 3 600 – 2 592 000 (1 hour – 30 days)                                                   |
+| **Listing**                |                                          |                                                                                               |
+| `order=asc` / `order=desc` |   :material-check-circle:{ .success }    | Ascending and descending supported; default `desc`                                            |
+| `after` cursor             |   :material-check-circle:{ .success }    | Forward cursor pagination                                                                     |
+| `limit`                    |   :material-check-circle:{ .success }    | 1 – 10 000; default 10 000                                                                    |
+| `purpose` filter           |   :material-check-circle:{ .success }    | Filter results by uploaded purpose                                                            |
+| **File size cap**          | :material-plus-circle:{ .extra-feature } | No artificial limit; S3 object limit (~5 TB)                                                  |
+| **Expiry enforcement**     |   :material-check-circle:{ .success }    | Expired files return 404 at read time; S3 Lifecycle as backstop                               |
+| **Chat integration**       |   :material-check-circle:{ .success }    | Use `file_id` in `type: "file"` content parts                                                 |
+| `status` field             |   :material-check-circle:{ .success }    | Always `"processed"` — no async processing pipeline                                           |
 
 </div>
 

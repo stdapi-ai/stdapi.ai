@@ -36,35 +36,35 @@ Transcribe audio to text with AWS Transcribe or AWS Bedrock audio-capable models
 
 <div class="feature-table" markdown>
 
-| Feature                    |                 Status                  | Notes                                                |
-|----------------------------|:---------------------------------------:|------------------------------------------------------|
-| **Input**                  |                                         |                                                      |
-| Audio file upload          |   :material-check-circle:{ .success }   | Multipart file upload                                |
-| JSON body input            | :material-plus-circle:{ .extra-feature }| Base64, data URI, HTTPS URL, or S3 URI — for MCP / AI agents |
-| **Output Formats**         |                                         |                                                      |
-| `json`                     |   :material-check-circle:{ .success }   | Structured transcription                             |
-| `text`                     |   :material-check-circle:{ .success }   | Plain text output                                    |
-| `verbose_json`             |      :material-cog:{ .model-dep }       | With timestamps and details                          |
-| `diarized_json`            |      :material-cog:{ .model-dep }       | With speaker identification                          |
-| `srt`                      |      :material-cog:{ .model-dep }       | Subtitle format with timing                          |
-| `vtt`                      |      :material-cog:{ .model-dep }       | WebVTT subtitle format                               |
-| **Language**               |                                         |                                                      |
-| Language specification     |      :material-cog:{ .model-dep }       | ISO-639-1 language codes                             |
-| Auto language detection    |   :material-check-circle:{ .success }   | Automatic identification                             |
-| **Streaming**              |                                         |                                                      |
-| SSE streaming              |   :material-check-circle:{ .success }   | Event-based streaming                                |
-| **Advanced**               |                                         |                                                      |
-| Timestamp granularity      |   :material-check-circle:{ .success }   | Word or segment level                                |
-| Speaker diarization        |   :material-check-circle:{ .success }   | Automatic speaker separation                         |
-| `known_speaker_names`      | :material-close-circle:{ .unsupported } | Not available                                        |
-| `known_speaker_references` | :material-close-circle:{ .unsupported } | Not available                                        |
-| `chunking_strategy`        |   :material-minus-circle:{ .partial }   | Only `auto` is supported                             |
-| `temperature`              |      :material-cog:{ .model-dep }       | Model temperature                                    |
-| `prompt`                   |      :material-cog:{ .model-dep }       | Extra transcription prompt                           |
-| `logprobs`                 |      :material-cog:{ .model-dep }       | Log probabilities for token-level confidence scoring |
-| **Usage tracking**         |                                         |                                                      |
-| Input audio duration       |   :material-check-circle:{ .success }   | Seconds (billing unit on AWS Transcribe)             |
-| Output text tokens         |      :material-cog:{ .model-dep }       | On models from Bedrock                               |
+| Feature                    |                  Status                  | Notes                                                            |
+|----------------------------|:----------------------------------------:|------------------------------------------------------------------|
+| **Input**                  |                                          |                                                                  |
+| Audio file upload          |   :material-check-circle:{ .success }    | Multipart file upload                                            |
+| JSON body input            | :material-plus-circle:{ .extra-feature } | Base64, data URI, HTTPS URL, or S3 URI — for MCP / AI agents     |
+| **Output Formats**         |                                          |                                                                  |
+| `json`                     |   :material-check-circle:{ .success }    | Structured transcription                                         |
+| `text`                     |   :material-check-circle:{ .success }    | Plain text output                                                |
+| `verbose_json`             |       :material-cog:{ .model-dep }       | With timestamps and details (AWS Transcribe; not Bedrock models) |
+| `diarized_json`            |       :material-cog:{ .model-dep }       | With speaker identification (AWS Transcribe; not Bedrock models) |
+| `srt`                      |       :material-cog:{ .model-dep }       | Subtitle format with timing (AWS Transcribe; not Bedrock models) |
+| `vtt`                      |       :material-cog:{ .model-dep }       | WebVTT subtitle format (AWS Transcribe; not Bedrock models)      |
+| **Language**               |                                          |                                                                  |
+| Language specification     |       :material-cog:{ .model-dep }       | ISO-639-1 language codes                                         |
+| Auto language detection    |   :material-check-circle:{ .success }    | Automatic identification                                         |
+| **Streaming**              |                                          |                                                                  |
+| SSE streaming              |   :material-check-circle:{ .success }    | Event-based streaming                                            |
+| **Advanced**               |                                          |                                                                  |
+| Timestamp granularity      |   :material-check-circle:{ .success }    | Word or segment level                                            |
+| Speaker diarization        |   :material-check-circle:{ .success }    | Automatic speaker separation                                     |
+| `known_speaker_names`      | :material-close-circle:{ .unsupported }  | Not available                                                    |
+| `known_speaker_references` | :material-close-circle:{ .unsupported }  | Not available                                                    |
+| `chunking_strategy`        |   :material-minus-circle:{ .partial }    | Only `auto` is supported                                         |
+| `temperature`              |       :material-cog:{ .model-dep }       | Bedrock models only; rejected by AWS Transcribe                  |
+| `prompt`                   |       :material-cog:{ .model-dep }       | Bedrock models only; rejected by AWS Transcribe                  |
+| `logprobs`                 |       :material-cog:{ .model-dep }       | Bedrock models only; rejected by AWS Transcribe                  |
+| **Usage tracking**         |                                          |                                                                  |
+| Input audio duration       |   :material-check-circle:{ .success }    | Seconds (billing unit on AWS Transcribe)                         |
+| Output text tokens         |       :material-cog:{ .model-dep }       | On models from Bedrock                                           |
 
 </div>
 

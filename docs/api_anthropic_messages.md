@@ -8,8 +8,14 @@ keywords: anthropic messages API, claude messages API, AWS Bedrock chat, streami
 
 Generate conversational AI responses with AWS Bedrock foundation models—including Claude, Nova, Llama, and more—through an Anthropic-compatible Messages API interface.
 
-!!! warning "Route Prefix"
+!!! warning "Route Prefix & Base URL"
     By default, all Anthropic-compatible routes are prefixed with `/anthropic`. This means the Messages API is available at `/anthropic/v1/messages` instead of `/v1/messages`. You can customize this prefix using the `ANTHROPIC_ROUTES_PREFIX` configuration variable documented in [Operations Configuration](operations_configuration.md#anthropic-routes-prefix).
+
+    The `curl` examples below use a `$BASE` variable that **must include this prefix** — set it to your scheme and host followed by `ANTHROPIC_ROUTES_PREFIX`:
+
+    ```bash
+    export BASE="https://your-host/anthropic"  # <scheme>://<host> + ANTHROPIC_ROUTES_PREFIX
+    ```
 
 ## Why Choose Messages API?
 
@@ -108,6 +114,8 @@ This API supports dynamic model name aliases matching the official Anthropic API
 - `claude-opus-4-8` → `anthropic.claude-opus-4-8`
 - `claude-sonnet-4-6` → `anthropic.claude-sonnet-4-6`
 - `claude-haiku-4-5-20251001` → `anthropic.claude-haiku-4-5-20251001-v1:0`
+
+For Claude 4 and later, a date-stripped shortcut (e.g. `claude-haiku-4-5`) is also accepted and resolves to the latest dated variant.
 
 Aliases for non-Anthropic models are also supported as normal.
 
@@ -398,7 +406,7 @@ Anthropic Claude models support server-side tools that are executed by the model
 | Tool | Claude 3.5 Sonnet v2 | Claude 3.7+ |
 |------|:---------------------:|:-----------:|
 | `bash` | :material-check-circle:{ .success } | :material-check-circle:{ .success } |
-| `text_editor` (`str_replace_based_edit_tool`) | :material-check-circle:{ .success } | :material-check-circle:{ .success } |
+| `text_editor` (`str_replace_based_edit_tool` or `str_replace_editor`) | :material-check-circle:{ .success } | :material-check-circle:{ .success } |
 | `computer` | :material-check-circle:{ .success } | :material-check-circle:{ .success } |
 | `memory` | :material-close-circle:{ .unsupported } | :material-check-circle:{ .success } |
 
@@ -715,7 +723,6 @@ curl -X POST "$BASE/v1/messages" \
 curl -X POST "$BASE/v1/messages/count_tokens" \
   -H "x-api-key: $ANTHROPIC_API_KEY" \
   -H "anthropic-version: 2023-06-01" \
-  -H "anthropic-beta: token-counting-2024-11-01" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "anthropic.claude-opus-4-8",

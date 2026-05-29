@@ -563,6 +563,7 @@ Use the `reasoning_effort` parameter with predefined effort levels. This is an O
 
 **Available Levels:**
 
+- `none` - Disable reasoning
 - `minimal` - Quick responses with minimal reasoning
 - `low` - Light reasoning for straightforward tasks
 - `medium` - Balanced reasoning for most use cases
@@ -647,6 +648,7 @@ The `thinking` parameter provides a Moonshot API-compatible format for controlli
 
 - `thinking={"type": "enabled"}` — Enable thinking mode
 - `thinking={"type": "disabled"}` — Disable thinking mode
+- `thinking={"type": "adaptive"}` — Let the model decide when to think
 
 This format is accepted for all reasoning-capable models. Models that don't support this parameter will ignore it.
 
@@ -664,10 +666,10 @@ This endpoint supports standard Bedrock headers for enhanced control over your r
 
 ### Performance Optimization
 
-| Header                                     | Purpose                | Valid Values                  |
-|--------------------------------------------|------------------------|-------------------------------|
-| `X-Amzn-Bedrock-Service-Tier`              | Service tier selection | `priority`, `default`, `flex` |
-| `X-Amzn-Bedrock-PerformanceConfig-Latency` | Latency optimization   | `standard`, `optimized`       |
+| Header                                     | Purpose                | Valid Values                              |
+|--------------------------------------------|------------------------|-------------------------------------------|
+| `X-Amzn-Bedrock-Service-Tier`              | Service tier selection | `default`, `flex`, `priority`, `reserved` |
+| `X-Amzn-Bedrock-PerformanceConfig-Latency` | Latency optimization   | `standard`, `optimized`                   |
 
 **Example with all headers:**
 

@@ -22,14 +22,14 @@ All query parameters are optional. Parameters combine with **AND** logic — onl
 
 ## Query Parameters
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `input_modalities` | `string` | Filter by input modality: `TEXT`, `IMAGE`, `SPEECH`, `VIDEO`, `DOCUMENT` |
-| `output_modalities` | `string` | Filter by output modality: `TEXT`, `IMAGE`, `AUDIO`, `EMBEDDINGS` |
-| `route` | `string` | Filter to models supporting a route path (e.g. `/v1/chat/completions`) **or** an MCP tool name (e.g. `openai_chat_completion`) — both formats are accepted transparently |
-| `region` | `string` | Filter to models available in a specific AWS region (e.g. `us-east-1`) |
-| `streaming` | `boolean` | `true` = streaming-capable models only, `false` = non-streaming only |
-| `legacy` | `boolean` | `true` = deprecated models only, `false` = active models only |
+| Parameter           | Type      | Description                                                                                                                                                              |
+|---------------------|-----------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `input_modalities`  | `string`  | Filter by input modality: `TEXT`, `IMAGE`, `VIDEO`, `AUDIO`, `SPEECH`                                                                                                    |
+| `output_modalities` | `string`  | Filter by output modality: `TEXT`, `IMAGE`, `VIDEO`, `SPEECH`, `EMBEDDING`                                                                                               |
+| `route`             | `string`  | Filter to models supporting a route path (e.g. `/v1/chat/completions`) **or** an MCP tool name (e.g. `openai_chat_completion`) — both formats are accepted transparently |
+| `region`            | `string`  | Filter to models available in a specific AWS region (e.g. `us-east-1`)                                                                                                   |
+| `streaming`         | `boolean` | `true` = streaming-capable models only, `false` = non-streaming only                                                                                                     |
+| `legacy`            | `boolean` | `true` = deprecated models only, `false` = active models only                                                                                                            |
 
 !!! note "Modality values are case-insensitive"
     `TEXT`, `text`, and `Text` are all accepted.
@@ -50,7 +50,7 @@ Each item in the returned list is a `ModelDetails` object:
 | `regions` | AWS regions where this model is available |
 | `response_streaming` | Whether streaming responses are supported |
 | `legacy` | `true` = deprecated model; `false` or absent = active |
-| `inference_profiles` | Available cross-region inference profile IDs (if any) |
+| `inference_profiles` | Per-region inference profile IDs as a `region → profile ID` mapping (if any) |
 
 ## Examples
 

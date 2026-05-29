@@ -92,7 +92,6 @@ Your existing applications, SDKs, and tools work immediately — no plugins or c
 | `/v1/models`                 | Model discovery & listing                                                 | AWS Bedrock                          |
 | `/v1/files`                  | File upload, listing, metadata, download, deletion                        | Amazon S3                            |
 | `/v1/uploads`                | Multipart upload sessions for large files                                 | Amazon S3                            |
-| `/search_models`             | Search models by capability: modality, route, MCP tool, region, streaming | Internal                             |
 
 **Anthropic-Compatible:**
 
@@ -107,12 +106,18 @@ Your existing applications, SDKs, and tools work immediately — no plugins or c
 !!! note "Route prefix"
     Anthropic-compatible routes are prefixed with `/anthropic` by default (e.g., `/anthropic/v1/messages`). The prefix is configurable via `ANTHROPIC_ROUTES_PREFIX`.
 
+**stdapi.ai Native:**
+
+| Endpoint                     | Capability                                                                | AWS Backend                          |
+|------------------------------|---------------------------------------------------------------------------|--------------------------------------|
+| `/search_models`             | Search models by capability: modality, route, MCP tool, region, streaming | Internal                             |
+
 ### Parameter Coverage
 
 stdapi.ai maps as many parameters as possible to Bedrock equivalents — across all routes, not just chat:
 
 - **Generation controls** — `temperature`, `max_tokens`, `top_p`, `top_k`, `stop`, `seed`, `frequency_penalty`, `presence_penalty`, `logit_bias`, `top_logprobs`, streaming via SSE, token usage reporting
-- **Reasoning** — `reasoning_effort` (minimal/low/medium/high/xhigh), `enable_thinking`, `thinking_budget`
+- **Reasoning** — `reasoning_effort` (none/minimal/low/medium/high/xhigh), `enable_thinking`, `thinking_budget`
 - **Tool / function calling** — Full OpenAI and Anthropic schemas, parallel tool calls, tool choice modes
 - **All content types** — System, developer, user, assistant, and tool roles; text, image, audio, video, and document content
 - **Response formats** — JSON object, JSON schema, streaming chunks, `reasoning_content`, `annotations`
@@ -210,7 +215,7 @@ Access every model available on AWS Bedrock through a single, consistent API.
 - Multiple engine tiers: Standard, Neural, Long-Form, Generative
 - SSML support — control pronunciation, emphasis, pauses, prosody
 - Output formats: MP3, PCM, Opus, AAC, FLAC, OGG Vorbis
-- Speed control (0.25× to 4×)
+- Speed control (0.2× to 2.0×)
 - Automatic language detection via Amazon Comprehend
 
 **Speech-to-Text (Amazon Transcribe):**
