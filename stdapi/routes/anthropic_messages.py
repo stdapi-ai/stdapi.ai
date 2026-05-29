@@ -254,10 +254,18 @@ async def count_tokens(
     model = await validate_model(
         request.model, input_modality="TEXT", output_modality="TEXT", error_status=400
     )
+    model_id = model.get_id()
     return log_response_params(
         MessageTokensCount(
             input_tokens=await count_tokens_via_bedrock(
-                request, model.get_id(), model.regions[0]
+                request,
+                model_id,
+                model.regions[0],
+                system_message_as_messages=getattr(
+                    get_chat_model(model_id),
+                    "SYSTEM_MESSAGE_AS_MESSAGES_SUPPORTED",
+                    False,
+                ),
             )
         )
     )

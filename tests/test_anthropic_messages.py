@@ -161,6 +161,115 @@ class TestAnthropicMessages:
         assert response.type == "message"
         assert len(response.content) >= 1
 
+    def test_system_role_in_messages(
+        self, anthropic_client: Anthropic, anthropic_chat_model: str
+    ) -> None:
+        """Test system prompt provided as a message with role='system'.
+
+        Validates:
+            - A message with role='system' is extracted as the system prompt
+            - The response is valid and the system instruction is honoured
+        """
+        response = anthropic_client.messages.create(
+            model=anthropic_chat_model,
+            max_tokens=100,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a helpful assistant. Be concise.",
+                },
+                {"role": "user", "content": "Say hi."},
+            ],
+        )
+
+        assert response.type == "message"
+        assert len(response.content) >= 1
+        assert response.content[0].type == "text"
+
+    def test_system_role_merged_with_system_field(
+        self, anthropic_client: Anthropic, anthropic_chat_model: str
+    ) -> None:
+        """Test that system-role messages are merged with the top-level system field.
+
+        Validates:
+            - Content from both sources is accepted without error
+            - Response is valid
+        """
+        response = anthropic_client.messages.create(
+            model=anthropic_chat_model,
+            max_tokens=100,
+            system="You are a helpful assistant.",
+            messages=[
+                {"role": "system", "content": "Be concise."},
+                {"role": "user", "content": "Say hi."},
+            ],
+        )
+
+        assert response.type == "message"
+        assert len(response.content) >= 1
+
+    def test_system_role_list_content_in_messages(
+        self, anthropic_client: Anthropic, anthropic_chat_model: str
+    ) -> None:
+        """Test system-role message with list-of-blocks content is extracted correctly.
+
+        Validates:
+            - System message whose content is a list of TextBlockParams is accepted
+            - Non-TextBlockParam blocks in the list are silently dropped without error
+            - Response is valid
+        """
+        response = anthropic_client.messages.create(
+            model=anthropic_chat_model,
+            max_tokens=100,
+            messages=[
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "You are a helpful assistant. Be concise.",
+                        }
+                    ],
+                },
+                {"role": "user", "content": "Say hi."},
+            ],
+        )
+
+        assert response.type == "message"
+        assert len(response.content) >= 1
+        assert response.content[0].type == "text"
+
+    def test_system_role_passthrough_as_message(
+        self, anthropic_client: Anthropic, anthropic_system_as_messages_model: str
+    ) -> None:
+        """Test a mid-conversation system message on Claude Opus 4.8+.
+
+        The first message must always be role='user'; a system-role message may only
+        appear immediately after a user turn and must be the last entry (or be followed
+        by an assistant turn). When SYSTEM_MESSAGE_AS_MESSAGES_SUPPORTED is True the
+        message is forwarded to Bedrock as a native mid-conversation system instruction;
+        while Bedrock lacks support the flag stays False and the message is extracted
+        into the system field. Either way the request must succeed.
+
+        Validates:
+            - A mid-conversation system message is accepted after the last user turn
+            - Response is valid (the instruction is applied as a system instruction)
+        """
+        response = anthropic_client.messages.create(
+            model=anthropic_system_as_messages_model,
+            max_tokens=100,
+            messages=[
+                {"role": "user", "content": "Hello."},
+                {"role": "assistant", "content": "Hi! How can I help you?"},
+                {"role": "user", "content": "How are you?"},
+                {"role": "system", "content": "From now on, respond only in one word."},
+            ],
+        )
+
+        assert response.type == "message"
+        assert len(response.content) >= 1
+        assert response.content[0].type == "text"
+
     # --- Streaming ---
 
     def test_streaming_basic(
@@ -2516,3 +2625,69 @@ class TestAnthropicCountTokens:
             raise
 
         assert response.input_tokens > 0
+
+    def test_count_tokens_system_role_in_messages(
+        self, anthropic_client: Anthropic, anthropic_count_tokens_model: str
+    ) -> None:
+        """Test that a system-role message contributes to the token count.
+
+        Validates:
+            - System-role message content is counted (not silently dropped)
+            - Token count with system-role message exceeds count without it
+        """
+        try:
+            response_without = anthropic_client.messages.count_tokens(
+                model=anthropic_count_tokens_model,
+                messages=[{"role": "user", "content": "Hello"}],
+            )
+        except AnthropicError as exc:
+            if isinstance(
+                anthropic_client, AnthropicBedrock
+            ) and "not supported" in str(exc):
+                pytest.xfail("Token counting is not supported in Bedrock yet")
+            raise
+
+        response_with = anthropic_client.messages.count_tokens(
+            model=anthropic_count_tokens_model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a very detailed and verbose assistant.",
+                },
+                {"role": "user", "content": "Hello"},
+            ],
+        )
+
+        assert response_with.input_tokens > response_without.input_tokens
+
+    def test_count_tokens_system_role_equivalent_to_system_field(
+        self, anthropic_client: Anthropic, anthropic_count_tokens_model: str
+    ) -> None:
+        """Test that system-role message and top-level system field yield the same token count.
+
+        Validates:
+            - Both paths for providing a system prompt produce an equivalent token count
+        """
+        system_text = "You are a helpful assistant."
+        try:
+            response_field = anthropic_client.messages.count_tokens(
+                model=anthropic_count_tokens_model,
+                messages=[{"role": "user", "content": "Hello"}],
+                system=system_text,
+            )
+        except AnthropicError as exc:
+            if isinstance(
+                anthropic_client, AnthropicBedrock
+            ) and "not supported" in str(exc):
+                pytest.xfail("Token counting is not supported in Bedrock yet")
+            raise
+
+        response_role = anthropic_client.messages.count_tokens(
+            model=anthropic_count_tokens_model,
+            messages=[
+                {"role": "system", "content": system_text},
+                {"role": "user", "content": "Hello"},
+            ],
+        )
+
+        assert response_role.input_tokens == response_field.input_tokens

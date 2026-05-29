@@ -84,6 +84,11 @@ class ChatModel(ChatModelBase[Any, Any]):
     #: System prompt supported.
     SYSTEM_PROMPT_SUPPORTED: ClassVar[bool] = True
 
+    #: System-role messages in the messages list are forwarded to Bedrock as-is
+    #: (mid-conversation system instructions, Claude Opus 4.8+).
+    #: When False (default), they are extracted and merged into the system prompt field.
+    SYSTEM_MESSAGE_AS_MESSAGES_SUPPORTED: ClassVar[bool] = False
+
     #: Maximum cache control blocks (Bedrock limit).
     MAX_CACHE_BLOCKS: ClassVar[int] = 4
 
@@ -328,6 +333,7 @@ class ChatModel(ChatModelBase[Any, Any]):
             prompt_caching_tool_supported=self.PROMPT_CACHING_TOOL_SUPPORTED,
             tool_name_map=self.CANONICAL_TO_BEDROCK_TOOL_MAP,
             req_map_content_block=self._req_map_content_block,
+            system_message_as_messages=self.SYSTEM_MESSAGE_AS_MESSAGES_SUPPORTED,
         )
 
         tool_config = self._req_promote_system_tools(tool_config)

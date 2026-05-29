@@ -407,6 +407,84 @@ async def _map_content_block_to_bedrock(  # noqa: PLR0911
             raise ApiError(msg)
 
 
+def _extract_system_messages(
+    messages: list[MessageParam],
+) -> tuple[list[MessageParam], list[TextBlockParam]]:
+    """Partition messages into non-system messages and system text blocks.
+
+    Args:
+        messages: Anthropic message params, possibly including system-role entries.
+
+    Returns:
+        A 2-tuple of (non_system_messages, system_blocks) where system_blocks
+        contains the content of any system-role messages as TextBlockParams.
+    """
+    non_system: list[MessageParam] = []
+    system_blocks: list[TextBlockParam] = []
+    for msg in messages:
+        match msg.role:
+            case "system":
+                match msg.content:
+                    case str(text):
+                        system_blocks.append(TextBlockParam(type="text", text=text))
+                    case list(blocks):
+                        system_blocks.extend(
+                            b for b in blocks if isinstance(b, TextBlockParam)
+                        )
+            case _:
+                non_system.append(msg)
+    return non_system, system_blocks
+
+
+def _merge_system_content(
+    existing: str | list[TextBlockParam] | None, extracted: list[TextBlockParam]
+) -> str | list[TextBlockParam] | None:
+    """Merge top-level system content with blocks extracted from system-role messages.
+
+    Args:
+        existing: The top-level system field value.
+        extracted: System blocks extracted from system-role messages.
+
+    Returns:
+        Merged system content, or the original value if nothing was extracted.
+    """
+    if not extracted:
+        return existing
+    match existing:
+        case str(s):
+            return [TextBlockParam(type="text", text=s), *extracted]
+        case list(blocks):
+            return [*blocks, *extracted]
+        case _:
+            return extracted
+
+
+def _prepare_messages_and_system(
+    messages: list[MessageParam],
+    system: str | list[TextBlockParam] | None,
+    *,
+    system_message_as_messages: bool,
+) -> tuple[list[MessageParam], str | list[TextBlockParam] | None]:
+    """Resolve the messages list and system content based on model capability.
+
+    Args:
+        messages: Input message list, possibly containing system-role entries.
+            System-role messages are mid-conversation system instructions valid
+            only after the first user turn (Claude Opus 4.8+).
+        system: Top-level system field value.
+        system_message_as_messages: When True (Claude Opus 4.8+), pass system-role
+            messages through as-is — the model handles them natively.  When False,
+            extract them and merge their content into the system field as a fallback.
+
+    Returns:
+        A 2-tuple of (resolved_messages, resolved_system).
+    """
+    if system_message_as_messages:
+        return messages, system
+    non_system, system_blocks = _extract_system_messages(messages)
+    return non_system, _merge_system_content(system, system_blocks)
+
+
 async def _map_messages(
     messages: list[MessageParam],
     *,
@@ -417,7 +495,8 @@ async def _map_messages(
     """Convert a list of Anthropic messages to Bedrock messages.
 
     Args:
-        messages: Anthropic message params.
+        messages: Anthropic message params (system-role messages must already be
+            extracted via ``_extract_system_messages`` before calling this).
         allow_explicit_caching: Whether to allow explicit prompt caching for messages.
         req_map_content_block: Optional model-specific callback for content block
             translation.  Called before the default mapper; return a
@@ -458,7 +537,7 @@ async def _map_messages(
                         and (cache_control := block.cache_control)
                     ):
                         content.append(_build_cache_point(cache_control))
-        result.append({"role": msg.role, "content": content})
+        result.append({"role": msg.role, "content": content})  # type: ignore[typeddict-item]
     return result
 
 
@@ -653,6 +732,7 @@ async def translate_request(
     tool_name_map: Mapping[ServerTools, str] | None = None,
     req_map_content_block: Callable[[ContentBlockParam], ContentBlockTypeDef | None]
     | None = None,
+    system_message_as_messages: bool = False,
 ) -> tuple[
     list[MessageTypeDef],
     list[SystemContentBlockTypeDef],
@@ -676,6 +756,10 @@ async def translate_request(
             Bedrock names before being added as ``toolSpec`` entries.
         req_map_content_block: Optional model-specific callback for content block
             translation.  Passed through to ``_map_messages``.
+        system_message_as_messages: When True, system-role messages are forwarded
+            directly to Bedrock as messages instead of being extracted into the
+            system-blocks field.  The top-level ``system`` field is always sent
+            unchanged regardless of this flag.
 
     Returns:
         A 9-tuple of (messages, system blocks, inference config,
@@ -700,14 +784,19 @@ async def translate_request(
         allow_explicit_caching=allow_explicit_caching and prompt_caching_tool_supported,
         tool_name_map=tool_name_map,
     )
+    messages, combined_system = _prepare_messages_and_system(
+        request.messages,
+        request.system,
+        system_message_as_messages=system_message_as_messages,
+    )
     return (
         await _map_messages(
-            request.messages,
+            messages,
             allow_explicit_caching=allow_explicit_caching,
             req_map_content_block=req_map_content_block,
         ),
         _map_system_blocks(
-            request.system, allow_explicit_caching=allow_explicit_caching
+            combined_system, allow_explicit_caching=allow_explicit_caching
         ),
         set_inference_configuration(
             model_id,
@@ -1522,7 +1611,11 @@ async def format_stream(
 
 
 async def count_tokens_via_bedrock(
-    request: MessageCountTokensParams, model_id: str, region: RegionName
+    request: MessageCountTokensParams,
+    model_id: str,
+    region: RegionName,
+    *,
+    system_message_as_messages: bool = False,
 ) -> int:
     """Count tokens using the AWS Bedrock Runtime CountTokens API.
 
@@ -1533,14 +1626,20 @@ async def count_tokens_via_bedrock(
         request: The count tokens request containing messages, system prompt, and tools.
         model_id: The Bedrock model identifier.
         region: The AWS region of the model.
+        system_message_as_messages: When True, system-role messages are forwarded
+            directly to Bedrock as messages instead of being extracted into the
+            system-blocks field.
 
     Returns:
         The total number of input tokens.
     """
-    req: ConverseTokensRequestTypeDef = {
-        "messages": await _map_messages(request.messages)
-    }
-    if system_blocks := _map_system_blocks(request.system):
+    messages, combined_system = _prepare_messages_and_system(
+        request.messages,
+        request.system,
+        system_message_as_messages=system_message_as_messages,
+    )
+    req: ConverseTokensRequestTypeDef = {"messages": await _map_messages(messages)}
+    if system_blocks := _map_system_blocks(combined_system):
         req["system"] = system_blocks
     tool_config = _build_tool_config(request.tools, request.tool_choice)
     if tool_config:

@@ -1477,7 +1477,7 @@ ContentBlockParam = (
 class MessageParam(BaseModelRequest):
     """Base message parameter."""
 
-    role: Literal["user", "assistant"] = Field(
+    role: Literal["user", "assistant", "system"] = Field(
         description="The role of the message author."
     )
     content: str | list[ContentBlockParam] = Field(description="The message content.")
@@ -2394,9 +2394,9 @@ class MessageCreateParams(BaseModelRequestWithExtra):
     { "role": "user", "content": [{ "type": "text", "text": "Hello" }] }
     ```
 
-    Note that if you want to include a system prompt, you can use the
-    top-level `system` parameter — there is no `"system"` role for input messages in
-    the Messages API.
+    You can also pass a message with `role: "system"` as the first entry to
+    specify a system prompt inline. Its content is combined with the top-level
+    `system` parameter (appended after it).
     """
     )
     cache_control: CacheControlEphemeralParam | None = Field(
@@ -2729,9 +2729,9 @@ class MessageCountTokensParams(BaseModelRequestWithExtra):
     { "role": "user", "content": [{ "type": "text", "text": "Hello" }] }
     ```
 
-    Note that if you want to include a system prompt, you can use the
-    top-level `system` parameter — there is no `"system"` role for input messages in
-    the Messages API.
+    You can also pass a message with `role: "system"` as the first entry to
+    specify a system prompt inline. Its content is combined with the top-level
+    `system` parameter (appended after it).
     """
     )
     system: str | list[TextBlockParam] | None = Field(

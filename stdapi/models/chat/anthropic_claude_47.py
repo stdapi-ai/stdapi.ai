@@ -1,7 +1,6 @@
-"""Anthropic Claude 4.8+ chat model implementation."""
+"""Anthropic Claude 4.7 chat model implementation."""
 
 from types import MappingProxyType
-from typing import ClassVar
 
 from stdapi.models.chat._anthropic_claude import (
     _BETA_COMPUTER_USE_2025,
@@ -11,12 +10,9 @@ from stdapi.models.chat._anthropic_claude import (
 
 
 class ChatModel(AnthropicClaudeChatModel):
-    """Anthropic Claude 4.8+ chat model implementation."""
+    """Anthropic Claude 4.7 chat model implementation."""
 
-    MATCHER = "anthropic.claude-"
-    SYSTEM_MESSAGE_AS_MESSAGES_SUPPORTED: ClassVar[bool] = (
-        False  # Not supported yet in Bedrock/botocore/aiobotocore
-    )
+    MATCHER = "anthropic.claude-opus-4-7"
     TOOL_BETA_FLAGS = MappingProxyType(
         {
             "bash": _BETA_COMPUTER_USE_2025,
