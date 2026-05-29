@@ -520,7 +520,7 @@ flowchart LR
 
 ### ECS Task Definition Example
 
-The example below uses ARM64 architecture, which requires the `-arm64` image tag. Replace `ARM64` with `X86_64` and use the untagged image for x86.
+The example below uses ARM64 architecture, which requires the `-arm64` image tag. Replace `ARM64` with `X86_64` and `-arm64` with `-amd64` for AMD64. Use the untagged image to let ECS select the architecture automatically via the multi-arch manifest.
 
 ```json
 {
