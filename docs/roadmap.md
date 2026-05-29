@@ -12,7 +12,7 @@ keywords: stdapi.ai releases, AI gateway updates, AWS Bedrock features, API gate
 
 See [Release History below](#release-history) for the full changelog of all releases.
 
-**Latest: v1.11.4** – MCP server, agent discovery, `/search_models` endpoint, `xhigh` reasoning effort support, and optional `max_tokens` in Anthropic Messages API
+**Latest: v1.12.0** – OpenAI Completions API (`/v1/completions`), TwelveLabs Pegasus video understanding, Responses API input token counting, `file-id:` references for uploaded files, and per-model default service tiers
 
 ---
 
@@ -26,7 +26,6 @@ The following features may be implemented in future releases based on community 
 
 | Provider                                                                       | Endpoint/Feature                                | AWS Backend                                                                                                            |
 |--------------------------------------------------------------------------------|-------------------------------------------------|------------------------------------------------------------------------------------------------------------------------|
-| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/completions`                               | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/responses` – stateful conversations        | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
 | ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/chat/completions` – stateful conversations | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
 | ![Ollama](styles/logo_ollama.svg){: style="height:20px;width:20px"} **Ollama** | `/api/generate`                                 | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models |
@@ -127,6 +126,39 @@ The following features may be implemented in future releases based on community 
 ---
 
 ## :material-history: Release History
+
+### v1.12.0 – Completions API, Video Understanding & File References
+
+This release adds the OpenAI-compatible [`/v1/completions`](api_openai_completions.md) endpoint for text-first coding agents and legacy completion clients, **TwelveLabs Pegasus** video understanding for analyzing `video/*` inputs in chat completions, and an input token counting endpoint for the Responses API. Files uploaded through the Files API can now be referenced anywhere a URL is accepted using the new `file-id:` URI scheme. The Anthropic Messages API now accepts `system`-role messages (merged into the system prompt for compatibility), reasoning can be explicitly enabled or disabled, and a new `DEFAULT_MODEL_SERVICE_TIERS` setting applies per-model service tiers automatically.
+
+#### :material-chat: Chat Completions
+
+| Provider                                                                                     | Endpoint/Feature                                                                | AWS Backend                                                                                                             |
+|----------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------|
+| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**               | `/v1/completions` – text completion endpoint for text-first coding agents       | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - foundation models  |
+| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI**               | `/v1/responses/input_tokens` – input token counting                             | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - CountTokens API    |
+| ![Anthropic](styles/logo_anthropic.svg){: style="height:20px;width:20px"} **Anthropic**      | `/v1/messages` – accepts `system`-role messages (merged into the system prompt) | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - Claude models      |
+| ![Twelve Labs](styles/logo_twelvelabs.svg){: style="height:20px;width:20px"} **Twelve Labs** | Pegasus video understanding (`video/*` inputs)                                  | ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){: style="height:20px;width:20px"} Amazon Bedrock - TwelveLabs Pegasus |
+
+#### :material-microphone: Speech & Audio
+
+| Provider                                                                       | Endpoint/Feature                                                  | AWS Backend                                                                                  |
+|--------------------------------------------------------------------------------|-------------------------------------------------------------------|----------------------------------------------------------------------------------------------|
+| ![OpenAI](styles/logo_openai.svg){: style="height:20px;width:20px"} **OpenAI** | `/v1/audio/speech` – case-insensitive voice names & default model | ![Amazon Polly](styles/logo_amazon_polly.svg){: style="height:20px;width:20px"} Amazon Polly |
+
+#### Platform Features
+
+| Feature                                                     | Description                                                                                                                                              |
+|-------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `file-id:` URI scheme                                       | Reference Files API uploads via `file-id:<file-id>` anywhere a URL is accepted — embeddings, audio transcription/translation, chat, images, and messages |
+| Default model service tiers (`DEFAULT_MODEL_SERVICE_TIERS`) | Automatically apply a per-model service tier (`default`, `flex`, `priority`, `reserved`) when none is provided in the request                            |
+| Explicit reasoning enable/disable                           | Reasoning/thinking can now be explicitly enabled or disabled via request parameters                                                                      |
+| Service tier & guardrail support for Pegasus                | TwelveLabs Pegasus requests honor `service_tier` and Bedrock Guardrail configuration                                                                     |
+| MCP speech streaming defaults to SSE                        | `/v1/audio/speech` defaults `stream_format` to `sse` when invoked as an MCP tool for broader client compatibility                                        |
+| Full regional S3 bucket handling                            | The Terraform module resolves regional S3 buckets via resource-level region (requires AWS provider >= 6.0.0)                                             |
+| Reliable cross-region model identifiers                     | Region routing no longer fails intermittently with "The provided model identifier is invalid": a region whose inference profile is missing or not yet propagated is skipped, and a geo-scoped profile is never sent to a different region |
+
+---
 
 ### v1.11.0 – MCP Server, Agent Discovery & Model Search (with v1.11.1-v1.11.4 maintenance updates)
 
