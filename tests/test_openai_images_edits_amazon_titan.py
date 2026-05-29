@@ -244,3 +244,6 @@ class TestAmazonTitanEditing:
             or "OUTPAINTING" in str(exc_info.value)
             or "BACKGROUND_REMOVAL" in str(exc_info.value)
         )
+
+
+pytest.skip("Amazon Titan Image Generator is deprecated", allow_module_level=True)

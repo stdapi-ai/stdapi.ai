@@ -186,3 +186,6 @@ class TestAmazonTitanImageGenerator:
             )
 
         assert "colorGuidedGenerationParams.colors" in str(exc_info.value)
+
+
+pytest.skip("Amazon Titan Image Generator is deprecated", allow_module_level=True)

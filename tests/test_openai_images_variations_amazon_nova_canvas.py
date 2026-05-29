@@ -176,3 +176,6 @@ class TestAmazonNovaCanvasVariations:
             )
 
         assert "colorGuidedGenerationParams.colors" in str(exc_info.value)
+
+
+pytest.skip("Amazon Nova Canvas is deprecated", allow_module_level=True)

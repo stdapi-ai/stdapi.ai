@@ -447,3 +447,6 @@ class TestAmazonNovaCanvasEditing:
             )
 
         assert "maskType" in str(exc_info.value) or "PROMPT" in str(exc_info.value)
+
+
+pytest.skip("Amazon Nova Canvas is deprecated", allow_module_level=True)

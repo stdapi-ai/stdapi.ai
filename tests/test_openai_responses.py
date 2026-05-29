@@ -1844,12 +1844,17 @@ class TestImageGenerationTool:
         else:
             effective_model = chat_model
             tool = {"type": "image_generation", "model": image_generation_model}
-        resp = openai_client.responses.create(  # type: ignore[call-overload]
-            model=effective_model,
-            input="Generate a small red square image.",
-            tools=[tool],
-            tool_choice="required",
-        )
+        try:
+            resp = openai_client.responses.create(  # type: ignore[call-overload]
+                model=effective_model,
+                input="Generate a small red square image.",
+                tools=[tool],
+                tool_choice="required",
+            )
+        except BadRequestError as exc:
+            if "does not exist" in str(exc) or "not available" in str(exc):
+                pytest.xfail("Model not available in this environment")
+            raise
         function_calls = [item for item in resp.output if item.type == "function_call"]
         image_calls = [
             item for item in resp.output if item.type == "image_generation_call"
