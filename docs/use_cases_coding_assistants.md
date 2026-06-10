@@ -84,22 +84,22 @@ Most AI coding assistants follow a similar configuration pattern. The exact menu
 
         API Key: YOUR_STDAPI_KEY
 
-        Model: anthropic.claude-opus-4-8
+        Model: anthropic.claude-fable-5
         (or select from detected models if available)
         ```
 
 !!! tip "Model Selection for Coding"
     **Recommended models for different tasks:**
 
-    - **Advanced reasoning & architecture**: `anthropic.claude-opus-4-8`
+    - **Advanced reasoning & architecture**: Anthropic Claude Opus or Fable
     - **Complex problem-solving**: Kimi thinking models
-    - **Specialized coding tasks**: `qwen.qwen3-coder-next` (Qwen Coder Next)
+    - **Specialized coding tasks**: Qwen Coder, Mistral Devstral & Codestral, ...
     - **Fast completions**: Amazon Nova Micro or Nova Lite
 
     **Configuration tips:**
 
     - **Auto-detect**: Some assistants query `/v1/models` and show a dropdown
-    - **Manual entry**: Use full Bedrock model ID (e.g., `anthropic.claude-opus-4-8`)
+    - **Manual entry**: Use full Bedrock model ID (e.g., `anthropic.claude-fable-5`)
     - **Multi-model setup**: Use fast, cheap models for secondary tasks (autocomplete, summaries) and powerful models for complex generation
 
 ### :material-chat-outline: Chat Completions
@@ -166,6 +166,7 @@ Create or edit `~/.claude/settings.json`:
   "env": {
     "ANTHROPIC_AUTH_TOKEN": "YOUR_API_KEY",
     "ANTHROPIC_BASE_URL": "https://YOUR_STDAPI_URL/anthropic",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL": "anthropic.claude-fable-5",
     "ANTHROPIC_DEFAULT_OPUS_MODEL": "anthropic.claude-opus-4-8",
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "anthropic.claude-sonnet-4-6",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "anthropic.claude-haiku-4-5-20251001-v1:0"
@@ -176,7 +177,7 @@ Create or edit `~/.claude/settings.json`:
 - Replace `YOUR_STDAPI_URL` with your stdapi.ai deployment URL (e.g., `https://api.example.com` or `http://localhost:8000` for local)
 - Replace `YOUR_API_KEY` with your stdapi.ai API key
 - The `/anthropic` path prefix is configured via the [`ANTHROPIC_ROUTES_PREFIX`](operations_configuration.md#anthropic-routes-prefix) setting (default: `/anthropic`)
-- The `ANTHROPIC_DEFAULT_*_MODEL` variables pin each model tier to a specific Bedrock model ID — recommended for production stability. Without them, Claude Code resolves aliases (`opus`, `sonnet`, `haiku`) which may change when Anthropic releases new versions. stdapi.ai also accepts the short alias names (e.g. `claude-sonnet-4-6`) as a convenience.
+- The `ANTHROPIC_DEFAULT_*_MODEL` variables pin each model tier to a specific Bedrock model ID — recommended for production stability. Without them, Claude Code resolves aliases (`fable`, `opus`, `sonnet`, `haiku`) which may change when Anthropic releases new versions. stdapi.ai also accepts the short alias names (e.g. `claude-sonnet-4-6`) as a convenience.
 
 !!! tip "Beta Flag Compatibility"
     stdapi.ai automatically filters unsupported `anthropic_beta` flags, so Claude Code works without needing `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`. Bedrock-supported flags (like `Interleaved-thinking-2025-05-14` and `token-efficient-tools-2025-02-19`) are preserved while unsupported ones are silently removed. See [`ANTHROPIC_BETA_FILTER`](operations_configuration.md#anthropic-beta-filter) and [`ANTHROPIC_BETA_ALLOWLIST`](operations_configuration.md#anthropic-beta-allowlist) for details.

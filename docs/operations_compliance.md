@@ -33,7 +33,7 @@ stdapi.ai is deployed entirely within your AWS account. All AI model inference, 
 !!! success ":material-check-decagram: AWS Compliance Certifications"
     All AWS services used by stdapi.ai (Bedrock, Polly, Transcribe, Comprehend, Translate) are in scope for **ISO 27001/27017/27018** and the full AWS ISO certification suite. Amazon Bedrock additionally covers **SOC 1/2/3**, **HIPAA**, **GDPR**, **FedRAMP** (Moderate and High), **PCI-DSS**, and **CSA STAR Level 2**. Amazon Comprehend and Polly are also **HIPAA**-eligible.
 
-    See [AWS Compliance Programs](https://aws.amazon.com/compliance/programs/) for the full list, and [AWS Services in Scope](https://aws.amazon.com/compliance/services-in-scope/) to verify current certifications per service.
+    Third-party audit reports (SOC, PCI, ISO, etc.) can be downloaded directly from **AWS Artifact** — no need to request them manually. See [Compliance validation for Amazon Bedrock](https://docs.aws.amazon.com/bedrock/latest/userguide/compliance-validation.html) for the current list of in-scope programs, [AWS Compliance Programs](https://aws.amazon.com/compliance/programs/) for the full catalogue, and [AWS Services in Scope](https://aws.amazon.com/compliance/services-in-scope/) to verify certifications per service.
 
 ---
 
@@ -74,11 +74,11 @@ No other outbound network calls are made. The application does not contact any t
 
 ### Data in Transit
 
-| Connection | Protocol | Notes |
-|---|---|---|
-| Client → ALB | HTTPS (TLS 1.2 / TLS 1.3) | ALB HTTPS listener; supports TLS 1.3 and post-quantum hybrid key exchange ([ALB security policies](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/describe-ssl-policies.html)) |
-| ALB → ECS container | HTTP | Private VPC traffic, isolated within AWS network infrastructure |
-| ECS → AWS services | HTTPS (TLS 1.2+) | AWS confirms: *"Within AWS, all inter-network data in transit supports TLS 1.2 encryption"* ([source](https://docs.aws.amazon.com/bedrock/latest/userguide/data-protection.html)) |
+| Connection          | Protocol                  | Notes                                                                                                                                                                                               |
+|---------------------|---------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Client → ALB        | HTTPS (TLS 1.2 / TLS 1.3) | ALB HTTPS listener; supports TLS 1.3 and post-quantum hybrid key exchange ([ALB security policies](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/describe-ssl-policies.html)) |
+| ALB → ECS container | HTTP                      | Private VPC traffic, isolated within AWS network infrastructure                                                                                                                                     |
+| ECS → AWS services  | HTTPS (TLS 1.2+)          | AWS confirms: *"Within AWS, all inter-network data in transit supports TLS 1.2 encryption"* ([source](https://docs.aws.amazon.com/bedrock/latest/userguide/data-protection.html))                   |
 
 ALB supports **TLS 1.3** and **post-quantum hybrid key exchange** (ML-KEM / Kyber combined with a classical algorithm), so the session key is secure even against a future quantum adversary. See [ALB security policies](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/describe-ssl-policies.html).
 
@@ -92,15 +92,51 @@ ECS containers hold no user data between requests. All persistent data (multimod
 
 ### Data Privacy
 
-AWS explicitly guarantees, for all Bedrock models without exception ([AWS Bedrock data protection](https://docs.aws.amazon.com/bedrock/latest/userguide/data-protection.html)):
+AWS gives you explicit control over whether your prompts and outputs are retained from inference requests via a **data retention mode**. The mode can be set at the account or project level and applies consistently across all inference calls. For full details, see the [AWS Bedrock data retention documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/data-retention.html).
 
-> *"Amazon Bedrock doesn't store or log your prompts and completions. Amazon Bedrock doesn't use your prompts and completions to train any AWS models and doesn't distribute them to third parties."*
+#### Data Retention Modes
 
-This guarantee is enforced by the **Model Deployment Account** architecture: for each model provider, AWS maintains isolated accounts where model inference runs. AWS confirms:
+| Mode                  | Behaviour                                                                                                                                                                                  |
+|-----------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `default`             | AWS may retain data for safety and abuse-prevention purposes. The model provider does **not** receive it. Actual retention depends on the model — consult the model's terms for specifics. |
+| `provider_data_share` | AWS retains and shares your inference data with the model provider per their requirements. Required for access to certain models (see below).                                              |
+| `none`                | **Zero data retention (ZDR).** No request or response data is written to durable storage by AWS or shared with the model provider.                                                         |
+
+!!! info "Your retention policy is always respected"
+    If your account or project is configured for zero data retention (`data_retention_mode: none`) and you invoke a model that requires retention, Amazon Bedrock **blocks the request and returns an error** — you always control your retention policy.
+
+#### Zero Data Retention (ZDR) for High-Compliance Accounts
+
+Some models require data retention for safety and abuse-prevention purposes. If your organisation requires zero data retention for compliance reasons and needs access to these models, contact your **AWS account manager** to discuss eligibility. ZDR access is evaluated on a per-account, per-model basis in coordination with the model provider.
+
+You can also enforce a zero-retention policy organisation-wide via an AWS Service Control Policy (SCP) — contact your AWS account manager or cloud team to set this up.
+
+#### `provider_data_share` Mode and Model Availability
+
+Certain models — for example, models that require provider-side safety review — are only accessible if your account is configured to share inference data with the model provider. This is an explicit opt-in: most models do not require it, and AWS blocks the request if your retention policy does not permit it.
+
+!!! warning "Understand the implications before enabling `provider_data_share`"
+    When this mode is active, AWS retains and shares your inference data with the relevant model provider per their requirements. Prefer enabling it at the project level rather than account-wide, and verify which models require it before doing so. See the [AWS Bedrock data retention documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/data-retention.html) for configuration steps.
+
+#### Model Deployment Account Architecture
+
+The default isolation guarantee is enforced by the **Model Deployment Account** architecture: for each model provider, AWS maintains isolated accounts where model inference runs. AWS confirms:
 
 > *"Model providers don't have any access to those accounts. [...] Because the model providers don't have access to those accounts, they don't have access to Amazon Bedrock logs or to customer prompts and completions."*
 
-This means that regardless of the geographic origin of a model, inference runs on AWS-owned infrastructure and your prompts never reach the model provider.
+This means that regardless of the geographic origin of a model, inference runs on AWS-owned infrastructure and — unless `provider_data_share` mode is explicitly configured — your prompts never reach the model provider.
+
+### Abuse Detection
+
+AWS operates automated abuse detection mechanisms on Amazon Bedrock to identify activity that violates AWS or model provider terms of service. Full details are in the [AWS Bedrock abuse detection documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/abuse-detection.html).
+
+Key points:
+
+- **Zero operator access (ZOA):** No AWS operator can access model inputs or outputs.
+- **Zero data retention (ZDR) by default:** AWS does not store model inputs or outputs unless a specific model requires it for abuse-prevention purposes (see [Data Privacy](#data-privacy)).
+- **Model-specific retention for abuse detection:** A small number of models require short-term retention of flagged or all traffic for automated offline abuse detection. For example, classifier-flagged traffic for certain OpenAI models may be retained for up to 30 days, and some Anthropic models require opting in to share retained traffic with the provider for abuse review. Eligible customers can request full ZDR for these models through their AWS account team.
+- **CSAM detection:** AWS uses automated mechanisms (hash matching, classifiers) to detect child sexual abuse material in image inputs. Detected content is blocked (`400 ValidationException`), may be stored for review, and may be reported to NCMEC or relevant authorities.
+- **Policy violations:** If abuse is detected, AWS may contact the email address on your AWS account and may suspend access to affected models. Keep your AWS account contact information current and monitored.
 
 ### Encryption at Rest and in Transit
 
@@ -114,10 +150,10 @@ See [KMS Encryption](#kms-encryption) below for how stdapi.ai handles encryption
 
 When cross-region inference is enabled, Bedrock may route a request to another region within the inference profile's scope. AWS defines two types of profiles ([source](https://docs.aws.amazon.com/bedrock/latest/userguide/cross-region-inference-support.html)):
 
-| Profile type | Example ID prefix | Geography |
-|---|---|---|
-| **Geography-pinned** (US, EU, APAC) | `us.`, `eu.`, `ap.` | Fixed destination list — **never changes**, guaranteed to stay within the named geography |
-| **Global** | No prefix (direct model ID) | May route to any AWS commercial region worldwide |
+| Profile type                        | Example ID prefix           | Geography                                                                                 |
+|-------------------------------------|-----------------------------|-------------------------------------------------------------------------------------------|
+| **Geography-pinned** (US, EU, APAC) | `us.`, `eu.`, `ap.`         | Fixed destination list — **never changes**, guaranteed to stay within the named geography |
+| **Global**                          | No prefix (direct model ID) | May route to any AWS commercial region worldwide                                          |
 
 AWS explicitly states:
 
@@ -207,18 +243,18 @@ For higher compliance needs, AWS KMS supports additional controls: custom key po
 
 ## :material-cog-outline: Compliance Configuration Reference
 
-| Variable | Purpose | Compliance relevance |
-|---|---|---|
-| `AWS_BEDROCK_REGIONS` | Ordered list of Bedrock regions | Restrict model inference to a specific geography |
-| `AWS_BEDROCK_CROSS_REGION_INFERENCE` | Enable Bedrock cross-region routing within configured regions | Set `false` to restrict inference to a single region |
-| `AWS_BEDROCK_CROSS_REGION_INFERENCE_GLOBAL` | Allow Bedrock to route globally outside configured regions | Set `false` to enforce geographic boundaries |
-| `AWS_S3_BUCKET` | Primary S3 bucket | Must be in your target region |
-| `AWS_S3_REGIONAL_BUCKETS` | Per-region S3 buckets for multi-region setups | Prevent cross-region data transfer |
-| `AWS_POLLY_REGION` | Polly service region | Pin to your target geography |
-| `AWS_TRANSCRIBE_REGION` | Transcribe service region | Pin to your target geography |
-| `AWS_TRANSCRIBE_S3_BUCKET` | S3 bucket for Transcribe audio files | Must be in the same region as `AWS_TRANSCRIBE_REGION` |
-| `AWS_COMPREHEND_REGION` | Comprehend service region | Pin to your target geography |
-| `AWS_TRANSLATE_REGION` | Translate service region | Pin to your target geography |
+| Variable                                    | Purpose                                                       | Compliance relevance                                  |
+|---------------------------------------------|---------------------------------------------------------------|-------------------------------------------------------|
+| `AWS_BEDROCK_REGIONS`                       | Ordered list of Bedrock regions                               | Restrict model inference to a specific geography      |
+| `AWS_BEDROCK_CROSS_REGION_INFERENCE`        | Enable Bedrock cross-region routing within configured regions | Set `false` to restrict inference to a single region  |
+| `AWS_BEDROCK_CROSS_REGION_INFERENCE_GLOBAL` | Allow Bedrock to route globally outside configured regions    | Set `false` to enforce geographic boundaries          |
+| `AWS_S3_BUCKET`                             | Primary S3 bucket                                             | Must be in your target region                         |
+| `AWS_S3_REGIONAL_BUCKETS`                   | Per-region S3 buckets for multi-region setups                 | Prevent cross-region data transfer                    |
+| `AWS_POLLY_REGION`                          | Polly service region                                          | Pin to your target geography                          |
+| `AWS_TRANSCRIBE_REGION`                     | Transcribe service region                                     | Pin to your target geography                          |
+| `AWS_TRANSCRIBE_S3_BUCKET`                  | S3 bucket for Transcribe audio files                          | Must be in the same region as `AWS_TRANSCRIBE_REGION` |
+| `AWS_COMPREHEND_REGION`                     | Comprehend service region                                     | Pin to your target geography                          |
+| `AWS_TRANSLATE_REGION`                      | Translate service region                                      | Pin to your target geography                          |
 
 ---
 

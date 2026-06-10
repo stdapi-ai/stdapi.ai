@@ -437,6 +437,11 @@ flowchart LR
 
 ## :material-currency-usd: Cost-Optimized Deployment
 
+!!! info "How costs scale"
+    By default, the Terraform module deploys **one ECS Fargate container per Availability Zone (AZ)**. Both AWS infrastructure costs (ECS/Fargate) and the stdapi.ai product fee (billed per container-hour, after the 14-day trial) are **proportional to the number of running containers** — so the number of AZs directly drives your bill.
+
+    To reduce costs: limit the number of subnets/AZs passed to the module, use Fargate Spot pricing, or schedule the service to stop outside business hours.
+
 For development, side projects, and non-critical workloads.
 
 ??? example "Low cost deployment configuration"

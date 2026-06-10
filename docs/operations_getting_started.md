@@ -135,7 +135,7 @@ stdapi.ai is compatible with both OpenAI and Anthropic SDKs. If you've used eith
 **Using the official SDKs?** Point the `base_url` / `base_url` option at `$API_ENDPOINT/v1` (OpenAI SDK) or `$API_ENDPOINT/anthropic` (Anthropic SDK) and use your existing code — no other changes needed. The [API Overview](api_overview.md) has SDK snippets for Python, Node.js, and more.
 
 !!! tip "Discover the full model catalog"
-    Once your first call succeeds, switch the `model` field to any other Bedrock model — `anthropic.claude-opus-4-8`, `anthropic.claude-sonnet-4-6`, `qwen.qwen3-coder-480b-a35b-v1:0`, and more.
+    Once your first call succeeds, switch the `model` field to any other Bedrock model — `anthropic.claude-fable-5`, `anthropic.claude-sonnet-4-6`, `qwen.qwen3-coder-480b-a35b-v1:0`, and more.
 
     - **Browse all models (recommended):** `GET /search_models` — returns every discovered model with full details (provider, modalities, supported routes, regions, streaming/legacy status). Or open the interactive Swagger docs.
     - **Find a model by capability:** the same endpoint filters by modality, route, region, streaming, or legacy status — e.g. `GET /search_models?input_modalities=IMAGE&route=/v1/chat/completions` returns only vision-capable chat models. This is also the recommended way for AI agents to discover the right model ID before calling another endpoint. See the [Search Models API](api_search_models.md) reference.
@@ -167,6 +167,14 @@ The two most common first-deployment hiccups:
     The auto-generated ALB domain (`*.elb.amazonaws.com`) has no trusted certificate. Safe to bypass for testing. For a production-grade certificate, set `alb_domain_name` in the Terraform module to use an ACM-managed certificate on your own domain.
 
 :material-arrow-right: **Full troubleshooting guide:** [Troubleshooting](operations_troubleshooting.md) — 401 auth errors, 404 model not found, ThrottlingException, S3 errors, VPC connectivity, Terraform IAM failures, and more.
+
+---
+
+## :material-currency-usd: Deployment Cost
+
+Costs scale with the number of Availability Zones (AZs): by default, the Terraform module deploys **one ECS Fargate container per AZ**. Both AWS infrastructure costs (ECS/Fargate) and the stdapi.ai product fee (billed per container-hour, after the trial period) are proportional to the number of running containers.
+
+To reduce costs, you can limit the number of AZs or use Fargate Spot pricing. See [Cost-Optimized Deployment](operations_deploy_advanced.md#cost-optimized-deployment) for configuration examples.
 
 ---
 

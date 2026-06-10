@@ -171,6 +171,26 @@ When running behind a load balancer (ALB) or reverse proxy, stdapi.ai can be con
 
 ---
 
+## :material-shield-bug: Prompt Injection
+
+Prompt injection is an application-level security concern: just as AWS secures the database engine but customers are responsible for preventing SQL injection, AWS secures the Bedrock infrastructure but **your application is responsible for preventing prompt injection**. For full details, see the [AWS Bedrock prompt injection security documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-injection.html).
+
+Key practices recommended by AWS:
+
+- **Input validation** — validate and sanitise all user input before passing it to the model; remove or escape special characters and enforce expected formats.
+- **Secure coding** — avoid string concatenation for building prompts; apply the principle of least privilege when granting access to resources.
+- **System prompt scoping** — when using system prompts, clearly define what the model can and cannot do. Newer models differentiate between system and user prompts — check the model provider's documentation for model-specific guidance.
+- **Security testing** — regularly test for prompt injection using penetration testing, static analysis, and dynamic application security testing (DAST).
+- **Keep dependencies updated** — monitor AWS security bulletins and keep the Bedrock SDK and libraries up to date.
+
+!!! tip "Use Amazon Bedrock Guardrails"
+    The most effective mitigation available within stdapi.ai is to configure an **Amazon Bedrock Guardrail**. Guardrails include a dedicated prompt attack detection layer and can be applied **per request** (via request headers) or **globally for the entire server** (via environment variables). See the [Bedrock Guardrails configuration section](operations_configuration.md#bedrock-guardrails) for setup instructions, and [Detect prompt attacks with Amazon Bedrock Guardrails](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-prompt-attack.html) for the upstream AWS documentation.
+
+!!! warning "stdapi.ai does not include built-in prompt injection protection"
+    stdapi.ai passes user prompts to the model as-is and does not apply any custom filtering or sanitisation against prompt injection. Protecting against this risk is the responsibility of your application and infrastructure.
+
+---
+
 ## :material-shield-check: Security Best Practices
 
 **Network Isolation:**

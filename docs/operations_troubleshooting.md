@@ -104,7 +104,7 @@ Common issues when deploying stdapi.ai for the first time. If your error isn't l
     - List every discovered model with full details: `GET /search_models` (the default model-discovery endpoint). Filter by capability with query parameters — e.g. `GET /search_models?input_modalities=IMAGE&route=/v1/chat/completions` returns only vision-capable chat models. See the [Search Models API](api_search_models.md) reference.
     - `GET /v1/models` is also available for strict OpenAI SDK compatibility (lighter payload, no capability metadata).
     - Verify `AWS_BEDROCK_REGIONS` includes a region that offers the model — see the [Bedrock model availability table](https://docs.aws.amazon.com/bedrock/latest/userguide/models-regions.html).
-    - For Anthropic SDK clients, use either the full Bedrock ID (`anthropic.claude-opus-4-8`) or the Anthropic alias (`claude-opus-4-8`) — both resolve automatically.
+    - For Anthropic SDK clients, use either the full Bedrock ID (`anthropic.claude-fable-5`) or the Anthropic alias (`claude-fable-5`) — both resolve automatically.
 
 ??? failure "`429 Too Many Requests` — Bedrock throttling / quota"
     AWS returned `ThrottlingException`, `TooManyRequestsException`, or `ServiceQuotaExceededException` — mapped to HTTP `429` with error type `rate_limit_error`. You've hit the per-region Bedrock quota.
@@ -112,6 +112,16 @@ Common issues when deploying stdapi.ai for the first time. If your error isn't l
     - Add more regions to `AWS_BEDROCK_REGIONS`. Each region has its own independent quota — three regions ≈ triple the throughput.
     - See [Resilience & Failover](operations_resilience.md) for multi-region routing configuration.
     - Check quotas in the AWS Service Quotas console for **Amazon Bedrock**.
+
+??? failure "`400 Bad Request` — This model is not available under data retention mode 'default'."
+    A specific model is unavailable or requests to it are rejected because your account's data retention mode is incompatible with what that model requires.
+
+    AWS Bedrock enforces retention compatibility at invocation time: each model declares the retention modes it accepts, and if your effective mode is not among them, the request is blocked.
+
+    **Common scenarios:**
+
+    - Your account is set to **zero data retention (`none`)** but the model requires `default` or `provider_data_share` for safety or abuse-prevention purposes. Bedrock blocks the request to honour your retention policy. To access the model, either switch to a compatible retention mode or contact your AWS account manager to request ZDR eligibility for that specific model.
+    - Your account is set to **`default`** but the model exclusively requires `provider_data_share` (typically models with mandatory provider-side safety review). The model will appear as unavailable. Enabling `provider_data_share` grants access but means AWS will share your inference data with the model provider — see [Data Privacy](operations_compliance.md#data-privacy) before enabling it.
 
 ??? failure "`400 Bad Request` — invalid parameters from Bedrock"
     Bedrock rejected the request parameters (`ValidationException` / `BadRequestException`), mapped to HTTP `400` with error type `invalid_request_error` — for example an unsupported parameter for the chosen model, an out-of-range value, or content that exceeds the model's limits.
