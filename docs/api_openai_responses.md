@@ -259,7 +259,7 @@ curl -X POST "$BASE/v1/responses" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "anthropic.claude-3-7-sonnet-20250219-v1:0",
+    "model": "anthropic.claude-sonnet-5",
     "input": "Solve: if a train travels 120 km in 90 minutes, what is its speed?",
     "reasoning": {"effort": "low"},
     "max_output_tokens": 4096
@@ -278,7 +278,7 @@ curl -X POST "$BASE/v1/responses" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "anthropic.claude-3-7-sonnet-20250219-v1:0",
+    "model": "anthropic.claude-sonnet-5",
     "instructions": "You are a helpful assistant.",
     "input": "What is Python?",
     "prompt_cache_key": "default"
@@ -308,7 +308,7 @@ curl -X POST "$BASE/v1/responses" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "anthropic.claude-3-7-sonnet-20250219-v1:0",
+    "model": "anthropic.claude-sonnet-5",
     "instructions": "You are a data analysis assistant.",
     "input": "Analyze this dataset: ...",
     "tools": [{"type": "function", "name": "run_sql", ...}],
@@ -331,7 +331,7 @@ curl -X POST "$BASE/v1/responses" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "anthropic.claude-3-7-sonnet-20250219-v1:0",
+    "model": "anthropic.claude-sonnet-5",
     "input": "Hello",
     "prompt_cache_key": "default",
     "prompt_cache_retention": "24h"
@@ -583,7 +583,7 @@ curl -X POST "$BASE/v1/responses" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "anthropic.claude-3-7-sonnet-20250219-v1:0",
+    "model": "anthropic.claude-sonnet-5",
     "input": "Solve 12 × 13",
     "reasoning": {"effort": "low"},
     "max_output_tokens": 4096

@@ -150,7 +150,7 @@ Every request log includes a `model_regions` field (a set) showing which AWS reg
 ```json
 {
   "type": "request",
-  "model_id": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+  "model_id": "anthropic.claude-sonnet-5",
   "model_regions": ["us-east-1"],
   ...
 }
@@ -288,7 +288,7 @@ This is controlled by [`AWS_BEDROCK_DEPRECATED_MODEL_FALLBACK`](operations_confi
 Using a **legacy** model (one AWS has scheduled for end-of-life) also emits a `warning`-level log entry, including the EOL date when known:
 
 ```
-Model 'anthropic.claude-3-5-haiku-20241022-v1:0' is legacy and will reach end-of-life on 2026-06-19. Please migrate to a supported model.
+Model 'anthropic.claude-haiku-4-5-20251001-v1:0' is legacy and will reach end-of-life on 2026-06-19. Please migrate to a supported model.
 ```
 
 Models whose EOL date falls within the current cache window are **proactively excluded** at cache refresh time, so they are never served to clients even if AWS has not yet removed them from the available models list.

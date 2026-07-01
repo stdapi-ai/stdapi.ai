@@ -1132,7 +1132,7 @@ export AWS_BEDROCK_ALLOW_CROSS_REGION_INFERENCE_PROFILE_ARN=true
 
 !!! example "Example ARN"
     ```
-    arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-3-5-sonnet-20241022-v2:0
+    arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-5
     ```
 
 !!! info "What are Cross-Region Inference Profiles?"
@@ -1270,13 +1270,13 @@ export AWS_BEDROCK_ALLOW_PROMPT_ROUTER_ARN=true
 
 ```bash
 export AWS_BEDROCK_MODEL_ARN_MAPPING='{
-  "anthropic.claude-3-5-sonnet-20241022-v2:0": "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-custom-profile",
-  "anthropic.claude-3-5-haiku-20241022-v1:0": "arn:aws:bedrock:us-east-1:123456789012:default-prompt-router/my-router"
+  "anthropic.claude-sonnet-5": "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-custom-profile",
+  "anthropic.claude-haiku-4-5-20251001-v1:0": "arn:aws:bedrock:us-east-1:123456789012:default-prompt-router/my-router"
 }'
 ```
 
 !!! info "What is Model ARN Mapping?"
-    Model ARN mapping allows server administrators to override the default routing behavior for specific models. When a client requests a model using its standard ID (e.g., `anthropic.claude-3-5-sonnet-20241022-v2:0`), the server automatically uses the mapped ARN for routing instead.
+    Model ARN mapping allows server administrators to override the default routing behavior for specific models. When a client requests a model using its standard ID (e.g., `anthropic.claude-sonnet-5`), the server automatically uses the mapped ARN for routing instead.
 
     **Supported ARN Types:**
 
@@ -1295,7 +1295,7 @@ export AWS_BEDROCK_MODEL_ARN_MAPPING='{
     **Cost Optimization with Prompt Router:**
     ```bash
     export AWS_BEDROCK_MODEL_ARN_MAPPING='{
-      "anthropic.claude-3-5-sonnet-20241022-v2:0": "arn:aws:bedrock:us-east-1:123456789012:default-prompt-router/cost-optimizer"
+      "anthropic.claude-sonnet-5": "arn:aws:bedrock:us-east-1:123456789012:default-prompt-router/cost-optimizer"
     }'
     ```
     Automatically route simple prompts to cheaper models, complex prompts to premium models.
@@ -1303,7 +1303,7 @@ export AWS_BEDROCK_MODEL_ARN_MAPPING='{
     **Custom Application Profile:**
     ```bash
     export AWS_BEDROCK_MODEL_ARN_MAPPING='{
-      "anthropic.claude-3-5-sonnet-20241022-v2:0": "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/production-profile"
+      "anthropic.claude-sonnet-5": "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/production-profile"
     }'
     ```
     Use your custom inference profile with specific region preferences and failover behavior.
@@ -1311,7 +1311,7 @@ export AWS_BEDROCK_MODEL_ARN_MAPPING='{
     **Environment-Specific Routing:**
     ```bash
     # Production: Use cost-optimized prompt router
-    export AWS_BEDROCK_MODEL_ARN_MAPPING='{"anthropic.claude-3-5-sonnet-20241022-v2:0": "arn:aws:bedrock:us-east-1:123456789012:default-prompt-router/prod-router"}'
+    export AWS_BEDROCK_MODEL_ARN_MAPPING='{"anthropic.claude-sonnet-5": "arn:aws:bedrock:us-east-1:123456789012:default-prompt-router/prod-router"}'
 
     # Development: Use standard cross-region profile
     export AWS_BEDROCK_MODEL_ARN_MAPPING='{}'
@@ -3391,7 +3391,7 @@ curl -X POST https://api.example.com/v1/chat/completions \
   -H "X-Amzn-Bedrock-GuardrailIdentifier: abc123def456" \
   -H "X-Amzn-Bedrock-GuardrailVersion: 1" \
   -H "X-Amzn-Bedrock-Trace: enabled" \
-  -d '{"model": "anthropic.claude-3-sonnet", "messages": [...]}'
+  -d '{"model": "anthropic.claude-sonnet-5", "messages": [...]}'
 ```
 
 ### Request Body Configuration
@@ -3443,7 +3443,7 @@ curl -X POST https://api.example.com/v1/chat/completions \
   -H "X-Amzn-Bedrock-PerformanceConfig-Latency: optimized" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "model": "anthropic.claude-sonnet-5",
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```
@@ -3730,7 +3730,7 @@ export DEFAULT_MODEL_PARAMS='{
 
 ```bash
 export DEFAULT_MODEL_PARAMS='{
-  "anthropic.claude-sonnet-4-5-20250929-v1:0": {
+  "anthropic.claude-sonnet-5": {
     "anthropic_beta": ["Interleaved-thinking-2025-05-14"]
   }
 }'
@@ -3748,7 +3748,7 @@ export DEFAULT_MODEL_PARAMS='{
     "temperature": 0.7,
     "max_tokens": 2000
   },
-  "anthropic.claude-sonnet-4-5-20250929-v1:0": {
+  "anthropic.claude-sonnet-5": {
     "temperature": 0.5,
     "top_p": 0.9,
     "anthropic_beta": ["Interleaved-thinking-2025-05-14"]
@@ -3884,7 +3884,7 @@ Configure custom aliases to map user-friendly model names to actual model IDs. T
     - `tts-1-hd` → `amazon.polly-neural`
     - `whisper-1` → `amazon.transcribe`
 
-    stdapi.ai also supports dynamic model name aliases matching official provider APIs (OpenAI, Anthropic). You can use model names from provider documentation (e.g., `claude-sonnet-4-6`, `gpt-oss-20b`) which are automatically resolved to their corresponding AWS Bedrock model identifiers.
+    stdapi.ai also supports dynamic model name aliases matching official provider APIs (OpenAI, Anthropic). You can use model names from provider documentation (e.g., `claude-sonnet-5`, `gpt-oss-20b`) which are automatically resolved to their corresponding AWS Bedrock model identifiers.
 
 
 #### `MODEL_ALIASES` { #model-aliases }
@@ -3928,7 +3928,7 @@ export MODEL_ALIASES='{
   "fast-model": "amazon.nova-micro-v1:0",
   "balanced-model": "amazon.nova-lite-v1:0",
   "quality-model": "amazon.nova-pro-v1:0",
-  "claude": "anthropic.claude-sonnet-4-5-20250929-v1:0"
+  "claude": "anthropic.claude-sonnet-5"
 }'
 ```
 
@@ -3937,9 +3937,9 @@ export MODEL_ALIASES='{
 ```bash
 # Make OpenAI model names work with AWS Bedrock models
 export MODEL_ALIASES='{
-  "gpt-5": "anthropic.claude-sonnet-4-5-20250929-v1:0",
-  "gpt-4o": "anthropic.claude-3-5-sonnet-20241022-v2:0",
-  "gpt-4o-mini": "anthropic.claude-3-5-haiku-20241022-v1:0",
+  "gpt-5": "anthropic.claude-sonnet-5",
+  "gpt-4o": "anthropic.claude-sonnet-5",
+  "gpt-4o-mini": "anthropic.claude-haiku-4-5-20251001-v1:0",
   "dall-e-3": "amazon.nova-canvas-v1:0",
   "dall-e-2": "stability.stable-image-ultra-v1:0"
 }'
@@ -3952,7 +3952,7 @@ export MODEL_ALIASES='{
 export MODEL_ALIASES='{
   "amazon.titan-image-generator-v1": "amazon.nova-canvas-v1:0",
   "amazon.titan-text-express-v1": "amazon.nova-lite-v1:0",
-  "anthropic.claude-3-5-sonnet-20240620-v1:0": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+  "anthropic.claude-3-5-sonnet-20240620-v1:0": "anthropic.claude-sonnet-5",
   "stability.stable-image-ultra-v1:0": "stability.stable-image-ultra-v1:1"
 }'
 ```
@@ -4188,7 +4188,7 @@ stdapi.ai supports passing ARNs directly as model IDs in API requests, enabling 
 
 ### Overview
 
-Instead of using standard model IDs like `anthropic.claude-3-5-sonnet-20241022-v2:0`, you can pass ARNs that reference:
+Instead of using standard model IDs like `anthropic.claude-sonnet-5`, you can pass ARNs that reference:
 
 - **Cross-Region Inference Profiles** - AWS-managed multi-region routing
 - **Application Inference Profiles** - Your custom routing configurations
@@ -4234,7 +4234,7 @@ curl -X POST https://api.example.com/v1/chat/completions \
   -H "Authorization: Bearer sk-..." \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+    "model": "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-5",
     "messages": [
       {"role": "user", "content": "Hello!"}
     ]

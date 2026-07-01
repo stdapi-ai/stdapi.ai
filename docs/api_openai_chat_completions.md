@@ -425,7 +425,7 @@ curl -X POST "$BASE/v1/chat/completions" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "model": "anthropic.claude-sonnet-5",
     "messages": [
       {"role": "user", "content": "Run a Python script that prints hello world."}
     ],
@@ -445,7 +445,7 @@ curl -X POST "$BASE/v1/chat/completions" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "model": "anthropic.claude-sonnet-5",
     "messages": [
       {"role": "user", "content": "Edit the file hello.py to print hello world."}
     ],
@@ -502,7 +502,7 @@ Configure default parameters for specific models via the `DEFAULT_MODEL_PARAMS` 
 
 ```bash
 export DEFAULT_MODEL_PARAMS='{
-  "anthropic.claude-sonnet-4-5-20250929-v1:0": {
+  "anthropic.claude-sonnet-5": {
     "anthropic_beta": ["extended-thinking-2024-12-12"]
   }
 }'
@@ -529,7 +529,7 @@ curl -X POST "$BASE/v1/chat/completions" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "model": "anthropic.claude-sonnet-5",
     "messages": [{"role":"user","content":"Summarize the news headline."}],
     "anthropic_beta": ["Interleaved-thinking-2025-05-14"]
   }'
@@ -606,7 +606,7 @@ curl -X POST "$BASE/v1/chat/completions" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "model": "anthropic.claude-sonnet-5",
     "enable_thinking": true,
     "thinking_budget": 2000,
     "messages": [{"role": "user", "content": "Solve this complex problem..."}]
@@ -783,7 +783,7 @@ curl -X POST "$BASE/v1/chat/completions" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "model": "anthropic.claude-sonnet-5",
     "reasoning_effort": "low",
     "messages": [{"role": "user", "content": "Solve 12*13"}]
   }'

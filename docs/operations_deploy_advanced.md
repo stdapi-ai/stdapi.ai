@@ -267,14 +267,14 @@ resource "aws_lb_target_group" "stdapi" {
        curl -X POST "http://stdapi.your-namespace.local:8000/v1/chat/completions" \
          -H "Authorization: Bearer YOUR_API_KEY" \
          -H "Content-Type: application/json" \
-         -d '{"model": "anthropic.claude-sonnet-4-6", "messages": [{"role": "user", "content": "Hello"}]}'
+         -d '{"model": "anthropic.claude-sonnet-5", "messages": [{"role": "user", "content": "Hello"}]}'
 
        # Anthropic-compatible endpoint
        curl -X POST "http://stdapi.your-namespace.local:8000/anthropic/v1/messages" \
          -H "x-api-key: YOUR_API_KEY" \
          -H "anthropic-version: 2023-06-01" \
          -H "Content-Type: application/json" \
-         -d '{"model": "anthropic.claude-sonnet-4-6", "max_tokens": 1024, "messages": [{"role": "user", "content": "Hello"}]}'
+         -d '{"model": "anthropic.claude-sonnet-5", "max_tokens": 1024, "messages": [{"role": "user", "content": "Hello"}]}'
        ```
 
     **Use cases:**

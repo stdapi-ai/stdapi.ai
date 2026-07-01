@@ -112,7 +112,7 @@ This API supports dynamic model name aliases matching the official Anthropic API
 **Examples:**
 
 - `claude-opus-4-8` → `anthropic.claude-opus-4-8`
-- `claude-sonnet-4-6` → `anthropic.claude-sonnet-4-6`
+- `claude-sonnet-5` → `anthropic.claude-sonnet-5`
 - `claude-haiku-4-5-20251001` → `anthropic.claude-haiku-4-5-20251001-v1:0`
 
 For Claude 4 and later, a date-stripped shortcut (e.g. `claude-haiku-4-5`) is also accepted and resolves to the latest dated variant.
@@ -419,7 +419,7 @@ curl -X POST "$BASE/v1/messages" \
   -H "anthropic-beta: computer-use-2025-01-24" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "model": "anthropic.claude-sonnet-5",
     "max_tokens": 4096,
     "messages": [
       {"role": "user", "content": "Run a Python script that prints hello world."}
@@ -506,7 +506,7 @@ curl -X POST "$BASE/v1/messages" \
   -H "anthropic-beta: extended-thinking-2024-12-12" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "model": "anthropic.claude-sonnet-5",
     "max_tokens": 1024,
     "messages": [{"role":"user","content":"Solve a complex problem"}]
   }'

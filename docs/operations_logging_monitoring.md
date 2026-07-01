@@ -197,7 +197,7 @@ __Example — Request with payload logging enabled__
   "method": "POST",
   "path": "/v1/chat/completions",
   "status_code": 200,
-  "model_id": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+  "model_id": "anthropic.claude-sonnet-5",
   "execution_time_ms": 842,
   "request_params": {"messages": [{"role": "user", "content": "..."}]},
   "request_response": {"id": "cmpl_...", "choices": [...], "usage": {...}}
