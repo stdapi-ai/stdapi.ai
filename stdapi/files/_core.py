@@ -36,6 +36,7 @@ from stdapi.aws_s3 import (
     require_s3_bucket_for_region,
     track_temporary_s3_objects,
 )
+from stdapi.server import APN_TAG_VALUE
 from stdapi.config import SETTINGS
 from stdapi.types import FILE_ID_PATTERN
 from stdapi.utils import now_utc_timestamp, parse_content_disposition_filename
@@ -252,7 +253,7 @@ async def upload_file(
         await s3.put_object_tagging(
             Bucket=bucket,
             Key=s3_key,
-            Tagging={"TagSet": [{"Key": "expires", "Value": "true"}]},
+            Tagging={"TagSet": [{"Key": "stdapi-ai.expires", "Value": "true"}]},
         )
     return _record_from_head(payload, await s3.head_object(Bucket=bucket, Key=s3_key))
 
