@@ -24,6 +24,42 @@ Pending features and current deployment state are tracked on the [GitHub Project
 
 ## :material-history: Release History
 
+### Unreleased – Terraform Module Compliance & Security Hardening
+
+This upcoming release focuses on the [stdapi-ai Terraform module](https://github.com/stdapi-ai/terraform-aws-stdapi-ai) and its child modules — [VPC](https://github.com/stdapi-ai/terraform-aws-vpc), [KMS](https://github.com/stdapi-ai/terraform-aws-kms-key), and [ECS Fargate](https://github.com/stdapi-ai/terraform-aws-ecs) — adding detailed AWS Security Hub control documentation and closing several compliance gaps: default security group lockdown, ALB access logging, EFS POSIX user enforcement with native backups, and optional compliance/GuardDuty/DNS Firewall VPC integrations. All four modules now also accept a `tags` variable for custom resource tagging.
+
+!!! info "Documentation-first release"
+    Every module README now includes a full Security Hub Foundational Security Best Practices (FSBP) control mapping. See [Compliance](operations_compliance.md#aws-security-hub-guardduty-dns-firewall-integration) for a summary and links to each module.
+
+#### :material-bug: Fixes
+
+- Added the missing `1h` and `5m` values to `PromptCacheRetention` for Bedrock-specific prompt cache TTLs in the OpenAI Responses API
+
+#### :material-shield-star: Security Hub & Compliance Hardening
+
+| Feature                                  | Module                              | Description                                                                                                          |
+|-------------------------------------------|--------------------------------------|------------------------------------------------------------------------------------------------------------------------|
+| Security Hub FSBP control documentation   | VPC, KMS, ECS Fargate, stdapi-ai      | Per-control (pass/fail/conditional/N-A) tables added to each module README                                             |
+| Default security group lockdown           | VPC                                   | New `aws_default_security_group` resource revokes all default ingress/egress rules (EC2.2 / CIS 5.4)                  |
+| VPC Flow Logs retention                   | VPC                                   | Default retention increased from 7 to 365 days (EC2.6)                                                                 |
+| Compliance VPC endpoints                  | VPC                                   | New `compliance_vpc_endpoints_enabled` variable adds ECR, SSM, SSM Contacts, and SSM Incidents interface endpoints    |
+| GuardDuty VPC endpoint                    | VPC                                   | New `guardduty_vpc_endpoint_enabled` variable adds the `guardduty-data` interface endpoint                            |
+| Route 53 Resolver DNS Firewall            | VPC                                   | New `dns_firewall_enabled` variable blocks/alerts on DNS queries to known-malicious domains (AWS Managed Domain Lists, plus DGA/DNS-tunneling detection via `dns_firewall_advanced_enabled`); dedicated VPC only |
+| ALB access logging                        | stdapi-ai                             | New `alb_access_logging_enabled` variable (default `true`) logs ALB access to a dedicated, encrypted S3 bucket        |
+| EFS POSIX user enforcement                 | ECS Fargate                           | `mount_points` now accepts an `efs_posix_user` object to enforce a POSIX identity on EFS access points (EFS.4)        |
+| EFS native backups                        | ECS Fargate                           | New `mount_points_efs_backup_enable` variable enables native EFS automatic backups, independent of the existing AWS Backup plan (EFS.7) |
+| Resource tagging                          | VPC, KMS, ECS Fargate, stdapi-ai      | New `tags` variable propagates custom tags to nearly all created resources (IAM.24 / EC2.48)                          |
+
+#### :material-cog-outline: Other Infrastructure Changes
+
+| Feature                            | Description                                                                                                                                      |
+|--------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------|
+| AWS provider version bump            | Requirement raised to `>= 6.27.0` across all four modules                                                                                          |
+| S3 object tag rename                 | Files API objects and the corresponding Terraform lifecycle rule now use the `stdapi-ai.expires` tag key instead of `expires`; a temporary backward-compatible rule still expires legacy-tagged objects |
+| `aws-apn-id` resource tagging         | AWS resources created at runtime (Bedrock async jobs, Transcribe jobs, S3 objects) are tagged with `aws-apn-id`, the standard AWS Marketplace attribution tag — an internal, vendor-side tag, not user-configurable |
+
+---
+
 ### v1.12.0 – Completions API, Video Understanding & File References
 
 This release adds the OpenAI-compatible [`/v1/completions`](api_openai_completions.md) endpoint for text-first coding agents and legacy completion clients, **TwelveLabs Pegasus** video understanding for analyzing `video/*` inputs in chat completions, and an input token counting endpoint for the Responses API. Files uploaded through the Files API can now be referenced anywhere a URL is accepted using the new `file-id:` URI scheme. The Anthropic Messages API now accepts `system`-role messages (merged into the system prompt for compatibility), reasoning can be explicitly enabled or disabled, and a new `DEFAULT_MODEL_SERVICE_TIERS` setting applies per-model service tiers automatically.

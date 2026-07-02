@@ -149,6 +149,9 @@ stdapi.ai validates every user-supplied URL via DNS resolution before fetching i
 -   **Private Network Blocking**: By default, the service also blocks all RFC 1918 private networks (10.x.x.x, 172.16.x.x, 192.168.x.x). Disable only in controlled environments where accessing local networks is required (`SSRF_PROTECTION_BLOCK_PRIVATE_NETWORKS=false`).
 -   **Defense in Depth**: Even with SSRF protection enabled, restrict outbound Security Group rules to only the necessary AWS service endpoints.
 
+!!! tip "Network-layer complement: Route 53 Resolver DNS Firewall"
+    SSRF protection blocks by IP range — it doesn't know whether a public IP belongs to a malicious domain (malware, phishing, botnet C2). The Terraform module can close that gap: set `dns_firewall_enabled = true` to block outbound DNS resolution of known-malicious domains before a fetch ever happens. See [AWS Security Hub, GuardDuty & DNS Firewall Integration](operations_compliance.md#aws-security-hub-guardduty-dns-firewall-integration).
+
 ### :material-web-check: Host Header Validation
 
 To protect against Host header injection and web cache poisoning, stdapi.ai can validate the `Host` header of incoming requests. When `TRUSTED_HOSTS` is not configured, no Host header validation is performed.
