@@ -6,7 +6,6 @@ from functools import cached_property
 from importlib import import_module
 from pkgutil import iter_modules
 from re import Pattern
-from re import compile as re_compile
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Never, TypedDict, TypeVar
 
@@ -16,7 +15,6 @@ from pydantic import AwareDatetime, BaseModel, JsonValue
 from pydantic_core import from_json, to_json
 
 import stdapi.region_routing as _region_routing
-from stdapi import server
 from stdapi.api_errors import ApiError, UnsupportedModelError
 from stdapi.aws import get_client
 from stdapi.aws_bedrock import (
@@ -35,7 +33,7 @@ from stdapi.config import SETTINGS
 from stdapi.input_file import get_s3_input_regions, resolve_all_bedrock_content_blocks
 from stdapi.models.capabilities import ROUTE_CAPABILITIES, Capability
 from stdapi.models.deprecation import DEPRECATED_MODELS
-from stdapi.monitoring import REQUEST_ID, REQUEST_LOG, log_error_details
+from stdapi.monitoring import REQUEST_ID, REQUEST_LOG, build_metadata, log_error_details
 from stdapi.region_routing import REGION_ROUTER, ROUTING_RETRYABLE_CODES
 from stdapi.utils import match_bedrock_app_profile_arn, match_bedrock_prompt_router_arn
 
@@ -503,7 +501,7 @@ class ModelBase[RequestT, ResponseT]:
                     },
                     tags=[
                         {"key": k, "value": v}
-                        for k, v in build_stdapi_metadata().items()
+                        for k, v in build_metadata(apn=True).items()
                     ],
                 )
             )["invocationArn"]
@@ -538,9 +536,7 @@ class ModelBase[RequestT, ResponseT]:
         request["modelId"] = (await get_model_details(self._model_id)).get_id(
             region, inference_profile=True
         )
-        request["requestMetadata"] = build_stdapi_metadata(
-            request.get("requestMetadata")
-        )
+        request["requestMetadata"] = build_metadata(request.get("requestMetadata"))
 
     async def _converse(
         self,
@@ -1891,35 +1887,3 @@ async def _wait_for_async_invocation_completion(
             case "Failed":
                 raise ApiError(response["failureMessage"])
         await sleep(0.5)
-
-
-_STDAPI_METADATA_PREFIX = "stdapi-ai."
-
-# Inverse of the Bedrock requestMetadata value pattern [a-zA-Z0-9\s:_@$#=/+,-.]{0,256}
-_STDAPI_METADATA_VALUE_INVALID = re_compile(r"[^a-zA-Z0-9\s:_@$#=/+,.\-]")
-
-
-def build_stdapi_metadata(existing: Mapping[str, str] | None = None) -> dict[str, str]:
-    """Build Bedrock requestMetadata with ``stdapi-ai.`` keys injected.
-
-    Drops any key starting with ``stdapi-ai.`` from *existing* to prevent
-    caller spoofing, then injects the current request context.
-
-    Args:
-        existing: Caller-supplied metadata from the request body, if any.
-
-    Returns:
-        Merged metadata dict with ``stdapi-ai.*`` keys always set.
-    """
-    metadata = {
-        k: v
-        for k, v in (existing or {}).items()
-        if not k.startswith(_STDAPI_METADATA_PREFIX)
-    }
-    metadata["stdapi-ai.request_id"] = REQUEST_ID.get()
-    metadata["stdapi-ai.server_id"] = server.SERVER_NAME
-    if (user_id := REQUEST_LOG.get().get("request_user_id")) and (
-        user_id := _STDAPI_METADATA_VALUE_INVALID.sub("", user_id)[:256]
-    ):
-        metadata["stdapi-ai.user_id"] = user_id
-    return metadata

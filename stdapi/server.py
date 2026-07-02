@@ -14,8 +14,14 @@ SERVER_NAME = f"{gethostname()[:128]}-{getpid()}-{SERVER_ID}"
 #: Server version
 SERVER_VERSION = "1.12.0"
 
+#: Product code
+PRODUCT_CODE = "72gxmztpjz2hm5qnkkg0iiazo"
+
+#: aws-apn-id tag value
+AWS_APN_ID = f"pc:{PRODUCT_CODE}"
+
 #: Server user agent
-USER_AGENT = f"stdapi.ai/{SERVER_VERSION}/{SERVER_ID}"
+USER_AGENT = f"stdapi.ai/{SERVER_VERSION}/{SERVER_ID} APN_1.1/pc_{PRODUCT_CODE}$"
 
 #: User agent used by the MCP internal HTTP client
 MCP_USER_AGENT = f"stdapi.ai/MCP/{SERVER_ID}"

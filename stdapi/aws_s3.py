@@ -4,6 +4,7 @@ import contextlib
 from asyncio import gather
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
+from urllib.parse import urlencode
 from uuid import uuid4
 
 from botocore.exceptions import ClientError
@@ -13,6 +14,7 @@ from stdapi.aws import get_client
 from stdapi.cleanup import schedule_cleanup
 from stdapi.config import SETTINGS
 from stdapi.monitoring import log_error_details
+from stdapi.server import AWS_APN_ID
 from stdapi.utils import async_iter, buffered_chunks, chain_async_iterators
 
 if TYPE_CHECKING:
@@ -20,6 +22,9 @@ if TYPE_CHECKING:
 
     from types_aiobotocore_bedrock.literals import RegionName
     from types_aiobotocore_s3.client import S3Client
+
+#: Default S3 ``Tagging`` query string
+S3_TAGGING: Final[str] = urlencode({"aws-apn-id": AWS_APN_ID})
 
 #: Maximum object size supported by S3 ``copy_object`` in a single request (5 GiB).
 _COPY_OBJECT_MAX_BYTES: Final[int] = 5 * 1024 * 1024 * 1024
@@ -263,12 +268,20 @@ async def copy_s3_object(
     dest_key = dest_key or await _get_tmp_key(content_type)
     copy_source = {"Bucket": source_bucket, "Key": source_key}
     if size <= _COPY_OBJECT_MAX_BYTES:
-        await s3.copy_object(Bucket=dest_bucket, Key=dest_key, CopySource=copy_source)
+        await s3.copy_object(
+            Bucket=dest_bucket,
+            Key=dest_key,
+            CopySource=copy_source,
+            Tagging=S3_TAGGING,
+            TaggingDirective="REPLACE",
+        )
     else:
         upload_id: str | None = None
         try:
             upload_id = (
-                await s3.create_multipart_upload(Bucket=dest_bucket, Key=dest_key)
+                await s3.create_multipart_upload(
+                    Bucket=dest_bucket, Key=dest_key, Tagging=S3_TAGGING
+                )
             )["UploadId"]
 
             parts: list[dict[str, int | str]] = []
@@ -351,7 +364,7 @@ async def put_s3_object(
         raise ValueError(msg)
     key = key or await _get_tmp_key(content_type)
     s3: S3Client = get_client("s3", BUCKET_TO_REGION.get(bucket))
-    kwargs: dict[str, str | dict[str, str]] = {}
+    kwargs: dict[str, str | dict[str, str]] = {"Tagging": S3_TAGGING}
     if content_type:
         kwargs["ContentType"] = content_type
     if content_disposition:

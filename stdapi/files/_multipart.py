@@ -34,7 +34,7 @@ from botocore.exceptions import ClientError
 
 from stdapi.api_errors import ApiError
 from stdapi.aws import get_client
-from stdapi.aws_s3 import BUCKET_TO_REGION, track_temporary_s3_objects
+from stdapi.aws_s3 import BUCKET_TO_REGION, S3_TAGGING, track_temporary_s3_objects
 from stdapi.config import SETTINGS
 from stdapi.files._core import (
     FileRecord,
@@ -331,6 +331,7 @@ async def create_multipart_session(
             ContentType=mime_type,
             ContentDisposition=f'attachment; filename="{filename}"',
             Metadata={"purpose": purpose, "expires-at": ""},
+            Tagging=S3_TAGGING,
         ),
         s3.put_object(
             Bucket=bucket,
@@ -343,6 +344,7 @@ async def create_multipart_session(
                 "purpose": purpose,
                 "total-bytes": str(total_bytes),
             },
+            Tagging=S3_TAGGING,
         ),
     )
     _cache_set(upload_id, multipart_resp["UploadId"], 0)

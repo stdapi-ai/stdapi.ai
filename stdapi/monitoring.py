@@ -2,6 +2,7 @@
 
 from contextlib import contextmanager, suppress
 from contextvars import ContextVar
+from re import compile as re_compile
 from time import perf_counter_ns
 from traceback import format_exception
 from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict, TypeVar
@@ -21,7 +22,7 @@ from stdapi.metering import SERVER_FULL_VERSION
 from stdapi.utils import hide_security_details, stdout_write, webuuid
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Generator
+    from collections.abc import AsyncGenerator, Generator, Mapping
 
     from pydantic.main import IncEx
     from types_aiobotocore_bedrock.literals import RegionName
@@ -127,6 +128,12 @@ LOGGING_PATHS_IGNORE: frozenset[str] = frozenset(
 
 #: Sorted log levels
 _SORTED_LOG_LEVELS: tuple[LogLevel, ...] = ("info", "warning", "error", "critical")
+
+#: stdapi.ai custom prefix for metadata and tags
+_STDAPI_METADATA_PREFIX = "stdapi-ai."
+
+#: Strips characters not allowed in stdapi metadata values.
+_METADATA_VALUE_STRIP_RE = re_compile(r"[^a-zA-Z0-9\s:_@$#=/+,.\-]")
 
 
 def _init_log_levels() -> set[LogLevel]:
@@ -516,3 +523,36 @@ async def log_request_sse_stream_event(
             data=format_http_error(REQUEST.get(), 500, "Internal Server Error")[0],
             event="error",
         )
+
+
+def build_metadata(
+    existing: Mapping[str, str] | None = None, *, apn: bool = False
+) -> dict[str, str]:
+    """Build request metadata with ``stdapi-ai.`` keys injected.
+
+    Drops any key starting with ``stdapi-ai.`` from *existing* to prevent
+    caller spoofing, then injects the current request context.
+
+    Args:
+        existing: Caller-supplied metadata from the request body, if any.
+        apn: When ``True``, add ``aws-apn-id`` tag.
+            Only set this when the result is used as resource tags, not as
+            request-level metadata.
+
+    Returns:
+        Merged metadata dict with ``stdapi-ai.*`` keys always set.
+    """
+    metadata = {
+        k: v
+        for k, v in (existing or {}).items()
+        if not k.startswith(_STDAPI_METADATA_PREFIX)
+    }
+    metadata["stdapi-ai.request_id"] = REQUEST_ID.get()
+    metadata["stdapi-ai.server_id"] = server.SERVER_NAME
+    if (user_id := REQUEST_LOG.get().get("request_user_id")) and (
+        user_id := _METADATA_VALUE_STRIP_RE.sub("", user_id)[:256]
+    ):
+        metadata["stdapi-ai.user_id"] = user_id
+    if apn:
+        metadata["aws-apn-id"] = server.AWS_APN_ID
+    return metadata

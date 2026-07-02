@@ -2009,6 +2009,18 @@ stdapi.ai supports both IAM roles and IAM users:
 !!! success "Best Practice: Use IAM Roles"
     When deploying on AWS infrastructure, always prefer IAM roles over IAM users with access keys. IAM roles provide automatic credential rotation and better security.
 
+### AWS Tag Policies
+
+If your AWS organization enforces a [tag policy](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_tag-policies.html), the following tag keys must be allowed on the relevant resource types.
+
+| Tag key | Value | Applied to |
+|---------|-------|------------|
+| `stdapi-ai.expires` | `"true"` | S3 objects (Files API expiry) |
+| `stdapi-ai.request_id` | request UUID | Bedrock async jobs, Transcribe jobs |
+| `stdapi-ai.server_id` | server instance name | Bedrock async jobs, Transcribe jobs |
+| `stdapi-ai.user_id` | user identifier | Bedrock async jobs, Transcribe jobs (when user identity is known) |
+| `aws-apn-id` | `pc:<product-code>` | All AWS resources created at runtime and by the Terraform module. This is a [standard AWS Marketplace attribution tag](https://docs.aws.amazon.com/PRM/latest/aws-prm-onboarding-guide/what-is-service.html) required by any AWS Marketplace product — allowing it benefits all such products deployed in your organization, not only stdapi.ai. |
+
 ---
 
 ## Authentication
