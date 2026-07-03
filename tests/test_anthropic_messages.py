@@ -263,6 +263,7 @@ class TestAnthropicMessages:
                 {"role": "assistant", "content": "Hi! How can I help you?"},
                 {"role": "user", "content": "How are you?"},
                 {"role": "system", "content": "From now on, respond only in one word."},
+                {"role": "user", "content": "Do you like the weather today?"},
             ],
         )
 

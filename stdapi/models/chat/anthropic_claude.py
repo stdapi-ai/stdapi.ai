@@ -15,7 +15,7 @@ class ChatModel(AnthropicClaudeChatModel):
 
     MATCHER = "anthropic.claude-"
     SYSTEM_MESSAGE_AS_MESSAGES_SUPPORTED: ClassVar[bool] = (
-        False  # Not supported yet in Bedrock/botocore/aiobotocore
+        False  # Not supported yet by models on Bedrock
     )
     TOOL_BETA_FLAGS = MappingProxyType(
         {

@@ -668,14 +668,14 @@ ANTHROPIC_MODEL_MAPPINGS: dict[str, dict[str, str]] = {
         "chat": "anthropic.claude-haiku-4-5-20251001-v1:0",
         "chat_vision": "anthropic.claude-haiku-4-5-20251001-v1:0",
         "chat_reasoning": "anthropic.claude-sonnet-4-5-20250929-v1:0",
-        "chat_system_as_messages": "anthropic.claude-opus-4-8",
+        "chat_system_as_messages": "anthropic.claude-sonnet-5",
         "count_tokens": "anthropic.claude-3-5-sonnet-20240620-v1:0",
     },
     "anthropic": {
         "chat": "claude-haiku-4-5-20251001",
         "chat_vision": "claude-haiku-4-5-20251001",
         "chat_reasoning": "claude-sonnet-4-5-20250929",
-        "chat_system_as_messages": "claude-opus-4-8",
+        "chat_system_as_messages": "claude-sonnet-5",
         "count_tokens": "anthropic.claude-3-5-sonnet-20240620-v1:0",
     },
 }
