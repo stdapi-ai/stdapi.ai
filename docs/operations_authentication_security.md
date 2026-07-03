@@ -150,7 +150,7 @@ stdapi.ai validates every user-supplied URL via DNS resolution before fetching i
 -   **Defense in Depth**: Even with SSRF protection enabled, restrict outbound Security Group rules to only the necessary AWS service endpoints.
 
 !!! tip "Network-layer complement: Route 53 Resolver DNS Firewall"
-    SSRF protection blocks by IP range — it doesn't know whether a public IP belongs to a malicious domain (malware, phishing, botnet C2). The Terraform module can close that gap: set `dns_firewall_enabled = true` to block outbound DNS resolution of known-malicious domains before a fetch ever happens. See [AWS Security Hub, GuardDuty & DNS Firewall Integration](operations_compliance.md#aws-security-hub-guardduty-dns-firewall-integration).
+    SSRF protection blocks by IP range — it doesn't know whether a public IP belongs to a malicious domain (malware, phishing, botnet C2). The Terraform module can close that gap: set `dns_firewall_enabled = true` to block outbound DNS resolution of known-malicious domains before a fetch ever happens. See [AWS Security Hub, GuardDuty & DNS Firewall Integration](#aws-security-hub-guardduty-dns-firewall-integration).
 
 ### :material-web-check: Host Header Validation
 
@@ -171,6 +171,38 @@ If your API is accessed directly from web browsers, Cross-Origin Resource Sharin
 When running behind a load balancer (ALB) or reverse proxy, stdapi.ai can be configured to trust `X-Forwarded-*` headers (`X-Forwarded-For`, `X-Forwarded-Proto`, `X-Forwarded-Port`) to correctly identify the original client IP and protocol. When enabled, the real client IP appears in request logs instead of the proxy's IP.
 
 -   **Security Warning**: Only enable `ENABLE_PROXY_HEADERS` when the service is deployed behind a **trusted proxy**. Enabling this in a publicly exposed environment without a proxy allows attackers to spoof their IP address by sending custom headers.
+
+---
+
+## :material-shield-star: AWS Security Hub, GuardDuty & DNS Firewall Integration
+
+!!! success "Recommended: deploy via the Terraform module"
+    The [stdapi-ai Terraform module](https://github.com/stdapi-ai/terraform-aws-stdapi-ai) is built against the **AWS Security Hub Foundational Security Best Practices (FSBP)** standard and passes a large share of its applicable controls **by default** — no extra configuration required. A set of opt-in variables closes the remaining gaps for organizations with stricter compliance requirements, and the same dedicated VPC also enables native **GuardDuty Runtime Monitoring** and **Route 53 Resolver DNS Firewall** (see below). This makes the module the fastest path to a Security Hub-compliant, threat-monitored deployment; manual (non-Terraform) deployments must implement each control yourself.
+
+The module composes three child modules — [VPC](https://github.com/JGoutin/terraform-aws-vpc), [KMS](https://github.com/JGoutin/terraform-aws-kms-key), and [ECS Fargate](https://github.com/JGoutin/terraform-aws-ecs-fargate) — plus its own ALB/WAF/S3/IAM resources. Each repository's README documents every relevant control — pass, fail, conditional (depends on your configuration), or not applicable — with remediation notes where relevant.
+
+| Module                                                                                          | Key controls covered by default                                                                   | Extra options to improve compliance                                    |
+|---------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------|
+| [stdapi-ai (root)](https://github.com/stdapi-ai/terraform-aws-stdapi-ai#security-hub-controls)    | S3 encryption/versioning/public-access block, least-privilege IAM, ALB access logging             | `alb_waf_enabled`, `alb_certificate_arn` / `alb_domain_name` (HTTPS redirect), `deletion_protection` |
+| [VPC](https://github.com/JGoutin/terraform-aws-vpc#security-hub-controls)                       | EC2.2 (default security group lockdown), EC2.6 (flow logs, 365-day retention), EC2.15/21/48, IAM.24 | `compliance_vpc_endpoints_enabled`, `guardduty_vpc_endpoint_enabled`, `dns_firewall_enabled` — **dedicated VPC only, see below** |
+| [KMS](https://github.com/JGoutin/terraform-aws-kms-key#security-hub-controls)                   | KMS.3 (deletion window), KMS.4 (automatic rotation, hardcoded on), KMS.5 (key policy)             | None — rotation and deletion window are hardcoded, not configurable    |
+| [ECS Fargate](https://github.com/JGoutin/terraform-aws-ecs-fargate#security-hub-controls)                | ECS.\*, EFS.1-8 (POSIX user enforcement, native backups), CloudWatch.15-17, Backup.1-5, IAM.1/24  | `mount_points_efs_backup_enable`, `mount_points[].efs_posix_user`, `alarms_enabled` |
+
+All four modules also accept a `tags` variable to propagate custom resource tags — itself relevant to Security Hub controls IAM.24 and EC2.48 when a tagging policy is enforced on your account.
+
+### :material-radar: GuardDuty Runtime Monitoring
+
+stdapi.ai's ECS tasks support **[Amazon GuardDuty Runtime Monitoring](https://docs.aws.amazon.com/guardduty/latest/ug/runtime-monitoring.html)** natively. Set `guardduty_vpc_endpoint_enabled = true` and the Terraform module creates the dedicated `guardduty-data` interface VPC endpoint the GuardDuty agent needs to report findings — keeping that traffic off the internet and off any NAT gateway. This isn't a Security Hub control, so it stays disabled by default; enable it whenever GuardDuty Runtime Monitoring is turned on for your account, since provisioning the endpoint through the module guarantees correct subnet placement.
+
+### :material-dns: Route 53 Resolver DNS Firewall
+
+stdapi.ai fetches user-supplied URLs as multimodal content references (images, documents, audio) — see [SSRF Protection](#ssrf-protection) for the application-level defense (IP-based blocklisting of loopback/link-local/private ranges). **Route 53 Resolver DNS Firewall** adds a network-layer control on top of that: set `dns_firewall_enabled = true` and the Terraform module creates a DNS Firewall rule group on the dedicated VPC that blocks or alerts on outbound DNS queries to known-malicious domains, closing the gap SSRF protection doesn't cover — a public IP address that resolves from a domain associated with malware, phishing, or botnet command-and-control.
+
+- `dns_firewall_managed_domain_list_ids` (default: `null`, which resolves automatically to the [AWS Managed](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resolver-dns-firewall-managed-domain-lists.html) Aggregate Threat List ID for your deployment region — no AWS CLI call or extra IAM permissions needed) selects which managed domain lists to enforce; `dns_firewall_action` controls whether matches are `BLOCK`ed, `ALERT`ed on, or explicitly `ALLOW`ed.
+- `dns_firewall_advanced_enabled` turns on **DNS Firewall Advanced** (additional AWS cost), which detects domain generation algorithm (DGA) and DNS tunneling activity — patterns a static domain list can't catch. Tune sensitivity with `dns_firewall_advanced_confidence_threshold` (`LOW` / `MEDIUM` / `HIGH`).
+
+!!! warning "`compliance_vpc_endpoints_enabled`, `guardduty_vpc_endpoint_enabled`, and `dns_firewall_enabled` require the module's dedicated VPC"
+    All three variables attach resources (interface endpoints, or a DNS Firewall rule group) to the VPC the Terraform module creates for you. They have **no effect** — `dns_firewall_enabled` cannot even be set to `true` and fails validation — if you instead pass your own `subnet_ids` to integrate with existing network infrastructure (see [Integration with Existing Infrastructure](operations_deploy_advanced.md#integration-with-existing-infrastructure)). In that case the module never creates a VPC, and you are responsible for provisioning any interface endpoints or DNS Firewall rules your compliance or monitoring tooling needs (ECR, SSM, `guardduty-data`, Resolver rule groups, etc.) directly in your own VPC.
 
 ---
 

@@ -26,10 +26,10 @@ Pending features and current deployment state are tracked on the [GitHub Project
 
 ### v1.13.0 – Terraform Module Compliance & Security Hardening
 
-This release focuses on the [stdapi-ai Terraform module](https://github.com/stdapi-ai/terraform-aws-stdapi-ai) and its child modules — [VPC](https://github.com/stdapi-ai/terraform-aws-vpc), [KMS](https://github.com/stdapi-ai/terraform-aws-kms-key), and [ECS Fargate](https://github.com/stdapi-ai/terraform-aws-ecs) — adding detailed AWS Security Hub control documentation and closing several compliance gaps: default security group lockdown, ALB access logging, EFS POSIX user enforcement with native backups, and optional compliance/GuardDuty/DNS Firewall VPC integrations. All four modules now also accept a `tags` variable for custom resource tagging.
+This release focuses on the [stdapi-ai Terraform module](https://github.com/stdapi-ai/terraform-aws-stdapi-ai) and its child modules — [VPC](https://github.com/JGoutin/terraform-aws-vpc), [KMS](https://github.com/JGoutin/terraform-aws-kms-key), and [ECS Fargate](https://github.com/JGoutin/terraform-aws-ecs-fargate) — adding detailed AWS Security Hub control documentation and closing several compliance gaps: default security group lockdown, ALB access logging, EFS POSIX user enforcement with native backups, and optional compliance/GuardDuty/DNS Firewall VPC integrations. All four modules now also accept a `tags` variable for custom resource tagging.
 
 !!! info "Documentation-first release"
-    Every module README now includes a full Security Hub Foundational Security Best Practices (FSBP) control mapping. See [Compliance](operations_compliance.md#aws-security-hub-guardduty-dns-firewall-integration) for a summary and links to each module.
+    Every module README now includes a full Security Hub Foundational Security Best Practices (FSBP) control mapping. See [Authentication & Security](operations_authentication_security.md#aws-security-hub-guardduty-dns-firewall-integration) for a summary and links to each module.
 
 #### :material-bug: Fixes
 

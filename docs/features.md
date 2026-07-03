@@ -341,6 +341,11 @@ stdapi.ai supports multiple authentication strategies to fit your architecture:
 !!! success "Commercial: Hardened Container Image :material-arrow-right: [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo)"
     The commercial image is security-validated by AWS Marketplace and includes: **read-only root filesystem**, **dropped Linux capabilities**, minimal installed packages, and no shell. The Terraform module also configures a **Customer Managed KMS key** (auto-rotation enabled) for all data at rest.
 
+!!! success "Commercial: Security Hub Validated by Default"
+    The Terraform module is built against the **AWS Security Hub Foundational Security Best Practices (FSBP)** standard and passes a large share of applicable controls out of the box — no extra configuration required. Opt-in variables add native **GuardDuty Runtime Monitoring** and **Route 53 Resolver DNS Firewall** (blocks outbound DNS resolution of known-malicious domains) on the module's dedicated VPC.
+
+    [:octicons-arrow-right-24: AWS Security Hub, GuardDuty & DNS Firewall Integration](operations_authentication_security.md#aws-security-hub-guardduty-dns-firewall-integration)
+
 ### Compliance & Data Sovereignty
 
 Data never leaves your AWS account — every AWS service call is restricted to the regions you configure. All AWS services used by stdapi.ai (Bedrock, S3, Polly, Transcribe, and more) are in scope for **GDPR**, **ISO 27001/27017/27018**, **SOC 1/2/3**, **HIPAA**, **FedRAMP**, **PCI-DSS**, and **CSA STAR Level 2**. The commercial Terraform module adds VPC endpoints (no internet egress), Customer Managed KMS keys, and region-pinned cross-region profiles for strict data residency.
@@ -481,6 +486,7 @@ export MCP_EXCLUDE_TOOLS="openai_files_delete,anthropic_files_delete"
 | **Container image**           | :material-check:{ .yellow-check } Community (GHCR)      | :material-check:{ .green-check } Hardened, AWS Marketplace validated                              |
 | **Deployment**                | :material-check:{ .yellow-check } Docker / self-managed | :material-check:{ .green-check } Terraform module (ECS Fargate) - AWS Marketplace container image |
 | **Production infrastructure** | —                                                       | :material-check:{ .green-check } Fully featured - AWS Well-Architected - Hardened                 |
+| **Security posture**          | Manual (self-managed)                                   | :material-check:{ .green-check } Security Hub FSBP validated by default; GuardDuty & DNS Firewall integrations |
 | **Commercial support**        | —                                                       | :material-check:{ .green-check } 1 business day                                                   |
 
 ---

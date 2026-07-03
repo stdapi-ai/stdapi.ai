@@ -223,6 +223,9 @@ flowchart LR
 - :material-connection: __Agent-ready by design__
   <br>Expose every API endpoint as a Model Context Protocol tool. AI agents connect directly — no HTTP client code. Streamable HTTP and SSE transports, configurable tool selection.
 
+- :material-shield-star: __Security Hub validated by default__
+  <br>The Terraform module is built against AWS Security Hub Foundational Security Best Practices and passes the majority of applicable controls out of the box. Opt-in GuardDuty Runtime Monitoring and Route 53 Resolver DNS Firewall close the rest.
+
 - :material-swap-horizontal: __Automatic deprecated model fallback__
   <br>When AWS retires a model, requests are transparently redirected to its replacement. Your applications survive model deprecations without code changes.
 
@@ -285,6 +288,7 @@ flowchart LR
 
     - **14-day free trial** — test in your environment risk-free
     - Hardened container, security updates, commercial support
+    - Terraform module validated against AWS Security Hub FSBP; optional GuardDuty & DNS Firewall integrations
     - **$0.10/container-hour** — no markup on model usage; pay AWS Bedrock rates directly
     - No AGPL restrictions — keep your code and modifications private
     - Terraform module for production-ready deployment in minutes
