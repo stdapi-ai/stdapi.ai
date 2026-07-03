@@ -91,7 +91,7 @@ _TOOL_MODELS = pytest.mark.parametrize(
         "moonshotai.kimi-k2.5",  # Moonshot Kimi K2.5
         pytest.param(
             "openai.gpt-oss-20b-1:0",  # OpenAI GPT-OSS 20B (Bedrock)
-            marks=pytest.mark.xfail(
+            marks=pytest.mark.xfail(  # type: ignore[call-overload]
                 match="toolUse.*failed to satisfy constraint.*[a-zA-Z0-9_-]",
                 reason="Model generates invalid tool names (fails regex [a-zA-Z0-9_-]+)",
             ),
@@ -124,7 +124,7 @@ _STREAMING_TOOL_MODELS = pytest.mark.parametrize(
         "moonshotai.kimi-k2.5",  # Moonshot Kimi K2.5
         pytest.param(
             "openai.gpt-oss-20b-1:0",  # OpenAI GPT-OSS 20B (Bedrock)
-            marks=pytest.mark.xfail(
+            marks=pytest.mark.xfail(  # type: ignore[call-overload]
                 match="toolUse.*failed to satisfy constraint.*[a-zA-Z0-9_-]",
                 reason="Model generates invalid tool names (fails regex [a-zA-Z0-9_-]+)",
             ),
@@ -156,7 +156,7 @@ _AGENTIC_MODELS = pytest.mark.parametrize(
         "moonshotai.kimi-k2.5",  # Moonshot Kimi K2.5
         pytest.param(
             "openai.gpt-oss-20b-1:0",  # OpenAI GPT-OSS 20B (Bedrock)
-            marks=pytest.mark.xfail(
+            marks=pytest.mark.xfail(  # type: ignore[call-overload]
                 match="toolUse.*failed to satisfy constraint.*[a-zA-Z0-9_-]",
                 reason="Model generates invalid tool names (fails regex [a-zA-Z0-9_-]+)",
             ),
