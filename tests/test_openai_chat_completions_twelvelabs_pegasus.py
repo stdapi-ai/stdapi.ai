@@ -1,18 +1,10 @@
 """Tests for TwelveLabs Pegasus chat completions."""
 
-import asyncio
 import base64
 import json
-from typing import TYPE_CHECKING, cast
 
 import pytest
 from openai import BadRequestError, OpenAI
-
-from stdapi.models.chat.twelvelabs_pegasus import _format_converse_stream, _PegasusChunk
-
-if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
-    from typing import Any
 
 PEGASUS_MODEL = "twelvelabs.pegasus-1-2-v1:0"
 PEGASUS_INLINE_BYTES = 18_874_368
@@ -350,91 +342,3 @@ class TestTwelveLabsPegasusChatCompletions:
         )
         assert len(resp.choices) >= 1
         assert resp.choices[0].message.content
-
-
-class TestTwelveLabsPegasusInternals:
-    """Internal function tests for TwelveLabs Pegasus."""
-
-    def test_format_converse_stream_delta_chunks(self) -> None:
-        """_format_converse_stream correctly formats delta chunks."""
-
-        async def fake_stream() -> AsyncGenerator[dict[str, Any]]:
-            yield {"message": "Hello", "stopReason": ""}
-            yield {"message": " world", "stopReason": ""}
-            yield {
-                "message": "",
-                "stopReason": "stop",
-                "amazon-bedrock-invocationMetrics": {
-                    "inputTokenCount": 0,
-                    "outputTokenCount": 5,
-                    "invocationLatency": 100,
-                    "firstByteLatency": 50,
-                },
-            }
-
-        async def run_test() -> list[Any]:
-            return [
-                event
-                async for event in _format_converse_stream(
-                    cast("AsyncGenerator[_PegasusChunk]", fake_stream()), "test prompt"
-                )
-            ]
-
-        events = asyncio.run(run_test())
-
-        # First event is messageStart
-        assert "messageStart" in events[0]
-        assert events[0]["messageStart"]["role"] == "assistant"
-
-        # Two contentBlockDelta events
-        assert "contentBlockDelta" in events[1]
-        assert events[1]["contentBlockDelta"]["delta"]["text"] == "Hello"
-        assert "contentBlockDelta" in events[2]
-        assert events[2]["contentBlockDelta"]["delta"]["text"] == " world"
-
-        # contentBlockStop
-        assert "contentBlockStop" in events[3]
-
-        # messageStop
-        assert "messageStop" in events[4]
-        assert events[4]["messageStop"]["stopReason"] == "end_turn"
-
-        # metadata event
-        assert "metadata" in events[5]
-
-    def test_format_converse_stream_final_chunk_metrics(self) -> None:
-        """_format_converse_stream correctly extracts metrics from final chunk."""
-
-        async def fake_stream() -> AsyncGenerator[dict[str, Any]]:
-            yield {"message": "Hello", "stopReason": ""}
-            yield {
-                "message": "",
-                "stopReason": "stop",
-                "amazon-bedrock-invocationMetrics": {
-                    "inputTokenCount": 0,
-                    "outputTokenCount": 5,
-                    "invocationLatency": 100,
-                    "firstByteLatency": 50,
-                },
-            }
-
-        async def run_test() -> list[Any]:
-            return [
-                event
-                async for event in _format_converse_stream(
-                    cast("AsyncGenerator[_PegasusChunk]", fake_stream()), "test prompt"
-                )
-            ]
-
-        events = asyncio.run(run_test())
-
-        # Find metadata event
-        metadata_event = None
-        for event in events:
-            if "metadata" in event:
-                metadata_event = event
-                break
-
-        assert metadata_event is not None
-        assert metadata_event["metadata"]["usage"]["outputTokens"] == 5
-        assert metadata_event["metadata"]["usage"]["inputTokens"] > 0

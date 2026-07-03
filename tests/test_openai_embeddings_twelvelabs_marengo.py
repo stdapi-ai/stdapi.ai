@@ -3,10 +3,10 @@
 import pytest
 from openai import BadRequestError, OpenAI
 
-MARANGO_V2 = "twelvelabs.marengo-embed-2-7-v1:0"
+MARANGO_V2 = None  # "twelvelabs.marengo-embed-2-7-v1:0" # No more available
 MARANGO_V3 = "twelvelabs.marengo-embed-3-0-v1:0"
 
-MARANGO_ALL = (MARANGO_V2, MARANGO_V3)
+MARANGO_ALL = (MARANGO_V3,)
 MARANGO_SAMPLE = (MARANGO_V3,)
 
 
@@ -96,6 +96,8 @@ class TestTwelveLabsMarengoEmbeddings:
             pytest.skip(
                 "TwelveLabs models are not available on the official OpenAI API"
             )
+        elif model_id is None:
+            pytest.skip("Required TwelveLabs model is not available")
         response = openai_client.embeddings.create(
             model=model_id,
             input="Hello from TwelveLabs Marengo embeddings.",
@@ -299,6 +301,8 @@ class TestTwelveLabsMarengoEmbeddings:
             pytest.skip(
                 "TwelveLabs models are not available on the official OpenAI API"
             )
+        elif model_id is None:
+            pytest.skip("Required TwelveLabs model is not available")
 
         inputs = ["A beautiful sunset over the ocean.", sample_image_file_base64]
         response = openai_client.embeddings.create(model=model_id, input=inputs)
