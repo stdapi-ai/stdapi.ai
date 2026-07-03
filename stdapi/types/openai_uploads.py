@@ -26,9 +26,7 @@ class CreateUploadBody(BaseModelRequest):
         description="The number of bytes in the file you are uploading.",
     )
     filename: str = Field(description="The name of the file to upload.")
-    mime_type: str = Field(
-        description="The MIME type of the file. This must fall within the supported MIME types for your file purpose."
-    )
+    mime_type: str = Field(description="The MIME type of the file.")
     purpose: FilePurpose = Field(
         description="The intended purpose of the uploaded file."
     )

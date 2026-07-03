@@ -58,6 +58,11 @@ This upcoming release focuses on the [stdapi-ai Terraform module](https://github
 | S3 object tag rename                 | Files API objects and the corresponding Terraform lifecycle rule now use the `stdapi-ai.expires` tag key instead of `expires`; a temporary backward-compatible rule still expires legacy-tagged objects |
 | `aws-apn-id` resource tagging         | AWS resources created at runtime (Bedrock async jobs, Transcribe jobs, S3 objects) are tagged with `aws-apn-id`, the standard AWS Marketplace attribution tag — an internal, vendor-side tag, not user-configurable |
 
+#### :material-robot-outline: MCP Token Optimization
+
+- Significantly reduced the size of MCP tool descriptions across the API, lowering the token cost of every AI agent session connected to this server
+- No change in functionality: all parameter constraints and usage guidance remain intact
+
 ---
 
 ### v1.12.0 – Completions API, Video Understanding & File References

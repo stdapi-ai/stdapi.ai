@@ -73,65 +73,57 @@ ThinkingEffort = Literal["low", "medium", "high", "xhigh", "max"]
 class CitationCharLocation(BaseModelResponse):
     """Character location citation."""
 
-    type: Literal["char_location"] = Field(
-        description="Citation type. Always `char_location`."
-    )
+    type: Literal["char_location"] = Field(description="Citation type.")
     document_title: str | None = Field(
         default=None, description="Title of the cited document."
     )
-    cited_text: str = Field(description="The text content of the citation.")
-    document_index: int = Field(description="The index of the cited document.")
-    end_char_index: int = Field(description="The ending character index.")
-    file_id: str | None = Field(default=None, description="The file identifier.")
-    start_char_index: int = Field(description="The starting character index.")
+    cited_text: str = Field(description="Cited text content.")
+    document_index: int = Field(description="Index of the cited document.")
+    end_char_index: int = Field(description="End character index.")
+    file_id: str | None = Field(default=None, description="File ID.")
+    start_char_index: int = Field(description="Start character index.")
 
 
 # Ref: anthropic.types.citation_page_location.CitationPageLocation
 class CitationPageLocation(BaseModelResponse):
     """Page location citation."""
 
-    type: Literal["page_location"] = Field(
-        description="Citation type. Always `page_location`."
-    )
+    type: Literal["page_location"] = Field(description="Citation type.")
     document_title: str | None = Field(
         default=None, description="Title of the cited document."
     )
-    cited_text: str = Field(description="The text content of the citation.")
-    document_index: int = Field(description="The index of the cited document.")
-    end_page_number: int = Field(description="The ending page number.")
-    file_id: str | None = Field(default=None, description="The file identifier.")
-    start_page_number: int = Field(description="The starting page number.")
+    cited_text: str = Field(description="Cited text content.")
+    document_index: int = Field(description="Index of the cited document.")
+    end_page_number: int = Field(description="End page number.")
+    file_id: str | None = Field(default=None, description="File ID.")
+    start_page_number: int = Field(description="Start page number.")
 
 
 # Ref: anthropic.types.citation_content_block_location.CitationContentBlockLocation
 class CitationContentBlockLocation(BaseModelResponse):
     """Content block location citation."""
 
-    type: Literal["content_block_location"] = Field(
-        description="Citation type. Always `content_block_location`."
-    )
+    type: Literal["content_block_location"] = Field(description="Citation type.")
     document_title: str | None = Field(
         default=None, description="Title of the cited document."
     )
-    cited_text: str = Field(description="The text content of the citation.")
-    document_index: int = Field(description="The index of the cited document.")
-    end_block_index: int = Field(description="The ending content block index.")
-    file_id: str | None = Field(default=None, description="The file identifier.")
-    start_block_index: int = Field(description="The starting content block index.")
+    cited_text: str = Field(description="Cited text content.")
+    document_index: int = Field(description="Index of the cited document.")
+    end_block_index: int = Field(description="End content block index.")
+    file_id: str | None = Field(default=None, description="File ID.")
+    start_block_index: int = Field(description="Start content block index.")
 
 
 # Ref: anthropic.types.citations_web_search_result_location.CitationsWebSearchResultLocation
 class CitationsWebSearchResultLocation(BaseModelResponse):
     """Web search result citation location."""
 
-    type: Literal["web_search_result_location"] = Field(
-        description="Citation type. Always `web_search_result_location`."
-    )
+    type: Literal["web_search_result_location"] = Field(description="Citation type.")
     url: str = Field(description="URL of the web search result.")
     title: str | None = Field(
         default=None, description="Title of the web search result."
     )
-    cited_text: str = Field(description="The text content of the citation.")
+    cited_text: str = Field(description="Cited text content.")
     encrypted_index: str = Field(description="Encrypted index for the search result.")
 
 
@@ -139,15 +131,13 @@ class CitationsWebSearchResultLocation(BaseModelResponse):
 class CitationsSearchResultLocation(BaseModelResponse):
     """Search result citation location."""
 
-    type: Literal["search_result_location"] = Field(
-        description="Citation type. Always `search_result_location`."
-    )
+    type: Literal["search_result_location"] = Field(description="Citation type.")
     search_result_index: int = Field(description="Index of the search result.")
-    cited_text: str = Field(description="The text content of the citation.")
-    end_block_index: int = Field(description="The ending content block index.")
-    source: str = Field(description="The source of the search result.")
-    start_block_index: int = Field(description="The starting content block index.")
-    title: str | None = Field(default=None, description="The title.")
+    cited_text: str = Field(description="Cited text content.")
+    end_block_index: int = Field(description="End content block index.")
+    source: str = Field(description="Source of the search result.")
+    start_block_index: int = Field(description="Start content block index.")
+    title: str | None = Field(default=None, description="Title.")
 
 
 # Ref: anthropic.types.text_citation.TextCitation
@@ -166,18 +156,16 @@ class CacheControlEphemeralParam(BaseModelRequest):
     """Cache control configuration for prompt caching."""
 
     type: CacheControlType = Field(
-        default="ephemeral", description="Cache control type. Always `ephemeral`."
+        default="ephemeral", description="Cache control type."
     )
-    ttl: Literal["5m", "1h"] | None = Field(
-        default=None, description="The time-to-live for the cache control breakpoint."
-    )
+    ttl: Literal["5m", "1h"] | None = Field(default=None, description="Cache TTL.")
 
 
 # Ref: anthropic.types.text_block.TextBlock
 class TextBlock(BaseModelResponse):
     """Text content block."""
 
-    type: Literal["text"] = Field(description="Content block type. Always `text`.")
+    type: Literal["text"] = Field(description="Content block type.")
     text: str = Field(description="Text content.")
     citations: list[TextCitation] | None = Field(
         default=None, description="Citations supporting the text block."
@@ -188,72 +176,68 @@ class TextBlock(BaseModelResponse):
 class CitationCharLocationParam(BaseModelRequest):
     """Citation char location parameter."""
 
-    cited_text: str = Field(description="The text content of the citation.")
-    document_index: int = Field(description="The index of the cited document.")
+    cited_text: str = Field(description="Cited text content.")
+    document_index: int = Field(description="Index of the cited document.")
     document_title: str | None = Field(
-        default=None, description="The title of the cited document."
+        default=None, description="Title of the cited document."
     )
-    end_char_index: int = Field(description="The ending character index.")
-    start_char_index: int = Field(description="The starting character index.")
-    type: Literal["char_location"] = Field(description="The type discriminator.")
+    end_char_index: int = Field(description="End character index.")
+    start_char_index: int = Field(description="Start character index.")
+    type: Literal["char_location"] = Field(description="Type discriminator.")
 
 
 # Ref: anthropic.types.citation_page_location_param.CitationPageLocationParam
 class CitationPageLocationParam(BaseModelRequest):
     """Citation page location parameter."""
 
-    cited_text: str = Field(description="The text content of the citation.")
-    document_index: int = Field(description="The index of the cited document.")
+    cited_text: str = Field(description="Cited text content.")
+    document_index: int = Field(description="Index of the cited document.")
     document_title: str | None = Field(
-        default=None, description="The title of the cited document."
+        default=None, description="Title of the cited document."
     )
-    end_page_number: int = Field(description="The ending page number.")
-    start_page_number: int = Field(description="The starting page number.")
-    type: Literal["page_location"] = Field(description="The type discriminator.")
+    end_page_number: int = Field(description="End page number.")
+    start_page_number: int = Field(description="Start page number.")
+    type: Literal["page_location"] = Field(description="Type discriminator.")
 
 
 # Ref: anthropic.types.citation_content_block_location_param.CitationContentBlockLocationParam
 class CitationContentBlockLocationParam(BaseModelRequest):
     """Citation content block location parameter."""
 
-    cited_text: str = Field(description="The text content of the citation.")
-    document_index: int = Field(description="The index of the cited document.")
+    cited_text: str = Field(description="Cited text content.")
+    document_index: int = Field(description="Index of the cited document.")
     document_title: str | None = Field(
-        default=None, description="The title of the cited document."
+        default=None, description="Title of the cited document."
     )
-    end_block_index: int = Field(description="The ending content block index.")
-    start_block_index: int = Field(description="The starting content block index.")
-    type: Literal["content_block_location"] = Field(
-        description="The type discriminator."
-    )
+    end_block_index: int = Field(description="End content block index.")
+    start_block_index: int = Field(description="Start content block index.")
+    type: Literal["content_block_location"] = Field(description="Type discriminator.")
 
 
 # Ref: anthropic.types.citation_web_search_result_location_param.CitationWebSearchResultLocationParam
 class CitationWebSearchResultLocationParam(BaseModelRequest):
     """Citation web search result location parameter."""
 
-    cited_text: str = Field(description="The text content of the citation.")
+    cited_text: str = Field(description="Cited text content.")
     encrypted_index: str = Field(description="Encrypted index for the search result.")
-    title: str | None = Field(default=None, description="The title.")
+    title: str | None = Field(default=None, description="Title.")
     type: Literal["web_search_result_location"] = Field(
-        description="The type discriminator."
+        description="Type discriminator."
     )
-    url: str = Field(description="The URL.")
+    url: str = Field(description="URL.")
 
 
 # Ref : anthropic.types.citation_search_result_location_param.CitationSearchResultLocationParam
 class CitationSearchResultLocationParam(BaseModelRequest):
     """Citation search result location parameter."""
 
-    cited_text: str = Field(description="The text content of the citation.")
-    end_block_index: int = Field(description="The ending content block index.")
-    search_result_index: int = Field(description="The index of the search result.")
-    source: str = Field(description="The source of the search result.")
-    start_block_index: int = Field(description="The starting content block index.")
-    title: str | None = Field(default=None, description="The title.")
-    type: Literal["search_result_location"] = Field(
-        description="The type discriminator."
-    )
+    cited_text: str = Field(description="Cited text content.")
+    end_block_index: int = Field(description="End content block index.")
+    search_result_index: int = Field(description="Index of the search result.")
+    source: str = Field(description="Source of the search result.")
+    start_block_index: int = Field(description="Start content block index.")
+    title: str | None = Field(default=None, description="Title.")
+    type: Literal["search_result_location"] = Field(description="Type discriminator.")
 
 
 # Ref: anthropic.types.text_citation_param.TextCitationParam
@@ -270,14 +254,14 @@ TextCitationParam = (
 class TextBlockParam(BaseModelRequest):
     """Text content block parameter for system prompts and messages."""
 
-    type: Literal["text"] = Field(description="Content block type. Always `text`.")
+    type: Literal["text"] = Field(description="Content block type.")
     text: str = Field(description="Text content.")
     cache_control: CacheControlEphemeralParam | None = Field(
         default=None, description="Cache control for this content block."
     )
     citations: list[TextCitationParam] | None = Field(
         default=None,
-        description="Citations supporting the text block. The type of citation returned will depend on the type of document being cited. Citing a PDF results in `page_location`, plain text results in `char_location`, and content document results in `content_block_location`.",
+        description="Citations supporting the text block. Type depends on document: PDF uses `page_location`, plain text uses `char_location`, content documents use `content_block_location`.",
     )
 
 
@@ -285,10 +269,10 @@ class TextBlockParam(BaseModelRequest):
 class Base64ImageSource(BaseModelRequest):
     """Image source for image content block."""
 
-    type: Literal["base64"] = Field(description="Image source type. Always `base64`.")
+    type: Literal["base64"] = Field(description="Image source type.")
     media_type: str = Field(description="Image media type.")
     data: InputFile = Field(
-        description="Base64 encoded image data (or data URI, S3 URI or URL)."
+        description="Base64 encoded image data, data URI, S3 URI, or URL."
     )
 
 
@@ -296,9 +280,9 @@ class Base64ImageSource(BaseModelRequest):
 class URLImageSource(BaseModelRequest):
     """URL image source for image content block."""
 
-    type: Literal["url"] = Field(description="Image source type. Always `url`.")
+    type: Literal["url"] = Field(description="Image source type.")
     url: InputFile = Field(
-        description="URL of the image (or data URI, S3 URI or base64 encode string)."
+        description="URL of the image, data URI, S3 URI, or base64 encoded string."
     )
 
 
@@ -306,7 +290,7 @@ class URLImageSource(BaseModelRequest):
 class ImageBlockParam(BaseModelRequest):
     """Image content block parameter."""
 
-    type: Literal["image"] = Field(description="Content block type. Always `image`.")
+    type: Literal["image"] = Field(description="Content block type.")
     source: Annotated[
         Base64ImageSource | URLImageSource | FileSource,
         Field(discriminator="type", description="Image source data."),
@@ -320,14 +304,12 @@ class ImageBlockParam(BaseModelRequest):
 class Base64PDFSource(BaseModelRequest):
     """Document source for document content block."""
 
-    type: Literal["base64"] = Field(
-        description="Document source type. Always `base64`."
-    )
+    type: Literal["base64"] = Field(description="Document source type.")
     media_type: Literal["application/pdf"] = Field(
         description="Document media type. Only `application/pdf` is supported."
     )
     data: InputFile = Field(
-        description="Base64 encoded document data (or data URI, S3 URI or URL)."
+        description="Base64 encoded document data, data URI, S3 URI, or URL."
     )
 
 
@@ -335,9 +317,9 @@ class Base64PDFSource(BaseModelRequest):
 class URLPDFSource(BaseModelRequest):
     """URL PDF source for document content block."""
 
-    type: Literal["url"] = Field(description="Document source type. Always `url`.")
+    type: Literal["url"] = Field(description="Document source type.")
     url: InputFile = Field(
-        description="URL of the PDF document (or data URI, S3 URI or base 64 encoded string)."
+        description="URL of the PDF document, data URI, S3 URI, or base64 encoded string."
     )
 
 
@@ -345,9 +327,9 @@ class URLPDFSource(BaseModelRequest):
 class PlainTextSourceParam(BaseModelRequest):
     """Plain text source for document content block."""
 
-    data: str = Field(description="The data content.")
-    media_type: Literal["text/plain"] = Field(description="The media type.")
-    type: Literal["text"] = Field(description="The type discriminator.")
+    data: str = Field(description="Data content.")
+    media_type: Literal["text/plain"] = Field(description="Media type.")
+    type: Literal["text"] = Field(description="Type discriminator.")
 
 
 # Ref: anthropic.types.content_block_source_param.ContentBlockSourceParam
@@ -355,24 +337,24 @@ class ContentBlockSourceParam(BaseModelRequest):
     """Content block source for document content block."""
 
     content: str | list[TextBlockParam | ImageBlockParam] = Field(
-        description="The content of the source."
+        description="Content of the source."
     )
-    type: Literal["content"] = Field(description="The type discriminator.")
+    type: Literal["content"] = Field(description="Type discriminator.")
 
 
 # Ref: anthropic.types.beta.BetaFileDocumentSourceParam / BetaFileImageSourceParam
 class FileSource(BaseModelRequest):
     """File source for document or image content block (Files API)."""
 
-    type: Literal["file"] = Field(description="Source type. Always `file`.")
-    file_id: FileIdInputFile = Field(description="The Files API file identifier.")
+    type: Literal["file"] = Field(description="Source type.")
+    file_id: FileIdInputFile = Field(description="Files API file identifier.")
 
 
 # Ref: anthropic.types.citations_config_param.CitationsConfigParam
 class CitationsConfigParam(BaseModelRequest):
     """Citations config parameter."""
 
-    enabled: bool = Field(description="Whether the feature is enabled.")
+    enabled: bool = Field(description="Whether to enable citations.")
 
 
 # Ref: anthropic.types.document_block_param.DocumentBlockParam
@@ -399,15 +381,15 @@ class DocumentBlockParam(BaseModelRequest):
     context: str | None = Field(
         default=None, description="Additional context for the document."
     )
-    title: str | None = Field(default=None, description="The title of the document")
+    title: str | None = Field(default=None, description="Document title")
 
 
 # Ref: anthropic.types.direct_caller.DirectCaller
 # Ref: anthropic.types.direct_caller_param.DirectCallerParam
 class DirectCaller(BaseModelResponse):
-    """Tool invocation directly from the model."""
+    """Caller."""
 
-    type: Literal["direct"] = Field(description="The type discriminator.")
+    type: Literal["direct"] = Field(description="Type discriminator.")
 
 
 # Ref: anthropic.types.server_tool_caller.ServerToolCaller
@@ -419,7 +401,7 @@ class ServerToolCaller(BaseModelResponse):
 
     tool_id: str = Field(description="The tool identifier.")
     type: str = Field(
-        pattern=r"^code_execution(?:_[0-9]{8})?$", description="The type discriminator."
+        pattern=r"^code_execution(?:_[0-9]{8})?$", description="Type discriminator."
     )
 
 
@@ -437,9 +419,7 @@ class ToolUseBlock(BaseModelResponse):
     id: str = Field(description="Unique identifier for this tool use.")
     name: str = Field(description="Name of the tool being used.")
     input: JsonMapping = Field(description="Tool input parameters as a JSON object.")
-    caller: Caller | None = Field(
-        default=None, description="Tool invocation directly from the model."
-    )
+    caller: Caller | None = Field(default=None, description="Caller.")
 
 
 # Ref: anthropic.types.tool_use_block_param.ToolUseBlockParam
@@ -455,9 +435,7 @@ class ToolUseBlockParam(BaseModelRequest):
     cache_control: CacheControlEphemeralParam | None = Field(
         default=None, description="Cache control for this content block."
     )
-    caller: Caller | None = Field(
-        default=None, description="Tool invocation directly from the model."
-    )
+    caller: Caller | None = Field(default=None, description="Caller.")
 
 
 # Ref: anthropic.types.tool_result_block_param.ToolResultBlockParam
@@ -471,10 +449,10 @@ class ToolResultBlockParam(BaseModelRequest):
         description="ID of the tool use this result corresponds to."
     )
     content: str | list[TextBlockParam | ImageBlockParam] = Field(
-        description="Tool result content. Can be text or list of content blocks."
+        description="Tool result content."
     )
     is_error: bool | None = Field(
-        default=None, description="Whether this tool result represents an error."
+        default=None, description="Whether this is an error result."
     )
     cache_control: CacheControlEphemeralParam | None = Field(
         default=None, description="Cache control for this content block."
@@ -542,9 +520,7 @@ class ServerToolUseBlock(BaseModelResponse):
     id: str = Field(description="Unique identifier for this server tool use.")
     name: str = Field(description="Name of the server tool being used.")
     input: JsonMapping = Field(description="Tool input parameters as a JSON object.")
-    caller: Caller | None = Field(
-        default=None, description="Tool invocation directly from the model."
-    )
+    caller: Caller | None = Field(default=None, description="Caller.")
 
 
 # Ref: anthropic.types.server_tool_use_block_param.ServerToolUseBlockParam
@@ -560,9 +536,7 @@ class ServerToolUseBlockParam(BaseModelRequest):
     cache_control: CacheControlEphemeralParam | None = Field(
         default=None, description="Cache control for this content block."
     )
-    caller: Caller | None = Field(
-        default=None, description="Tool invocation directly from the model."
-    )
+    caller: Caller | None = Field(default=None, description="Caller.")
 
 
 # Ref: anthropic.types.web_search_result_block.WebSearchResultBlock
@@ -573,7 +547,7 @@ class WebSearchResultBlock(BaseModelResponse):
         description="Result type. Always `web_search_result`."
     )
     encrypted_content: str | None = Field(
-        default=None, description="Encrypted content of the web page."
+        default=None, description="Encrypted web page content."
     )
     title: str = Field(description="Title of the web page.")
     url: str = Field(description="URL of the web page.")
@@ -586,7 +560,7 @@ class WebSearchResultBlock(BaseModelResponse):
 class WebSearchToolResultError(BaseModelResponse):
     """Web search tool result error."""
 
-    error_code: str = Field(description="Machine-readable error code.")
+    error_code: str = Field(description="Error code.")
     type: Literal["error"] = Field(description="Result type. Always `error`.")
 
 
@@ -607,9 +581,7 @@ class WebSearchToolResultBlock(BaseModelResponse):
     content: WebSearchToolResultBlockContent = Field(
         description="Search results or error."
     )
-    caller: Caller | None = Field(
-        default=None, description="Tool invocation directly from the model."
-    )
+    caller: Caller | None = Field(default=None, description="Caller.")
 
 
 # Ref: anthropic.types.search_result_block_param.SearchResultBlockParam
@@ -645,9 +617,9 @@ class WebFetchToolResultErrorBlock(BaseModelResponse):
         "too_many_requests",
         "max_uses_exceeded",
         "unavailable",
-    ] = Field(description="Machine-readable error code.")
+    ] = Field(description="Error code.")
     type: Literal["web_fetch_tool_result_error"] = Field(
-        description="The type discriminator."
+        description="Type discriminator."
     )
 
 
@@ -664,7 +636,7 @@ class PlainTextSource(BaseModelResponse):
 
     data: str = Field(description="The data content.")
     media_type: Literal["text/plain"] = Field(description="The media type.")
-    type: Literal["text"] = Field(description="The type discriminator.")
+    type: Literal["text"] = Field(description="Type discriminator.")
 
 
 # Ref: anthropic.types.document_block.DocumentBlock
@@ -678,19 +650,19 @@ class DocumentBlock(BaseModelResponse):
         Base64PDFSource | PlainTextSource,
         Field(discriminator="type", description="The document source."),
     ]
-    title: str | None = Field(default=None, description="The title of the document")
-    type: Literal["document"] = Field(description="The type discriminator.")
+    title: str | None = Field(default=None, description="Document title")
+    type: Literal["document"] = Field(description="Type discriminator.")
 
 
 # Ref: anthropic.types.web_fetch_block.WebFetchBlock
 class WebFetchBlock(BaseModelResponse):
     """Web fetch block."""
 
-    content: DocumentBlock = Field(description="The content of the block.")
+    content: DocumentBlock = Field(description="Block content.")
     retrieved_at: str | None = Field(
         default=None, description="ISO 8601 timestamp when the content was retrieved"
     )
-    type: Literal["web_fetch_result"] = Field(description="The type discriminator.")
+    type: Literal["web_fetch_result"] = Field(description="Type discriminator.")
     url: str = Field(description="Fetched content URL")
 
 
@@ -698,18 +670,12 @@ class WebFetchBlock(BaseModelResponse):
 class WebFetchToolResultBlock(BaseModelResponse):
     """Web fetch tool result block."""
 
-    caller: Caller | None = Field(
-        default=None, description="Tool invocation directly from the model."
-    )
+    caller: Caller | None = Field(default=None, description="Caller.")
     content: WebFetchToolResultErrorBlock | WebFetchBlock = Field(
-        description="The content of the block."
+        description="Block content."
     )
-    tool_use_id: str = Field(
-        description="The ID of the tool use that produced this result."
-    )
-    type: Literal["web_fetch_tool_result"] = Field(
-        description="The type discriminator."
-    )
+    tool_use_id: str = Field(description="Tool use ID.")
+    type: Literal["web_fetch_tool_result"] = Field(description="Type discriminator.")
 
 
 # Ref: anthropic.types.code_execution_tool_result_error_code.CodeExecutionToolResultErrorCode
@@ -722,11 +688,9 @@ type CodeExecutionToolResultErrorCode = Literal[
 class CodeExecutionToolResultError(BaseModelResponse):
     """Code execution tool result error."""
 
-    error_code: CodeExecutionToolResultErrorCode = Field(
-        description="Machine-readable error code."
-    )
+    error_code: CodeExecutionToolResultErrorCode = Field(description="Error code.")
     type: Literal["code_execution_tool_result_error"] = Field(
-        description="The type discriminator."
+        description="Type discriminator."
     )
 
 
@@ -734,39 +698,31 @@ class CodeExecutionToolResultError(BaseModelResponse):
 class CodeExecutionOutputBlock(BaseModelResponse):
     """Code execution output block."""
 
-    file_id: str = Field(description="The file identifier.")
-    type: Literal["code_execution_output"] = Field(
-        description="The type discriminator."
-    )
+    file_id: str = Field(description="File ID.")
+    type: Literal["code_execution_output"] = Field(description="Type discriminator.")
 
 
 # Ref: anthropic.types.code_execution_result_block.CodeExecutionResultBlock
 class CodeExecutionResultBlock(BaseModelResponse):
     """Code execution result block."""
 
-    content: list[CodeExecutionOutputBlock] = Field(
-        description="The content of the block."
-    )
-    return_code: int = Field(description="The return code of the execution.")
-    stderr: str = Field(description="Standard error output.")
-    stdout: str = Field(description="Standard output.")
-    type: Literal["code_execution_result"] = Field(
-        description="The type discriminator."
-    )
+    content: list[CodeExecutionOutputBlock] = Field(description="Block content.")
+    return_code: int = Field(description="Return code.")
+    stderr: str = Field(description="Stderr.")
+    stdout: str = Field(description="Stdout.")
+    type: Literal["code_execution_result"] = Field(description="Type discriminator.")
 
 
 # Ref: anthropic.types.encrypted_code_execution_result_block.EncryptedCodeExecutionResultBlock
 class EncryptedCodeExecutionResultBlock(BaseModelResponse):
     """Code execution result with encrypted stdout for PFC + web_search results."""
 
-    content: list[CodeExecutionOutputBlock] = Field(
-        description="The content of the block."
-    )
+    content: list[CodeExecutionOutputBlock] = Field(description="Block content.")
     encrypted_stdout: str = Field(description="Encrypted standard output.")
-    return_code: int = Field(description="The return code of the execution.")
-    stderr: str = Field(description="Standard error output.")
+    return_code: int = Field(description="Return code.")
+    stderr: str = Field(description="Stderr.")
     type: Literal["encrypted_code_execution_result"] = Field(
-        description="The type discriminator."
+        description="Type discriminator."
     )
 
 
@@ -781,11 +737,9 @@ class CodeExecutionToolResultBlock(BaseModelResponse):
     ) = Field(
         description="Code execution result with encrypted stdout for PFC + web_search results."
     )
-    tool_use_id: str = Field(
-        description="The ID of the tool use that produced this result."
-    )
+    tool_use_id: str = Field(description="Tool use ID.")
     type: Literal["code_execution_tool_result"] = Field(
-        description="The type discriminator."
+        description="Type discriminator."
     )
 
 
@@ -803,11 +757,9 @@ BashCodeExecutionToolResultErrorCode = Literal[
 class BashCodeExecutionToolResultError(BaseModelResponse):
     """Bash code execution tool result error."""
 
-    error_code: BashCodeExecutionToolResultErrorCode = Field(
-        description="Machine-readable error code."
-    )
+    error_code: BashCodeExecutionToolResultErrorCode = Field(description="Error code.")
     type: Literal["bash_code_execution_tool_result_error"] = Field(
-        description="The type discriminator."
+        description="Type discriminator."
     )
 
 
@@ -815,9 +767,9 @@ class BashCodeExecutionToolResultError(BaseModelResponse):
 class BashCodeExecutionOutputBlock(BaseModelResponse):
     """Bash code execution output block."""
 
-    file_id: str = Field(description="The file identifier.")
+    file_id: str = Field(description="File ID.")
     type: Literal["bash_code_execution_output"] = Field(
-        description="The type discriminator."
+        description="Type discriminator."
     )
 
 
@@ -825,14 +777,12 @@ class BashCodeExecutionOutputBlock(BaseModelResponse):
 class BashCodeExecutionResultBlock(BaseModelResponse):
     """Bash code execution result block."""
 
-    content: list[BashCodeExecutionOutputBlock] = Field(
-        description="The content of the block."
-    )
-    return_code: int = Field(description="The return code of the execution.")
-    stderr: str = Field(description="Standard error output.")
-    stdout: str = Field(description="Standard output.")
+    content: list[BashCodeExecutionOutputBlock] = Field(description="Block content.")
+    return_code: int = Field(description="Return code.")
+    stderr: str = Field(description="Stderr.")
+    stdout: str = Field(description="Stdout.")
     type: Literal["bash_code_execution_result"] = Field(
-        description="The type discriminator."
+        description="Type discriminator."
     )
 
 
@@ -841,13 +791,11 @@ class BashCodeExecutionToolResultBlock(BaseModelResponse):
     """Bash code execution tool result block."""
 
     content: BashCodeExecutionToolResultError | BashCodeExecutionResultBlock = Field(
-        description="The content of the block."
+        description="Block content."
     )
-    tool_use_id: str = Field(
-        description="The ID of the tool use that produced this result."
-    )
+    tool_use_id: str = Field(description="Tool use ID.")
     type: Literal["bash_code_execution_tool_result"] = Field(
-        description="The type discriminator."
+        description="Type discriminator."
     )
 
 
@@ -866,13 +814,11 @@ class TextEditorCodeExecutionToolResultError(BaseModelResponse):
     """Text editor code execution tool result error."""
 
     error_code: TextEditorCodeExecutionToolResultErrorCode = Field(
-        description="Machine-readable error code."
+        description="Error code."
     )
-    error_message: str | None = Field(
-        default=None, description="Human-readable error message."
-    )
+    error_message: str | None = Field(default=None, description="Error message.")
     type: Literal["text_editor_code_execution_tool_result_error"] = Field(
-        description="The type discriminator."
+        description="Type discriminator."
     )
 
 
@@ -880,7 +826,7 @@ class TextEditorCodeExecutionToolResultError(BaseModelResponse):
 class TextEditorCodeExecutionViewResultBlock(BaseModelResponse):
     """Text editor code execution view result block."""
 
-    content: str = Field(description="The content of the block.")
+    content: str = Field(description="Block content.")
     file_type: Literal["text", "image", "pdf"] = Field(
         description="The type of file output."
     )
@@ -892,7 +838,7 @@ class TextEditorCodeExecutionViewResultBlock(BaseModelResponse):
         default=None, description="Total number of lines in the file."
     )
     type: Literal["text_editor_code_execution_view_result"] = Field(
-        description="The type discriminator."
+        description="Type discriminator."
     )
 
 
@@ -902,7 +848,7 @@ class TextEditorCodeExecutionCreateResultBlock(BaseModelResponse):
 
     is_file_update: bool = Field(description="Whether this result is a file update.")
     type: Literal["text_editor_code_execution_create_result"] = Field(
-        description="The type discriminator."
+        description="Type discriminator."
     )
 
 
@@ -924,7 +870,7 @@ class TextEditorCodeExecutionStrReplaceResultBlock(BaseModelResponse):
         default=None, description="The starting line of the original text."
     )
     type: Literal["text_editor_code_execution_str_replace_result"] = Field(
-        description="The type discriminator."
+        description="Type discriminator."
     )
 
 
@@ -937,12 +883,10 @@ class TextEditorCodeExecutionToolResultBlock(BaseModelResponse):
         | TextEditorCodeExecutionViewResultBlock
         | TextEditorCodeExecutionCreateResultBlock
         | TextEditorCodeExecutionStrReplaceResultBlock
-    ) = Field(description="The content of the block.")
-    tool_use_id: str = Field(
-        description="The ID of the tool use that produced this result."
-    )
+    ) = Field(description="Block content.")
+    tool_use_id: str = Field(description="Tool use ID.")
     type: Literal["text_editor_code_execution_tool_result"] = Field(
-        description="The type discriminator."
+        description="Type discriminator."
     )
 
 
@@ -956,14 +900,10 @@ type ToolSearchToolResultErrorCode = Literal[
 class ToolSearchToolResultError(BaseModelResponse):
     """Tool search tool result error."""
 
-    error_code: ToolSearchToolResultErrorCode = Field(
-        description="Machine-readable error code."
-    )
-    error_message: str | None = Field(
-        default=None, description="Human-readable error message."
-    )
+    error_code: ToolSearchToolResultErrorCode = Field(description="Error code.")
+    error_message: str | None = Field(default=None, description="Error message.")
     type: Literal["tool_search_tool_result_error"] = Field(
-        description="The type discriminator."
+        description="Type discriminator."
     )
 
 
@@ -971,19 +911,17 @@ class ToolSearchToolResultError(BaseModelResponse):
 class ToolReferenceBlock(BaseModelResponse):
     """Tool reference block."""
 
-    tool_name: str = Field(description="The name of the tool.")
-    type: Literal["tool_reference"] = Field(description="The type discriminator.")
+    tool_name: str = Field(description="Tool name.")
+    type: Literal["tool_reference"] = Field(description="Type discriminator.")
 
 
 # Ref: anthropic.types.tool_search_tool_search_result_block.ToolSearchToolSearchResultBlock
 class ToolSearchToolSearchResultBlock(BaseModelResponse):
     """Tool search tool search result block."""
 
-    tool_references: list[ToolReferenceBlock] = Field(
-        description="References to tools."
-    )
+    tool_references: list[ToolReferenceBlock] = Field(description="Tool references.")
     type: Literal["tool_search_tool_search_result"] = Field(
-        description="The type discriminator."
+        description="Type discriminator."
     )
 
 
@@ -992,22 +930,18 @@ class ToolSearchToolResultBlock(BaseModelResponse):
     """Tool search tool result block."""
 
     content: ToolSearchToolResultError | ToolSearchToolSearchResultBlock = Field(
-        description="The content of the block."
+        description="Block content."
     )
-    tool_use_id: str = Field(
-        description="The ID of the tool use that produced this result."
-    )
-    type: Literal["tool_search_tool_result"] = Field(
-        description="The type discriminator."
-    )
+    tool_use_id: str = Field(description="Tool use ID.")
+    type: Literal["tool_search_tool_result"] = Field(description="Type discriminator.")
 
 
 # Ref: anthropic.types.container_upload_block.ContainerUploadBlock
 class ContainerUploadBlock(BaseModelResponse):
     """Response model for a file uploaded to the container."""
 
-    file_id: str = Field(description="The file identifier.")
-    type: Literal["container_upload"] = Field(description="The type discriminator.")
+    file_id: str = Field(description="File ID.")
+    type: Literal["container_upload"] = Field(description="Type discriminator.")
 
 
 # Content block unions
@@ -1033,9 +967,9 @@ ContentBlock = Annotated[
 class WebSearchResultBlockParam(BaseModelRequest):
     """Web search result block parameter."""
 
-    encrypted_content: str = Field(description="Encrypted content of the web page.")
+    encrypted_content: str = Field(description="Encrypted web page content.")
     title: str = Field(description="The title.")
-    type: Literal["web_search_result"] = Field(description="The type discriminator.")
+    type: Literal["web_search_result"] = Field(description="Type discriminator.")
     url: str = Field(description="The URL.")
     page_age: str | None = Field(
         default=None, description="How long ago the page was published or updated."
@@ -1057,11 +991,9 @@ WebSearchToolResultErrorCode = Literal[
 class WebSearchToolRequestErrorParam(BaseModelRequest):
     """Web search tool request error parameter."""
 
-    error_code: WebSearchToolResultErrorCode = Field(
-        description="Machine-readable error code."
-    )
+    error_code: WebSearchToolResultErrorCode = Field(description="Error code.")
     type: Literal["web_search_tool_result_error"] = Field(
-        description="The type discriminator."
+        description="Type discriminator."
     )
 
 
@@ -1076,21 +1008,14 @@ class WebSearchToolResultBlockParam(BaseModelRequest):
     """Web search tool result block parameter."""
 
     content: WebSearchToolResultBlockParamContentParam = Field(
-        description="The content of the block."
+        description="Block content."
     )
-    tool_use_id: str = Field(
-        description="The ID of the tool use that produced this result."
-    )
-    type: Literal["web_search_tool_result"] = Field(
-        description="The type discriminator."
-    )
+    tool_use_id: str = Field(description="Tool use ID.")
+    type: Literal["web_search_tool_result"] = Field(description="Type discriminator.")
     cache_control: CacheControlEphemeralParam | None = Field(
-        default=None,
-        description="Create a cache control breakpoint at this content block.",
+        default=None, description="Cache control breakpoint."
     )
-    caller: Caller | None = Field(
-        default=None, description="Tool invocation directly from the model."
-    )
+    caller: Caller | None = Field(default=None, description="Caller.")
 
 
 # Ref: anthropic.types.web_fetch_tool_result_error_code.WebFetchToolResultErrorCode
@@ -1110,11 +1035,9 @@ WebFetchToolResultErrorCode = Literal[
 class WebFetchToolResultErrorBlockParam(BaseModelRequest):
     """Web fetch tool result error block parameter."""
 
-    error_code: WebFetchToolResultErrorCode = Field(
-        description="Machine-readable error code."
-    )
+    error_code: WebFetchToolResultErrorCode = Field(description="Error code.")
     type: Literal["web_fetch_tool_result_error"] = Field(
-        description="The type discriminator."
+        description="Type discriminator."
     )
 
 
@@ -1122,8 +1045,8 @@ class WebFetchToolResultErrorBlockParam(BaseModelRequest):
 class WebFetchBlockParam(BaseModelRequest):
     """Web fetch block parameter."""
 
-    content: DocumentBlockParam = Field(description="The content of the block.")
-    type: Literal["web_fetch_result"] = Field(description="The type discriminator.")
+    content: DocumentBlockParam = Field(description="Block content.")
+    type: Literal["web_fetch_result"] = Field(description="Type discriminator.")
     url: str = Field(description="Fetched content URL")
     retrieved_at: str | None = Field(
         default=None, description="ISO 8601 timestamp when the content was retrieved"
@@ -1135,42 +1058,31 @@ class WebFetchToolResultBlockParam(BaseModelRequest):
     """Web fetch tool result block parameter."""
 
     content: WebFetchToolResultErrorBlockParam | WebFetchBlockParam = Field(
-        description="The content of the block."
+        description="Block content."
     )
-    tool_use_id: str = Field(
-        description="The ID of the tool use that produced this result."
-    )
-    type: Literal["web_fetch_tool_result"] = Field(
-        description="The type discriminator."
-    )
+    tool_use_id: str = Field(description="Tool use ID.")
+    type: Literal["web_fetch_tool_result"] = Field(description="Type discriminator.")
     cache_control: CacheControlEphemeralParam | None = Field(
-        default=None,
-        description="Create a cache control breakpoint at this content block.",
+        default=None, description="Cache control breakpoint."
     )
-    caller: Caller | None = Field(
-        default=None, description="Tool invocation directly from the model."
-    )
+    caller: Caller | None = Field(default=None, description="Caller.")
 
 
 # Ref : anthropic.types.code_execution_output_block_param.CodeExecutionOutputBlockParam
 class CodeExecutionOutputBlockParam(BaseModelRequest):
     """Code execution output block parameter."""
 
-    file_id: str = Field(description="The file identifier.")
-    type: Literal["code_execution_output"] = Field(
-        description="The type discriminator."
-    )
+    file_id: str = Field(description="File ID.")
+    type: Literal["code_execution_output"] = Field(description="Type discriminator.")
 
 
 # Ref: anthropic.types.code_execution_tool_result_error_param.CodeExecutionToolResultErrorParam
 class CodeExecutionToolResultErrorParam(BaseModelRequest):
     """Code execution tool result error parameter."""
 
-    error_code: CodeExecutionToolResultErrorCode = Field(
-        description="Machine-readable error code."
-    )
+    error_code: CodeExecutionToolResultErrorCode = Field(description="Error code.")
     type: Literal["code_execution_tool_result_error"] = Field(
-        description="The type discriminator."
+        description="Type discriminator."
     )
 
 
@@ -1178,29 +1090,23 @@ class CodeExecutionToolResultErrorParam(BaseModelRequest):
 class CodeExecutionResultBlockParam(BaseModelRequest):
     """Code execution result block parameter."""
 
-    content: list[CodeExecutionOutputBlockParam] = Field(
-        description="The content of the block."
-    )
-    return_code: int = Field(description="The return code of the execution.")
-    stderr: str = Field(description="Standard error output.")
-    stdout: str = Field(description="Standard output.")
-    type: Literal["code_execution_result"] = Field(
-        description="The type discriminator."
-    )
+    content: list[CodeExecutionOutputBlockParam] = Field(description="Block content.")
+    return_code: int = Field(description="Return code.")
+    stderr: str = Field(description="Stderr.")
+    stdout: str = Field(description="Stdout.")
+    type: Literal["code_execution_result"] = Field(description="Type discriminator.")
 
 
 # Ref: anthropic.types.encrypted_code_execution_result_block_param.EncryptedCodeExecutionResultBlockParam
 class EncryptedCodeExecutionResultBlockParam(BaseModelRequest):
     """Code execution result with encrypted stdout for PFC + web_search results."""
 
-    content: list[CodeExecutionOutputBlockParam] = Field(
-        description="The content of the block."
-    )
+    content: list[CodeExecutionOutputBlockParam] = Field(description="Block content.")
     encrypted_stdout: str = Field(description="Encrypted standard output.")
-    return_code: int = Field(description="The return code of the execution.")
-    stderr: str = Field(description="Standard error output.")
+    return_code: int = Field(description="Return code.")
+    stderr: str = Field(description="Stderr.")
     type: Literal["encrypted_code_execution_result"] = Field(
-        description="The type discriminator."
+        description="Type discriminator."
     )
 
 
@@ -1219,15 +1125,12 @@ class CodeExecutionToolResultBlockParam(BaseModelRequest):
     content: CodeExecutionToolResultBlockParamContentParam = Field(
         description="Code execution result with encrypted stdout for PFC + web_search results."
     )
-    tool_use_id: str = Field(
-        description="The ID of the tool use that produced this result."
-    )
+    tool_use_id: str = Field(description="Tool use ID.")
     type: Literal["code_execution_tool_result"] = Field(
-        description="The type discriminator."
+        description="Type discriminator."
     )
     cache_control: CacheControlEphemeralParam | None = Field(
-        default=None,
-        description="Create a cache control breakpoint at this content block.",
+        default=None, description="Cache control breakpoint."
     )
 
 
@@ -1235,9 +1138,9 @@ class CodeExecutionToolResultBlockParam(BaseModelRequest):
 class BashCodeExecutionOutputBlockParam(BaseModelRequest):
     """Bash code execution output block parameter."""
 
-    file_id: str = Field(description="The file identifier.")
+    file_id: str = Field(description="File ID.")
     type: Literal["bash_code_execution_output"] = Field(
-        description="The type discriminator."
+        description="Type discriminator."
     )
 
 
@@ -1246,13 +1149,13 @@ class BashCodeExecutionResultBlockParam(BaseModelRequest):
     """Bash code execution result block parameter."""
 
     content: list[BashCodeExecutionOutputBlockParam] = Field(
-        description="The content of the block."
+        description="Block content."
     )
-    return_code: int = Field(description="The return code of the execution.")
-    stderr: str = Field(description="Standard error output.")
-    stdout: str = Field(description="Standard output.")
+    return_code: int = Field(description="Return code.")
+    stderr: str = Field(description="Stderr.")
+    stdout: str = Field(description="Stdout.")
     type: Literal["bash_code_execution_result"] = Field(
-        description="The type discriminator."
+        description="Type discriminator."
     )
 
 
@@ -1260,11 +1163,9 @@ class BashCodeExecutionResultBlockParam(BaseModelRequest):
 class BashCodeExecutionToolResultErrorParam(BaseModelRequest):
     """Bash code execution tool result error parameter."""
 
-    error_code: BashCodeExecutionToolResultErrorCode = Field(
-        description="Machine-readable error code."
-    )
+    error_code: BashCodeExecutionToolResultErrorCode = Field(description="Error code.")
     type: Literal["bash_code_execution_tool_result_error"] = Field(
-        description="The type discriminator."
+        description="Type discriminator."
     )
 
 
@@ -1275,15 +1176,12 @@ class BashCodeExecutionToolResultBlockParam(BaseModelRequest):
     content: (
         BashCodeExecutionToolResultErrorParam | BashCodeExecutionResultBlockParam
     ) = Field()
-    tool_use_id: str = Field(
-        description="The ID of the tool use that produced this result."
-    )
+    tool_use_id: str = Field(description="Tool use ID.")
     type: Literal["bash_code_execution_tool_result"] = Field(
-        description="The type discriminator."
+        description="Type discriminator."
     )
     cache_control: CacheControlEphemeralParam | None = Field(
-        default=None,
-        description="Create a cache control breakpoint at this content block.",
+        default=None, description="Cache control breakpoint."
     )
 
 
@@ -1292,26 +1190,24 @@ class TextEditorCodeExecutionToolResultErrorParam(BaseModelRequest):
     """Text editor code execution tool result error parameter."""
 
     error_code: TextEditorCodeExecutionToolResultErrorCode = Field(
-        description="Machine-readable error code."
+        description="Error code."
     )
     type: Literal["text_editor_code_execution_tool_result_error"] = Field(
-        description="The type discriminator."
+        description="Type discriminator."
     )
-    error_message: str | None = Field(
-        default=None, description="Human-readable error message."
-    )
+    error_message: str | None = Field(default=None, description="Error message.")
 
 
 # Ref: anthropic.types.text_editor_code_execution_view_result_block_param.TextEditorCodeExecutionViewResultBlockParam
 class TextEditorCodeExecutionViewResultBlockParam(BaseModelRequest):
     """Text editor code execution view result block parameter."""
 
-    content: str = Field(description="The content of the block.")
+    content: str = Field(description="Block content.")
     file_type: Literal["text", "image", "pdf"] = Field(
         description="The type of file output."
     )
     type: Literal["text_editor_code_execution_view_result"] = Field(
-        description="The type discriminator."
+        description="Type discriminator."
     )
     num_lines: int | None = Field(default=None, description="The number of lines.")
     start_line: int | None = Field(
@@ -1328,7 +1224,7 @@ class TextEditorCodeExecutionCreateResultBlockParam(BaseModelRequest):
 
     is_file_update: bool = Field(description="Whether this result is a file update.")
     type: Literal["text_editor_code_execution_create_result"] = Field(
-        description="The type discriminator."
+        description="Type discriminator."
     )
 
 
@@ -1337,7 +1233,7 @@ class TextEditorCodeExecutionStrReplaceResultBlockParam(BaseModelRequest):
     """Text editor code execution str replace result block parameter."""
 
     type: Literal["text_editor_code_execution_str_replace_result"] = Field(
-        description="The type discriminator."
+        description="Type discriminator."
     )
     lines: list[str] | None = Field(default=None, description="The lines of content.")
     new_lines: int | None = Field(
@@ -1364,15 +1260,12 @@ class TextEditorCodeExecutionToolResultBlockParam(BaseModelRequest):
         | TextEditorCodeExecutionCreateResultBlockParam
         | TextEditorCodeExecutionStrReplaceResultBlockParam
     ) = Field()
-    tool_use_id: str = Field(
-        description="The ID of the tool use that produced this result."
-    )
+    tool_use_id: str = Field(description="Tool use ID.")
     type: Literal["text_editor_code_execution_tool_result"] = Field(
-        description="The type discriminator."
+        description="Type discriminator."
     )
     cache_control: CacheControlEphemeralParam | None = Field(
-        default=None,
-        description="Create a cache control breakpoint at this content block.",
+        default=None, description="Cache control breakpoint."
     )
 
 
@@ -1380,11 +1273,9 @@ class TextEditorCodeExecutionToolResultBlockParam(BaseModelRequest):
 class ToolSearchToolResultErrorParam(BaseModelRequest):
     """Tool search tool result error parameter."""
 
-    error_code: ToolSearchToolResultErrorCode = Field(
-        description="Machine-readable error code."
-    )
+    error_code: ToolSearchToolResultErrorCode = Field(description="Error code.")
     type: Literal["tool_search_tool_result_error"] = Field(
-        description="The type discriminator."
+        description="Type discriminator."
     )
 
 
@@ -1392,11 +1283,10 @@ class ToolSearchToolResultErrorParam(BaseModelRequest):
 class ToolReferenceBlockParam(BaseModelRequest):
     """Tool reference block that can be included in tool_result content."""
 
-    tool_name: str = Field(description="The name of the tool.")
-    type: Literal["tool_reference"] = Field(description="The type discriminator.")
+    tool_name: str = Field(description="Tool name.")
+    type: Literal["tool_reference"] = Field(description="Type discriminator.")
     cache_control: CacheControlEphemeralParam | None = Field(
-        default=None,
-        description="Create a cache control breakpoint at this content block.",
+        default=None, description="Cache control breakpoint."
     )
 
 
@@ -1405,10 +1295,10 @@ class ToolSearchToolSearchResultBlockParam(BaseModelRequest):
     """Tool search tool search result block parameter."""
 
     tool_references: list[ToolReferenceBlockParam] = Field(
-        description="References to tools."
+        description="Tool references."
     )
     type: Literal["tool_search_tool_search_result"] = Field(
-        description="The type discriminator."
+        description="Type discriminator."
     )
 
 
@@ -1420,15 +1310,10 @@ class ToolSearchToolResultBlockParam(BaseModelRequest):
         Field()
     )
 
-    tool_use_id: str = Field(
-        description="The ID of the tool use that produced this result."
-    )
-    type: Literal["tool_search_tool_result"] = Field(
-        description="The type discriminator."
-    )
+    tool_use_id: str = Field(description="Tool use ID.")
+    type: Literal["tool_search_tool_result"] = Field(description="Type discriminator.")
     cache_control: CacheControlEphemeralParam | None = Field(
-        default=None,
-        description="Create a cache control breakpoint at this content block.",
+        default=None, description="Cache control breakpoint."
     )
 
 
@@ -1440,11 +1325,10 @@ class ContainerUploadBlockParam(BaseModelRequest):
     UNSUPPORTED on this implementation.
     """
 
-    file_id: str = Field(description="The file identifier.")
-    type: Literal["container_upload"] = Field(description="The type discriminator.")
+    file_id: str = Field(description="File ID.")
+    type: Literal["container_upload"] = Field(description="Type discriminator.")
     cache_control: CacheControlEphemeralParam | None = Field(
-        default=None,
-        description="Create a cache control breakpoint at this content block.",
+        default=None, description="Cache control breakpoint."
     )
 
 
@@ -1477,10 +1361,8 @@ ContentBlockParam = (
 class MessageParam(BaseModelRequest):
     """Base message parameter."""
 
-    role: Literal["user", "assistant", "system"] = Field(
-        description="The role of the message author."
-    )
-    content: str | list[ContentBlockParam] = Field(description="The message content.")
+    role: Literal["user", "assistant", "system"] = Field(description="Message role.")
+    content: str | list[ContentBlockParam] = Field(description="Message content.")
 
 
 # Ref: anthropic.types.tool_param.ToolParam.InputSchema
@@ -1488,11 +1370,9 @@ class MessageParam(BaseModelRequest):
 class ToolInputSchema(BaseModelRequest):
     """JSON schema for tool input parameters."""
 
-    type: Literal["object"] = Field(
-        description="Schema type. Must be `object`.", default="object"
-    )
+    type: Literal["object"] = Field(description="Schema type.", default="object")
     properties: JsonMapping | None = Field(
-        default=None, description="Properties of the tool input schema."
+        default=None, description="Schema properties."
     )
     required: list[str] | None = Field(default=None, description="Required properties.")
 
@@ -1501,60 +1381,39 @@ class ToolInputSchema(BaseModelRequest):
 class ToolParam(BaseModelRequest):
     """Tool definition for function calling."""
 
-    type: Literal["custom"] = Field(
-        default="custom", description="Tool type. Always `custom` for custom tools."
-    )
+    type: Literal["custom"] = Field(default="custom", description="Tool type.")
     name: str = Field(
-        description="""Name of the tool.
-
-    This is how the tool will be called by the model and in `tool_use` blocks.
-    """
+        description="Name of the tool, used to call it in `tool_use` blocks."
     )
     input_schema: ToolInputSchema = Field(
-        description="""[JSON schema](https://json-schema.org/draft/2020-12) for this tool's input.
-
-    This defines the shape of the `input` that your tool accepts and that the model
-    will produce.
-    """
+        description="JSON schema for the shape of the `input` this tool "
+        "accepts and that the model will produce."
     )
     cache_control: CacheControlEphemeralParam | None = Field(
-        default=None,
-        description="Create a cache control breakpoint at this content block.",
+        default=None, description="Cache control breakpoint."
     )
     description: str | None = Field(
         default=None,
-        description="""Description of what this tool does.
-
-    Tool descriptions should be as detailed as possible. The more information that
-    the model has about what the tool is and how to use it, the better it will
-    perform. You can use natural language descriptions to reinforce important
-    aspects of the tool input JSON schema.
-    """,
+        description="Description of what this tool does. More detail helps the "
+        "model use it correctly.",
     )
     eager_input_streaming: bool | None = Field(
         default=None,
-        description="""Enable eager input streaming for this tool.
-
-    When true, tool input parameters will be streamed incrementally as they are
-    generated, and types will be inferred on-the-fly rather than buffering the full
-    JSON output. When false, streaming is disabled for this tool even if the
-    fine-grained-tool-streaming beta is active. When null (default), uses the
-    default behavior based on beta headers.
-    """,
+        description="Stream tool input parameters incrementally as they are "
+        "generated instead of buffering the full JSON output. When null "
+        "(default), behavior follows the fine-grained-tool-streaming beta header.",
     )
     strict: bool | None = Field(
-        default=None,
-        description="When true, guarantees schema validation on tool names and inputs.",
+        default=None, description="Enable strict schema validation."
     )
     allowed_callers: list[AllowedCaller] | None = Field(
-        default=None, description="List of allowed callers for this tool."
+        default=None, description="Allowed callers."
     )
     defer_loading: bool | None = Field(
-        default=None,
-        description="If true, tool will not be included in initial system prompt.  Only loaded when returned via tool_reference from tool search.",
+        default=None, description="Defer loading tool until referenced by tool_search."
     )
     input_examples: list[dict[str, object]] | None = Field(
-        default=None, description="Example inputs for the tool."
+        default=None, description="Example inputs."
     )
 
 
@@ -1562,32 +1421,22 @@ class ToolParam(BaseModelRequest):
 class ToolBashParam(BaseModelRequest):
     """Bash tool definition for command execution."""
 
-    type: str = Field(
-        pattern=r"^bash(?:_[0-9]{8})?$", description="Tool type. Always `bash_*`."
-    )
-    name: Literal["bash"] = Field(
-        description="""Name of the tool.
-
-    This is how the tool will be called by the model and in `tool_use` blocks.
-    """
-    )
+    type: str = Field(pattern=r"^bash(?:_[0-9]{8})?$", description="Tool type.")
+    name: Literal["bash"] = Field(description="Tool name used in tool_use blocks.")
     cache_control: CacheControlEphemeralParam | None = Field(
-        default=None,
-        description="Create a cache control breakpoint at this content block.",
+        default=None, description="Cache control breakpoint."
     )
     allowed_callers: list[AllowedCaller] | None = Field(
-        default=None, description="List of allowed callers for this tool."
+        default=None, description="Allowed callers."
     )
     defer_loading: bool | None = Field(
-        default=None,
-        description="If true, tool will not be included in initial system prompt.  Only loaded when returned via tool_reference from tool search.",
+        default=None, description="Defer loading tool until referenced by tool_search."
     )
     input_examples: list[dict[str, object]] | None = Field(
-        default=None, description="Example inputs for the tool."
+        default=None, description="Example inputs."
     )
     strict: bool | None = Field(
-        default=None,
-        description="When true, guarantees schema validation on tool names and inputs",
+        default=None, description="Enable strict schema validation"
     )
 
 
@@ -1597,33 +1446,24 @@ class ToolBashParam(BaseModelRequest):
 class ToolTextEditorParam(BaseModelRequest):
     """Text editor tool definition for file editing."""
 
-    type: str = Field(
-        pattern=r"^text_editor(?:_[0-9]{8})?$",
-        description="Tool type. Always `text_editor_*`.",
-    )
+    type: str = Field(pattern=r"^text_editor(?:_[0-9]{8})?$", description="Tool type.")
     name: Literal["str_replace_editor", "str_replace_based_edit_tool"] = Field(
-        description="""Name of the tool.
-
-    This is how the tool will be called by the model and in `tool_use` blocks.
-    """
+        description="Tool name used in tool_use blocks."
     )
     cache_control: CacheControlEphemeralParam | None = Field(
-        default=None,
-        description="Create a cache control breakpoint at this content block.",
+        default=None, description="Cache control breakpoint."
     )
     allowed_callers: list[AllowedCaller] | None = Field(
-        default=None, description="List of allowed callers for this tool."
+        default=None, description="Allowed callers."
     )
     defer_loading: bool | None = Field(
-        default=None,
-        description="If true, tool will not be included in initial system prompt.  Only loaded when returned via tool_reference from tool search.",
+        default=None, description="Defer loading tool until referenced by tool_search."
     )
     input_examples: list[dict[str, object]] | None = Field(
-        default=None, description="Example inputs for the tool."
+        default=None, description="Example inputs."
     )
     strict: bool | None = Field(
-        default=None,
-        description="When true, guarantees schema validation on tool names and inputs",
+        default=None, description="Enable strict schema validation"
     )
     max_characters: int | None = Field(
         default=None,
@@ -1635,17 +1475,13 @@ class ToolTextEditorParam(BaseModelRequest):
 class UserLocationParam(BaseModelRequest):
     """User location parameter."""
 
-    type: Literal["approximate"] = Field(description="The type discriminator.")
-    city: str | None = Field(default=None, description="The city of the user.")
+    type: Literal["approximate"] = Field(description="Type discriminator.")
+    city: str | None = Field(default=None, description="User city.")
     country: str | None = Field(
-        default=None,
-        description="The two letter [ISO country code](https://en.wikipedia.org/wiki/ISO_3166-1_alpha-2) of the user.",
+        default=None, description="Two-letter ISO country code of the user."
     )
-    region: str | None = Field(default=None, description="The region of the user.")
-    timezone: str | None = Field(
-        default=None,
-        description="The [IANA timezone](https://nodatime.org/TimeZones) of the user.",
-    )
+    region: str | None = Field(default=None, description="User region.")
+    timezone: str | None = Field(default=None, description="IANA timezone of the user.")
 
 
 # Ref: anthropic.types.web_search_tool_20250305_param.WebSearchTool20250305Param
@@ -1657,22 +1493,15 @@ class WebSearchToolParam(BaseModelRequest):
     (e.g., Amazon Nova 2 via ``nova_grounding``).
     """
 
-    type: str = Field(
-        pattern=r"^web_search(?:_[0-9]{8})?$",
-        description="Tool type. Always `web_search_*`.",
-    )
+    type: str = Field(pattern=r"^web_search(?:_[0-9]{8})?$", description="Tool type.")
     name: Literal["web_search"] = Field(
-        description="""Name of the tool.
-
-    This is how the tool will be called by the model and in `tool_use` blocks.
-    """
+        description="Name of the tool, used to call it in `tool_use` blocks."
     )
     cache_control: CacheControlEphemeralParam | None = Field(
-        default=None,
-        description="Create a cache control breakpoint at this content block.",
+        default=None, description="Cache control breakpoint."
     )
     allowed_callers: list[AllowedCaller] | None = Field(
-        default=None, description="List of allowed callers for this tool."
+        default=None, description="Allowed callers."
     )
     allowed_domains: list[str] | None = Field(
         default=None,
@@ -1683,16 +1512,14 @@ class WebSearchToolParam(BaseModelRequest):
         description="If provided, these domains will never appear in results.  Cannot be used alongside `allowed_domains`.",
     )
     defer_loading: bool | None = Field(
-        default=None,
-        description="If true, tool will not be included in initial system prompt.  Only loaded when returned via tool_reference from tool search.",
+        default=None, description="Defer loading tool until referenced by tool_search."
     )
     max_uses: int | None = Field(
         default=None,
         description="Maximum number of times the tool can be used in the API request.",
     )
     strict: bool | None = Field(
-        default=None,
-        description="When true, guarantees schema validation on tool names and inputs",
+        default=None, description="Enable strict schema validation"
     )
     user_location: UserLocationParam | None = Field(
         default=None,
@@ -1706,26 +1533,21 @@ class WebSearchToolParam(BaseModelRequest):
 class CodeExecutionToolParam(BaseModelRequest):
     """Code execution tool parameter."""
 
-    name: Literal["code_execution"] = Field(
-        description="Name of the tool.  This is how the tool will be called by the model and in `tool_use` blocks."
-    )
+    name: Literal["code_execution"] = Field(description="Tool name.")
     type: str = Field(
-        pattern=r"^code_execution(?:_[0-9]{8})?$", description="The type discriminator."
+        pattern=r"^code_execution(?:_[0-9]{8})?$", description="Type discriminator."
     )
     allowed_callers: list[AllowedCaller] | None = Field(
-        default=None, description="List of allowed callers for this tool."
+        default=None, description="Allowed callers."
     )
     cache_control: CacheControlEphemeralParam | None = Field(
-        default=None,
-        description="Create a cache control breakpoint at this content block.",
+        default=None, description="Cache control breakpoint."
     )
     defer_loading: bool | None = Field(
-        default=None,
-        description="If true, tool will not be included in initial system prompt.  Only loaded when returned via tool_reference from tool search.",
+        default=None, description="Defer loading tool until referenced by tool_search."
     )
     strict: bool | None = Field(
-        default=None,
-        description="When true, guarantees schema validation on tool names and inputs",
+        default=None, description="Enable strict schema validation"
     )
 
 
@@ -1733,29 +1555,24 @@ class CodeExecutionToolParam(BaseModelRequest):
 class MemoryToolParam(BaseModelRequest):
     """Memory tool parameter."""
 
-    name: Literal["memory"] = Field(
-        description="Name of the tool.  This is how the tool will be called by the model and in `tool_use` blocks."
-    )
+    name: Literal["memory"] = Field(description="Tool name.")
     type: str = Field(
-        pattern=r"^memory(?:_[0-9]{8})?$", description="The type discriminator."
+        pattern=r"^memory(?:_[0-9]{8})?$", description="Type discriminator."
     )
     allowed_callers: list[AllowedCaller] | None = Field(
-        default=None, description="List of allowed callers for this tool."
+        default=None, description="Allowed callers."
     )
     cache_control: CacheControlEphemeralParam | None = Field(
-        default=None,
-        description="Create a cache control breakpoint at this content block.",
+        default=None, description="Cache control breakpoint."
     )
     defer_loading: bool | None = Field(
-        default=None,
-        description="If true, tool will not be included in initial system prompt.  Only loaded when returned via tool_reference from tool search.",
+        default=None, description="Defer loading tool until referenced by tool_search."
     )
     input_examples: list[dict[str, object]] | None = Field(
-        default=None, description="Example inputs for the tool."
+        default=None, description="Example inputs."
     )
     strict: bool | None = Field(
-        default=None,
-        description="When true, guarantees schema validation on tool names and inputs",
+        default=None, description="Enable strict schema validation"
     )
 
 
@@ -1764,14 +1581,12 @@ class MemoryToolParam(BaseModelRequest):
 class WebFetchToolParam(BaseModelRequest):
     """Web fetch tool parameter."""
 
-    name: Literal["web_fetch"] = Field(
-        description="Name of the tool.  This is how the tool will be called by the model and in `tool_use` blocks."
-    )
+    name: Literal["web_fetch"] = Field(description="Tool name.")
     type: str = Field(
-        pattern=r"^web_fetch(?:_[0-9]{8})?$", description="The type discriminator."
+        pattern=r"^web_fetch(?:_[0-9]{8})?$", description="Type discriminator."
     )
     allowed_callers: list[AllowedCaller] | None = Field(
-        default=None, description="List of allowed callers for this tool."
+        default=None, description="Allowed callers."
     )
     allowed_domains: list[str] | None = Field(
         default=None, description="List of domains to allow fetching from"
@@ -1780,16 +1595,14 @@ class WebFetchToolParam(BaseModelRequest):
         default=None, description="List of domains to block fetching from"
     )
     cache_control: CacheControlEphemeralParam | None = Field(
-        default=None,
-        description="Create a cache control breakpoint at this content block.",
+        default=None, description="Cache control breakpoint."
     )
     citations: CitationsConfigParam | None = Field(
         default=None,
         description="Citations configuration for fetched documents.  Citations are disabled by default.",
     )
     defer_loading: bool | None = Field(
-        default=None,
-        description="If true, tool will not be included in initial system prompt.  Only loaded when returned via tool_reference from tool search.",
+        default=None, description="Defer loading tool until referenced by tool_search."
     )
     max_content_tokens: int | None = Field(
         default=None,
@@ -1800,8 +1613,7 @@ class WebFetchToolParam(BaseModelRequest):
         description="Maximum number of times the tool can be used in the API request.",
     )
     strict: bool | None = Field(
-        default=None,
-        description="When true, guarantees schema validation on tool names and inputs",
+        default=None, description="Enable strict schema validation"
     )
 
 
@@ -1824,26 +1636,23 @@ class ToolComputerParam(BaseModelRequest):
         default=None, description="The X11 display number (e.g. 0, 1) for the display."
     )
     cache_control: CacheControlEphemeralParam | None = Field(
-        default=None,
-        description="Create a cache control breakpoint at this content block.",
+        default=None, description="Cache control breakpoint."
     )
     allowed_callers: list[AllowedCaller] | None = Field(
-        default=None, description="List of allowed callers for this tool."
+        default=None, description="Allowed callers."
     )
     defer_loading: bool | None = Field(
-        default=None,
-        description="If true, tool will not be included in initial system prompt.  Only loaded when returned via tool_reference from tool search.",
+        default=None, description="Defer loading tool until referenced by tool_search."
     )
     enable_zoom: bool | None = Field(
         default=None,
         description="Whether to enable an action to take a zoomed-in screenshot of the screen.  Added in ``computer_20251124``.",
     )
     input_examples: list[dict[str, object]] | None = Field(
-        default=None, description="Example inputs for the tool."
+        default=None, description="Example inputs."
     )
     strict: bool | None = Field(
-        default=None,
-        description="When true, guarantees schema validation on tool names and inputs",
+        default=None, description="Enable strict schema validation"
     )
 
 
@@ -1851,27 +1660,22 @@ class ToolComputerParam(BaseModelRequest):
 class ToolSearchToolBm25Param(BaseModelRequest):
     """Tool search tool BM25 parameter."""
 
-    name: Literal["tool_search_tool_bm25"] = Field(
-        description="Name of the tool.  This is how the tool will be called by the model and in `tool_use` blocks."
-    )
+    name: Literal["tool_search_tool_bm25"] = Field(description="Tool name.")
     type: str = Field(
         pattern=r"^tool_search_tool_bm25(?:_[0-9]{8})?$",
-        description="The type discriminator.",
+        description="Type discriminator.",
     )
     allowed_callers: list[AllowedCaller] | None = Field(
-        default=None, description="List of allowed callers for this tool."
+        default=None, description="Allowed callers."
     )
     cache_control: CacheControlEphemeralParam | None = Field(
-        default=None,
-        description="Create a cache control breakpoint at this content block.",
+        default=None, description="Cache control breakpoint."
     )
     defer_loading: bool | None = Field(
-        default=None,
-        description="If true, tool will not be included in initial system prompt.  Only loaded when returned via tool_reference from tool search.",
+        default=None, description="Defer loading tool until referenced by tool_search."
     )
     strict: bool | None = Field(
-        default=None,
-        description="When true, guarantees schema validation on tool names and inputs",
+        default=None, description="Enable strict schema validation"
     )
 
 
@@ -1879,27 +1683,22 @@ class ToolSearchToolBm25Param(BaseModelRequest):
 class ToolSearchToolRegexParam(BaseModelRequest):
     """Tool search tool regex parameter."""
 
-    name: Literal["tool_search_tool_regex"] = Field(
-        description="Name of the tool.  This is how the tool will be called by the model and in `tool_use` blocks."
-    )
+    name: Literal["tool_search_tool_regex"] = Field(description="Tool name.")
     type: str = Field(
         pattern=r"^tool_search_tool_regex(?:_[0-9]{8})?$",
-        description="The type discriminator.",
+        description="Type discriminator.",
     )
     allowed_callers: list[AllowedCaller] | None = Field(
-        default=None, description="List of allowed callers for this tool."
+        default=None, description="Allowed callers."
     )
     cache_control: CacheControlEphemeralParam | None = Field(
-        default=None,
-        description="Create a cache control breakpoint at this content block.",
+        default=None, description="Cache control breakpoint."
     )
     defer_loading: bool | None = Field(
-        default=None,
-        description="If true, tool will not be included in initial system prompt.  Only loaded when returned via tool_reference from tool search.",
+        default=None, description="Defer loading tool until referenced by tool_search."
     )
     strict: bool | None = Field(
-        default=None,
-        description="When true, guarantees schema validation on tool names and inputs",
+        default=None, description="Enable strict schema validation"
     )
 
 
@@ -1925,7 +1724,7 @@ class ToolChoiceAutoParam(BaseModelRequest):
 
     type: Literal["auto"] = Field(description="Tool choice type. Always `auto`.")
     disable_parallel_tool_use: bool | None = Field(
-        default=None, description="Whether to disable parallel tool use."
+        default=None, description="Disable parallel tool use."
     )
 
 
@@ -1935,7 +1734,7 @@ class ToolChoiceAnyParam(BaseModelRequest):
 
     type: Literal["any"] = Field(description="Tool choice type. Always `any`.")
     disable_parallel_tool_use: bool | None = Field(
-        default=None, description="Whether to disable parallel tool use."
+        default=None, description="Disable parallel tool use."
     )
 
 
@@ -1946,7 +1745,7 @@ class ToolChoiceToolParam(BaseModelRequest):
     type: Literal["tool"] = Field(description="Tool choice type. Always `tool`.")
     name: str = Field(description="Name of the tool to use.")
     disable_parallel_tool_use: bool | None = Field(
-        default=None, description="Whether to disable parallel tool use."
+        default=None, description="Disable parallel tool use."
     )
 
 
@@ -1954,7 +1753,7 @@ class ToolChoiceToolParam(BaseModelRequest):
 class ToolChoiceNoneParam(BaseModelRequest):
     """The model will not be allowed to use tools."""
 
-    type: Literal["none"] = Field(description="The type discriminator.")
+    type: Literal["none"] = Field(description="Type discriminator.")
 
 
 # Ref: anthropic.types.tool_choice_param.ToolChoiceParam
@@ -1971,9 +1770,7 @@ ToolChoiceParam = Annotated[
 class MetadataParam(BaseModelRequest):
     """Request metadata for tracking and filtering."""
 
-    user_id: str | None = Field(
-        default=None, description="An external identifier for the end-user."
-    )
+    user_id: str | None = Field(default=None, description="End-user identifier.")
 
 
 # Ref: anthropic.types.cache_creation.CacheCreation
@@ -1990,37 +1787,32 @@ class CacheCreation(BaseModelResponse):
 
 # Ref: anthropic.types.server_tool_usage.ServerToolUsage
 class ServerToolUsage(BaseModelResponse):
-    """Server tool usage statistics."""
+    """Server tool usage."""
 
-    web_search_requests: int = Field(
-        description="The number of web search tool requests."
-    )
-    web_fetch_requests: int = Field(
-        description="The number of web fetch tool requests."
-    )
+    web_search_requests: int = Field(description="Web search requests.")
+    web_fetch_requests: int = Field(description="Web fetch requests.")
 
 
 # Ref: anthropic.types.usage.Usage
 class Usage(BaseModelResponse):
     """Token usage information."""
 
-    input_tokens: int = Field(description="Number of input tokens.")
-    output_tokens: int = Field(description="Number of output tokens.")
+    input_tokens: int = Field(description="Input tokens.")
+    output_tokens: int = Field(description="Output tokens.")
     cache_creation_input_tokens: int | None = Field(
-        default=None,
-        description="Number of input tokens used to create the cache entry.",
+        default=None, description="Cache creation input tokens."
     )
     cache_read_input_tokens: int | None = Field(
-        default=None, description="Number of input tokens read from the cache."
+        default=None, description="Cache read input tokens."
     )
     cache_creation: CacheCreation | None = Field(
-        default=None, description="Detailed cache creation token usage breakdown."
+        default=None, description="Cache creation details."
     )
     inference_geo: str | None = Field(
         default=None, description="Inference geographic region."
     )
     server_tool_use: ServerToolUsage | None = Field(
-        default=None, description="Server tool usage statistics."
+        default=None, description="Server tool usage."
     )
     service_tier: Literal["standard", "priority", "batch"] | None = Field(
         default=None, description="The service tier used for the request."
@@ -2040,102 +1832,34 @@ class Message(BaseModelResponse):
     """Messages API response."""
 
     id: str = Field(
-        description="""Unique object identifier.
-
-    The format and length of IDs may change over time.
-    """
+        description="Unique object identifier. Format and length may change over time."
     )
-    type: Literal["message"] = Field(
-        description="""Object type.
-
-    For Messages, this is always `"message"`.
-    """
-    )
+    type: Literal["message"] = Field(description="Object type. Always `message`.")
     role: Literal["assistant"] = Field(
-        description="""Conversational role of the generated message.
-
-    This will always be `"assistant"`.
-    """
+        description="Conversational role of the generated message. Always `assistant`."
     )
     content: list[ContentBlock] = Field(
-        description="""Content generated by the model.
-
-    This is an array of content blocks, each of which has a `type` that determines
-    its shape.
-
-    Example:
-
-    ```json
-    [{ "type": "text", "text": "Hi" }]
-    ```
-
-    If the request input `messages` ended with an `assistant` turn, then the
-    response `content` will continue directly from that last turn. You can use this
-    to constrain the model's output.
-
-    For example, if the input `messages` were:
-
-    ```json
-    [
-      {
-        "role": "user",
-        "content": "What's the Greek name for Sun? (A) Sol (B) Helios (C) Sun"
-      },
-      { "role": "assistant", "content": "The best answer is (" }
-    ]
-    ```
-
-    Then the response `content` might be:
-
-    ```json
-    [{ "type": "text", "text": "B)" }]
-    ```
-    """
+        description="Content generated by the model, as an array of content "
+        "blocks each with a `type`. If the input `messages` ended with an "
+        "`assistant` turn, this continues directly from that turn."
     )
-    model: str = Field(description="The model that will complete your prompt.")
+    model: str = Field(description="Model ID.")
     stop_reason: StopReason | None = Field(
         default=None,
-        description="""The reason that we stopped.
-
-    This may be one the following values:
-
-    - `"end_turn"`: the model reached a natural stopping point
-    - `"max_tokens"`: we exceeded the requested `max_tokens` or the model's maximum
-    - `"stop_sequence"`: one of your provided custom `stop_sequences` was generated
-    - `"tool_use"`: the model invoked one or more tools
-    - `"pause_turn"`: we paused a long-running turn. You may provide the response
-      back as-is in a subsequent request to let the model continue.
-    - `"refusal"`: when streaming classifiers intervene to handle potential policy
-      violations
-
-    In non-streaming mode this value is always non-null. In streaming mode, it is
-    null in the `message_start` event and non-null otherwise.
-    """,
+        description="Why generation stopped: `end_turn` (natural stop), "
+        "`max_tokens` (hit the limit), `stop_sequence` (matched a custom stop "
+        "sequence), `tool_use` (model invoked a tool), `pause_turn` (long-running "
+        "turn paused — resend as-is to continue), or `refusal` (streaming "
+        "classifier intervened). Always non-null except in the streaming "
+        "`message_start` event.",
     )
     stop_sequence: str | None = Field(
-        default=None,
-        description="""Which custom stop sequence was generated, if any.
-
-    This value will be a non-null string if one of your custom stop sequences was
-    generated.
-    """,
+        default=None, description="The matched custom stop sequence, if any."
     )
     usage: Usage = Field(
-        description="""Billing and rate-limit usage.
-
-    The API bills and rate-limits by token counts, as tokens represent the
-    underlying cost to our systems.
-
-    Under the hood, the API transforms requests into a format suitable for the
-    model. The model's output then goes through a parsing stage before becoming an
-    API response. As a result, the token counts in `usage` will not match one-to-one
-    with the exact visible content of an API request or response.
-
-    For example, `output_tokens` will be non-zero, even for an empty string response.
-
-    Total input tokens in a request is the summation of `input_tokens`,
-    `cache_creation_input_tokens`, and `cache_read_input_tokens`.
-    """
+        description="Cumulative billing/rate-limit token usage. May not match the "
+        "visible content one-to-one; total input tokens = `input_tokens` + "
+        "`cache_creation_input_tokens` + `cache_read_input_tokens`."
     )
 
     container: Container | None = Field(
@@ -2231,12 +1955,8 @@ class MessageDelta(BaseModelResponse):
         default=None,
         description="Information about the container used in this request.",
     )
-    stop_reason: StopReason | None = Field(
-        default=None, description="Stop reason if available."
-    )
-    stop_sequence: str | None = Field(
-        default=None, description="Stop sequence if available."
-    )
+    stop_reason: StopReason | None = Field(default=None, description="Stop reason.")
+    stop_sequence: str | None = Field(default=None, description="Stop sequence.")
 
 
 # Ref: anthropic.types.raw_content_block_start_event.RawContentBlockStartEvent
@@ -2246,7 +1966,7 @@ class RawContentBlockStartEvent(BaseModelResponse):
     type: Literal["content_block_start"] = Field(
         description="Event type. Always `content_block_start`."
     )
-    index: int = Field(description="Index of the content block.")
+    index: int = Field(description="Content block index.")
     content_block: ContentBlock = Field(description="The content block that started.")
 
 
@@ -2257,7 +1977,7 @@ class RawContentBlockDeltaEvent(BaseModelResponse):
     type: Literal["content_block_delta"] = Field(
         description="Event type. Always `content_block_delta`."
     )
-    index: int = Field(description="Index of the content block.")
+    index: int = Field(description="Content block index.")
     delta: RawContentBlockDelta = Field(
         description="Delta update for the content block."
     )
@@ -2270,7 +1990,7 @@ class RawContentBlockStopEvent(BaseModelResponse):
     type: Literal["content_block_stop"] = Field(
         description="Event type. Always `content_block_stop`."
     )
-    index: int = Field(description="Index of the content block.")
+    index: int = Field(description="Content block index.")
 
 
 # Ref: anthropic.types.raw_message_start_event.RawMessageStartEvent
@@ -2292,21 +2012,9 @@ class RawMessageDeltaEvent(BaseModelResponse):
     )
     delta: MessageDelta = Field(description="Delta update for the message.")
     usage: MessageDeltaUsage = Field(
-        description="""Billing and rate-limit usage.
-
-    The API bills and rate-limits by token counts, as tokens represent the
-    underlying cost to our systems.
-
-    Under the hood, the API transforms requests into a format suitable for the
-    model. The model's output then goes through a parsing stage before becoming an
-    API response. As a result, the token counts in `usage` will not match one-to-one
-    with the exact visible content of an API request or response.
-
-    For example, `output_tokens` will be non-zero, even for an empty string response.
-
-    Total input tokens in a request is the summation of `input_tokens`,
-    `cache_creation_input_tokens`, and `cache_read_input_tokens`.
-    """
+        description="Cumulative billing/rate-limit token usage. May not match the "
+        "visible content one-to-one; total input tokens = `input_tokens` + "
+        "`cache_creation_input_tokens` + `cache_read_input_tokens`."
     )
 
 
@@ -2335,88 +2043,24 @@ MessageStreamEvent = Annotated[
 class MessageCreateParams(BaseModelRequestWithExtra):
     """Create message request following the Messages API specification."""
 
-    model: str = Field(description="The model that will complete your prompt.")
+    model: str = Field(description="Model ID.")
     messages: list[MessageParam] = Field(
-        description="""Input messages.
-
-    Models are trained to operate on alternating `user` and `assistant`
-    conversational turns. When creating a new `Message`, you specify the prior
-    conversational turns with the `messages` parameter, and the model then generates
-    the next `Message` in the conversation. Consecutive `user` or `assistant` turns
-    in your request will be combined into a single turn.
-
-    Each input message must be an object with a `role` and `content`. You can
-    specify a single `user`-role message, or you can include multiple `user` and
-    `assistant` messages.
-
-    If the final message uses the `assistant` role, the response content will
-    continue immediately from the content in that message. This can be used to
-    constrain part of the model's response.
-
-    Example with a single `user` message:
-
-    ```json
-    [{ "role": "user", "content": "Hello" }]
-    ```
-
-    Example with multiple conversational turns:
-
-    ```json
-    [
-      { "role": "user", "content": "Hello there." },
-      { "role": "assistant", "content": "Hi. How can I help you?" },
-      { "role": "user", "content": "Can you explain LLMs in plain English?" }
-    ]
-    ```
-
-    Example with a partially-filled response:
-
-    ```json
-    [
-      {
-        "role": "user",
-        "content": "What's the Greek name for Sun? (A) Sol (B) Helios (C) Sun"
-      },
-      { "role": "assistant", "content": "The best answer is (" }
-    ]
-    ```
-
-    Each input message `content` may be either a single `string` or an array of
-    content blocks, where each block has a specific `type`. Using a `string` for
-    `content` is shorthand for an array of one content block of type `"text"`. The
-    following input messages are equivalent:
-
-    ```json
-    { "role": "user", "content": "Hello" }
-    ```
-
-    ```json
-    { "role": "user", "content": [{ "type": "text", "text": "Hello" }] }
-    ```
-
-    You can also pass a message with `role: "system"` as the first entry to
-    specify a system prompt inline. Its content is combined with the top-level
-    `system` parameter (appended after it).
-    """
+        description="Conversation turns, alternating `user`/`assistant` roles. "
+        "Consecutive turns with the same role are combined. If the final message "
+        "has role `assistant`, the response continues from its content. A "
+        "`content` value may be a plain string (shorthand for one `text` block) "
+        "or an array of content blocks. A first message with role `system` sets "
+        "an inline system prompt, appended after the top-level `system` parameter."
     )
     cache_control: CacheControlEphemeralParam | None = Field(
-        default=None,
-        description="""
-    Top-level cache control automatically applies a cache_control marker to the last
-    cacheable block in the request.
-    """,
+        default=None, description="Cache control applied to the last cacheable block."
     )
     max_tokens: int | None = Field(
         default=None,
         ge=1,
         validation_alias=AliasChoices("max_tokens", "maxTokens"),
-        description="""The maximum number of tokens to generate before stopping.
-
-    Note that our models may stop _before_ reaching this maximum. This parameter
-    only specifies the absolute maximum number of tokens to generate.
-
-    Different models have different maximum values for this parameter.
-    """,
+        description="Maximum tokens to generate before stopping; the model may "
+        "stop earlier. Maximum value varies by model.",
     )
     inference_geo: str | None = Field(
         default=None,
@@ -2424,7 +2068,7 @@ class MessageCreateParams(BaseModelRequestWithExtra):
         "UNSUPPORTED on this implementation. Data residency configuration is managed at server configuration level.",
     )
     metadata: MetadataParam | None = Field(
-        default=None, description="Object describing metadata about the request."
+        default=None, description="Request metadata."
     )
     output_config: OutputConfigParam | None = Field(
         default=None,
@@ -2438,16 +2082,9 @@ class MessageCreateParams(BaseModelRequestWithExtra):
     stop_sequences: list[str] | None = Field(
         default=None,
         validation_alias=AliasChoices("stop_sequences", "stopSequences"),
-        description="""Custom text sequences that will cause the model to stop generating.
-
-    Models will normally stop when they have naturally completed their turn,
-    which will result in a response `stop_reason` of `"end_turn"`.
-
-    If you want the model to stop generating when it encounters custom strings of
-    text, you can use the `stop_sequences` parameter. If the model encounters one of
-    the custom sequences, the response `stop_reason` value will be `"stop_sequence"`
-    and the response `stop_sequence` value will contain the matched stop sequence.
-    """,
+        description="Custom sequences that stop generation when encountered. "
+        "The response `stop_reason` becomes `stop_sequence` and `stop_sequence` "
+        "holds the matched value.",
     )
     stream: bool = Field(
         default=False,
@@ -2455,143 +2092,53 @@ class MessageCreateParams(BaseModelRequestWithExtra):
     )
     system: str | list[TextBlockParam] | None = Field(
         default=None,
-        description="""System prompt.
-
-    A system prompt is a way of providing context and instructions, such
-    as specifying a particular goal or role.
-    """,
+        description="System prompt providing context and instructions, such as "
+        "a goal or role.",
     )
     temperature: float | None = Field(
         default=None,
         ge=0.0,
         le=1.0,
-        description="""Amount of randomness injected into the response.
-
-    Defaults to `1.0`. Ranges from `0.0` to `1.0`. Use `temperature` closer to `0.0`
-    for analytical / multiple choice, and closer to `1.0` for creative and
-    generative tasks.
-
-    Note that even with `temperature` of `0.0`, the results will not be fully
-    deterministic.
-    """,
+        description="Randomness of the response, 0.0-1.0 (default 1.0). Lower "
+        "values suit analytical/multiple-choice tasks, higher values suit "
+        "creative tasks. Not fully deterministic even at 0.0.",
     )
     thinking: ThinkingConfigParam | None = Field(
         default=None,
-        description="""Configuration for enabling extended thinking.
-
-    When enabled, responses include `thinking` content blocks showing model's
-    thinking process before the final answer.""",
+        description="Extended thinking configuration. When enabled, responses "
+        "include `thinking` content blocks showing the model's reasoning before "
+        "the final answer.",
     )
     tool_choice: ToolChoiceParam | None = Field(
         default=None,
-        description="""How the model should use the provided tools.
-
-    The model can use a specific tool, any available tool, decide by itself, or not
-    use tools at all.
-    """,
+        description="How the model should use the provided tools: a specific "
+        "tool, any available tool, model's choice, or none.",
     )
     tools: list[ToolUnionParam] | None = Field(
         default=None,
-        description="""Definitions of tools that the model may use.
-
-    If you include `tools` in your API request, the model may return `tool_use`
-    content blocks that represent the model's use of those tools. You can then run
-    those tools using the tool input generated by the model and then optionally
-    return results back to the model using `tool_result` content blocks.
-
-    There are two types of tools: **client tools** and **server tools**. The
-    behavior described below applies to client tools. For
-    server tools, see their individual documentation as each has its own behavior.
-
-    Each tool definition includes:
-
-    - `name`: Name of the tool.
-    - `description`: Optional, but strongly-recommended description of the tool.
-    - `input_schema`: [JSON schema](https://json-schema.org/draft/2020-12) for the
-      tool `input` shape that the model will produce in `tool_use` output content
-      blocks.
-
-    For example, if you defined `tools` as:
-
-    ```json
-    [
-      {
-        "name": "get_stock_price",
-        "description": "Get the current stock price for a given ticker symbol.",
-        "input_schema": {
-          "type": "object",
-          "properties": {
-            "ticker": {
-              "type": "string",
-              "description": "The stock ticker symbol, e.g. AAPL for Apple Inc."
-            }
-          },
-          "required": ["ticker"]
-        }
-      }
-    ]
-    ```
-
-    And then asked the model "What's the S&P 500 at today?", the model might produce
-    `tool_use` content blocks in the response like this:
-
-    ```json
-    [
-      {
-        "type": "tool_use",
-        "id": "toolu_01D7FLrfh4GYq7yT1ULFeyMV",
-        "name": "get_stock_price",
-        "input": { "ticker": "^GSPC" }
-      }
-    ]
-    ```
-
-    You might then run your `get_stock_price` tool with `{"ticker": "^GSPC"}` as an
-    input, and return the following back to the model in a subsequent `user`
-    message:
-
-    ```json
-    [
-      {
-        "type": "tool_result",
-        "tool_use_id": "toolu_01D7FLrfh4GYq7yT1ULFeyMV",
-        "content": "259.75 USD"
-      }
-    ]
-    ```
-
-    Tools can be used for workflows that include running client-side tools and
-    functions, or more generally whenever you want the model to produce a particular
-    JSON structure of output.""",
+        description="Tool definitions the model may use. Each includes `name`, "
+        "an optional but recommended `description`, and `input_schema` (JSON "
+        "Schema for the tool's `input`). The model returns `tool_use` content "
+        "blocks; run the tool and return results via `tool_result` content "
+        "blocks. Client tools run on your side; server tools have their own "
+        "documented behavior.",
     )
     top_k: int | None = Field(
         default=None,
         ge=0,
-        description="""Only sample from the top K options for each subsequent token.
-
-    Used to remove "long tail" low probability responses.
-
-    Recommended for advanced use cases only. You usually only need to use
-    `temperature`.
-
-    Note: top_k is not supported by The AWs Bedrock Converse API and is passed as = Field()
-    extra arguments, some models may required passing this argument with a different name.
-    """,
+        description="Sample only from the top K most likely tokens per step, "
+        "removing low-probability outliers. Advanced use only; prefer "
+        "`temperature`. Not supported by the AWS Bedrock Converse API, where it "
+        "is passed as an extra argument; some models require a different "
+        "argument name for it.",
     )
     top_p: float | None = Field(
         default=None,
         validation_alias=AliasChoices("top_p", "topP"),
         ge=0.0,
-        description="""Use nucleus sampling.
-
-    In nucleus sampling, we compute the cumulative distribution over all the options
-    for each subsequent token in decreasing probability order and cut it off once it
-    reaches a particular probability specified by `top_p`. You should either alter
-    `temperature` or `top_p`, but not both.
-
-    Recommended for advanced use cases only. You usually only need to use
-    `temperature`.
-    """,
+        description="Nucleus sampling: cuts off the cumulative token probability "
+        "distribution at `top_p`. Use either `temperature` or `top_p`, not both. "
+        "Advanced use only; prefer `temperature`.",
     )
 
     container: str | None = Field(
@@ -2670,160 +2217,33 @@ ThinkingConfigParam = Annotated[
 class MessageCountTokensParams(BaseModelRequestWithExtra):
     """Count tokens request for the Messages API."""
 
-    model: str = Field(description="The model that will complete your prompt.")
+    model: str = Field(description="Model ID.")
     messages: list[MessageParam] = Field(
-        description="""Input messages.
-
-    Models are trained to operate on alternating `user` and `assistant`
-    conversational turns. When creating a new `Message`, you specify the prior
-    conversational turns with the `messages` parameter, and the model then generates
-    the next `Message` in the conversation. Consecutive `user` or `assistant` turns
-    in your request will be combined into a single turn.
-
-    Each input message must be an object with a `role` and `content`. You can
-    specify a single `user`-role message, or you can include multiple `user` and
-    `assistant` messages.
-
-    If the final message uses the `assistant` role, the response content will
-    continue immediately from the content in that message. This can be used to
-    constrain part of the model's response.
-
-    Example with a single `user` message:
-
-    ```json
-    [{ "role": "user", "content": "Hello" }]
-    ```
-
-    Example with multiple conversational turns:
-
-    ```json
-    [
-      { "role": "user", "content": "Hello there." },
-      { "role": "assistant", "content": "Hi. How can I help you?" },
-      { "role": "user", "content": "Can you explain LLMs in plain English?" }
-    ]
-    ```
-
-    Example with a partially-filled response:
-
-    ```json
-    [
-      {
-        "role": "user",
-        "content": "What's the Greek name for Sun? (A) Sol (B) Helios (C) Sun"
-      },
-      { "role": "assistant", "content": "The best answer is (" }
-    ]
-    ```
-
-    Each input message `content` may be either a single `string` or an array of
-    content blocks, where each block has a specific `type`. Using a `string` for
-    `content` is shorthand for an array of one content block of type `"text"`. The
-    following input messages are equivalent:
-
-    ```json
-    { "role": "user", "content": "Hello" }
-    ```
-
-    ```json
-    { "role": "user", "content": [{ "type": "text", "text": "Hello" }] }
-    ```
-
-    You can also pass a message with `role: "system"` as the first entry to
-    specify a system prompt inline. Its content is combined with the top-level
-    `system` parameter (appended after it).
-    """
+        description="Conversation turns, alternating `user`/`assistant` roles. "
+        "Consecutive turns with the same role are combined. If the final message "
+        "has role `assistant`, the response continues from its content. A "
+        "`content` value may be a plain string (shorthand for one `text` block) "
+        "or an array of content blocks. A first message with role `system` sets "
+        "an inline system prompt, appended after the top-level `system` parameter."
     )
     system: str | list[TextBlockParam] | None = Field(
         default=None,
-        description="""System prompt.
-
-    A system prompt is a way of providing context and instructions, such
-    as specifying a particular goal or role.
-    """,
+        description="System prompt providing context and instructions, such as "
+        "a goal or role.",
     )
     tools: list[ToolUnionParam] | None = Field(
         default=None,
-        description="""Definitions of tools that the model may use.
-
-    If you include `tools` in your API request, the model may return `tool_use`
-    content blocks that represent the model's use of those tools. You can then run
-    those tools using the tool input generated by the model and then optionally
-    return results back to the model using `tool_result` content blocks.
-
-    There are two types of tools: **client tools** and **server tools**. The
-    behavior described below applies to client tools. For
-    server tools; see their individual documentation as each has its own behavior.
-
-    Each tool definition includes:
-
-    - `name`: Name of the tool.
-    - `description`: Optional, but strongly-recommended description of the tool.
-    - `input_schema`: [JSON schema](https://json-schema.org/draft/2020-12) for the
-      tool `input` shape that the model will produce in `tool_use` output content
-      blocks.
-
-    For example, if you defined `tools` as:
-
-    ```json
-    [
-      {
-        "name": "get_stock_price",
-        "description": "Get the current stock price for a given ticker symbol.",
-        "input_schema": {
-          "type": "object",
-          "properties": {
-            "ticker": {
-              "type": "string",
-              "description": "The stock ticker symbol, e.g. AAPL for Apple Inc."
-            }
-          },
-          "required": ["ticker"]
-        }
-      }
-    ]
-    ```
-
-    And then asked the model "What's the S&P 500 at today?", the model might produce
-    `tool_use` content blocks in the response like this:
-
-    ```json
-    [
-      {
-        "type": "tool_use",
-        "id": "toolu_01D7FLrfh4GYq7yT1ULFeyMV",
-        "name": "get_stock_price",
-        "input": { "ticker": "^GSPC" }
-      }
-    ]
-    ```
-
-    You might then run your `get_stock_price` tool with `{"ticker": "^GSPC"}` as an
-    input, and return the following back to the model in a subsequent `user`
-    message:
-
-    ```json
-    [
-      {
-        "type": "tool_result",
-        "tool_use_id": "toolu_01D7FLrfh4GYq7yT1ULFeyMV",
-        "content": "259.75 USD"
-      }
-    ]
-    ```
-
-    Tools can be used for workflows that include running client-side tools and
-    functions, or more generally whenever you want the model to produce a particular
-    JSON structure of output.
-    """,
+        description="Tool definitions the model may use. Each includes `name`, "
+        "an optional but recommended `description`, and `input_schema` (JSON "
+        "Schema for the tool's `input`). The model returns `tool_use` content "
+        "blocks; run the tool and return results via `tool_result` content "
+        "blocks. Client tools run on your side; server tools have their own "
+        "documented behavior.",
     )
     tool_choice: ToolChoiceParam | None = Field(
         default=None,
-        description="""How the model should use the provided tools.
-
-    The model can use a specific tool, any available tool, decide by itself, or not
-    use tools at all.
-    """,
+        description="How the model should use the provided tools: a specific "
+        "tool, any available tool, model's choice, or none.",
     )
     output_config: OutputConfigParam | None = Field(
         default=None,
@@ -2831,15 +2251,12 @@ class MessageCountTokensParams(BaseModelRequestWithExtra):
     )
     thinking: ThinkingConfigParam | None = Field(
         default=None,
-        description="""Configuration for enabling extended thinking.
-
-    When enabled, responses include `thinking` content blocks showing models's
-    thinking process before the final answer.
-    """,
+        description="Extended thinking configuration. When enabled, responses "
+        "include `thinking` content blocks showing the model's reasoning before "
+        "the final answer.",
     )
     cache_control: CacheControlEphemeralParam | None = Field(
-        default=None,
-        description="Top-level cache control automatically applies a cache_control marker to the last cacheable block in the request.",
+        default=None, description="Cache control applied to last cacheable block."
     )
 
 

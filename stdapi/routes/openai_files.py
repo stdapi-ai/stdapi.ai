@@ -163,14 +163,10 @@ async def upload(
         FilePurpose,
         Form(
             description=(
-                "The intended purpose of the uploaded file.\n\n"
-                "Supported values:\n"
-                "- `assistants`: Used in the Assistants API\n"
-                "- `batch`: Used in the Batch API\n"
-                "- `fine-tune`: Used for fine-tuning\n"
-                "- `vision`: Images used for vision fine-tuning\n"
-                "- `user_data`: Flexible file type for any purpose\n"
-                "- `evals`: Used for eval data sets"
+                "Intended purpose of the file: `assistants` (Assistants API), "
+                "`batch` (Batch API), `fine-tune` (fine-tuning), `vision` "
+                "(vision fine-tuning images), `user_data` (any purpose), or "
+                "`evals` (eval datasets)."
             )
         ),
     ] = "assistants",
@@ -192,9 +188,9 @@ async def upload(
             ge=3600,
             le=2592000,
             description=(
-                "The number of seconds after the anchor time that the file will expire.\n"
-                "Must be between 3600 (1 hour) and 2592000 (30 days).\n"
-                "By default, files with `purpose=batch` expire after 30 days and all other files are persisted until they are manually deleted."
+                "Seconds after the anchor time until the file expires (1 hour "
+                "to 30 days). By default, `purpose=batch` files expire after "
+                "30 days; all other files persist until manually deleted."
             ),
         ),
     ] = None,
@@ -250,9 +246,8 @@ async def list_files_endpoint(
         str | None,
         Query(
             description=(
-                "A cursor for use in pagination. `after` is an object ID that defines your place in the list. "
-                "For instance, if you make a list request and receive 100 objects, ending with obj_foo, "
-                "your subsequent call can include after=obj_foo in order to fetch the next page of the list."
+                "Cursor for pagination: the object ID to start after "
+                "(the last ID from a previous page)."
             ),
             pattern=FILE_ID_PATTERN,
         ),
@@ -262,14 +257,12 @@ async def list_files_endpoint(
         Query(
             ge=1,
             le=10000,
-            description="A limit on the number of objects to be returned. Limit can range between 1 and 10,000, and the default is 10,000.",
+            description="A limit on the number of objects to be returned.",
         ),
     ] = 10000,
     order: Annotated[
         Literal["asc", "desc"],
-        Query(
-            description="Sort order by the `created_at` timestamp of the objects. `asc` for ascending order and `desc` for descending order."
-        ),
+        Query(description="Sort order by the `created_at` timestamp of the objects."),
     ] = "desc",
     _: Annotated[None, Depends(authenticate)] = None,
 ) -> ListFilesResponse:

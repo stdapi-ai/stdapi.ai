@@ -15,9 +15,7 @@ class FileMetadata(BaseModelResponse):
     id: str = Field(
         description="Unique object identifier. The format and length of IDs may change over time."
     )
-    type: Literal["file"] = Field(
-        default="file", description='Object type. For files, this is always `"file"`.'
-    )
+    type: Literal["file"] = Field(default="file", description='Object type ("file").')
     filename: str = Field(description="Original filename of the uploaded file.")
     mime_type: str = Field(description="MIME type of the file.")
     size_bytes: int = Field(description="Size of the file in bytes.")
@@ -35,8 +33,7 @@ class DeletedFile(BaseModelResponse):
 
     id: str = Field(description="ID of the deleted file.")
     type: Literal["file_deleted"] = Field(
-        default="file_deleted",
-        description='Deleted object type. For file deletion, this is always `"file_deleted"`.',
+        default="file_deleted", description='Deleted object type ("file_deleted").'
     )
 
 

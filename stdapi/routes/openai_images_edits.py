@@ -236,11 +236,9 @@ async def edit_images(
     response_format: Annotated[
         str,
         Form(
-            description="The format in which the generated images are returned. "
-            "Must be one of url or b64_json. "
-            "URLs are only valid for 60 minutes after the image has been generated.\n"
-            "This parameter isn't supported with streaming which will always "
-            "return base64-encoded images."
+            description="The format for returned images: url or b64_json. "
+            "URLs expire after 60 minutes. Streaming always returns base64-encoded "
+            "images, regardless of this setting."
         ),
     ] = "url",
     n: Annotated[
@@ -249,9 +247,8 @@ async def edit_images(
     size: Annotated[
         str,
         Form(
-            description="The size of the generated images."
-            "\nSupported values depend on the model. "
-            "With some models, output size may be different.",
+            description="The size of the generated images. "
+            "Supported values depend on the model; output size may differ for some models.",
             pattern=r"^(\d+)x(\d+)$",
         ),
     ] = "1024x1024",
@@ -266,17 +263,16 @@ async def edit_images(
     background: Annotated[
         ImageBackgroundAuto,
         Form(
-            description="Allows to set transparency for the background of the generated image(s).\n"
-            "If `transparent`, the output format needs to support transparency, "
-            "so it should be set to either `png` (default value) or `webp`."
+            description="Background transparency setting. If `transparent`, "
+            "`output_format` must be `png` or `webp`."
             "\ntransparent is UNSUPPORTED on this implementation."
         ),
     ] = "auto",
     input_fidelity: Annotated[
         ImageInputFidelity,
         Form(
-            description="Control how much effort the model will exert to match the style and "
-            "features, especially facial features, of input images."
+            description="Effort level for matching the style and features (especially "
+            "facial features) of input images."
             "\nUNSUPPORTED on this implementation."
         ),
     ] = "low",
@@ -290,21 +286,15 @@ async def edit_images(
     ] = 100,
     output_format: Annotated[
         ImageOutputFormats | None,
-        Form(
-            description="The format in which the generated images are returned. "
-            "Must be one of `png`, `jpeg`, or `webp`."
-        ),
+        Form(description="The output image format: `png`, `jpeg`, or `webp`."),
     ] = None,
     partial_images: Annotated[
         int | None,
         Form(
-            description="The number of partial images to generate.\n"
-            "This parameter is used for streaming responses that return partial images. "
-            "Value must be between 0 and 3. "
-            "When set to 0, the response will be a single image sent in one streaming event.\n"
-            "Note that the final image may be sent before the full number of partial images "
-            "are generated if the full image is generated more quickly.\n"
-            "Partial images are only sent if the model supports it.",
+            description="Number of partial images to generate during streaming "
+            "(0-3; requires `stream=true`). 0 sends the final image as a single event. "
+            "The final image may arrive before all partial images if generation "
+            "finishes early, and partial images are only sent if the model supports them.",
             ge=0,
             le=3,
         ),
@@ -312,9 +302,8 @@ async def edit_images(
     quality: Annotated[
         str,
         Form(
-            description="The quality of the image that will be generated.\n"
-            "`auto` (default value) will automatically select the best quality for the given model.\n"
-            "Supported values depend on the model.",
+            description="Image quality. `auto` selects the best quality for the model; "
+            "supported values depend on the model.",
             min_length=1,
             max_length=255,
         ),

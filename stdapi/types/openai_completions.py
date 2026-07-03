@@ -68,55 +68,43 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
     )
     prompt: InputFileUrl | str | list[InputFileUrl | str] = Field(
         ...,
-        description="The prompt(s) to generate completions for.\n"
-        "Pass a single string or an array of strings.\n"
-        "Non-inline prompts can be passed as a URL (`https://...`), "
-        "S3 URI (`s3://bucket/key`), base64 data URI "
-        "(`data:[<mediatype>][;base64],<data>`), or a Files API reference "
-        "(`file-id:<file-id>`). Each file is forwarded to the model using "
-        "its detected modality (`image`, `video`, `audio`, `document`); "
-        "the model errors if it does not support that modality.\n"
-        "Special case: an array containing exactly one text string and one or "
-        "more file prompts is sent as a single multimodal request (one choice), "
-        "with the text and files packed in input order — the natural 'ask once "
-        "using these files as context' pattern. Other array shapes return one "
-        "choice per element.\n"
-        "Token arrays (`list[int]` / `list[list[int]]`) are UNSUPPORTED on this "
-        "implementation.",
+        description="The prompt(s) to generate completions for: a single string or array "
+        "of strings. Non-inline prompts can be a URL, S3 URI, base64 data URI, or Files API reference. "
+        "Each file is forwarded using its detected modality; the model errors if unsupported.\n"
+        "An array with exactly one text string and file prompts is sent as a single multimodal request. "
+        "Other array shapes return one choice per element. "
+        "Token arrays are UNSUPPORTED on this implementation.",
     )
     max_tokens: int | None = Field(
         default=None,
         ge=1,
-        description="The maximum number of tokens that can be generated in the completion.\n"
-        "The token count of your prompt plus ``max_tokens`` cannot exceed the model's context length.",
+        description="The maximum number of tokens to generate. "
+        "Prompt tokens plus max_tokens cannot exceed the model's context length.",
     )
     temperature: float | None = Field(
         default=None,
         ge=0.0,
         le=2.0,
-        description="What sampling temperature to use, between 0 and 2.\n"
-        "Higher values like 0.8 make the output more random; lower values like 0.2 make "
-        "it more focused and deterministic.\n"
+        description="Sampling temperature. Higher values (e.g. 0.8) make output more random; "
+        "lower values (e.g. 0.2) make it more focused. "
         "We generally recommend altering this or ``top_p`` but not both.",
     )
     top_p: float | None = Field(
         default=None,
         ge=0.0,
         le=1.0,
-        description="An alternative to sampling with temperature, called nucleus sampling, "
-        "where the model considers the results of the tokens with ``top_p`` probability mass.\n"
-        "So 0.1 means only the tokens comprising the top 10% probability mass are considered.\n"
-        "We generally recommend altering this or ``temperature`` but not both.",
+        description="Nucleus sampling: the model considers only tokens within the top ``top_p`` "
+        "probability mass. We generally recommend altering this or ``temperature`` but not both.",
     )
     stop: str | list[str] | None = Field(
         default=None,
-        description="Up to 4 sequences where the API will stop generating further tokens.\n"
+        description="Up to 4 sequences where the API will stop generating. "
         "The returned text will not contain the stop sequence.",
     )
     stream: bool | None = Field(
         default=None,
-        description="If set, partial completion deltas are sent as server-sent events as they "
-        "become available, terminated by a ``data: [DONE]`` message.",
+        description="If true, partial completion deltas are sent as server-sent events "
+        "as they become available, terminated by a ``data: [DONE]`` message.",
     )
     stream_options: StreamOptions | None = Field(
         default=None, description="Options that apply only when ``stream`` is ``True``."
@@ -134,38 +122,30 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
     )
     service_tier: ServiceTiers | None = Field(
         default=None,
-        description="Processing tier used for serving the request "
-        "(`auto`, `priority`, `flex`, `default`/`scale`).",
+        description="Processing tier used for serving the request (`auto`, `priority`, `flex`).",
     )
     safety_identifier: str | None = Field(
         default=None,
-        description="A stable identifier used to help detect users of your application that may be "
-        "violating usage policies.\nThe IDs should be a string that uniquely identifies each user. "
-        "We recommend hashing their username or email address, in order to avoid sending any "
-        "identifying information.",
+        description="A stable identifier for detecting users who may be violating usage policies. "
+        "Prefer a hash of username or email over the raw value.",
     )
     prompt_cache_key: str | None = Field(
         default=None,
-        description="Used to cache responses for similar requests.\n"
-        "Controls prompt caching for similar requests to reduce costs and improve response times.\n"
-        "Set to any non-empty value to enable prompt caching globally on supported models.\n"
-        "Set to a dot-separated list of 'system', 'messages', and/or 'tools' to enable caching "
-        "only for specific prompt sections.\n"
-        "Note: Custom hash keys are UNSUPPORTED in this implementation.",
+        description="Controls prompt caching for similar requests to reduce costs and improve "
+        "response times. Any non-empty value enables caching; a dot-separated list of "
+        "'system', 'messages', and/or 'tools' scopes it to specific prompt sections. "
+        "Custom hash keys are UNSUPPORTED in this implementation.",
     )
     prompt_cache_retention: PromptCacheRetention | None = Field(
         default=None,
-        description="The retention policy for the prompt cache.\n"
-        "OpenAI values are currently mapped to AWS Bedrock possible values for increased "
-        "compatibility: in-memory -> 5m, 24h -> 1h.",
+        description="The retention policy for the prompt cache. "
+        "OpenAI values are mapped to Bedrock: in-memory -> 5m, 24h -> 1h.",
     )
     best_of: int | None = Field(
         default=None,
-        description="Generates ``best_of`` completions server-side and returns the 'best' "
-        "(the one with the highest log probability per token).\n"
-        "Results cannot be streamed. When used with ``n``, ``best_of`` controls the number "
-        "of candidate completions and ``n`` specifies how many to return — ``best_of`` must "
-        "be greater than ``n``.\n"
+        description="Generates ``best_of`` completions server-side and returns the one with "
+        "the highest log probability per token. Results cannot be streamed, and ``best_of`` "
+        "must be greater than ``n``.\n"
         "UNSUPPORTED in this implementation.",
     )
     echo: bool | None = Field(
@@ -175,44 +155,39 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
     )
     frequency_penalty: float | None = Field(
         default=None,
-        description="Number between -2.0 and 2.0. Positive values penalize new tokens based on "
-        "their existing frequency in the text so far, decreasing the model's likelihood to "
-        "repeat the same line verbatim.\n"
+        description="Number between -2.0 and 2.0. Positive values penalize tokens by their "
+        "existing frequency so far, reducing verbatim repetition.\n"
         "UNSUPPORTED in this implementation.",
     )
     logit_bias: dict[int, float] | None = Field(
         default=None,
-        description="Modify the likelihood of specified tokens appearing in the completion.\n"
-        "Accepts a JSON object that maps tokens (specified by their token ID in the GPT "
-        "tokenizer) to an associated bias value from -100 to 100.\n"
+        description="Maps token IDs (GPT tokenizer) to a bias value from -100 to 100 to modify "
+        "their likelihood of appearing in the completion.\n"
         "UNSUPPORTED in this implementation.",
     )
     logprobs: int | None = Field(
         default=None,
-        description="Include the log probabilities on the ``logprobs`` most likely output tokens, "
-        "as well as the chosen tokens.\n"
-        "The maximum value for ``logprobs`` is 5.\n"
+        description="Include the log probabilities on the ``logprobs`` most likely output "
+        "tokens (max 5), as well as the chosen tokens.\n"
         "UNSUPPORTED in this implementation.",
     )
     presence_penalty: float | None = Field(
         default=None,
-        description="Number between -2.0 and 2.0. Positive values penalize new tokens based on "
-        "whether they appear in the text so far, increasing the model's likelihood to talk "
-        "about new topics.\n"
+        description="Number between -2.0 and 2.0. Positive values penalize tokens that already "
+        "appear in the text so far, encouraging new topics.\n"
         "UNSUPPORTED in this implementation.",
     )
     seed: int | None = Field(
         default=None,
-        description="If specified, the system makes a best effort to sample deterministically, "
-        "such that repeated requests with the same ``seed`` and parameters should return the "
-        "same result.\n"
-        "Determinism is not guaranteed.\n"
+        description="If specified, the system makes a best effort to sample deterministically "
+        "for repeated requests with the same ``seed`` and parameters. Determinism is not "
+        "guaranteed.\n"
         "UNSUPPORTED in this implementation.",
     )
     suffix: str | None = Field(
         default=None,
-        description="The suffix that comes after a completion of inserted text.\n"
-        "On OpenAI this is only supported for ``gpt-3.5-turbo-instruct``.\n"
+        description="The suffix that comes after a completion of inserted text "
+        "(OpenAI: ``gpt-3.5-turbo-instruct`` only).\n"
         "UNSUPPORTED in this implementation.",
     )
 
@@ -247,7 +222,7 @@ class Completion(BaseModelResponse):
         description="The object type, always ``text_completion``.",
     )
     created: int = Field(
-        description="Unix timestamp (in seconds) of when the completion was created."
+        description="Unix timestamp (in seconds) when the completion was created."
     )
     model: str = Field(description="The model used to generate the completion.")
     choices: list[CompletionChoice] = Field(

@@ -69,14 +69,12 @@ ResponseIncludable = Literal[
 class ComparisonFilter(BaseModelRequest):
     """Compares a specified attribute key to a given value using a defined operator."""
 
-    key: str = Field(description="The key to compare against the value.")
+    key: str = Field(description="The key to compare against.")
     type: Literal["eq", "ne", "gt", "gte", "lt", "lte", "in", "nin"] = Field(
-        description=(
-            "Specifies the comparison operator: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `nin`."
-        )
+        description="Comparison operator: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, or `nin`."
     )
     value: str | float | bool | list[str | float] = Field(
-        description="The value to compare against the attribute key; supports string, number, or boolean types."
+        description="The value to compare against the key."
     )
 
 
@@ -85,9 +83,9 @@ class CompoundFilter(BaseModelRequest):
     """Combine multiple filters using `and` or `or`."""
 
     filters: list[ComparisonFilter | object] = Field(
-        description="Array of filters to combine. Items can be `ComparisonFilter` or `CompoundFilter`."
+        description="Array of filters to combine."
     )
-    type: Literal["and", "or"] = Field(description="Type of operation: `and` or `or`.")
+    type: Literal["and", "or"] = Field(description="Combine operation: `and` or `or`.")
 
 
 #: Union of filter types applicable to file search.
@@ -103,9 +101,7 @@ FileSearchFilters = ComparisonFilter | CompoundFilter | None
 class CustomToolInputFormatText(BaseModelRequest):
     """Unconstrained free-form text input format."""
 
-    type: Literal["text"] = Field(
-        description="Unconstrained text format. Always `text`."
-    )
+    type: Literal["text"] = Field(description="Text format identifier.")
 
 
 # Ref: openai.types.shared.custom_tool_input_format.Grammar
@@ -114,9 +110,9 @@ class CustomToolInputFormatGrammar(BaseModelRequest):
 
     definition: str = Field(description="The grammar definition.")
     syntax: Literal["lark", "regex"] = Field(
-        description="The syntax of the grammar definition. One of `lark` or `regex`."
+        description="Grammar syntax type: `lark` or `regex`."
     )
-    type: Literal["grammar"] = Field(description="Grammar format. Always `grammar`.")
+    type: Literal["grammar"] = Field(description="Grammar format identifier.")
 
 
 # Ref: openai.types.shared.custom_tool_input_format.CustomToolInputFormat
@@ -135,29 +131,26 @@ CustomToolInputFormat = Annotated[
 class ContainerNetworkPolicyDisabled(BaseModelRequest):
     """Disable outbound network access from the container."""
 
-    type: Literal["disabled"] = Field(description="Always `disabled`.")
+    type: Literal["disabled"] = Field(description="Network policy disabled.")
 
 
 # Ref: openai.types.responses.container_network_policy_domain_secret.ContainerNetworkPolicyDomainSecret
 class ContainerNetworkPolicyDomainSecret(BaseModelRequest):
     """A domain-scoped secret injected for an allowlisted domain."""
 
-    domain: str = Field(description="The domain associated with the secret.")
-    name: str = Field(description="The name of the secret to inject for the domain.")
-    value: str = Field(description="The secret value to inject for the domain.")
+    domain: str = Field(description="The domain for this secret.")
+    name: str = Field(description="The secret name.")
+    value: str = Field(description="The secret value.")
 
 
 # Ref: openai.types.responses.container_network_policy_allowlist.ContainerNetworkPolicyAllowlist
 class ContainerNetworkPolicyAllowlist(BaseModelRequest):
     """Allow outbound network access only to specified domains."""
 
-    allowed_domains: list[str] = Field(
-        description="A list of allowed domains when type is `allowlist`."
-    )
-    type: Literal["allowlist"] = Field(description="Always `allowlist`.")
+    allowed_domains: list[str] = Field(description="List of allowed domains.")
+    type: Literal["allowlist"] = Field(description="Allowlist network policy.")
     domain_secrets: list[ContainerNetworkPolicyDomainSecret] | None = Field(
-        default=None,
-        description="Optional domain-scoped secrets for allowlisted domains.",
+        default=None, description="Domain-scoped secrets for allowlisted domains."
     )
 
 
@@ -224,20 +217,18 @@ ContainerSkill = Annotated[SkillReference | InlineSkill, Field(discriminator="ty
 class ContainerAuto(BaseModelRequest):
     """Automatically creates a container for this request."""
 
-    type: Literal["container_auto"] = Field(description="Always `container_auto`.")
+    type: Literal["container_auto"] = Field(description="Container auto.")
     file_ids: list[str] | None = Field(
-        default=None,
-        description="An optional list of uploaded files to make available to your code.",
+        default=None, description="Uploaded files to make available to code."
     )
     memory_limit: Literal["1g", "4g", "16g", "64g"] | None = Field(
-        default=None, description="The memory limit for the container."
+        default=None, description="Container memory limit."
     )
     network_policy: ContainerNetworkPolicy | None = Field(
-        default=None, description="Network access policy for the container."
+        default=None, description="Network access policy."
     )
     skills: list[ContainerSkill] | None = Field(
-        default=None,
-        description="An optional list of skills referenced by id or inline data.",
+        default=None, description="Skills to include in the container."
     )
 
 
@@ -245,9 +236,9 @@ class ContainerAuto(BaseModelRequest):
 class ContainerReference(BaseModelRequest):
     """References a container created with the /v1/containers endpoint."""
 
-    container_id: str = Field(description="The ID of the referenced container.")
+    container_id: str = Field(description="Referenced container ID.")
     type: Literal["container_reference"] = Field(
-        description="References a container created with the /v1/containers endpoint."
+        description="Container reference type."
     )
 
 
@@ -255,10 +246,8 @@ class ContainerReference(BaseModelRequest):
 class LocalEnvironment(BaseModelRequest):
     """Use a local computer environment."""
 
-    type: Literal["local"] = Field(description="Always `local`.")
-    skills: list[LocalSkill] | None = Field(
-        default=None, description="An optional list of skills."
-    )
+    type: Literal["local"] = Field(description="Local environment.")
+    skills: list[LocalSkill] | None = Field(default=None, description="List of skills.")
 
 
 # ---------------------------------------------------------------------------
@@ -270,25 +259,20 @@ class LocalEnvironment(BaseModelRequest):
 class FunctionTool(BaseModelRequest):
     """Defines a function in your own code the model can choose to call."""
 
-    name: str = Field(description="The name of the function to call.")
-    type: Literal["function"] = Field(
-        description="The type of the function tool. Always `function`."
-    )
+    name: str = Field(description="Function name.")
+    type: Literal["function"] = Field(description="Function tool type.")
     defer_loading: bool | None = Field(
         default=None,
         description="Whether this function is deferred and loaded via tool search.",
     )
     description: str | None = Field(
-        default=None,
-        description="A description of the function. Used by the model to determine whether or not to call the function.",
+        default=None, description="Function description for the model."
     )
     parameters: JsonMapping | None = Field(
-        default=None,
-        description="A JSON schema object describing the parameters of the function.",
+        default=None, description="JSON schema for function parameters."
     )
     strict: bool | None = Field(
-        default=None,
-        description="Whether to enforce strict parameter validation. Default `true`.",
+        default=None, description="Enforce strict parameter validation. Default: true."
     )
 
 
@@ -297,11 +281,9 @@ class FileSearchRankingOptionsHybridSearch(BaseModelRequest):
     """Hybrid search weighting for reciprocal rank fusion."""
 
     embedding_weight: float = Field(
-        description="The weight of the embedding in the reciprocal ranking fusion."
+        description="Embedding weight for reciprocal rank fusion."
     )
-    text_weight: float = Field(
-        description="The weight of the text in the reciprocal ranking fusion."
-    )
+    text_weight: float = Field(description="Text weight for reciprocal rank fusion.")
 
 
 # Ref: openai.types.responses.file_search_tool.RankingOptions
@@ -309,15 +291,13 @@ class FileSearchRankingOptions(BaseModelRequest):
     """Ranking options for file search."""
 
     hybrid_search: FileSearchRankingOptionsHybridSearch | None = Field(
-        default=None,
-        description="Weights that control how reciprocal rank fusion balances semantic embedding matches versus sparse keyword matches when hybrid search is enabled.",
+        default=None, description="Weights for hybrid search reciprocal rank fusion."
     )
     ranker: Literal["auto", "default-2024-11-15"] | None = Field(
-        default=None, description="The ranker to use for the file search."
+        default=None, description="File search ranker."
     )
     score_threshold: float | None = Field(
-        default=None,
-        description="The score threshold for the file search, a number between 0 and 1.",
+        default=None, description="Score threshold (0 to 1)."
     )
 
 
@@ -328,18 +308,11 @@ class FileSearchTool(BaseModelRequest):
     UNSUPPORTED on this implementation.
     """
 
-    type: Literal["file_search"] = Field(
-        description="The type of the file search tool. Always `file_search`."
-    )
-    vector_store_ids: list[str] = Field(
-        description="The IDs of the vector stores to search."
-    )
-    filters: FileSearchFilters = Field(default=None, description="A filter to apply.")
+    type: Literal["file_search"] = Field(description="File search tool type.")
+    vector_store_ids: list[str] = Field(description="Vector store IDs to search.")
+    filters: FileSearchFilters = Field(default=None, description="Filter to apply.")
     max_num_results: int | None = Field(
-        default=None,
-        ge=1,
-        le=50,
-        description="The maximum number of results to return. This number should be between 1 and 50 inclusive.",
+        default=None, ge=1, le=50, description="Maximum results to return (1-50)."
     )
     ranking_options: FileSearchRankingOptions | None = Field(
         default=None, description="Ranking options for search."
@@ -351,8 +324,7 @@ class WebSearchFilters(BaseModelRequest):
     """Filters for web search."""
 
     allowed_domains: list[str] | None = Field(
-        default=None,
-        description="Allowed domains for the search. If not provided, all domains are allowed. Subdomains of the provided domains are allowed as well.",
+        default=None, description="Allowed domains for the search."
     )
 
 
@@ -360,21 +332,12 @@ class WebSearchFilters(BaseModelRequest):
 class WebSearchUserLocation(BaseModelRequest):
     """The approximate location of the user."""
 
-    city: str | None = Field(
-        default=None, description="Free text input for the city of the user."
-    )
-    country: str | None = Field(
-        default=None, description="The two-letter ISO country code of the user."
-    )
-    region: str | None = Field(
-        default=None, description="Free text input for the region of the user."
-    )
-    timezone: str | None = Field(
-        default=None, description="The IANA timezone of the user."
-    )
+    city: str | None = Field(default=None, description="User's city.")
+    country: str | None = Field(default=None, description="User's ISO country code.")
+    region: str | None = Field(default=None, description="User's region.")
+    timezone: str | None = Field(default=None, description="User's IANA timezone.")
     type: Literal["approximate"] | None = Field(
-        default=None,
-        description="The type of location approximation. Always `approximate`.",
+        default=None, description="Approximate location type."
     )
 
 
@@ -383,20 +346,20 @@ class WebSearchTool(BaseModelRequest):
     """Search the web for sources related to the prompt."""
 
     type: Literal["web_search", "web_search_2025_08_26"] = Field(
-        description="The type of the web search tool. One of `web_search` or `web_search_2025_08_26`."
+        description="Web search tool type."
     )
     filters: WebSearchFilters | None = Field(
-        default=None, description="Filters for the search."
+        default=None, description="Search filters."
     )
     search_context_size: VerbosityLevel | None = Field(
         default=None,
-        description="High level guidance for the amount of context window space to use for the search. One of `low`, `medium`, or `high`. `medium` is the default.",
+        description="Context window size: `low`, `medium`, or `high`. Default: `medium`.",
     )
     user_location: WebSearchUserLocation | None = Field(
-        default=None, description="The approximate location of the user."
+        default=None, description="User's approximate location."
     )
     external_web_access: bool | None = Field(
-        default=None, description="Whether external web access is allowed."
+        default=None, description="Allow external web access."
     )
 
 
@@ -404,21 +367,11 @@ class WebSearchTool(BaseModelRequest):
 class WebSearchPreviewUserLocation(BaseModelRequest):
     """The user's location for web search preview."""
 
-    type: Literal["approximate"] = Field(
-        description="The type of location approximation. Always `approximate`."
-    )
-    city: str | None = Field(
-        default=None, description="Free text input for the city of the user."
-    )
-    country: str | None = Field(
-        default=None, description="The two-letter ISO country code of the user."
-    )
-    region: str | None = Field(
-        default=None, description="Free text input for the region of the user."
-    )
-    timezone: str | None = Field(
-        default=None, description="The IANA timezone of the user."
-    )
+    type: Literal["approximate"] = Field(description="Approximate location type.")
+    city: str | None = Field(default=None, description="User's city.")
+    country: str | None = Field(default=None, description="User's ISO country code.")
+    region: str | None = Field(default=None, description="User's region.")
+    timezone: str | None = Field(default=None, description="User's IANA timezone.")
 
 
 # Ref: openai.types.responses.web_search_preview_tool.WebSearchPreviewTool
@@ -426,20 +379,20 @@ class WebSearchPreviewTool(BaseModelRequest):
     """This tool searches the web for relevant results to use in a response."""
 
     type: Literal["web_search_preview", "web_search_preview_2025_03_11"] = Field(
-        description="The type of the web search tool. One of `web_search_preview` or `web_search_preview_2025_03_11`."
+        description="Web search preview tool type."
     )
     search_content_types: list[Literal["text", "image"]] | None = Field(
         default=None, description="Content types to include in search results."
     )
     search_context_size: VerbosityLevel | None = Field(
         default=None,
-        description="High level guidance for the amount of context window space to use for the search. One of `low`, `medium`, or `high`. `medium` is the default.",
+        description="Context window size: `low`, `medium`, or `high`. Default: `medium`.",
     )
     user_location: WebSearchPreviewUserLocation | None = Field(
-        default=None, description="The user's location."
+        default=None, description="User's location."
     )
     external_web_access: bool | None = Field(
-        default=None, description="Whether external web access is allowed. "
+        default=None, description="Allow external web access."
     )
 
 
@@ -450,9 +403,7 @@ class ComputerTool(BaseModelRequest):
     UNSUPPORTED on this implementation.
     """
 
-    type: Literal["computer"] = Field(
-        description="The type of the computer tool. Always `computer`."
-    )
+    type: Literal["computer"] = Field(description="Computer tool type.")
 
 
 # Ref: openai.types.responses.computer_use_preview_tool.ComputerUsePreviewTool
@@ -462,13 +413,13 @@ class ComputerUsePreviewTool(BaseModelRequest):
     UNSUPPORTED on this implementation.
     """
 
-    display_height: int = Field(description="The height of the computer display.")
-    display_width: int = Field(description="The width of the computer display.")
+    display_height: int = Field(description="Display height in pixels.")
+    display_width: int = Field(description="Display width in pixels.")
     environment: Literal["windows", "mac", "linux", "ubuntu", "browser"] = Field(
-        description="The type of computer environment to control."
+        description="Computer environment to control."
     )
     type: Literal["computer_use_preview"] = Field(
-        description="The type of the computer use tool. Always `computer_use_preview`."
+        description="Computer use preview tool type."
     )
 
 
@@ -477,8 +428,7 @@ class McpAllowedToolsFilter(BaseModelRequest):
     """A filter object to specify which MCP tools are allowed."""
 
     read_only: bool | None = Field(
-        default=None,
-        description="Indicates whether or not a tool modifies data or is read-only.",
+        default=None, description="Filter by read-only status."
     )
     tool_names: list[str] | None = Field(
         default=None, description="List of allowed tool names."
@@ -527,15 +477,13 @@ class Mcp(BaseModelRequest):
     UNSUPPORTED on this implementation.
     """
 
-    server_label: str = Field(
-        description="A label for this MCP server, used to identify it in tool calls."
-    )
-    type: Literal["mcp"] = Field(description="The type of the MCP tool. Always `mcp`.")
+    server_label: str = Field(description="Label for this MCP server.")
+    type: Literal["mcp"] = Field(description="MCP tool type.")
     allowed_tools: McpAllowedTools = Field(
-        default=None, description="List of allowed tool names or a filter object."
+        default=None, description="Allowed tool names or filter."
     )
     authorization: str | None = Field(
-        default=None, description="An OAuth access token for the remote MCP server."
+        default=None, description="OAuth access token for the MCP server."
     )
     connector_id: (
         Literal[
@@ -551,27 +499,23 @@ class Mcp(BaseModelRequest):
         | None
     ) = Field(
         default=None,
-        description=(
-            "Identifier for service connectors. One of `server_url` or `connector_id` must be provided."
-        ),
+        description="Service connector. Requires `server_url` or `connector_id`.",
     )
     defer_loading: bool | None = Field(
-        default=None,
-        description="Whether this MCP tool is deferred and discovered via tool search.",
+        default=None, description="Deferred and discovered via tool search."
     )
     headers: dict[str, str] | None = Field(
-        default=None, description="Optional HTTP headers to send to the MCP server."
+        default=None, description="HTTP headers for the MCP server."
     )
     require_approval: McpRequireApproval = Field(
-        default=None,
-        description="Specify which of the MCP server's tools require approval.",
+        default=None, description="Tools requiring approval."
     )
     server_description: str | None = Field(
-        default=None, description="Optional description of the MCP server."
+        default=None, description="MCP server description."
     )
     server_url: str | None = Field(
         default=None,
-        description="The URL for the MCP server. One of `server_url` or `connector_id` must be provided.",
+        description="MCP server URL. Requires `server_url` or `connector_id`.",
     )
 
 
@@ -579,16 +523,15 @@ class Mcp(BaseModelRequest):
 class CodeInterpreterContainerAuto(BaseModelRequest):
     """Configuration for a code interpreter container."""
 
-    type: Literal["auto"] = Field(description="Always `auto`.")
+    type: Literal["auto"] = Field(description="Auto container type.")
     file_ids: list[str] | None = Field(
-        default=None,
-        description="An optional list of uploaded files to make available to your code.",
+        default=None, description="Uploaded files for code interpreter."
     )
     memory_limit: Literal["1g", "4g", "16g", "64g"] | None = Field(
-        default=None, description="The memory limit for the code interpreter container."
+        default=None, description="Container memory limit."
     )
     network_policy: ContainerNetworkPolicy | None = Field(
-        default=None, description="Network access policy for the container."
+        default=None, description="Network access policy."
     )
 
 
@@ -601,19 +544,16 @@ class CodeInterpreter(BaseModelRequest):
     """A tool that runs Python code to help generate a response to a prompt."""
 
     container: CodeInterpreterContainer | None = Field(
-        default=None,
-        description="The code interpreter container. Can be a container ID or an object that specifies uploaded file IDs to make available to your code.",
+        default=None, description="Code interpreter container (ID or config)."
     )
-    type: Literal["code_interpreter"] = Field(
-        description="The type of the code interpreter tool. Always `code_interpreter`."
-    )
+    type: Literal["code_interpreter"] = Field(description="Code interpreter tool type.")
 
 
 # Ref: openai.types.responses.tool.ImageGenerationInputImageMask
 class ImageGenerationInputImageMask(BaseModelRequest):
     """Optional mask for inpainting."""
 
-    file_id: str | None = Field(default=None, description="File ID for the mask image.")
+    file_id: str | None = Field(default=None, description="Mask image file ID.")
     image_url: str | None = Field(
         default=None, description="Base64-encoded mask image."
     )
@@ -623,54 +563,47 @@ class ImageGenerationInputImageMask(BaseModelRequest):
 class ImageGeneration(BaseModelRequest):
     """A tool that generates images."""
 
-    type: Literal["image_generation"] = Field(
-        description="The type of the image generation tool. Always `image_generation`."
-    )
+    type: Literal["image_generation"] = Field(description="Image generation tool type.")
     action: Literal["generate", "edit", "auto"] | None = Field(
-        default=None,
-        description="Whether to generate a new image or edit an existing image. Default: `auto`.",
+        default=None, description="Generate new or edit existing image. Default: auto."
     )
     background: Literal["transparent", "opaque", "auto"] | None = Field(
         default=None,
-        description="Background type for the generated image. One of `transparent`, `opaque`, or `auto`. Default: `auto`.",
+        description="Background type: `transparent`, `opaque`, or `auto`. Default: auto.",
     )
     input_fidelity: Literal["high", "low"] | None = Field(
-        default=None,
-        description="Control how much effort the model will exert to match the style and features of input images. Supports `high` and `low`. Defaults to `low`.",
+        default=None, description="Match style/features of input images. Default: low."
     )
     input_image_mask: ImageGenerationInputImageMask | None = Field(
-        default=None, description="Optional mask for inpainting."
+        default=None, description="Mask for inpainting."
     )
-    model: str | None = Field(
-        default=None, description="The image generation model to use."
-    )
+    model: str | None = Field(default=None, description="Image generation model.")
     moderation: Literal["auto", "low"] | None = Field(
-        default=None,
-        description="Moderation level for the generated image. Default: `auto`.",
+        default=None, description="Moderation level. Default: auto."
     )
     output_compression: int | None = Field(
         default=None,
         ge=0,
         le=100,
-        description="Compression level for the output image. Default: 100.",
+        description="Output compression (0-100). Default: 100.",
     )
     output_format: Literal["png", "webp", "jpeg"] | None = Field(
         default=None,
-        description="The output format of the generated image. One of `png`, `webp`, or `jpeg`. Default: `png`.",
+        description="Output format: `png`, `webp`, or `jpeg`. Default: png.",
     )
     partial_images: int | None = Field(
         default=None,
         ge=0,
         le=3,
-        description="Number of partial images to generate in streaming mode, from 0 (default) to 3.",
+        description="Partial images for streaming (0-3). Default: 0.",
     )
     quality: Literal["low", "medium", "high", "auto"] | None = Field(
         default=None,
-        description="The quality of the generated image. One of `low`, `medium`, `high`, or `auto`. Default: `auto`.",
+        description="Image quality: `low`, `medium`, `high`, or `auto`. Default: auto.",
     )
     size: Literal["1024x1024", "1024x1536", "1536x1024", "auto"] | None = Field(
         default=None,
-        description="The size of the generated image. One of `1024x1024`, `1024x1536`, `1536x1024`, or `auto`. Default: `auto`.",
+        description="Image size: `1024x1024`, `1024x1536`, `1536x1024`, or `auto`. Default: auto.",
     )
 
 
@@ -681,9 +614,7 @@ class LocalShell(BaseModelRequest):
     UNSUPPORTED on this implementation.
     """
 
-    type: Literal["local_shell"] = Field(
-        description="The type of the local shell tool. Always `local_shell`."
-    )
+    type: Literal["local_shell"] = Field(description="Local shell tool type.")
 
 
 #: Shell tool environment union.
@@ -703,11 +634,9 @@ class FunctionShellTool(BaseModelRequest):
     UNSUPPORTED on this implementation.
     """
 
-    type: Literal["shell"] = Field(
-        description="The type of the shell tool. Always `shell`."
-    )
+    type: Literal["shell"] = Field(description="Shell tool type.")
     environment: FunctionShellEnvironment = Field(
-        default=None, description="The environment in which to execute shell commands."
+        default=None, description="Environment for shell commands."
     )
 
 
@@ -718,22 +647,14 @@ class CustomTool(BaseModelRequest):
     UNSUPPORTED on this implementation.
     """
 
-    name: str = Field(
-        description="The name of the custom tool, used to identify it in tool calls."
-    )
-    type: Literal["custom"] = Field(
-        description="The type of the custom tool. Always `custom`."
-    )
+    name: str = Field(description="Custom tool name.")
+    type: Literal["custom"] = Field(description="Custom tool type.")
     defer_loading: bool | None = Field(
-        default=None,
-        description="Whether this tool should be deferred and discovered via tool search.",
+        default=None, description="Deferred and discovered via tool search."
     )
-    description: str | None = Field(
-        default=None, description="Optional description of the custom tool."
-    )
+    description: str | None = Field(default=None, description="Tool description.")
     format: CustomToolInputFormat | None = Field(
-        default=None,
-        description="The input format for the custom tool. Default is unconstrained text.",
+        default=None, description="Input format. Default: unconstrained text."
     )
 
 
@@ -741,21 +662,14 @@ class CustomTool(BaseModelRequest):
 class NamespaceToolFunction(BaseModelRequest):
     """A function tool within a namespace."""
 
-    name: str = Field(description="The name of the function.")
-    type: Literal["function"] = Field(description="Always `function`.")
+    name: str = Field(description="Function name.")
+    type: Literal["function"] = Field(description="Function type.")
     defer_loading: bool | None = Field(
-        default=None,
-        description="Whether this function should be deferred and discovered via tool search.",
+        default=None, description="Deferred and discovered via tool search."
     )
-    description: str | None = Field(
-        default=None, description="Description of the function."
-    )
-    parameters: object | None = Field(
-        default=None, description="The function's parameter schema."
-    )
-    strict: bool | None = Field(
-        default=None, description="Whether to enforce strict parameter validation."
-    )
+    description: str | None = Field(default=None, description="Function description.")
+    parameters: object | None = Field(default=None, description="Parameter schema.")
+    strict: bool | None = Field(default=None, description="Enforce strict validation.")
 
 
 # Ref: openai.types.responses.namespace_tool.Tool
@@ -771,16 +685,12 @@ class NamespaceTool(BaseModelRequest):
     UNSUPPORTED on this implementation.
     """
 
-    description: str = Field(
-        description="A description of the namespace shown to the model."
-    )
-    name: str = Field(description="The namespace name used in tool calls.")
+    description: str = Field(description="Description shown to the model.")
+    name: str = Field(description="Namespace name.")
     tools: list[NamespaceToolTool] = Field(
-        description="The function/custom tools available inside this namespace."
+        description="Tools available in this namespace."
     )
-    type: Literal["namespace"] = Field(
-        description="The type of the tool. Always `namespace`."
-    )
+    type: Literal["namespace"] = Field(description="Namespace tool type.")
 
 
 # Ref: openai.types.responses.tool_search_tool.ToolSearchTool
@@ -790,20 +700,15 @@ class ToolSearchTool(BaseModelRequest):
     UNSUPPORTED on this implementation.
     """
 
-    type: Literal["tool_search"] = Field(
-        description="The type of the tool. Always `tool_search`."
-    )
+    type: Literal["tool_search"] = Field(description="Tool search type.")
     description: str | None = Field(
-        default=None,
-        description="Description shown to the model for a client-executed tool search tool.",
+        default=None, description="Description for client-executed tool search."
     )
     execution: Literal["server", "client"] | None = Field(
-        default=None,
-        description="Whether tool search is executed by the server or by the client.",
+        default=None, description="Execute tool search on server or client."
     )
     parameters: object | None = Field(
-        default=None,
-        description="Parameter schema for a client-executed tool search tool.",
+        default=None, description="Parameter schema for client-executed tool search."
     )
 
 
@@ -814,9 +719,7 @@ class ApplyPatchTool(BaseModelRequest):
     UNSUPPORTED on this implementation.
     """
 
-    type: Literal["apply_patch"] = Field(
-        description="The type of the tool. Always `apply_patch`."
-    )
+    type: Literal["apply_patch"] = Field(description="Apply patch tool type.")
 
 
 # Ref: openai.types.responses.tool.Tool
@@ -858,17 +761,15 @@ class ToolChoiceTypes(BaseModelRequest):
         "web_search_preview_2025_03_11",
         "image_generation",
         "code_interpreter",
-    ] = Field(description="The type of built-in tool the model should use.")
+    ] = Field(description="Built-in tool type to use.")
 
 
 # Ref: openai.types.responses.tool_choice_function.ToolChoiceFunction
 class ToolChoiceFunction(BaseModelRequest):
     """Force the model to call a specific function."""
 
-    name: str = Field(description="The name of the function to call.")
-    type: Literal["function"] = Field(
-        description="For function calling, the type is always `function`."
-    )
+    name: str = Field(description="Function name to call.")
+    type: Literal["function"] = Field(description="Function tool type.")
 
 
 # Ref: openai.types.responses.tool_choice_allowed.ToolChoiceAllowed
@@ -876,49 +777,41 @@ class ToolChoiceAllowed(BaseModelRequest):
     """Constrains the tools available to the model to a pre-defined set."""
 
     mode: Literal["auto", "required"] = Field(
-        description="`auto` allows the model to pick from among the allowed tools. `required` requires the model to call one or more of the allowed tools."
+        description="`auto` lets model pick tools. `required` forces tool call."
     )
-    tools: list[JsonMapping] = Field(
-        description="A list of tool definitions that the model should be allowed to call."
-    )
-    type: Literal["allowed_tools"] = Field(description="Always `allowed_tools`.")
+    tools: list[JsonMapping] = Field(description="Allowed tool definitions.")
+    type: Literal["allowed_tools"] = Field(description="Allowed tools type.")
 
 
 # Ref: openai.types.responses.tool_choice_mcp.ToolChoiceMcp
 class ToolChoiceMcp(BaseModelRequest):
     """Force the model to call a specific tool on a remote MCP server."""
 
-    server_label: str = Field(description="The label of the MCP server to use.")
-    type: Literal["mcp"] = Field(description="For MCP tools, the type is always `mcp`.")
-    name: str | None = Field(
-        default=None, description="The name of the tool to call on the server."
-    )
+    server_label: str = Field(description="MCP server label.")
+    type: Literal["mcp"] = Field(description="MCP tool type.")
+    name: str | None = Field(default=None, description="Tool name on the server.")
 
 
 # Ref: openai.types.responses.tool_choice_custom.ToolChoiceCustom
 class ToolChoiceCustom(BaseModelRequest):
     """Force the model to call a specific custom tool."""
 
-    name: str = Field(description="The name of the custom tool to call.")
-    type: Literal["custom"] = Field(
-        description="For custom tool calling, the type is always `custom`."
-    )
+    name: str = Field(description="Custom tool name to call.")
+    type: Literal["custom"] = Field(description="Custom tool type.")
 
 
 # Ref: openai.types.responses.tool_choice_apply_patch.ToolChoiceApplyPatch
 class ToolChoiceApplyPatch(BaseModelRequest):
     """Forces the model to call the apply_patch tool when executing a tool call."""
 
-    type: Literal["apply_patch"] = Field(
-        description="The tool to call. Always `apply_patch`."
-    )
+    type: Literal["apply_patch"] = Field(description="Apply patch tool.")
 
 
 # Ref: openai.types.responses.tool_choice_shell.ToolChoiceShell
 class ToolChoiceShell(BaseModelRequest):
     """Forces the model to call the shell tool when a tool call is required."""
 
-    type: Literal["shell"] = Field(description="The tool to call. Always `shell`.")
+    type: Literal["shell"] = Field(description="Shell tool.")
 
 
 #: Full tool choice union: literal string or structured object.
@@ -945,17 +838,13 @@ class Reasoning(BaseModelRequest):
 
     effort: ReasoningEffort | None = Field(
         default=None,
-        description=(
-            "Constrains effort on reasoning for reasoning models. Supported values are "
-            "`none`, `minimal`, `low`, `medium`, `high`, and `xhigh`."
-        ),
+        description="Reasoning effort: `none`, `minimal`, `low`, `medium`, `high`, or `xhigh`.",
     )
     generate_summary: Literal["auto", "concise", "detailed"] | None = Field(
-        default=None, description="**Deprecated:** use `summary` instead."
+        default=None, description="Deprecated: use `summary` instead."
     )
     summary: Literal["auto", "concise", "detailed"] | None = Field(
-        default=None,
-        description="A summary of the reasoning performed by the model. One of `auto`, `concise`, or `detailed`.",
+        default=None, description="Reasoning summary: `auto`, `concise`, or `detailed`."
     )
 
 
@@ -968,29 +857,22 @@ class Reasoning(BaseModelRequest):
 class ResponseInputText(BaseModelRequest):
     """A text input to the model."""
 
-    text: str = Field(description="The text input to the model.")
-    type: Literal["input_text"] = Field(
-        description="The type of the input item. Always `input_text`."
-    )
+    text: str = Field(description="Text input.")
+    type: Literal["input_text"] = Field(description="Input text type.")
 
 
 # Ref: openai.types.responses.response_input_image.ResponseInputImage
 class ResponseInputImage(BaseModelRequest):
     """An image input to the model."""
 
-    type: Literal["input_image"] = Field(
-        description="The type of the input item. Always `input_image`."
-    )
+    type: Literal["input_image"] = Field(description="Input image type.")
     detail: Literal["low", "high", "auto", "original"] | None = Field(
         default=None,
-        description="The detail level of the image to be sent to the model. One of `high`, `low`, `auto`, or `original`. Defaults to `auto`.",
+        description="Image detail level: `high`, `low`, `auto`, or `original`. Default: auto.",
     )
-    file_id: str | None = Field(
-        default=None, description="The ID of the file to be sent to the model."
-    )
+    file_id: str | None = Field(default=None, description="Image file ID.")
     image_url: str | None = Field(
-        default=None,
-        description="The URL of the image to be sent to the model. A fully qualified URL or base64 encoded image in a data URL.",
+        default=None, description="Image URL or base64 data URL."
     )
 
 
@@ -998,21 +880,11 @@ class ResponseInputImage(BaseModelRequest):
 class ResponseInputFile(BaseModelRequest):
     """A file input to the model."""
 
-    type: Literal["input_file"] = Field(
-        description="The type of the input item. Always `input_file`."
-    )
-    file_data: str | None = Field(
-        default=None, description="The content of the file to be sent to the model."
-    )
-    file_id: str | None = Field(
-        default=None, description="The ID of the file to be sent to the model."
-    )
-    file_url: str | None = Field(
-        default=None, description="The URL of the file to be sent to the model."
-    )
-    filename: str | None = Field(
-        default=None, description="The name of the file to be sent to the model."
-    )
+    type: Literal["input_file"] = Field(description="Input file type.")
+    file_data: str | None = Field(default=None, description="File content.")
+    file_id: str | None = Field(default=None, description="File ID.")
+    file_url: str | None = Field(default=None, description="File URL.")
+    filename: str | None = Field(default=None, description="Filename.")
 
 
 # NOTE: Not in the OpenAI spec's InputContent — this type handles a real-world behaviour
@@ -1025,12 +897,8 @@ class ResponseInputFile(BaseModelRequest):
 class ResponseOutputTextContent(BaseModelRequestWithExtra):
     """An output_text content block echoed back in the input array (previous assistant response)."""
 
-    type: Literal["output_text"] = Field(
-        description="The type of the content block. Always `output_text`."
-    )
-    text: str = Field(
-        description="The text content from the previous assistant response."
-    )
+    type: Literal["output_text"] = Field(description="Output text type.")
+    text: str = Field(description="Text content from assistant response.")
 
 
 # Ref: openai.types.responses.response_input_content.ResponseInputContent
@@ -1055,16 +923,11 @@ ResponseInputMessageContentList = list[ResponseInputContent]
 class ResponseComputerToolCallOutputScreenshot(BaseModelRequest):
     """A computer screenshot image used with the computer use tool."""
 
-    type: Literal["computer_screenshot"] = Field(
-        description="Always `computer_screenshot`."
-    )
+    type: Literal["computer_screenshot"] = Field(description="Computer screenshot.")
     file_id: str | None = Field(
-        default=None,
-        description="The identifier of an uploaded file that contains the screenshot.",
+        default=None, description="Uploaded file with screenshot."
     )
-    image_url: str | None = Field(
-        default=None, description="The URL of the screenshot image."
-    )
+    image_url: str | None = Field(default=None, description="Screenshot URL.")
 
 
 # ---------------------------------------------------------------------------
@@ -1076,15 +939,15 @@ class ResponseComputerToolCallOutputScreenshot(BaseModelRequest):
 class ShellCallOutcomeTimeout(BaseModelRequest):
     """Indicates that the shell call exceeded its configured time limit."""
 
-    type: Literal["timeout"] = Field(description="The outcome type. Always `timeout`.")
+    type: Literal["timeout"] = Field(description="Timeout outcome.")
 
 
 # Ref: openai.types.responses.response_function_shell_call_output_content.OutcomeExit
 class ShellCallOutcomeExit(BaseModelRequest):
     """Indicates that the shell commands finished and returned an exit code."""
 
-    exit_code: int = Field(description="The exit code returned by the shell process.")
-    type: Literal["exit"] = Field(description="The outcome type. Always `exit`.")
+    exit_code: int = Field(description="Shell exit code.")
+    type: Literal["exit"] = Field(description="Exit outcome.")
 
 
 # Ref: openai.types.responses.response_function_shell_call_output_content.Outcome
@@ -1097,11 +960,9 @@ ShellCallOutcome = Annotated[
 class ShellCallOutputContent(BaseModelRequest):
     """Captured stdout and stderr for a portion of a shell tool call output."""
 
-    outcome: ShellCallOutcome = Field(
-        description="The exit or timeout outcome associated with this shell call."
-    )
-    stderr: str = Field(description="Captured stderr output for the shell call.")
-    stdout: str = Field(description="Captured stdout output for the shell call.")
+    outcome: ShellCallOutcome = Field(description="Exit or timeout outcome.")
+    stderr: str = Field(description="Captured stderr.")
+    stdout: str = Field(description="Captured stdout.")
 
 
 # ---------------------------------------------------------------------------
@@ -1113,40 +974,26 @@ class ShellCallOutputContent(BaseModelRequest):
 class ApplyPatchOperationCreateFile(BaseModelRequest):
     """Instruction for creating a new file via the apply_patch tool."""
 
-    diff: str = Field(
-        description="Unified diff content to apply when creating the file."
-    )
-    path: str = Field(
-        description="Path of the file to create relative to the workspace root."
-    )
-    type: Literal["create_file"] = Field(
-        description="The operation type. Always `create_file`."
-    )
+    diff: str = Field(description="Diff content for new file.")
+    path: str = Field(description="Path relative to workspace root.")
+    type: Literal["create_file"] = Field(description="Create file operation.")
 
 
 # Ref: openai.types.responses.response_input_item.ApplyPatchCallOperationDeleteFile
 class ApplyPatchOperationDeleteFile(BaseModelRequest):
     """Instruction for deleting an existing file via the apply_patch tool."""
 
-    path: str = Field(
-        description="Path of the file to delete relative to the workspace root."
-    )
-    type: Literal["delete_file"] = Field(
-        description="The operation type. Always `delete_file`."
-    )
+    path: str = Field(description="Path to delete.")
+    type: Literal["delete_file"] = Field(description="Delete file operation.")
 
 
 # Ref: openai.types.responses.response_input_item.ApplyPatchCallOperationUpdateFile
 class ApplyPatchOperationUpdateFile(BaseModelRequest):
     """Instruction for updating an existing file via the apply_patch tool."""
 
-    diff: str = Field(description="Unified diff content to apply to the existing file.")
-    path: str = Field(
-        description="Path of the file to update relative to the workspace root."
-    )
-    type: Literal["update_file"] = Field(
-        description="The operation type. Always `update_file`."
-    )
+    diff: str = Field(description="Diff content to apply.")
+    path: str = Field(description="Path to update.")
+    type: Literal["update_file"] = Field(description="Update file operation.")
 
 
 # Ref: openai.types.responses.response_input_item.ApplyPatchCallOperation
@@ -1168,17 +1015,17 @@ class EasyInputMessage(BaseModelRequest):
     """A message input to the model with a role indicating instruction following hierarchy."""
 
     content: str | ResponseInputMessageContentList = Field(
-        description="Text, image, or audio input to the model, used to generate a response. Can also contain previous assistant responses."
+        description="Text, image, or audio input for the model."
     )
     role: Literal["user", "assistant", "system", "developer"] = Field(
-        description="The role of the message input. One of `user`, `assistant`, `system`, or `developer`."
+        description="Message role: `user`, `assistant`, `system`, or `developer`."
     )
     phase: Literal["commentary", "final_answer"] | None = Field(
         default=None,
-        description="Labels an `assistant` message as intermediate commentary or the final answer.",
+        description="Labels assistant message as commentary or final answer.",
     )
     type: Literal["message"] | None = Field(
-        default=None, description="The type of the message input. Always `message`."
+        default=None, description="Message input type."
     )
 
 
@@ -1186,19 +1033,16 @@ class EasyInputMessage(BaseModelRequest):
 class InputMessage(BaseModelRequest):
     """A message input with a restricted set of roles (no `assistant`)."""
 
-    content: ResponseInputMessageContentList = Field(
-        description="A list of one or many input items to the model, containing different content types."
-    )
+    content: ResponseInputMessageContentList = Field(description="Input content items.")
     role: Literal["user", "system", "developer"] = Field(
-        description="The role of the message input. One of `user`, `system`, or `developer`."
+        description="Message role: `user`, `system`, or `developer`."
     )
     status: ResponseItemStatus | None = Field(
         default=None,
-        description="The status of item. One of `in_progress`, `completed`, or `incomplete`. Populated when items are returned via API.",
+        description="Item status: `in_progress`, `completed`, or `incomplete`.",
     )
     type: Literal["message"] | None = Field(
-        default=None,
-        description="The type of the message input. Always set to `message`.",
+        default=None, description="Message input type."
     )
 
 
@@ -1206,40 +1050,28 @@ class InputMessage(BaseModelRequest):
 class ComputerCallOutputAcknowledgedSafetyCheck(BaseModelRequest):
     """A pending safety check for the computer call."""
 
-    id: str = Field(description="The ID of the pending safety check.")
-    code: str | None = Field(
-        default=None, description="The type of the pending safety check."
-    )
-    message: str | None = Field(
-        default=None, description="Details about the pending safety check."
-    )
+    id: str = Field(description="Safety check ID.")
+    code: str | None = Field(default=None, description="Safety check type.")
+    message: str | None = Field(default=None, description="Safety check details.")
 
 
 # Ref: openai.types.responses.response_input_item.ComputerCallOutput
 class ComputerCallOutput(BaseModelRequest):
     """The output of a computer tool call."""
 
-    call_id: str = Field(
-        description="The ID of the computer tool call that produced the output."
-    )
+    call_id: str = Field(description="Computer tool call ID.")
     output: ResponseComputerToolCallOutputScreenshot = Field(
-        description="A computer screenshot image used with the computer use tool."
+        description="Computer screenshot."
     )
     type: Literal["computer_call_output"] = Field(
-        description="The type of the computer tool call output. Always `computer_call_output`."
+        description="Computer call output type."
     )
-    id: str | None = Field(
-        default=None, description="The ID of the computer tool call output."
-    )
+    id: str | None = Field(default=None, description="Output ID.")
     acknowledged_safety_checks: (
         list[ComputerCallOutputAcknowledgedSafetyCheck] | None
-    ) = Field(
-        default=None,
-        description="The safety checks reported by the API that have been acknowledged by the developer.",
-    )
+    ) = Field(default=None, description="Acknowledged safety checks.")
     status: ResponseItemStatus | None = Field(
-        default=None,
-        description="The status of the message input. One of `in_progress`, `completed`, or `incomplete`. Populated when input items are returned via API.",
+        default=None, description="Status: `in_progress`, `completed`, or `incomplete`."
     )
 
 
@@ -1338,21 +1170,13 @@ class ImageGenerationCallInput(BaseModelRequest):
 class LocalShellCallActionInput(BaseModelRequest):
     """Execute a shell command on the server."""
 
-    command: list[str] = Field(description="The command to run.")
-    env: dict[str, str] = Field(
-        description="Environment variables to set for the command."
-    )
-    type: Literal["exec"] = Field(
-        description="The type of the local shell action. Always `exec`."
-    )
-    timeout_ms: int | None = Field(
-        default=None, description="Optional timeout in milliseconds for the command."
-    )
-    user: str | None = Field(
-        default=None, description="Optional user to run the command as."
-    )
+    command: list[str] = Field(description="Command to run.")
+    env: dict[str, str] = Field(description="Environment variables.")
+    type: Literal["exec"] = Field(description="Exec action type.")
+    timeout_ms: int | None = Field(default=None, description="Timeout in milliseconds.")
+    user: str | None = Field(default=None, description="User to run as.")
     working_directory: str | None = Field(
-        default=None, description="Optional working directory to run the command in."
+        default=None, description="Working directory."
     )
 
 
@@ -1517,16 +1341,10 @@ class ApplyPatchCallOutput(BaseModelRequest):
 class McpListToolsToolItem(BaseModelRequest):
     """A tool available on an MCP server."""
 
-    input_schema: object = Field(
-        description="The JSON schema describing the tool's input."
-    )
-    name: str = Field(description="The name of the tool.")
-    annotations: object | None = Field(
-        default=None, description="Additional annotations about the tool."
-    )
-    description: str | None = Field(
-        default=None, description="The description of the tool."
-    )
+    input_schema: object = Field(description="Tool input JSON schema.")
+    name: str = Field(description="Tool name.")
+    annotations: object | None = Field(default=None, description="Tool annotations.")
+    description: str | None = Field(default=None, description="Tool description.")
 
 
 # Ref: openai.types.responses.response_input_item.McpListTools (input variant)
@@ -1550,14 +1368,12 @@ class McpListToolsInput(BaseModelRequest):
 class McpApprovalRequestInput(BaseModelRequest):
     """A request for human approval of a tool invocation (as input item)."""
 
-    id: str = Field(description="The unique ID of the approval request.")
-    arguments: str = Field(description="A JSON string of arguments for the tool.")
-    name: str = Field(description="The name of the tool to run.")
-    server_label: str = Field(
-        description="The label of the MCP server making the request."
-    )
+    id: str = Field(description="Approval request ID.")
+    arguments: str = Field(description="Tool arguments JSON.")
+    name: str = Field(description="Tool name.")
+    server_label: str = Field(description="MCP server label.")
     type: Literal["mcp_approval_request"] = Field(
-        description="The type of the item. Always `mcp_approval_request`."
+        description="MCP approval request type."
     )
 
 
@@ -1584,30 +1400,19 @@ class McpApprovalResponse(BaseModelRequest):
 class McpCallInput(BaseModelRequest):
     """An invocation of a tool on an MCP server (as input item)."""
 
-    id: str = Field(description="The unique ID of the tool call.")
-    arguments: str = Field(
-        description="A JSON string of the arguments passed to the tool."
-    )
-    name: str = Field(description="The name of the tool that was run.")
-    server_label: str = Field(
-        description="The label of the MCP server running the tool."
-    )
-    type: Literal["mcp_call"] = Field(
-        description="The type of the item. Always `mcp_call`."
-    )
+    id: str = Field(description="Tool call ID.")
+    arguments: str = Field(description="Tool arguments JSON.")
+    name: str = Field(description="Tool name.")
+    server_label: str = Field(description="MCP server label.")
+    type: Literal["mcp_call"] = Field(description="MCP call type.")
     approval_request_id: str | None = Field(
-        default=None,
-        description="Unique identifier for the MCP tool call approval request.",
+        default=None, description="Approval request ID."
     )
-    error: str | None = Field(
-        default=None, description="The error from the tool call, if any."
-    )
-    output: str | None = Field(
-        default=None, description="The output from the tool call."
-    )
+    error: str | None = Field(default=None, description="Tool call error.")
+    output: str | None = Field(default=None, description="Tool call output.")
     status: (
         Literal["in_progress", "completed", "incomplete", "calling", "failed"] | None
-    ) = Field(default=None, description="The status of the tool call.")
+    ) = Field(default=None, description="Tool call status.")
 
 
 # Ref: openai.types.responses.response_input_item.ItemReference
@@ -1675,46 +1480,38 @@ type ResponseInputParam = str | list[ResponseInputItem]
 class AnnotationFileCitation(BaseModelResponse):
     """A citation to a file."""
 
-    file_id: str = Field(description="The ID of the file.")
-    filename: str = Field(description="The filename of the file cited.")
-    index: int = Field(description="The index of the file in the list of files.")
-    type: Literal["file_citation"] = Field(
-        description="The type of the file citation. Always `file_citation`."
-    )
+    file_id: str = Field(description="File ID.")
+    filename: str = Field(description="Filename.")
+    index: int = Field(description="File index.")
+    type: Literal["file_citation"] = Field(description="File citation type.")
 
 
 # Ref: openai.types.responses.response_output_text.AnnotationURLCitation
 class AnnotationURLCitation(BaseModelResponse):
     """A citation for a web resource used to generate a model response."""
 
-    end_index: int = Field(
-        description="The index of the last character of the URL citation in the message."
-    )
-    start_index: int = Field(
-        description="The index of the first character of the URL citation in the message."
-    )
-    title: str = Field(description="The title of the web resource.")
-    type: Literal["url_citation"] = Field(
-        description="The type of the URL citation. Always `url_citation`."
-    )
-    url: str = Field(description="The URL of the web resource.")
+    end_index: int = Field(description="Last character index of URL citation.")
+    start_index: int = Field(description="First character index of URL citation.")
+    title: str = Field(description="Web resource title.")
+    type: Literal["url_citation"] = Field(description="URL citation type.")
+    url: str = Field(description="Web resource URL.")
 
 
 # Ref: openai.types.responses.response_output_text.AnnotationContainerFileCitation
 class AnnotationContainerFileCitation(BaseModelResponse):
     """A citation for a container file used to generate a model response."""
 
-    container_id: str = Field(description="The ID of the container file.")
+    container_id: str = Field(description="Container file ID.")
     end_index: int = Field(
-        description="The index of the last character of the container file citation in the message."
+        description="Last character index of container file citation."
     )
-    file_id: str = Field(description="The ID of the file.")
-    filename: str = Field(description="The filename of the container file cited.")
+    file_id: str = Field(description="File ID.")
+    filename: str = Field(description="Container filename.")
     start_index: int = Field(
-        description="The index of the first character of the container file citation in the message."
+        description="First character index of container file citation."
     )
     type: Literal["container_file_citation"] = Field(
-        description="The type of the container file citation. Always `container_file_citation`."
+        description="Container file citation type."
     )
 
 
@@ -1722,11 +1519,9 @@ class AnnotationContainerFileCitation(BaseModelResponse):
 class AnnotationFilePath(BaseModelResponse):
     """A path to a file."""
 
-    file_id: str = Field(description="The ID of the file.")
-    index: int = Field(description="The index of the file in the list of files.")
-    type: Literal["file_path"] = Field(
-        description="The type of the file path. Always `file_path`."
-    )
+    file_id: str = Field(description="File ID.")
+    index: int = Field(description="File index.")
+    type: Literal["file_path"] = Field(description="File path type.")
 
 
 # Ref: openai.types.responses.response_output_text.Annotation
@@ -1743,37 +1538,29 @@ Annotation = Annotated[
 class LogprobTopLogprob(BaseModelResponse):
     """A possible token with its log probability."""
 
-    token: str | None = Field(default=None, description="A possible text token.")
-    logprob: float | None = Field(
-        default=None, description="The log probability of this token."
-    )
+    token: str | None = Field(default=None, description="Possible text token.")
+    logprob: float | None = Field(default=None, description="Log probability.")
 
 
 # Ref: openai.types.responses.response_output_text.Logprob
 class Logprob(BaseModelResponse):
     """The log probability of a token."""
 
-    token: str = Field(description="A possible text token.")
-    bytes: list[int] = Field(description="The bytes of this token.")
-    logprob: float = Field(description="The log probability of this token.")
-    top_logprobs: list[LogprobTopLogprob] = Field(
-        description="The log probability of the top most likely tokens."
-    )
+    token: str = Field(description="Text token.")
+    bytes: list[int] = Field(description="Token bytes.")
+    logprob: float = Field(description="Log probability.")
+    top_logprobs: list[LogprobTopLogprob] = Field(description="Top log probabilities.")
 
 
 # Ref: openai.types.responses.response_output_text.ResponseOutputText
 class ResponseOutputText(BaseModelResponse):
     """A text output from the model."""
 
-    annotations: list[Annotation] = Field(
-        description="The annotations of the text output."
-    )
-    text: str = Field(description="The text output from the model.")
-    type: Literal["output_text"] = Field(
-        description="The type of the output text. Always `output_text`."
-    )
+    annotations: list[Annotation] = Field(description="Text annotations.")
+    text: str = Field(description="Model text output.")
+    type: Literal["output_text"] = Field(description="Output text type.")
     logprobs: list[Logprob] | None = Field(
-        default=None, description="Log probabilities for the output tokens."
+        default=None, description="Output token log probabilities."
     )
 
 
@@ -1781,10 +1568,8 @@ class ResponseOutputText(BaseModelResponse):
 class ResponseOutputRefusal(BaseModelResponse):
     """A refusal from the model."""
 
-    refusal: str = Field(description="The refusal explanation from the model.")
-    type: Literal["refusal"] = Field(
-        description="The type of the refusal. Always `refusal`."
-    )
+    refusal: str = Field(description="Refusal explanation.")
+    type: Literal["refusal"] = Field(description="Refusal type.")
 
 
 # Ref: openai.types.responses.response_output_message.Content
@@ -1797,22 +1582,16 @@ ResponseOutputMessageContent = Annotated[
 class ResponseOutputMessage(BaseModelResponse):
     """An output message from the model."""
 
-    id: str = Field(description="The unique ID of the output message.")
-    content: list[ResponseOutputMessageContent] = Field(
-        description="The content of the output message."
-    )
-    role: Literal["assistant"] = Field(
-        description="The role of the output message. Always `assistant`."
-    )
+    id: str = Field(description="Output message ID.")
+    content: list[ResponseOutputMessageContent] = Field(description="Message content.")
+    role: Literal["assistant"] = Field(description="Assistant role.")
     status: Literal["in_progress", "completed", "incomplete"] = Field(
-        description="The status of the message input."
+        description="Message status."
     )
-    type: Literal["message"] = Field(
-        description="The type of the output message. Always `message`."
-    )
+    type: Literal["message"] = Field(description="Message type.")
     phase: Literal["commentary", "final_answer"] | None = Field(
         default=None,
-        description="Labels an `assistant` message as intermediate commentary or the final answer.",
+        description="Labels assistant message as commentary or final answer.",
     )
 
 
@@ -1825,25 +1604,15 @@ class ResponseOutputMessage(BaseModelResponse):
 class ResponseFunctionToolCall(BaseModelResponse):
     """A tool call to run a function."""
 
-    arguments: str = Field(
-        description="A JSON string of the arguments to pass to the function."
-    )
-    call_id: str = Field(
-        description="The unique ID of the function tool call generated by the model."
-    )
-    name: str = Field(description="The name of the function to run.")
-    type: Literal["function_call"] = Field(
-        description="The type of the function tool call. Always `function_call`."
-    )
-    id: str | None = Field(
-        default=None, description="The unique ID of the function tool call."
-    )
-    namespace: str | None = Field(
-        default=None, description="The namespace of the function to run."
-    )
+    arguments: str = Field(description="JSON string of function arguments.")
+    call_id: str = Field(description="Function tool call ID.")
+    name: str = Field(description="Function name.")
+    type: Literal["function_call"] = Field(description="Function call type.")
+    id: str | None = Field(default=None, description="Function call unique ID.")
+    namespace: str | None = Field(default=None, description="Function namespace.")
     status: ResponseItemStatus | None = Field(
         default=None,
-        description="The status of the item. One of `in_progress`, `completed`, or `incomplete`. Populated when items are returned via API.",
+        description="Item status: `in_progress`, `completed`, or `incomplete`.",
     )
 
 
@@ -1857,33 +1626,26 @@ class FileSearchResult(BaseModelResponse):
     """A file search result."""
 
     attributes: dict[str, str | float | bool] | None = Field(
-        default=None,
-        description="Set of 16 key-value pairs that can be attached to an object.",
+        default=None, description="Key-value pairs for the file."
     )
-    file_id: str | None = Field(default=None, description="The unique ID of the file.")
-    filename: str | None = Field(default=None, description="The name of the file.")
-    score: float | None = Field(
-        default=None, description="The relevance score of the file, between 0 and 1."
-    )
-    text: str | None = Field(
-        default=None, description="The text that was retrieved from the file."
-    )
+    file_id: str | None = Field(default=None, description="File ID.")
+    filename: str | None = Field(default=None, description="Filename.")
+    score: float | None = Field(default=None, description="Relevance score (0-1).")
+    text: str | None = Field(default=None, description="Retrieved text from file.")
 
 
 # Ref: openai.types.responses.response_file_search_tool_call.ResponseFileSearchToolCall
 class ResponseFileSearchToolCall(BaseModelResponse):
     """The results of a file search tool call."""
 
-    id: str = Field(description="The unique ID of the file search tool call.")
-    queries: list[str] = Field(description="The queries used to search for files.")
+    id: str = Field(description="File search tool call ID.")
+    queries: list[str] = Field(description="Search queries.")
     status: Literal["in_progress", "searching", "completed", "incomplete", "failed"] = (
-        Field(description="The status of the file search tool call.")
+        Field(description="File search status.")
     )
-    type: Literal["file_search_call"] = Field(
-        description="The type of the file search tool call. Always `file_search_call`."
-    )
+    type: Literal["file_search_call"] = Field(description="File search call type.")
     results: list[FileSearchResult] | None = Field(
-        default=None, description="The results of the file search tool call."
+        default=None, description="File search results."
     )
 
 
@@ -1896,19 +1658,19 @@ class ResponseFileSearchToolCall(BaseModelResponse):
 class WebSearchActionSource(BaseModelResponse):
     """A source used in the search."""
 
-    type: Literal["url"] = Field(description="The type of source. Always `url`.")
-    url: str = Field(description="The URL of the source.")
+    type: Literal["url"] = Field(description="URL source type.")
+    url: str = Field(description="Source URL.")
 
 
 # Ref: openai.types.responses.response_function_web_search.ActionSearch
 class WebSearchActionSearch(BaseModelResponse):
     """Web search action of type `search`."""
 
-    query: str = Field(description="[DEPRECATED] The search query.")
-    type: Literal["search"] = Field(description="The action type.")
-    queries: list[str] | None = Field(default=None, description="The search queries.")
+    query: str = Field(description="[DEPRECATED] Search query.")
+    type: Literal["search"] = Field(description="Search action type.")
+    queries: list[str] | None = Field(default=None, description="Search queries.")
     sources: list[WebSearchActionSource] | None = Field(
-        default=None, description="The sources used in the search."
+        default=None, description="Search sources."
     )
 
 
@@ -1916,19 +1678,17 @@ class WebSearchActionSearch(BaseModelResponse):
 class WebSearchActionOpenPage(BaseModelResponse):
     """Web search action of type `open_page`."""
 
-    type: Literal["open_page"] = Field(description="The action type.")
-    url: str | None = Field(default=None, description="The URL opened by the model.")
+    type: Literal["open_page"] = Field(description="Open page action type.")
+    url: str | None = Field(default=None, description="Opened URL.")
 
 
 # Ref: openai.types.responses.response_function_web_search.ActionFind
 class WebSearchActionFind(BaseModelResponse):
     """Web search action of type `find_in_page`."""
 
-    pattern: str = Field(
-        description="The pattern or text to search for within the page."
-    )
-    type: Literal["find_in_page"] = Field(description="The action type.")
-    url: str = Field(description="The URL of the page searched for the pattern.")
+    pattern: str = Field(description="Pattern to find in page.")
+    type: Literal["find_in_page"] = Field(description="Find in page action type.")
+    url: str = Field(description="Page URL searched.")
 
 
 # Ref: openai.types.responses.response_function_web_search.Action
@@ -1942,16 +1702,12 @@ WebSearchAction = Annotated[
 class ResponseFunctionWebSearch(BaseModelResponse):
     """The results of a web search tool call."""
 
-    id: str = Field(description="The unique ID of the web search tool call.")
-    action: WebSearchAction = Field(
-        description="An object describing the specific action taken in this web search call."
-    )
+    id: str = Field(description="Web search tool call ID.")
+    action: WebSearchAction = Field(description="Web search action taken.")
     status: Literal["in_progress", "searching", "completed", "failed"] = Field(
-        description="The status of the web search tool call."
+        description="Web search status."
     )
-    type: Literal["web_search_call"] = Field(
-        description="The type of the web search tool call. Always `web_search_call`."
-    )
+    type: Literal["web_search_call"] = Field(description="Web search call type.")
 
 
 # ---------------------------------------------------------------------------
@@ -1963,13 +1719,9 @@ class ResponseFunctionWebSearch(BaseModelResponse):
 class PendingSafetyCheck(BaseModelResponse):
     """A pending safety check for the computer call."""
 
-    id: str = Field(description="The ID of the pending safety check.")
-    code: str | None = Field(
-        default=None, description="The type of the pending safety check."
-    )
-    message: str | None = Field(
-        default=None, description="Details about the pending safety check."
-    )
+    id: str = Field(description="Safety check ID.")
+    code: str | None = Field(default=None, description="Safety check type.")
+    message: str | None = Field(default=None, description="Safety check details.")
 
 
 # Ref: openai.types.responses.response_computer_tool_call.ActionClick
@@ -1977,15 +1729,13 @@ class ComputerActionClick(BaseModelResponse):
     """A click action."""
 
     button: Literal["left", "right", "wheel", "back", "forward"] = Field(
-        description="Indicates which mouse button was pressed."
+        description="Mouse button pressed."
     )
-    type: Literal["click"] = Field(
-        description="Specifies the event type. Always `click`."
-    )
-    x: int = Field(description="The x-coordinate where the click occurred.")
-    y: int = Field(description="The y-coordinate where the click occurred.")
+    type: Literal["click"] = Field(description="Click action type.")
+    x: int = Field(description="Click x-coordinate.")
+    y: int = Field(description="Click y-coordinate.")
     keys: list[str] | None = Field(
-        default=None, description="The keys being held while clicking."
+        default=None, description="Keys held while clicking."
     )
 
 
@@ -1993,13 +1743,11 @@ class ComputerActionClick(BaseModelResponse):
 class ComputerActionDoubleClick(BaseModelResponse):
     """A double click action."""
 
-    type: Literal["double_click"] = Field(
-        description="Specifies the event type. Always `double_click`."
-    )
-    x: int = Field(description="The x-coordinate where the double click occurred.")
-    y: int = Field(description="The y-coordinate where the double click occurred.")
+    type: Literal["double_click"] = Field(description="Double click action type.")
+    x: int = Field(description="Double click x-coordinate.")
+    y: int = Field(description="Double click y-coordinate.")
     keys: list[str] | None = Field(
-        default=None, description="The keys being held while double-clicking."
+        default=None, description="Keys held while double-clicking."
     )
 
 
@@ -2007,22 +1755,18 @@ class ComputerActionDoubleClick(BaseModelResponse):
 class ComputerActionDragPath(BaseModelResponse):
     """An x/y coordinate pair."""
 
-    x: int = Field(description="The x-coordinate.")
-    y: int = Field(description="The y-coordinate.")
+    x: int = Field(description="X-coordinate.")
+    y: int = Field(description="Y-coordinate.")
 
 
 # Ref: openai.types.responses.response_computer_tool_call.ActionDrag
 class ComputerActionDrag(BaseModelResponse):
     """A drag action."""
 
-    path: list[ComputerActionDragPath] = Field(
-        description="An array of coordinates representing the path of the drag action."
-    )
-    type: Literal["drag"] = Field(
-        description="Specifies the event type. Always `drag`."
-    )
+    path: list[ComputerActionDragPath] = Field(description="Drag path coordinates.")
+    type: Literal["drag"] = Field(description="Drag action type.")
     keys: list[str] | None = Field(
-        default=None, description="The keys being held while dragging."
+        default=None, description="Keys held while dragging."
     )
 
 
@@ -2030,50 +1774,38 @@ class ComputerActionDrag(BaseModelResponse):
 class ComputerActionKeypress(BaseModelResponse):
     """A collection of keypresses."""
 
-    keys: list[str] = Field(
-        description="The combination of keys the model is requesting to be pressed."
-    )
-    type: Literal["keypress"] = Field(
-        description="Specifies the event type. Always `keypress`."
-    )
+    keys: list[str] = Field(description="Keys to press.")
+    type: Literal["keypress"] = Field(description="Keypress action type.")
 
 
 # Ref: openai.types.responses.response_computer_tool_call.ActionMove
 class ComputerActionMove(BaseModelResponse):
     """A mouse move action."""
 
-    type: Literal["move"] = Field(
-        description="Specifies the event type. Always `move`."
-    )
-    x: int = Field(description="The x-coordinate to move to.")
-    y: int = Field(description="The y-coordinate to move to.")
-    keys: list[str] | None = Field(
-        default=None, description="The keys being held while moving."
-    )
+    type: Literal["move"] = Field(description="Move action type.")
+    x: int = Field(description="Target x-coordinate.")
+    y: int = Field(description="Target y-coordinate.")
+    keys: list[str] | None = Field(default=None, description="Keys held while moving.")
 
 
 # Ref: openai.types.responses.response_computer_tool_call.ActionScreenshot
 class ComputerActionScreenshot(BaseModelResponse):
     """A screenshot action."""
 
-    type: Literal["screenshot"] = Field(
-        description="Specifies the event type. Always `screenshot`."
-    )
+    type: Literal["screenshot"] = Field(description="Screenshot action type.")
 
 
 # Ref: openai.types.responses.response_computer_tool_call.ActionScroll
 class ComputerActionScroll(BaseModelResponse):
     """A scroll action."""
 
-    scroll_x: int = Field(description="The horizontal scroll distance.")
-    scroll_y: int = Field(description="The vertical scroll distance.")
-    type: Literal["scroll"] = Field(
-        description="Specifies the event type. Always `scroll`."
-    )
-    x: int = Field(description="The x-coordinate where the scroll occurred.")
-    y: int = Field(description="The y-coordinate where the scroll occurred.")
+    scroll_x: int = Field(description="Horizontal scroll distance.")
+    scroll_y: int = Field(description="Vertical scroll distance.")
+    type: Literal["scroll"] = Field(description="Scroll action type.")
+    x: int = Field(description="Scroll x-coordinate.")
+    y: int = Field(description="Scroll y-coordinate.")
     keys: list[str] | None = Field(
-        default=None, description="The keys being held while scrolling."
+        default=None, description="Keys held while scrolling."
     )
 
 
@@ -2081,19 +1813,15 @@ class ComputerActionScroll(BaseModelResponse):
 class ComputerActionType(BaseModelResponse):
     """An action to type in text."""
 
-    text: str = Field(description="The text to type.")
-    type: Literal["type"] = Field(
-        description="Specifies the event type. Always `type`."
-    )
+    text: str = Field(description="Text to type.")
+    type: Literal["type"] = Field(description="Type action type.")
 
 
 # Ref: openai.types.responses.response_computer_tool_call.ActionWait
 class ComputerActionWait(BaseModelResponse):
     """A wait action."""
 
-    type: Literal["wait"] = Field(
-        description="Specifies the event type. Always `wait`."
-    )
+    type: Literal["wait"] = Field(description="Wait action type.")
 
 
 # Ref: openai.types.responses.computer_action.ComputerAction
@@ -2118,24 +1846,20 @@ ComputerActionList = list[ComputerAction]
 class ResponseComputerToolCall(BaseModelResponse):
     """A tool call to a computer use tool."""
 
-    id: str = Field(description="The unique ID of the computer call.")
-    call_id: str = Field(
-        description="An identifier used when responding to the tool call with output."
-    )
+    id: str = Field(description="Computer call ID.")
+    call_id: str = Field(description="Response identifier.")
     pending_safety_checks: list[PendingSafetyCheck] = Field(
-        description="The pending safety checks for the computer call."
+        description="Pending safety checks."
     )
     status: Literal["in_progress", "completed", "incomplete"] = Field(
-        description="The status of the item."
+        description="Call status."
     )
-    type: Literal["computer_call"] = Field(
-        description="The type of the computer call. Always `computer_call`."
-    )
+    type: Literal["computer_call"] = Field(description="Computer call type.")
     action: ComputerAction | None = Field(
-        default=None, description="The action to perform."
+        default=None, description="Action to perform."
     )
     actions: ComputerActionList | None = Field(
-        default=None, description="Flattened batched actions for `computer_use`."
+        default=None, description="Batched actions for computer_use."
     )
 
 
@@ -2143,39 +1867,30 @@ class ResponseComputerToolCall(BaseModelResponse):
 class AcknowledgedSafetyCheck(BaseModelResponse):
     """An acknowledged safety check for a computer call output."""
 
-    id: str = Field(description="The ID of the pending safety check.")
-    code: str | None = Field(
-        default=None, description="The type of the pending safety check."
-    )
-    message: str | None = Field(
-        default=None, description="Details about the pending safety check."
-    )
+    id: str = Field(description="Safety check ID.")
+    code: str | None = Field(default=None, description="Safety check type.")
+    message: str | None = Field(default=None, description="Safety check details.")
 
 
 # Ref: openai.types.responses.response_computer_tool_call_output_item.ResponseComputerToolCallOutputItem
 class ResponseComputerToolCallOutputItem(BaseModelResponse):
     """The output of a computer tool call."""
 
-    id: str = Field(description="The unique ID of the computer call tool output.")
-    call_id: str = Field(
-        description="The ID of the computer tool call that produced the output."
-    )
+    id: str = Field(description="Computer call output ID.")
+    call_id: str = Field(description="Computer tool call ID.")
     output: ResponseComputerToolCallOutputScreenshot = Field(
-        description="A computer screenshot image used with the computer use tool."
+        description="Computer screenshot."
     )
     status: Literal["completed", "incomplete", "failed", "in_progress"] = Field(
-        description="The status of the message input."
+        description="Output status."
     )
     type: Literal["computer_call_output"] = Field(
-        description="The type of the computer tool call output. Always `computer_call_output`."
+        description="Computer call output type."
     )
     acknowledged_safety_checks: list[AcknowledgedSafetyCheck] | None = Field(
-        default=None,
-        description="The safety checks reported by the API that have been acknowledged by the developer.",
+        default=None, description="Acknowledged safety checks."
     )
-    created_by: str | None = Field(
-        default=None, description="The identifier of the actor that created the item."
-    )
+    created_by: str | None = Field(default=None, description="Item creator.")
 
 
 # ---------------------------------------------------------------------------
@@ -2187,20 +1902,16 @@ class ResponseComputerToolCallOutputItem(BaseModelResponse):
 class CodeInterpreterOutputLogs(BaseModelResponse):
     """The logs output from the code interpreter."""
 
-    logs: str = Field(description="The logs output from the code interpreter.")
-    type: Literal["logs"] = Field(description="The type of the output. Always `logs`.")
+    logs: str = Field(description="Code interpreter logs.")
+    type: Literal["logs"] = Field(description="Logs output type.")
 
 
 # Ref: openai.types.responses.response_code_interpreter_tool_call.OutputImage
 class CodeInterpreterOutputImage(BaseModelResponse):
     """The image output from the code interpreter."""
 
-    type: Literal["image"] = Field(
-        description="The type of the output. Always `image`."
-    )
-    url: str = Field(
-        description="The URL of the image output from the code interpreter."
-    )
+    type: Literal["image"] = Field(description="Image output type.")
+    url: str = Field(description="Image output URL.")
 
 
 # Ref: openai.types.responses.response_code_interpreter_tool_call.Output
@@ -2213,22 +1924,17 @@ CodeInterpreterOutput = Annotated[
 class ResponseCodeInterpreterToolCall(BaseModelResponse):
     """A tool call to run code."""
 
-    id: str = Field(description="The unique ID of the code interpreter tool call.")
-    container_id: str = Field(
-        description="The ID of the container used to run the code."
-    )
+    id: str = Field(description="Code interpreter tool call ID.")
+    container_id: str = Field(description="Container ID.")
     status: Literal[
         "in_progress", "completed", "incomplete", "interpreting", "failed"
-    ] = Field(description="The status of the code interpreter tool call.")
+    ] = Field(description="Code interpreter status.")
     type: Literal["code_interpreter_call"] = Field(
-        description="The type of the code interpreter tool call. Always `code_interpreter_call`."
+        description="Code interpreter call type."
     )
-    code: str | None = Field(
-        default=None, description="The code to run, or null if not available."
-    )
+    code: str | None = Field(default=None, description="Code to run.")
     outputs: list[CodeInterpreterOutput] | None = Field(
-        default=None,
-        description="The outputs generated by the code interpreter, such as logs or images.",
+        default=None, description="Code interpreter outputs (logs or images)."
     )
 
 
@@ -2241,45 +1947,33 @@ class ResponseCodeInterpreterToolCall(BaseModelResponse):
 class ReasoningItemSummary(BaseModelResponse):
     """A summary text from the model."""
 
-    text: str = Field(
-        description="A summary of the reasoning output from the model so far."
-    )
-    type: Literal["summary_text"] = Field(
-        description="The type of the object. Always `summary_text`."
-    )
+    text: str = Field(description="Reasoning summary.")
+    type: Literal["summary_text"] = Field(description="Summary text type.")
 
 
 # Ref: openai.types.responses.response_reasoning_item.Content
 class ReasoningItemContent(BaseModelResponse):
     """Reasoning text from the model."""
 
-    text: str = Field(description="The reasoning text from the model.")
-    type: Literal["reasoning_text"] = Field(
-        description="The type of the reasoning text. Always `reasoning_text`."
-    )
+    text: str = Field(description="Reasoning text.")
+    type: Literal["reasoning_text"] = Field(description="Reasoning text type.")
 
 
 # Ref: openai.types.responses.response_reasoning_item.ResponseReasoningItem
 class ResponseReasoningItem(BaseModelResponse):
     """A description of the chain of thought used by a reasoning model while generating a response."""
 
-    id: str = Field(description="The unique identifier of the reasoning content.")
-    summary: list[ReasoningItemSummary] = Field(
-        description="Reasoning summary content."
-    )
-    type: Literal["reasoning"] = Field(
-        description="The type of the object. Always `reasoning`."
-    )
+    id: str = Field(description="Reasoning content ID.")
+    summary: list[ReasoningItemSummary] = Field(description="Reasoning summary.")
+    type: Literal["reasoning"] = Field(description="Reasoning type.")
     content: list[ReasoningItemContent] | None = Field(
         default=None, description="Reasoning text content."
     )
     encrypted_content: str | None = Field(
-        default=None,
-        description="The encrypted content of the reasoning item, populated when `reasoning.encrypted_content` is included.",
+        default=None, description="Encrypted reasoning content when included."
     )
     status: ResponseItemStatus | None = Field(
-        default=None,
-        description="The status of the item. One of `in_progress`, `completed`, or `incomplete`. Populated when items are returned via API.",
+        default=None, description="Status: `in_progress`, `completed`, or `incomplete`."
     )
 
 
@@ -2345,45 +2039,31 @@ ResponseApplyPatchOperation = Annotated[
 class ResponseApplyPatchToolCall(BaseModelResponse):
     """A tool call that applies file diffs by creating, deleting, or updating files."""
 
-    id: str = Field(description="The unique ID of the apply patch tool call.")
-    call_id: str = Field(
-        description="The unique ID of the apply patch tool call generated by the model."
-    )
+    id: str = Field(description="Apply patch tool call ID.")
+    call_id: str = Field(description="Model-generated apply patch call ID.")
     operation: ResponseApplyPatchOperation = Field(
-        description="The patch operation to apply."
+        description="Patch operation to apply."
     )
     status: Literal["in_progress", "completed"] = Field(
-        description="The status of the apply patch tool call."
+        description="Apply patch status."
     )
-    type: Literal["apply_patch_call"] = Field(
-        description="The type of the item. Always `apply_patch_call`."
-    )
-    created_by: str | None = Field(
-        default=None, description="The ID of the entity that created this tool call."
-    )
+    type: Literal["apply_patch_call"] = Field(description="Apply patch call type.")
+    created_by: str | None = Field(default=None, description="Tool call creator.")
 
 
 # Ref: openai.types.responses.response_apply_patch_tool_call_output.ResponseApplyPatchToolCallOutput
 class ResponseApplyPatchToolCallOutput(BaseModelResponse):
     """The output emitted by an apply patch tool call."""
 
-    id: str = Field(description="The unique ID of the apply patch tool call output.")
-    call_id: str = Field(
-        description="The unique ID of the apply patch tool call generated by the model."
-    )
-    status: Literal["completed", "failed"] = Field(
-        description="The status of the apply patch tool call output."
-    )
+    id: str = Field(description="Apply patch output ID.")
+    call_id: str = Field(description="Apply patch call ID.")
+    status: Literal["completed", "failed"] = Field(description="Output status.")
     type: Literal["apply_patch_call_output"] = Field(
-        description="The type of the item. Always `apply_patch_call_output`."
+        description="Apply patch output type."
     )
-    created_by: str | None = Field(
-        default=None,
-        description="The ID of the entity that created this tool call output.",
-    )
+    created_by: str | None = Field(default=None, description="Output creator.")
     output: str | None = Field(
-        default=None,
-        description="Optional textual output returned by the apply patch tool.",
+        default=None, description="Textual output from apply patch."
     )
 
 
@@ -2391,42 +2071,25 @@ class ResponseApplyPatchToolCallOutput(BaseModelResponse):
 class ResponseCompactionItem(BaseModelResponse):
     """A compaction item generated by the v1/responses/compact API."""
 
-    id: str = Field(description="The unique ID of the compaction item.")
-    encrypted_content: str = Field(
-        description="The encrypted content that was produced by compaction."
-    )
-    type: Literal["compaction"] = Field(
-        description="The type of the item. Always `compaction`."
-    )
-    created_by: str | None = Field(
-        default=None, description="The identifier of the actor that created the item."
-    )
+    id: str = Field(description="Compaction item ID.")
+    encrypted_content: str = Field(description="Encrypted compaction content.")
+    type: Literal["compaction"] = Field(description="Compaction type.")
+    created_by: str | None = Field(default=None, description="Item creator.")
 
 
 # Ref: openai.types.responses.response_tool_search_call.ResponseToolSearchCall
 class ResponseToolSearchCall(BaseModelResponse):
     """A tool search call item."""
 
-    id: str = Field(description="The unique ID of the tool search call item.")
-    arguments: JsonMapping = Field(
-        description="Arguments used for the tool search call."
-    )
+    id: str = Field(description="Tool search call ID.")
+    arguments: JsonMapping = Field(description="Tool search arguments.")
     execution: Literal["server", "client"] = Field(
-        description="Whether tool search was executed by the server or by the client."
+        description="Server or client execution."
     )
-    status: ResponseItemStatus = Field(
-        description="The status of the tool search call item that was recorded."
-    )
-    type: Literal["tool_search_call"] = Field(
-        description="The type of the item. Always `tool_search_call`."
-    )
-    call_id: str | None = Field(
-        default=None,
-        description="The unique ID of the tool search call generated by the model.",
-    )
-    created_by: str | None = Field(
-        default=None, description="The identifier of the actor that created the item."
-    )
+    status: ResponseItemStatus = Field(description="Call status.")
+    type: Literal["tool_search_call"] = Field(description="Tool search call type.")
+    call_id: str | None = Field(default=None, description="Model-generated call ID.")
+    created_by: str | None = Field(default=None, description="Item creator.")
 
 
 # Ref: openai.types.responses.response_tool_search_output_item.ResponseToolSearchOutputItem
@@ -2623,7 +2286,7 @@ class ResponseFunctionShellToolCall(BaseModelResponse):
 class ShellToolCallOutputOutcomeTimeout(BaseModelResponse):
     """Indicates that the shell call exceeded its configured time limit."""
 
-    type: Literal["timeout"] = Field(description="The outcome type. Always `timeout`.")
+    type: Literal["timeout"] = Field(description="Timeout outcome.")
 
 
 # Ref: openai.types.responses.response_function_shell_tool_call_output.OutputOutcomeExit
@@ -2705,21 +2368,13 @@ class ImageGenerationCall(BaseModelResponse):
 class LocalShellCallAction(BaseModelResponse):
     """Execute a shell command on the server."""
 
-    command: list[str] = Field(description="The command to run.")
-    env: dict[str, str] = Field(
-        description="Environment variables to set for the command."
-    )
-    type: Literal["exec"] = Field(
-        description="The type of the local shell action. Always `exec`."
-    )
-    timeout_ms: int | None = Field(
-        default=None, description="Optional timeout in milliseconds for the command."
-    )
-    user: str | None = Field(
-        default=None, description="Optional user to run the command as."
-    )
+    command: list[str] = Field(description="Command to run.")
+    env: dict[str, str] = Field(description="Environment variables.")
+    type: Literal["exec"] = Field(description="Exec action type.")
+    timeout_ms: int | None = Field(default=None, description="Timeout in milliseconds.")
+    user: str | None = Field(default=None, description="User to run as.")
     working_directory: str | None = Field(
-        default=None, description="Optional working directory to run the command in."
+        default=None, description="Working directory."
     )
 
 
@@ -2727,69 +2382,47 @@ class LocalShellCallAction(BaseModelResponse):
 class LocalShellCall(BaseModelResponse):
     """A tool call to run a command on the local shell."""
 
-    id: str = Field(description="The unique ID of the local shell call.")
-    action: LocalShellCallAction = Field(
-        description="Execute a shell command on the server."
-    )
-    call_id: str = Field(
-        description="The unique ID of the local shell tool call generated by the model."
-    )
+    id: str = Field(description="Local shell call ID.")
+    action: LocalShellCallAction = Field(description="Shell command to execute.")
+    call_id: str = Field(description="Model-generated call ID.")
     status: Literal["in_progress", "completed", "incomplete"] = Field(
-        description="The status of the local shell call."
+        description="Call status."
     )
-    type: Literal["local_shell_call"] = Field(
-        description="The type of the local shell call. Always `local_shell_call`."
-    )
+    type: Literal["local_shell_call"] = Field(description="Local shell call type.")
 
 
 # Ref: openai.types.responses.response_output_item.LocalShellCallOutput
 class LocalShellCallOutput(BaseModelResponse):
     """The output of a local shell tool call."""
 
-    id: str = Field(
-        description="The unique ID of the local shell tool call generated by the model."
-    )
-    output: str = Field(
-        description="A JSON string of the output of the local shell tool call."
-    )
+    id: str = Field(description="Shell tool call ID.")
+    output: str = Field(description="JSON output string.")
     type: Literal["local_shell_call_output"] = Field(
-        description="The type of the local shell tool call output. Always `local_shell_call_output`."
+        description="Shell call output type."
     )
-    status: ResponseItemStatus | None = Field(
-        default=None, description="The status of the item."
-    )
+    status: ResponseItemStatus | None = Field(default=None, description="Item status.")
 
 
 # Ref: openai.types.responses.response_output_item.McpListToolsTool
 class McpListToolsToolOutput(BaseModelResponse):
     """A tool available on an MCP server."""
 
-    input_schema: object = Field(
-        description="The JSON schema describing the tool's input."
-    )
-    name: str = Field(description="The name of the tool.")
-    annotations: object | None = Field(
-        default=None, description="Additional annotations about the tool."
-    )
-    description: str | None = Field(
-        default=None, description="The description of the tool."
-    )
+    input_schema: object = Field(description="Tool input JSON schema.")
+    name: str = Field(description="Tool name.")
+    annotations: object | None = Field(default=None, description="Tool annotations.")
+    description: str | None = Field(default=None, description="Tool description.")
 
 
 # Ref: openai.types.responses.response_output_item.McpListTools
 class McpListTools(BaseModelResponse):
     """A list of tools available on an MCP server."""
 
-    id: str = Field(description="The unique ID of the list.")
-    server_label: str = Field(description="The label of the MCP server.")
-    tools: list[McpListToolsToolOutput] = Field(
-        description="The tools available on the server."
-    )
-    type: Literal["mcp_list_tools"] = Field(
-        description="The type of the item. Always `mcp_list_tools`."
-    )
+    id: str = Field(description="List ID.")
+    server_label: str = Field(description="MCP server label.")
+    tools: list[McpListToolsToolOutput] = Field(description="Server tools.")
+    type: Literal["mcp_list_tools"] = Field(description="MCP list tools type.")
     error: str | None = Field(
-        default=None, description="Error message if the server could not list tools."
+        default=None, description="Error if tools could not be listed."
     )
 
 
@@ -2797,14 +2430,12 @@ class McpListTools(BaseModelResponse):
 class McpApprovalRequest(BaseModelResponse):
     """A request for human approval of a tool invocation."""
 
-    id: str = Field(description="The unique ID of the approval request.")
-    arguments: str = Field(description="A JSON string of arguments for the tool.")
-    name: str = Field(description="The name of the tool to run.")
-    server_label: str = Field(
-        description="The label of the MCP server making the request."
-    )
+    id: str = Field(description="Approval request ID.")
+    arguments: str = Field(description="Tool arguments JSON.")
+    name: str = Field(description="Tool name.")
+    server_label: str = Field(description="MCP server label.")
     type: Literal["mcp_approval_request"] = Field(
-        description="The type of the item. Always `mcp_approval_request`."
+        description="MCP approval request type."
     )
 
 
@@ -2812,47 +2443,32 @@ class McpApprovalRequest(BaseModelResponse):
 class McpApprovalResponseOutput(BaseModelResponse):
     """A response to an MCP approval request."""
 
-    id: str = Field(description="The unique ID of the approval response.")
-    approval_request_id: str = Field(
-        description="The ID of the approval request being answered."
-    )
-    approve: bool = Field(description="Whether the request was approved.")
+    id: str = Field(description="Approval response ID.")
+    approval_request_id: str = Field(description="Approval request ID.")
+    approve: bool = Field(description="Whether approved.")
     type: Literal["mcp_approval_response"] = Field(
-        description="The type of the item. Always `mcp_approval_response`."
+        description="MCP approval response type."
     )
-    reason: str | None = Field(
-        default=None, description="Optional reason for the decision."
-    )
+    reason: str | None = Field(default=None, description="Decision reason.")
 
 
 # Ref: openai.types.responses.response_output_item.McpCall
 class McpCall(BaseModelResponse):
     """An invocation of a tool on an MCP server."""
 
-    id: str = Field(description="The unique ID of the tool call.")
-    arguments: str = Field(
-        description="A JSON string of the arguments passed to the tool."
-    )
-    name: str = Field(description="The name of the tool that was run.")
-    server_label: str = Field(
-        description="The label of the MCP server running the tool."
-    )
-    type: Literal["mcp_call"] = Field(
-        description="The type of the item. Always `mcp_call`."
-    )
+    id: str = Field(description="Tool call ID.")
+    arguments: str = Field(description="Tool arguments JSON.")
+    name: str = Field(description="Tool name.")
+    server_label: str = Field(description="MCP server label.")
+    type: Literal["mcp_call"] = Field(description="MCP call type.")
     approval_request_id: str | None = Field(
-        default=None,
-        description="Unique identifier for the MCP tool call approval request.",
+        default=None, description="Approval request ID."
     )
-    error: str | None = Field(
-        default=None, description="The error from the tool call, if any."
-    )
-    output: str | None = Field(
-        default=None, description="The output from the tool call."
-    )
+    error: str | None = Field(default=None, description="Tool call error.")
+    output: str | None = Field(default=None, description="Tool call output.")
     status: (
         Literal["in_progress", "completed", "incomplete", "calling", "failed"] | None
-    ) = Field(default=None, description="The status of the tool call.")
+    ) = Field(default=None, description="Tool call status.")
 
 
 # Ref: openai.types.responses.response_output_item.ResponseOutputItem
@@ -2895,31 +2511,27 @@ ResponseOutputItem = Annotated[
 class InputTokensDetails(BaseModelResponse):
     """A detailed breakdown of the input tokens."""
 
-    cached_tokens: int = Field(
-        description="The number of tokens that were retrieved from the cache."
-    )
+    cached_tokens: int = Field(description="Cached token count.")
 
 
 # Ref: openai.types.responses.response_usage.OutputTokensDetails
 class OutputTokensDetails(BaseModelResponse):
     """A detailed breakdown of the output tokens."""
 
-    reasoning_tokens: int = Field(description="The number of reasoning tokens.")
+    reasoning_tokens: int = Field(description="Reasoning token count.")
 
 
 # Ref: openai.types.responses.response_usage.ResponseUsage
 class ResponseUsage(BaseModelResponse):
     """Token usage details for a response, including input, output, and total counts."""
 
-    input_tokens: int = Field(description="The number of input tokens.")
-    input_tokens_details: InputTokensDetails = Field(
-        description="A detailed breakdown of the input tokens."
-    )
-    output_tokens: int = Field(description="The number of output tokens.")
+    input_tokens: int = Field(description="Input token count.")
+    input_tokens_details: InputTokensDetails = Field(description="Input token details.")
+    output_tokens: int = Field(description="Output token count.")
     output_tokens_details: OutputTokensDetails = Field(
-        description="A detailed breakdown of the output tokens."
+        description="Output token details."
     )
-    total_tokens: int = Field(description="The total number of tokens used.")
+    total_tokens: int = Field(description="Total token count.")
 
 
 # ---------------------------------------------------------------------------
@@ -2934,23 +2546,19 @@ class ResponseFormatTextJSONSchemaConfig(BaseModelRequest):
     model_config = ConfigDict(populate_by_name=True)
 
     name: str = Field(
-        description="The name of the response format. Must be a-z, A-Z, 0-9, or contain underscores and dashes, with a maximum length of 64."
+        description="Response format name (a-z, A-Z, 0-9, underscores, dashes; max 64 chars)."
     )
     schema_: JsonMapping = Field(
         alias="schema",
         serialization_alias="schema",
-        description="The schema for the response format, described as a JSON Schema object.",
+        description="JSON Schema for response format.",
     )
-    type: Literal["json_schema"] = Field(
-        description="The type of response format. Always `json_schema`."
-    )
+    type: Literal["json_schema"] = Field(description="JSON schema response format.")
     description: str | None = Field(
-        default=None,
-        description="A description of what the response format is for, used by the model to determine how to respond.",
+        default=None, description="Description of the response format for the model."
     )
     strict: bool | None = Field(
-        default=None,
-        description="Whether to enable strict schema adherence when generating the output.",
+        default=None, description="Enable strict schema adherence."
     )
 
 
@@ -3032,8 +2640,8 @@ ResponseErrorCode = Literal[
 class ResponseError(BaseModelResponse):
     """An error object returned when the model fails to generate a response."""
 
-    code: ResponseErrorCode = Field(description="The error code for the response.")
-    message: str = Field(description="A human-readable description of the error.")
+    code: ResponseErrorCode = Field(description="Error code.")
+    message: str = Field(description="Error message.")
 
 
 # Ref: openai.types.responses.response.IncompleteDetails
@@ -3041,7 +2649,7 @@ class IncompleteDetails(BaseModelResponse):
     """Details about why the response is incomplete."""
 
     reason: Literal["max_output_tokens", "content_filter"] | None = Field(
-        default=None, description="The reason why the response is incomplete."
+        default=None, description="Incomplete reason."
     )
 
 
@@ -3054,9 +2662,7 @@ class IncompleteDetails(BaseModelResponse):
 class Conversation(BaseModelResponse):
     """The conversation that this response belonged to."""
 
-    id: str = Field(
-        description="The unique ID of the conversation that this response was associated with."
-    )
+    id: str = Field(description="Conversation ID.")
 
 
 # ---------------------------------------------------------------------------
@@ -3068,114 +2674,77 @@ class Conversation(BaseModelResponse):
 class Response(BaseModelResponse):
     """A model response from the Responses API."""
 
-    id: str = Field(description="Unique identifier for this Response.")
-    created_at: float = Field(
-        description="Unix timestamp (in seconds) of when this Response was created."
-    )
+    id: str = Field(description="Response ID.")
+    created_at: float = Field(description="Unix timestamp of creation.")
     error: ResponseError | None = Field(
-        default=None,
-        description="An error object returned when the model fails to generate a Response.",
+        default=None, description="Response error if failed."
     )
     incomplete_details: IncompleteDetails | None = Field(
-        default=None, description="Details about why the response is incomplete."
+        default=None, description="Incomplete details."
     )
     instructions: str | list[ResponseInputItem] | None = Field(
-        default=None,
-        description="A system (or developer) message inserted into the model's context.",
+        default=None, description="System or developer message."
     )
     metadata: Metadata | None = Field(
-        default=None,
-        description="Set of 16 key-value pairs that can be attached to an object.",
+        default=None, description="Key-value pairs for the response."
     )
-    model: str = Field(description="Model ID used to generate the response.")
-    object: Literal["response"] = Field(
-        description="The object type of this resource. Always `response`."
-    )
-    output: list[ResponseOutputItem] = Field(
-        description="An array of content items generated by the model."
-    )
-    parallel_tool_calls: bool = Field(
-        description="Whether to allow the model to run tool calls in parallel."
-    )
+    model: str = Field(description="Model ID.")
+    object: Literal["response"] = Field(description="Object type.")
+    output: list[ResponseOutputItem] = Field(description="Generated content items.")
+    parallel_tool_calls: bool = Field(description="Allow parallel tool calls.")
     temperature: float | None = Field(
-        default=None,
-        description="Sampling temperature to use, between 0 and 2. Higher values make output more random.",
+        default=None, description="Sampling temperature (0-2)."
     )
-    tool_choice: ToolChoice = Field(
-        description="How the model should select which tool to use when generating a response."
-    )
-    tools: list[Tool] = Field(
-        description="An array of tools the model may call while generating a response."
-    )
-    top_p: float | None = Field(
-        default=None,
-        description="Nucleus sampling parameter. Consider tokens with top_p probability mass.",
-    )
-    background: bool | None = Field(
-        default=None, description="Whether to run the model response in the background."
-    )
+    tool_choice: ToolChoice = Field(description="Tool selection method.")
+    tools: list[Tool] = Field(description="Available tools.")
+    top_p: float | None = Field(default=None, description="Nucleus sampling parameter.")
+    background: bool | None = Field(default=None, description="Run in background.")
     completed_at: float | None = Field(
-        default=None,
-        description="Unix timestamp (in seconds) of when this Response was completed.",
+        default=None, description="Completion timestamp."
     )
-    conversation: Conversation | None = Field(
-        default=None, description="The conversation that this response belonged to."
-    )
+    conversation: Conversation | None = Field(default=None, description="Conversation.")
     max_output_tokens: int | None = Field(
-        default=None,
-        description="An upper bound for the number of tokens that can be generated for a response.",
+        default=None, description="Max output tokens."
     )
     max_tool_calls: int | None = Field(
-        default=None,
-        description="The maximum number of total calls to built-in tools that can be processed in a response.",
+        default=None, description="Max tool calls allowed."
     )
     previous_response_id: str | None = Field(
-        default=None,
-        description="The unique ID of the previous response to the model. Use to create multi-turn conversations.",
+        default=None, description="Previous response ID for multi-turn."
     )
     prompt: ResponsePrompt | None = Field(
-        default=None, description="Reference to a prompt template and its variables."
+        default=None, description="Prompt template reference."
     )
     prompt_cache_key: str | None = Field(
-        default=None,
-        description="Used to cache responses for similar requests to optimize cache hit rates.",
+        default=None, description="Cache key for similar requests."
     )
     prompt_cache_retention: PromptCacheRetention | None = Field(
-        default=None, description="The retention policy for the prompt cache."
+        default=None, description="Cache retention policy."
     )
     reasoning: Reasoning | None = Field(
-        default=None, description="Configuration options for reasoning models."
+        default=None, description="Reasoning configuration."
     )
     safety_identifier: str | None = Field(
-        default=None,
-        description="A stable identifier to help detect users violating usage policies.",
+        default=None, description="User policy violation identifier."
     )
     service_tier: ServiceTiers | None = Field(
-        default=None,
-        description="Specifies the processing type used for serving the request.",
+        default=None, description="Service tier for request."
     )
-    status: ResponseStatus | None = Field(
-        default=None, description="The status of the response generation."
-    )
+    status: ResponseStatus | None = Field(default=None, description="Response status.")
     text: ResponseTextConfig | None = Field(
-        default=None,
-        description="Configuration options for a text response from the model.",
+        default=None, description="Text response config."
     )
     top_logprobs: int | None = Field(
-        default=None,
-        description="An integer between 0 and 20 specifying the number of most likely tokens to return at each token position.",
+        default=None, description="Top logprobs count (0-20)."
     )
     truncation: Literal["auto", "disabled"] | None = Field(
-        default=None,
-        description="The truncation strategy to use for the model response.",
+        default=None, description="Truncation strategy."
     )
     usage: ResponseUsage | None = Field(
-        default=None,
-        description="Token usage details including input tokens, output tokens, and total count.",
+        default=None, description="Token usage details."
     )
     user: str | None = Field(
-        default=None,
-        description="Stable identifier for end-users. Replaced by `safety_identifier` and `prompt_cache_key`.",
+        default=None, description="User identifier (use safety_identifier instead)."
     )
 
 
@@ -3188,10 +2757,8 @@ class Response(BaseModelResponse):
 class ContentPartReasoningText(BaseModelResponse):
     """Reasoning text part within a stream content-part event."""
 
-    text: str = Field(description="The reasoning text from the model.")
-    type: Literal["reasoning_text"] = Field(
-        description="The type of the reasoning text. Always `reasoning_text`."
-    )
+    text: str = Field(description="Reasoning text.")
+    type: Literal["reasoning_text"] = Field(description="Reasoning text type.")
 
 
 # Ref: openai.types.responses.response_content_part_added_event.Part
@@ -4133,72 +3700,54 @@ class ResponseCreateParams(BaseModelRequest):
         description="Reference to a prompt template and its variables.\nUNSUPPORTED on this implementation.",
     )
     prompt_cache_key: str | None = Field(
-        default=None,
-        description="Used to cache responses for similar requests to optimize cache hit rates.",
+        default=None, description="Cache key for similar requests."
     )
     prompt_cache_retention: PromptCacheRetention | None = Field(
-        default=None, description="The retention policy for the prompt cache."
+        default=None, description="Cache retention policy."
     )
     reasoning: Reasoning | None = Field(
-        default=None, description="Configuration options for reasoning models."
+        default=None, description="Reasoning configuration."
     )
     safety_identifier: str | None = Field(
         default=None,
-        description="A stable identifier to help detect users violating usage policies.\nUNSUPPORTED on this implementation.",
+        description="User policy violation identifier.\nUNSUPPORTED on this implementation.",
     )
     service_tier: ServiceTiers | None = Field(
-        default=None,
-        description="Specifies the processing type used for serving the request.",
+        default=None, description="Service tier for request."
     )
     store: bool | None = Field(
         default=None,
-        description="Whether to store the generated model response for later retrieval via API.\nUNSUPPORTED on this implementation.",
+        description="Store response for later retrieval.\nUNSUPPORTED on this implementation.",
     )
     stream: bool | None = Field(
-        default=None,
-        description="If true, the model response data will be streamed to the client as it is generated.",
+        default=None, description="Stream response as it is generated."
     )
     stream_options: StreamOptions | None = Field(
         default=None,
-        description="Options for streaming responses. Only set this when you set `stream: true`.\nUNSUPPORTED on this implementation.",
+        description="Streaming options.\nUNSUPPORTED on this implementation.",
     )
     temperature: float | None = Field(
-        default=None,
-        ge=0,
-        le=2,
-        description="Sampling temperature to use, between 0 and 2. Higher values make output more random.",
+        default=None, ge=0, le=2, description="Sampling temperature (0-2)."
     )
     text: ResponseTextConfig | None = Field(
-        default=None,
-        description="Configuration options for a text response from the model.",
+        default=None, description="Text response config."
     )
     tool_choice: ToolChoice | None = Field(
-        default=None,
-        description="How the model should select which tool to use when generating a response.",
+        default=None, description="Tool selection method."
     )
-    tools: list[Tool] | None = Field(
-        default=None,
-        description="An array of tools the model may call while generating a response.",
-    )
+    tools: list[Tool] | None = Field(default=None, description="Available tools.")
     top_logprobs: int | None = Field(
-        default=None,
-        ge=0,
-        le=20,
-        description="An integer between 0 and 20 specifying the number of most likely tokens to return at each token position.",
+        default=None, ge=0, le=20, description="Top logprobs count (0-20)."
     )
     top_p: float | None = Field(
-        default=None,
-        ge=0,
-        le=1,
-        description="Nucleus sampling parameter. Consider tokens with top_p probability mass.",
+        default=None, ge=0, le=1, description="Nucleus sampling parameter."
     )
     truncation: Literal["auto", "disabled"] | None = Field(
         default=None,
-        description="The truncation strategy to use for the model response.\nUNSUPPORTED on this implementation.",
+        description="Truncation strategy.\nUNSUPPORTED on this implementation.",
     )
     user: str | None = Field(
-        default=None,
-        description="Stable identifier for end-users. Replaced by `safety_identifier` and `prompt_cache_key`.",
+        default=None, description="User identifier (use safety_identifier instead)."
     )
 
     # Extra validations
@@ -4253,53 +3802,38 @@ class InputTokenCountParams(BaseModelRequest):
     Counts input tokens without producing a response.
     """
 
-    model: str = Field(description="Model ID used to generate the response.")
+    model: str = Field(description="Model ID.")
     input: str | ResponseInputParam | None = Field(
-        default=None,
-        description="Text, image, or file inputs to the model, used to generate a response",
+        default=None, description="Text, image, or file inputs."
     )
     instructions: str | None = Field(
         default=None,
-        description="A system (or developer) message inserted into the model's context. "
-        "When used along with `previous_response_id`, the instructions from a previous "
-        "response will not be carried over to the next response.",
+        description="System message. Not carried over with previous_response_id.",
     )
-    tools: list[Tool] | None = Field(
-        default=None,
-        description="An array of tools the model may call while generating a response. "
-        "You can specify which tool to use by setting the `tool_choice` parameter.",
-    )
-    tool_choice: ToolChoice | None = Field(
-        default=None, description="Controls which tool the model should use, if any."
-    )
+    tools: list[Tool] | None = Field(default=None, description="Available tools.")
+    tool_choice: ToolChoice | None = Field(default=None, description="Tool selection.")
     parallel_tool_calls: bool | None = Field(
-        default=None,
-        description="Whether to allow the model to run tool calls in parallel.",
+        default=None, description="Allow parallel tool calls."
     )
     reasoning: Reasoning | None = Field(
-        default=None, description="Configuration options for reasoning models."
+        default=None, description="Reasoning configuration."
     )
     text: ResponseTextConfig | None = Field(
         default=None,
-        description="Configuration options for a text response from the model.\n"
-        "UNSUPPORTED on this implementation.",
+        description="Text response config.\nUNSUPPORTED on this implementation.",
     )
     truncation: Literal["auto", "disabled"] | None = Field(
         default=None,
-        description="The truncation strategy to use for the model response.\n"
-        "UNSUPPORTED on this implementation.",
+        description="Truncation strategy.\nUNSUPPORTED on this implementation.",
     )
     previous_response_id: str | None = Field(
         default=None,
-        description="The unique ID of the previous response to the model. Use to create "
-        "multi-turn conversations. Cannot be used with `conversation`.\n"
+        description="Previous response ID for multi-turn.\n"
         "UNSUPPORTED on this implementation.",
     )
     conversation: ConversationParam = Field(
         default=None,
-        description="The conversation that this response belongs to. Items from this conversation "
-        "are prepended to `input_items` for this response request. Cannot be used with "
-        "`previous_response_id`.\nUNSUPPORTED on this implementation.",
+        description="Conversation ID.\nUNSUPPORTED on this implementation.",
     )
 
     # Extra validations
@@ -4327,4 +3861,4 @@ class InputTokenCountResponse(BaseModelResponse):
     """Response body for POST /v1/responses/input_tokens."""
 
     object: Literal["response.input_tokens"] = "response.input_tokens"
-    input_tokens: int = Field(description="The total number of tokens in the input.")
+    input_tokens: int = Field(description="Total input token count.")

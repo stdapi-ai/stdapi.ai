@@ -161,7 +161,7 @@ async def create_transcription(
         Form(
             description=(
                 "The language of the input audio.\n"
-                "Supplying the input language in ISO-639-1 (e.g. `en`) format will improve accuracy and latency."
+                "Supplying it in ISO-639-1 format (e.g. `en`) improves accuracy and latency."
             )
         ),
     ] = None,
@@ -179,28 +179,22 @@ async def create_transcription(
         Form(
             description=(
                 "Controls how the audio is cut into chunks.\n"
-                "When set to `auto`, the server first normalizes loudness and then uses voice activity detection (VAD) to choose boundaries. "
-                "`server_vad` object can be provided to tweak VAD detection parameters manually. "
-                "If unset, the audio is transcribed as a single block.\nUNSUPPORTED on this implementation."
+                "`auto` normalizes loudness then uses voice activity detection (VAD) to choose "
+                "boundaries; a `server_vad` object tunes VAD parameters manually.\n"
+                "server_vad is UNSUPPORTED on this implementation."
             )
         ),
     ] = "auto",
     response_format: Annotated[
-        AudioResponseFormat,
-        Form(
-            description=(
-                "The format of the transcript output.\n"
-                "Supported formats: `json`, `text`, `srt`, `verbose_json`, `vtt`"
-            )
-        ),
+        AudioResponseFormat, Form(description="Transcript output format.")
     ] = "json",
     timestamp_granularities: Annotated[
         str,
         Form(
             description=(
-                "Comma-separated list of timestamp granularities to populate for this transcription (e.g. `word,segment`).\n"
-                "`response_format` must be set to `verbose_json` to use timestamp granularities.\n"
-                "Either or both of these options are supported: `word`, or `segment`."
+                "Comma-separated timestamp granularities to populate (e.g. "
+                "`word,segment`): `word` and/or `segment`. Requires "
+                "`response_format=verbose_json`."
             )
         ),
     ] = "",
@@ -209,8 +203,8 @@ async def create_transcription(
         Form(
             description=(
                 "Additional information to include in the transcription response.\n"
-                "`logprobs` will return the log probabilities of the tokens in the response to understand the model's confidence in the transcription. "
-                "`logprobs` only works with response_format set to `json`."
+                "`logprobs` returns token log probabilities (confidence) and only works "
+                "with `response_format=json`."
             )
         ),
     ] = None,
@@ -236,9 +230,8 @@ async def create_transcription(
         list[str] | None,
         Form(
             description=(
-                "Optional list of speaker names that correspond to the audio samples provided in "
-                "`known_speaker_references[]`. Each entry should be a short identifier (for "
-                "example `customer` or `agent`).\n"
+                "Speaker names corresponding to the samples in `known_speaker_references[]` "
+                "(e.g. `customer`, `agent`).\n"
                 "UNSUPPORTED on this implementation."
             )
         ),
@@ -247,11 +240,8 @@ async def create_transcription(
         list[str] | None,
         Form(
             description=(
-                "Optional list of audio samples (as "
-                "[data URLs](https://developer.mozilla.org/en-US/docs/Web/HTTP/Basics_of_HTTP/Data_URLs)) "
-                "that contain known speaker references matching `known_speaker_names[]`. Each "
-                "sample must be between 2 and 10 seconds, and can use any of the same input audio "
-                "formats supported by `file`.\n"
+                "Audio samples (as data URLs, 2-10 seconds each, same formats as `file`) "
+                "for known-speaker diarization, matching `known_speaker_names[]`.\n"
                 "UNSUPPORTED on this implementation."
             )
         ),

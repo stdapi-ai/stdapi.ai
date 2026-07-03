@@ -23,11 +23,9 @@ class _Strict(BaseModelRequest):
     strict: bool | None = Field(
         default=None,
         description=(
-            "Whether to enable strict schema adherence when generating the function call.\n"
-            "If set to true, the model will follow the exact schema defined in the `parameters` field. "
-            "Only a subset of JSON Schema is supported when `strict` is `true`."
-            "Learn more about Structured Outputs in the "
-            "[function calling guide](https://platform.openai.com/docs/guides/function-calling)."
+            "Whether to enable strict schema adherence when generating the function call. "
+            "If true, the model follows the exact schema in `parameters`; only a subset of "
+            "JSON Schema is supported in that case."
         ),
     )
 
@@ -38,15 +36,12 @@ class LegacyFunction(BaseModelRequest):
 
     name: str = Field(description="The name of the function to be called.")
     description: str | None = Field(
-        default=None,
-        description="A description of what the function does, used by the model to choose when and how to call the function.",
+        default=None, description="A description of what the function does."
     )
     parameters: JsonMapping | None = Field(
         default=None,
-        description="The parameters the functions accepts, described as a JSON Schema object.\n"
-        "See the [guide](https://platform.openai.com/docs/guides/function-calling) for examples, and the "
-        "[JSON Schema reference](https://json-schema.org/understanding-json-schema/) for documentation about the format.\n"
-        "Omitting `parameters` defines a function with an empty parameter list.",
+        description="The parameters the function accepts, described as a JSON Schema "
+        "object. Omitting `parameters` defines a function with an empty parameter list.",
     )
 
 
@@ -60,8 +55,7 @@ class ResponseFormatText(BaseModelResponse):
     """The type of response format being defined."""
 
     type: TextLiteral = Field(
-        default="text",
-        description="The type of response format being defined. Always `text`.",
+        default="text", description="The type of response format. Always `text`."
     )
 
 
@@ -71,7 +65,7 @@ class ResponseFormatJSONObject(BaseModelResponse):
 
     type: Literal["json_object"] = Field(
         default="json_object",
-        description="The type of response format being defined. Always `json_object`.",
+        description="The type of response format. Always `json_object`.",
     )
 
 
@@ -81,11 +75,7 @@ class JSONSchema(_Strict):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    name: str = Field(
-        description=(
-            "The name of the response format. Must be a-z, A-Z, 0-9, or contain underscores and dashes, with a maximum length of 64."
-        )
-    )
+    name: str = Field(description="The name of the response format (max 64 chars).")
     description: str | None = Field(
         default=None,
         description=(
@@ -96,7 +86,7 @@ class JSONSchema(_Strict):
         alias="schema",
         serialization_alias="schema",
         description=(
-            "The schema for the response format, described as a JSON Schema object. Learn how to build JSON schemas [here](https://json-schema.org/)."
+            "The schema for the response format, described as a JSON Schema object."
         ),
     )
 
@@ -112,8 +102,8 @@ class ResponseFormatJSONSchema(BaseModelResponse, _Strict):
 
     type: Literal["json_schema"] = Field(
         default="json_schema",
-        description="The type of response format being defined. Always `json_schema`.",
+        description="The type of response format. Always `json_schema`.",
     )
     json_schema: JSONSchema = Field(
-        description="Structured Outputs configuration options, including a JSON Schema."
+        description="Structured Outputs JSON Schema configuration."
     )

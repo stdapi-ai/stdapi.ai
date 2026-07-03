@@ -146,11 +146,8 @@ async def create_image_variations(
     response_format: Annotated[
         str,
         Form(
-            description="The format in which the generated images are returned. "
-            "Must be one of url or b64_json. "
-            "URLs are only valid for 60 minutes after the image has been generated.\n"
-            "This parameter isn't supported with streaming which will always "
-            "return base64-encoded images."
+            description="The format for returned images: url or b64_json. "
+            "URLs expire after 60 minutes."
         ),
     ] = "url",
     n: Annotated[
@@ -159,9 +156,8 @@ async def create_image_variations(
     size: Annotated[
         str,
         Form(
-            description="The size of the generated images."
-            "\nSupported values depend on the model. "
-            "With some models, output size may be different.",
+            description="The size of the generated images. "
+            "Supported values depend on the model; output size may differ for some models.",
             pattern=r"^(\d+)x(\d+)$",
         ),
     ] = "1024x1024",

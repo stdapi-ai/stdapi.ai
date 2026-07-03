@@ -33,14 +33,10 @@ class FileUploadJsonBody(BaseModelRequest):
     purpose: FilePurpose = Field(
         default="assistants",
         description=(
-            "The intended purpose of the uploaded file.\n\n"
-            "Supported values:\n"
-            "- `assistants`: Used in the Assistants API\n"
-            "- `batch`: Used in the Batch API\n"
-            "- `fine-tune`: Used for fine-tuning\n"
-            "- `vision`: Images used for vision fine-tuning\n"
-            "- `user_data`: Flexible file type for any purpose\n"
-            "- `evals`: Used for eval data sets"
+            "Intended purpose of the file: `assistants` (Assistants API), "
+            "`batch` (Batch API), `fine-tune` (fine-tuning), `vision` (vision "
+            "fine-tuning images), `user_data` (any purpose), or `evals` "
+            "(eval datasets)."
         ),
     )
     expires_after_anchor: Literal["created_at"] | None = Field(
@@ -52,10 +48,9 @@ class FileUploadJsonBody(BaseModelRequest):
         ge=3600,
         le=2592000,
         description=(
-            "The number of seconds after the anchor time that the file will expire.\n"
-            "Must be between 3600 (1 hour) and 2592000 (30 days).\n"
-            "By default, files with `purpose=batch` expire after 30 days and all other files "
-            "are persisted until manually deleted."
+            "Seconds after the anchor time until the file expires (1 hour to "
+            "30 days). By default, `purpose=batch` files expire after 30 days; "
+            "all other files persist until manually deleted."
         ),
     )
 
@@ -70,20 +65,14 @@ class FileObject(BaseModelResponse):
     object: Literal["file"] = Field(
         default="file", description="The object type, which is always `file`."
     )
-    bytes: int = Field(description="The size of the file, in bytes.")
+    bytes: int = Field(description="The file size in bytes.")
     created_at: int = Field(
-        description="The Unix timestamp (in seconds) for when the file was created."
+        description="Unix timestamp (in seconds) when the file was created."
     )
     filename: str = Field(description="The name of the file.")
-    purpose: str = Field(
-        description=(
-            "The intended purpose of the file. Supported values are `assistants`, `assistants_output`, "
-            "`batch`, `batch_output`, `fine-tune`, `fine-tune-results`, `vision`, and `user_data`."
-        )
-    )
+    purpose: str = Field(description="The intended purpose of the file.")
     status: Literal["uploaded", "processed", "error"] = Field(
-        default="processed",
-        description="Deprecated. The current status of the file, which can be either `uploaded`, `processed`, or `error`.",
+        default="processed", description="Deprecated. The current status of the file."
     )
     expires_at: int | None = Field(
         default=None,
@@ -91,7 +80,7 @@ class FileObject(BaseModelResponse):
     )
     status_details: str | None = Field(
         default=None,
-        description="Deprecated. For details on why a fine-tuning training file failed validation, see the `error` field on `fine_tuning.job`.",
+        description="Deprecated. Details on why a fine-tuning training file failed validation.",
     )
 
 

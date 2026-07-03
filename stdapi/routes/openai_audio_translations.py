@@ -133,13 +133,7 @@ async def create_translation(
         ),
     ] = None,
     response_format: Annotated[
-        TranslateAudioResponseFormat,
-        Form(
-            description=(
-                "The format of the transcript output.\n"
-                "Supported formats: `json`, `text`, `srt`, `verbose_json`, `vtt`"
-            )
-        ),
+        TranslateAudioResponseFormat, Form(description="Transcript output format.")
     ] = "json",
     temperature: Annotated[
         float | None,

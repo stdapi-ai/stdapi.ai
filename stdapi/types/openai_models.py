@@ -13,7 +13,7 @@ class Model(BaseModelResponse):
 
     id: str = Field(description="The unique identifier for the model.", min_length=1)
     object: Literal["model"] = Field(
-        default="model", description='The object type. Always "model".'
+        default="model", description='The object type ("model").'
     )
     created: int = Field(
         ge=0, description="The Unix timestamp when the model was created."

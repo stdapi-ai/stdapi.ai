@@ -259,7 +259,7 @@ class TestMCPIntegration:
             },
         )
         assert response.status_code == 200
-        return response.headers["mcp-session-id"]
+        return response.headers["mcp-session-id"]  # type: ignore[no-any-return]
 
     def test_failing_tool_call_produces_no_traceback(
         self,
@@ -291,6 +291,26 @@ class TestMCPIntegration:
         captured = capsys.readouterr()
         assert "Traceback" not in captured.out
         assert "Traceback" not in captured.err
+
+    def test_tool_descriptions_have_no_response_docs_block(
+        self, client: TestClient, api_key: str, mcp_session_id: str
+    ) -> None:
+        """Tool descriptions must not carry the auto-generated '### Responses:' section."""
+        response = client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 40, "method": "tools/list", "params": {}},
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Accept": "application/json, text/event-stream",
+                "mcp-session-id": mcp_session_id,
+            },
+        )
+        assert response.status_code == 200
+        tools = response.json()["result"]["tools"]
+        assert tools
+        assert all(
+            "### Responses:" not in tool.get("description", "") for tool in tools
+        )
 
     def test_mcp_response_has_request_id_header(
         self, client: TestClient, api_key: str, mcp_session_id: str

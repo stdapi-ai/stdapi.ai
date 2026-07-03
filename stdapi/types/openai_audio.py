@@ -49,15 +49,13 @@ class Logprob(BaseModel):
     """Log probability metadata for delta tokens."""
 
     token: str | None = Field(
-        default=None,
-        description="The token that was used to generate the log probability.",
+        default=None, description="Token used to generate the log probability."
     )
     bytes: list[int | float] | None = Field(
-        default=None,
-        description="The bytes that were used to generate the log probability.",
+        default=None, description="Bytes used to generate the log probability."
     )
     logprob: float | None = Field(
-        default=None, description="The log probability of the token."
+        default=None, description="Log probability of the token."
     )
 
 
@@ -65,15 +63,13 @@ class Logprob(BaseModel):
 class TranscriptionTextDeltaEvent(BaseModelResponse):
     """Streaming text delta event for transcriptions."""
 
-    delta: str = Field(description="The text delta that was additionally transcribed.")
+    delta: str = Field(description="Transcribed text delta.")
     type: Literal["transcript.text.delta"] = Field(
-        description="The type of the event. Always `transcript.text.delta`."
+        description="Event type. Always `transcript.text.delta`."
     )
     logprobs: list[Logprob] | None = Field(
         default=None,
-        description=(
-            "The log probabilities of the delta. Only included if requested by the client."
-        ),
+        description="Log probabilities of the delta; included only if requested.",
     )
 
 
@@ -83,10 +79,10 @@ class UsageInputTokenDetails(BaseModelResponse):
     """Details about the input tokens billed for this request."""
 
     audio_tokens: int | None = Field(
-        default=None, description="Number of audio tokens billed for this request."
+        default=None, description="Audio tokens billed for this request."
     )
     text_tokens: int | None = Field(
-        default=None, description="Number of text tokens billed for this request."
+        default=None, description="Text tokens billed for this request."
     )
 
 
@@ -97,17 +93,15 @@ class UsageTokens(BaseModelResponse):
     """Usage statistics for models billed by token usage."""
 
     input_tokens: int = Field(
-        default=0, ge=0, description="Number of input tokens billed for this request."
+        default=0, ge=0, description="Input tokens billed for this request."
     )
-    output_tokens: int = Field(
-        default=0, ge=0, description="Number of output tokens generated."
-    )
+    output_tokens: int = Field(default=0, ge=0, description="Output tokens generated.")
     total_tokens: int = Field(
-        default=0, ge=0, description="Total number of tokens used (input + output)."
+        default=0, ge=0, description="Total tokens used (input + output)."
     )
     type: Literal["tokens"] = Field(
         default="tokens",
-        description="The type of the usage object. Always `tokens` for this variant.",
+        description="Usage object type. Always `tokens` for this variant.",
     )
     input_token_details: UsageInputTokenDetails | None = Field(
         default=None,
@@ -119,16 +113,16 @@ class UsageTokens(BaseModelResponse):
 class TranscriptionTextDoneEvent(BaseModelResponse):
     """Streaming final done event for transcriptions."""
 
-    text: str = Field(description="The text that was transcribed.")
+    text: str = Field(description="Transcribed text.")
     type: Literal["transcript.text.done"] = Field(
-        description="The type of the event. Always `transcript.text.done`."
+        description="Event type. Always `transcript.text.done`."
     )
     logprobs: list[Logprob] | None = Field(
         default=None,
-        description="The log probabilities of the individual tokens in the transcription.",
+        description="Log probabilities of individual tokens in the transcription.",
     )
     usage: UsageTokens | None = Field(
-        default=None, description="Usage statistics for models billed by token usage."
+        default=None, description="Usage statistics for token-billed models."
     )
 
 
@@ -142,7 +136,7 @@ class UsageDuration(BaseModelResponse):
         default=0, ge=0, description="Duration of the input audio in seconds."
     )
     type: Literal["duration"] = Field(
-        description="The type of the usage object. Always `duration` for this variant."
+        description="Usage object type. Always `duration` for this variant."
     )
 
 
@@ -155,15 +149,13 @@ Usage = Annotated[UsageTokens | UsageDuration, Field(discriminator="type")]
 class Transcription(BaseModelResponse):
     """Transcription response."""
 
-    text: str = Field(description="The transcribed text.")
+    text: str = Field(description="Transcribed text.")
     logprobs: list[Logprob] | None = Field(
         default=None,
-        description=(
-            "The log probabilities of the tokens in the transcription. Only returned with specific models when requested."
-        ),
+        description="Log probabilities of tokens; returned only with specific models when requested.",
     )
     usage: Usage | None = Field(
-        default=None, description="Token or duration usage statistics for the request."
+        default=None, description="Token or duration usage statistics."
     )
 
 
@@ -171,24 +163,17 @@ class Transcription(BaseModelResponse):
 class TranscriptionSegment(BaseModelResponse):
     """Verbose JSON segment details."""
 
-    id: int = Field(ge=0, description="Unique identifier of the segment.")
+    id: int = Field(ge=0, description="Unique segment identifier.")
     avg_logprob: float = Field(
-        description=(
-            "Average logprob of the segment. If the value is lower than -1, consider the logprobs failed."
-        )
+        description="Average logprob of the segment. Below -1 suggests logprobs failed."
     )
     compression_ratio: float = Field(
-        ge=0,
-        description=(
-            "Compression ratio of the segment. If the value is greater than 2.4, consider the compression failed."
-        ),
+        ge=0, description="Compression ratio. Above 2.4 suggests compression failed."
     )
     end: float = Field(ge=0, description="End time of the segment in seconds.")
     no_speech_prob: float = Field(
         ge=0,
-        description=(
-            "Probability of no speech in the segment. If the value is higher than 1.0 and the avg_logprob is below -1, consider this segment silent."
-        ),
+        description="Probability of no speech. Above 1.0 with avg_logprob below -1 indicates silence.",
     )
     seek: int = Field(ge=0, description="Seek offset of the segment.")
     start: float = Field(ge=0, description="Start time of the segment in seconds.")
@@ -196,7 +181,7 @@ class TranscriptionSegment(BaseModelResponse):
         description="Temperature parameter used for generating the segment."
     )
     text: str = Field(description="Text content of the segment.")
-    tokens: list[int] = Field(description="Array of token IDs for the text content.")
+    tokens: list[int] = Field(description="Token IDs for the text content.")
 
 
 # Ref: openai.types.audio.transcription_word.TranscriptionWord
@@ -205,26 +190,25 @@ class TranscriptionWord(BaseModelResponse):
 
     end: float = Field(ge=0, description="End time of the word in seconds.")
     start: float = Field(ge=0, description="Start time of the word in seconds.")
-    word: str = Field(description="The text content of the word.")
+    word: str = Field(description="Text content of the word.")
 
 
 # Ref: openai.types.audio.transcription_verbose.TranscriptionVerbose
 class TranscriptionVerbose(BaseModelResponse):
     """Verbose JSON transcription response."""
 
-    duration: float = Field(description="The duration of the input audio.")
-    language: str = Field(description="The language of the input audio.")
-    text: str = Field(description="The transcribed text.")
+    duration: float = Field(description="Duration of the input audio.")
+    language: str = Field(description="Language of the input audio.")
+    text: str = Field(description="Transcribed text.")
     segments: list[TranscriptionSegment] | None = Field(
         default=None,
-        description="Segments of the transcribed text and their corresponding details.",
+        description="Transcribed text segments with corresponding details.",
     )
     usage: UsageDuration | None = Field(
-        default=None,
-        description="Usage statistics for models billed by audio input duration.",
+        default=None, description="Usage statistics for duration-billed models."
     )
     words: list[TranscriptionWord] | None = Field(
-        default=None, description="Extracted words and their corresponding timestamps."
+        default=None, description="Extracted words with timestamps."
     )
 
 
@@ -232,20 +216,17 @@ class TranscriptionVerbose(BaseModelResponse):
 class TranscriptionDiarizedSegment(BaseModelResponse):
     """A segment of diarized transcript text with speaker metadata."""
 
-    id: str = Field(description="Unique identifier for the segment.")
+    id: str = Field(description="Unique segment identifier.")
     end: float = Field(ge=0, description="End timestamp of the segment in seconds.")
     speaker: str = Field(
-        description=(
-            "Speaker label for this segment. "
-            "When known speakers are provided, the label matches `known_speaker_names[]`. "
-            "Otherwise speakers are labeled sequentially using capital letters (`A`, `B`, ...)."
-        )
+        description="Speaker label: matches `known_speaker_names[]` if provided, "
+        "otherwise sequential capital letters (`A`, `B`, ...)."
     )
     start: float = Field(ge=0, description="Start timestamp of the segment in seconds.")
     text: str = Field(description="Transcript text for this segment.")
     type: Literal["transcript.text.segment"] = Field(
         default="transcript.text.segment",
-        description="The type of the segment. Always `transcript.text.segment`.",
+        description="Segment type. Always `transcript.text.segment`.",
     )
 
 
@@ -255,17 +236,14 @@ class TranscriptionDiarized(BaseModelResponse):
 
     duration: float = Field(ge=0, description="Duration of the input audio in seconds.")
     segments: list[TranscriptionDiarizedSegment] = Field(
-        description="Segments of the transcript annotated with timestamps and speaker labels."
+        description="Transcript segments with timestamps and speaker labels."
     )
     task: Literal["transcribe"] = Field(
-        default="transcribe",
-        description="The type of task that was run. Always `transcribe`.",
+        default="transcribe", description="Task type. Always `transcribe`."
     )
-    text: str = Field(
-        description="The concatenated transcript text for the entire audio input."
-    )
+    text: str = Field(description="Concatenated transcript for the entire audio input.")
     usage: Usage | None = Field(
-        default=None, description="Token or duration usage statistics for the request."
+        default=None, description="Token or duration usage statistics."
     )
 
 
@@ -289,7 +267,8 @@ class ChunkingStrategyVadConfig(BaseModelRequest):
         default=None,
         ge=0,
         description=(
-            "Duration of silence to detect speech stop (in milliseconds). With shorter values the model will respond more quickly, but may jump in on short pauses."
+            "Duration of silence to detect speech stop (in milliseconds). "
+            "Shorter values respond faster but may cut in on short pauses."
         ),
     )
     threshold: float | None = Field(
@@ -297,7 +276,8 @@ class ChunkingStrategyVadConfig(BaseModelRequest):
         ge=0.0,
         le=1.0,
         description=(
-            "Sensitivity threshold (0.0 to 1.0) for voice activity detection. A higher threshold will require louder audio to activate the model."
+            "Sensitivity threshold (0.0 to 1.0) for voice activity detection. "
+            "Higher values require louder audio to activate."
         ),
     )
 
@@ -310,22 +290,20 @@ ChunkingStrategy = Auto | ChunkingStrategyVadConfig
 class Translation(BaseModelResponse):
     """Translation response."""
 
-    text: str = Field(description="The translated text.")
+    text: str = Field(description="Translated text.")
 
 
 # Ref: openai.types.audio.translation_verbose.TranslationVerbose
 class TranslationVerbose(BaseModelResponse):
     """Verbose JSON translation response."""
 
-    duration: float = Field(description="The duration of the input audio.")
+    duration: float = Field(description="Duration of the input audio.")
     language: str = Field(
-        default="english",
-        description="The language of the output translation (always `english`).",
+        default="english", description="Output translation language (always `english`)."
     )
-    text: str = Field(description="The translated text.")
+    text: str = Field(description="Translated text.")
     segments: list[TranscriptionSegment] | None = Field(
-        default=None,
-        description="Segments of the translated text and their corresponding details.",
+        default=None, description="Translated text segments with corresponding details."
     )
 
 
@@ -338,22 +316,22 @@ class SpeechAudioDeltaEvent(BaseModelResponse):
     """Speech audio delta event for streaming."""
 
     type: str = Field(default="speech.audio.delta", frozen=True)
-    audio: str = Field(..., description="Base64 encoded audio chunk")
+    audio: str = Field(..., description="Base64-encoded audio chunk")
 
 
 class SpeechUsage(BaseModelResponse):
     """Usage statistics for speech generation."""
 
-    input_tokens: int = Field(..., description="Number of input tokens")
-    output_tokens: int = Field(default=0, description="Number of output tokens")
-    total_tokens: int = Field(..., description="Total number of tokens used")
+    input_tokens: int = Field(..., description="Input tokens")
+    output_tokens: int = Field(default=0, description="Output tokens")
+    total_tokens: int = Field(..., description="Total tokens used")
 
 
 class SpeechAudioDoneEvent(BaseModelResponse):
     """Speech audio done event for streaming."""
 
     type: str = Field(default="speech.audio.done", frozen=True)
-    usage: SpeechUsage = Field(..., description="Usage statistics")
+    usage: SpeechUsage = Field(..., description="Usage statistics.")
 
 
 # Ref: openai.types.audio.speech_create_params.SpeechCreateParams
@@ -364,46 +342,41 @@ class SpeechCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=True):
         ...,
         validation_alias=AliasChoices("input", "Text"),
         min_length=1,
-        description="The text to generate audio for.\n"
-        "With Amazon Polly models, the input can be a SSML document.",
+        description="Text to generate audio for. "
+        "Amazon Polly models accept SSML documents.",
     )
     model: str = Field(
         default=SETTINGS.default_tts_model,
         validation_alias=AliasChoices("model", "Engine"),
-        description="One of the available TTS models.\n"
-        "Available models: `amazon.polly-standard`,"
-        " `amazon.polly-neural`, `amazon.polly-long-form`, `amazon.polly-generative`.",
+        description="TTS model. "
+        "Available: `amazon.polly-standard`, `amazon.polly-neural`, `amazon.polly-long-form`, `amazon.polly-generative`.",
     )
     voice: str = Field(
         default="alloy",
         validation_alias=AliasChoices("voice", "VoiceId"),
-        description="The voice to use when generating the audio.\n"
+        description="Voice for audio generation. "
         "Supported voices vary by model and language.",
     )
     instructions: str | None = Field(
         default=None,
-        description="Control the voice of your generated audio with additional instructions.\n"
-        "Does not work with `amazon.polly-standard`,"
-        " `amazon.polly-neural`, `amazon.polly-long-form` or `amazon.polly-generative`.",
+        description="Additional voice control instructions. "
+        "Does not work with `amazon.polly-standard`, `amazon.polly-neural`, `amazon.polly-long-form`, or `amazon.polly-generative`.",
     )
     response_format: AudioFileFormat = Field(
         validation_alias=AliasChoices("response_format", "OutputFormat"),
         default="mp3",
-        description="The format to audio in.\nSupported formats: "
-        "`mp3`, `opus`, `ogg` (vorbis), `aac`, `flac`, `wav`, and `pcm`",
+        description="Audio format: `mp3`, `opus`, `ogg`, `aac`, `flac`, `wav`, or `pcm`.",
     )
     speed: float = Field(
         default=1.0,
         ge=0.2,
         le=2.0,
-        description="The speed of the generated audio.\n"
-        "Select a value from `0.2` to `2.0`. `1.0` is the default.",
+        description="Audio speed. Range: `0.2` to `2.0`. Default: `1.0`.",
     )
     stream_format: Literal["audio", "sse"] = Field(
         default="audio",
-        description="The format to stream the audio in.\n"
-        "Supported formats are `sse` and `audio`. When used as an MCP tool, "
-        "defaults to `sse` for better client compatibility.",
+        description="Streaming format: `sse` or `audio`. "
+        "MCP tools default to `sse` for better client compatibility.",
     )
 
     @model_validator(mode="after")
@@ -423,76 +396,53 @@ class TranscriptionCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=
     """
 
     # file: handled in route
-    model: str = Field(..., description="The transcription model to use.")
+    model: str = Field(..., description="Transcription model to use.")
     chunking_strategy: ChunkingStrategy = Field(
         default="auto",
-        description="Controls how the audio is cut into chunks.\n"
-        "When set to `auto`, the server first normalizes loudness and then uses voice activity detection (VAD) to choose boundaries. "
-        "`server_vad` object can be provided to tweak VAD detection parameters manually. "
-        "If unset, the audio is transcribed as a single block.\n"
-        "server_vad is UNSUPPORTED on this implementation.",
+        description="Audio chunking: `auto` (VAD) or `server_vad` for manual tuning. "
+        "server_vad is UNSUPPORTED.",
     )
     include: TranscriptionInclude | None = Field(
         default=None,
-        description="Additional information to include in the transcription response.\n"
-        "`logprobs` will return the log probabilities of the tokens in the response to understand the model's confidence in the transcription. "
-        "`logprobs` only works with response_format set to `json`.",
+        description="Additional response info. "
+        "`logprobs` returns token confidence; requires `response_format=json`.",
     )
     known_speaker_names: list[str] | None = Field(
         default=None,
-        description=(
-            "Optional list of speaker names that correspond to the audio samples provided in "
-            "`known_speaker_references[]`. Each entry should be a short identifier (for "
-            "example `customer` or `agent`).\n"
-            "UNSUPPORTED on this implementation."
-        ),
+        description="Speaker names matching `known_speaker_references[]` (e.g. `customer`, `agent`). "
+        "UNSUPPORTED.",
     )
     known_speaker_references: list[str] | None = Field(
         default=None,
-        description=(
-            "Optional list of audio samples (as "
-            "[data URLs](https://developer.mozilla.org/en-US/docs/Web/HTTP/Basics_of_HTTP/Data_URLs)) "
-            "that contain known speaker references matching `known_speaker_names[]`. Each "
-            "sample must be between 2 and 10 seconds, and can use any of the same input audio "
-            "formats supported by `file`.\n"
-            "UNSUPPORTED on this implementation."
-        ),
+        description="Audio samples (data URLs, 2-10s) for known-speaker diarization. "
+        "UNSUPPORTED.",
     )
     language: str | None = Field(
         default=None,
-        description="The language of the input audio.\n"
-        "Supplying the input language in "
-        "[ISO-639-1](https://en.wikipedia.org/wiki/List_of_ISO_639-1_codes) "
-        "(e.g. `en`) format will improve accuracy and latency.",
+        description="Input audio language in ISO-639-1 (e.g. `en`). Improves accuracy and latency.",
     )
     prompt: str | None = Field(
         default=None,
-        description="An optional text to guide the model's style or continue a previous audio segment.\n"
-        "The prompt should match the audio language.",
+        description="Text to guide model style or continue a previous segment. "
+        "Should match the audio language.",
     )
     response_format: AudioResponseFormat = Field(
-        default="json",
-        description="The format of the transcript output.\n"
-        "Supported formats: `json`, `text`, `srt`, `verbose_json`, `vtt` or `diarized_json`",
+        default="json", description="Transcript output format."
     )
     temperature: float | None = Field(
         default=None,
         ge=0.0,
-        description="The sampling temperature, between `0` and `1`.\n"
-        "Higher values like `0.8` will make the output more random, while lower values like "
-        "`0.2` will make it more focused and deterministic.",
+        description="Sampling temperature (`0` to `1`). "
+        "Higher (e.g. `0.8`) is more random; lower (e.g. `0.2`) is more focused.",
     )
     timestamp_granularities: list[AudioTimestampGranularities] = Field(
         default_factory=list,
-        description="The timestamp granularities to populate for this transcription.\n"
-        "`response_format` must be set `verbose_json` to use timestamp granularities.\n"
-        "Either or both of these options are supported: `word`, or `segment`.",
+        description="Timestamp granularities: `word` and/or `segment`. "
+        "Requires `response_format=verbose_json`.",
     )
     stream: bool | None = Field(
         default=False,
-        description="If set to true, the model response data will be streamed to the client as it is "
-        "generated using"
-        "[server-sent events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events#Event_stream_format).",
+        description="Stream the response as server-sent events as it is generated.",
     )
 
     @model_validator(mode="after")
@@ -523,22 +473,20 @@ class TranslationCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=Tr
     """
 
     # file: handled in route
-    model: str = Field(..., description="The transcription model to use.")
+    model: str = Field(..., description="Transcription model to use.")
     prompt: str | None = Field(
         default=None,
-        description="An optional text to guide the model's style or continue a previous audio segment.\n"
-        "The prompt should be in English.",
+        description="Text to guide model style or continue a previous segment. "
+        "Should be in English.",
     )
     response_format: TranslateAudioResponseFormat = Field(
-        default="json",
-        description="The format of the transcript output.\n"
-        "Supported formats: `json`, `text`, `srt`, `verbose_json`, `vtt`",
+        default="json", description="Output format."
     )
     temperature: float | None = Field(
         default=None,
         ge=0.0,
         le=1.0,
-        description="The sampling temperature, between `0` and `1`.\n"
+        description="Sampling temperature (`0` to `1`). "
         "Higher values like `0.8` will make the output more random, while lower values like "
         "`0.2` will make it more focused and deterministic.",
     )
@@ -546,9 +494,7 @@ class TranslationCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=Tr
 
 #: Shared description for the ``file`` field in audio JSON body models.
 _AUDIO_FILE_FIELD_DESCRIPTION = (
-    "The audio file as a base64 string, data URI (``data:audio/<fmt>;base64,<data>``), "
-    "HTTPS URL, S3 URI (``s3://bucket/key``), or a Files API reference "
-    "(``file-id:<file-id>``). "
+    "Audio file: base64 string, data URI, HTTPS URL, S3 URI, or Files API reference. "
     "Supported formats: flac, mp3, mp4, mpeg, mpga, m4a, ogg, wav, webm."
 )
 

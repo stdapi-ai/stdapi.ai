@@ -11,6 +11,5 @@ class AmazonBedrockGuardrailConfigParams(BaseModelRequest):
 
     tagSuffix: str | None = Field(  # noqa: N815
         default=None,
-        description="Include this field for Amazon Bedrock Guardrail input tagging.\n"
-        "UNSUPPORTED on this implementation.",  # Not compatible with Bedrock Converse API
+        description="Amazon Bedrock Guardrail input tagging. UNSUPPORTED on this implementation.",
     )

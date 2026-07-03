@@ -21,6 +21,21 @@ from stdapi.routes.core_root import MCP_SERVER_CARD
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
+    from mcp.types import Tool
+
+#: Marker fastapi_mcp always prepends to the auto-generated response/example block.
+_RESPONSES_MARKER = "\n\n### Responses:"
+
+
+def _strip_response_docs(tools: list[Tool]) -> None:
+    """Drop the auto-generated response/example section from each tool's description.
+
+    Args:
+        tools: MCP tools to mutate in place.
+    """
+    for tool in tools:
+        if tool.description and _RESPONSES_MARKER in tool.description:
+            tool.description = tool.description.split(_RESPONSES_MARKER, 1)[0]
 
 
 def is_mcp() -> bool:
@@ -84,6 +99,8 @@ def mount_mcp(app: FastAPI) -> None:
     ``MCP_USER_AGENT`` and injects the parent request ID for log correlation.
     Populates ``MCP_SERVER_CARD["tools"]`` in :mod:`stdapi.routes.core_root` with
     the discovered tool list so the server card reflects real tools at startup.
+    Strips the auto-generated response/example section from each tool description
+    (see :func:`_strip_response_docs`) to reduce MCP context cost.
 
     Args:
         app: FastAPI application to attach MCP to.
@@ -106,6 +123,8 @@ def mount_mcp(app: FastAPI) -> None:
             event_hooks={"request": [_inject_request_id]},
         ),
     )
+    _strip_response_docs(mcp.tools)
+
     if SETTINGS.enable_mcp_streamable_http:
         mcp.mount_http()
     if SETTINGS.enable_mcp_sse:

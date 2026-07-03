@@ -63,12 +63,8 @@ class EmbeddingCreateParams(BaseModelRequestWithExtra):
 
     input: InputFileUrl | str | list[InputFileUrl | str] = Field(
         ...,
-        description="Input text to embed, as a single string or an array of strings.\n"
-        "For multimodal models, non-text inputs can be passed as a URL (`https://...`), "
-        "S3 URI (`s3://bucket/key`), base64 data URI (`data:[<mediatype>][;base64],<data>`), "
-        "or a Files API reference (`file-id:<file-id>`).\n"
-        "To embed multiple inputs in a single request, "
-        "pass an array of strings or array of token arrays.\n"
+        description="Input text to embed, as a single string or array of strings. "
+        "For multimodal models, non-text inputs can be a URL, S3 URI, base64 data URI, or Files API reference. "
         "Token arrays are UNSUPPORTED on this implementation.",
     )
     model: str = Field(
@@ -78,7 +74,7 @@ class EmbeddingCreateParams(BaseModelRequestWithExtra):
         default=None,
         validation_alias=AliasChoices("dimensions", "embeddingDimension"),
         description=(
-            "The number of dimensions the resulting output embeddings should have.\n"
+            "The number of dimensions the resulting output embeddings should have. "
             "Supported by some models only."
         ),
         ge=1,
@@ -86,17 +82,11 @@ class EmbeddingCreateParams(BaseModelRequestWithExtra):
     )
     encoding_format: Literal["float", "base64"] | None = Field(
         default="float",
-        description=(
-            "The format to return the embeddings in.\n"
-            "Can be either `float` or `base64`."
-        ),
+        description="The format to return the embeddings in: `float` or `base64`.",
     )
     user: str | None = Field(
         default=None,
-        description=(
-            "A unique identifier representing your end-user, "
-            "which can help to monitor and detect abuse."
-        ),
+        description="A unique identifier representing your end-user, which can help detect abuse.",
         min_length=1,
         max_length=255,
     )
