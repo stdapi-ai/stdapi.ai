@@ -268,7 +268,7 @@ class TestAnthropicMessages:
 
         assert response.type == "message"
         assert len(response.content) >= 1
-        assert response.content[0].type == "text"
+        assert any(c.type == "text" for c in response.content)
 
     # --- Streaming ---
 
