@@ -89,7 +89,13 @@ _TOOL_MODELS = pytest.mark.parametrize(
         "mistral.mistral-large-2402-v1:0",  # Mistral Large
         "mistral.pixtral-large-2502-v1:0",  # Mistral Pixtral Large
         "moonshotai.kimi-k2.5",  # Moonshot Kimi K2.5
-        "openai.gpt-oss-20b-1:0",  # OpenAI GPT-OSS 20B (Bedrock)
+        pytest.param(
+            "openai.gpt-oss-20b-1:0",  # OpenAI GPT-OSS 20B (Bedrock)
+            marks=pytest.mark.xfail(
+                match="toolUse.*failed to satisfy constraint.*[a-zA-Z0-9_-]",
+                reason="Model generates invalid tool names (fails regex [a-zA-Z0-9_-]+)",
+            ),
+        ),
         "openai.gpt-oss-120b-1:0",  # OpenAI GPT-OSS 120B (Bedrock)
         "qwen.qwen3-32b-v1:0",  # Qwen3 32B
         "writer.palmyra-x4-v1:0",  # Writer Palmyra X4
@@ -116,7 +122,13 @@ _STREAMING_TOOL_MODELS = pytest.mark.parametrize(
         "mistral.mistral-large-2402-v1:0",  # Mistral Large
         "mistral.pixtral-large-2502-v1:0",  # Mistral Pixtral Large
         "moonshotai.kimi-k2.5",  # Moonshot Kimi K2.5
-        "openai.gpt-oss-20b-1:0",  # OpenAI GPT-OSS 20B (Bedrock)
+        pytest.param(
+            "openai.gpt-oss-20b-1:0",  # OpenAI GPT-OSS 20B (Bedrock)
+            marks=pytest.mark.xfail(
+                match="toolUse.*failed to satisfy constraint.*[a-zA-Z0-9_-]",
+                reason="Model generates invalid tool names (fails regex [a-zA-Z0-9_-]+)",
+            ),
+        ),
         "openai.gpt-oss-120b-1:0",  # OpenAI GPT-OSS 120B (Bedrock)
         "qwen.qwen3-32b-v1:0",  # Qwen3 32B
         "writer.palmyra-x4-v1:0",  # Writer Palmyra X4
@@ -142,7 +154,13 @@ _AGENTIC_MODELS = pytest.mark.parametrize(
         "mistral.mistral-large-2402-v1:0",  # Mistral Large
         "mistral.pixtral-large-2502-v1:0",  # Mistral Pixtral Large
         "moonshotai.kimi-k2.5",  # Moonshot Kimi K2.5
-        "openai.gpt-oss-20b-1:0",  # OpenAI GPT-OSS 20B (Bedrock)
+        pytest.param(
+            "openai.gpt-oss-20b-1:0",  # OpenAI GPT-OSS 20B (Bedrock)
+            marks=pytest.mark.xfail(
+                match="toolUse.*failed to satisfy constraint.*[a-zA-Z0-9_-]",
+                reason="Model generates invalid tool names (fails regex [a-zA-Z0-9_-]+)",
+            ),
+        ),
         "openai.gpt-oss-120b-1:0",  # OpenAI GPT-OSS 120B (Bedrock)
         "qwen.qwen3-32b-v1:0",  # Qwen3 32B
         "writer.palmyra-x4-v1:0",  # Writer Palmyra X4
