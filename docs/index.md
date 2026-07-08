@@ -264,6 +264,16 @@ flowchart LR
 
 </div>
 
+## AWS Qualified Software
+
+<div class="center" markdown>
+[![AWS Qualified Software badge](styles/aws_qualified_software_badge_dark.png){ width="120" }](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo)
+
+stdapi.ai is an **AWS Qualified Software** solution, verified against AWS technical and security requirements for AWS Marketplace.
+</div>
+
+---
+
 ## Choose Your Edition
 
 <div class="grid cards" markdown>
