@@ -1,5 +1,6 @@
 """Common utilities."""
 
+import sys
 from asyncio import to_thread
 from base64 import b32encode
 from binascii import Error as BinasciiError
@@ -8,7 +9,6 @@ from datetime import UTC, datetime
 from io import BytesIO
 from re import ASCII
 from re import compile as compile_regex
-from sys import stdout
 from typing import (
     TYPE_CHECKING,
     Literal,
@@ -350,8 +350,8 @@ def stdout_write(value: JsonValue) -> None:
     """
     msg = f"{to_json(value).decode()}\n"
     try:
-        stdout.write(msg)
-        stdout.flush()
+        sys.stdout.write(msg)
+        sys.stdout.flush()
     except ValueError as error:  # pragma: no cover
         if "closed" in str(error):
             return
