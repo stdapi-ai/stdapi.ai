@@ -124,7 +124,7 @@ if SETTINGS.anthropic_routes_prefix != SETTINGS.openai_routes_prefix:
         Raises:
             ApiError: When unable to retrieve models from backend services (500)
         """
-        updated = (await initialize_bedrock_models())[0]
+        updated = await initialize_bedrock_models()
         async with _ALL_MODELS_LOCK:
             if updated or not _ALL_MODELS:
                 models = await get_all_models_details()

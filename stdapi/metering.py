@@ -14,9 +14,7 @@ from stdapi.exceptions import (
 from stdapi.server import SERVER_ID, SERVER_VERSION
 
 if TYPE_CHECKING:
-    from types_aiobotocore_meteringmarketplace.type_defs import (
-        RegisterUsageResultTypeDef,
-    )
+    from stdapi.monitoring import EventLog
 
 PRODUCT_CODE = ""
 LICENCE_INFO = (
@@ -31,13 +29,14 @@ EDITION_TITLE = f"stdapi.ai ({'Enterprise' if PRODUCT_CODE else 'Community'} Edi
 SERVER_FULL_VERSION = f"{SERVER_VERSION}+{'e' if PRODUCT_CODE else 'c'}"
 
 
-async def register() -> RegisterUsageResultTypeDef | None:
+async def register(start_event: EventLog) -> None:
     """Register this host with AWS Marketplace Metering.
 
     Applicable to ECS, EKS, and Fargate hosts running hourly-billed products.
 
-    Returns:
-        Registration result from AWS Marketplace, or ``None`` when no product code is configured.
+    Args:
+        start_event: Startup event log populated with ``register_usage_response``
+            when a product code is configured.
 
     Raises:
         NotEntitledError: If the account has no entitlement for the product.
@@ -51,7 +50,7 @@ async def register() -> RegisterUsageResultTypeDef | None:
             "meteringmarketplace", config=CONFIG, region_name=AWS_REGION
         ) as metering:
             try:
-                return await metering.register_usage(
+                start_event["register_usage_response"] = await metering.register_usage(
                     ProductCode=PRODUCT_CODE,
                     PublicKeyVersion=product_public_key_version,
                     Nonce=SERVER_ID,
@@ -94,4 +93,3 @@ async def register() -> RegisterUsageResultTypeDef | None:
                 if exc_type:
                     raise exc_type(exc_msg) from None
                 raise  # pragma: no cover
-    return None

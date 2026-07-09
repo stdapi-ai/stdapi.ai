@@ -13,7 +13,7 @@ from pydantic_core import from_json
 from stdapi.api_errors import ApiError
 from stdapi.aws import CONFIG
 from stdapi.config import AWS_REGION, AWS_SESSION, SETTINGS
-from stdapi.monitoring import log_error_details
+from stdapi.monitoring import EventLog, add_server_warning, log_error_details
 
 #: HTTPBearer security scheme for API key authentication
 _authorization_bearer = HTTPBearer(auto_error=False)
@@ -183,16 +183,22 @@ class AuthenticationHandler:
 _auth_handler = AuthenticationHandler()
 
 
-async def initialize_authentication() -> bool:
+async def initialize_authentication(start_event: EventLog) -> None:
     """Initialize the global authentication handler.
 
     This function should be called once during application startup to retrieve
-    and cache the API key from the configured source.
+    and cache the API key from the configured source. Records a security
+    warning on *start_event* if authentication ends up disabled.
 
-    Returns:
-        True if authentication is enabled, False otherwise.
+    Args:
+        start_event: Startup event log to update if authentication is disabled.
     """
-    return await _auth_handler.initialize()
+    if not await _auth_handler.initialize():
+        add_server_warning(
+            start_event,
+            "SECURITY risk: Authentication is not enabled "
+            "('api_key', 'api_key_ssm_parameter', 'api_key_secretsmanager_secret' not set)",
+        )
 
 
 async def authenticate(

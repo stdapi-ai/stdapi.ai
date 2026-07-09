@@ -92,10 +92,8 @@ def fake_models(api_key: str) -> Generator[dict[str, str]]:
     Yields a dict with 'client_headers' for convenience.
     """
 
-    async def _noop_init() -> tuple[
-        bool, dict[str, object], dict[str, object], set[str]
-    ]:
-        return (False, {}, {}, set())
+    async def _noop_init() -> bool:
+        return False
 
     async def _fake_get_all() -> tuple[
         dict[str, ModelDetails], dict[str, set[str]], dict[str, set[str]]

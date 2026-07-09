@@ -42,6 +42,7 @@ from stdapi.models.audio.amazon_transcribe import initialize_transcribe_models
 from stdapi.monitoring import (
     LOGGING_PATHS_IGNORE,
     EventLog,
+    add_server_warning,
     log_error_details,
     log_request_event,
     otel_manager,
@@ -92,59 +93,31 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
             )
             with otel_manager.use_span(span_context):
                 region_latencies = await measure_region_latencies()
-                results = await gather(
-                    initialize_authentication(),
-                    initialize_bedrock_models(),
+                start_event = EventLog(
+                    type="start",
+                    level="info",
+                    date=SETTINGS.now(),
+                    server_id=server.SERVER_NAME,
+                    server_version=SERVER_FULL_VERSION,
+                )
+                await gather(
+                    initialize_authentication(start_event),
+                    initialize_bedrock_models(start_event),
                     initialize_polly_models(),
                     initialize_transcribe_models(),
-                    register(),
+                    register(start_event),
                     initialize_aws_account_info(),
                 )
-                auth_enabled = results[0]
-                register_usage_response = results[-1]
-                unavailable_models = results[1][1]
-                invalid_arn_mappings = results[1][2]
-                unmatched_restrict_keys = results[1][3]
                 update_unified_models_collections()
-            start_event = EventLog(
-                type="start",
-                level="info",
-                date=SETTINGS.now(),
-                server_id=server.SERVER_NAME,
-                server_version=SERVER_FULL_VERSION,
-                server_start_time_ms=(time_ns() - start) // 1000000,
-            )
-            if register_usage_response:
-                start_event["register_usage_response"] = register_usage_response
             if region_latencies:
                 start_event["region_latencies"] = region_latencies
-            if not auth_enabled:
-                start_event.setdefault("server_warnings", []).append(
-                    "SECURITY risk: Authentication is not enabled "
-                    "('api_key', 'api_key_ssm_parameter', 'api_key_secretsmanager_secret' not set)"
-                )
-                start_event["level"] = "warning"
             if not SETTINGS.aws_s3_bucket:
-                start_event.setdefault("server_warnings", []).append(
-                    "S3 bucket not configured ('aws_s3_bucket' not set): some features are disabled"
+                add_server_warning(
+                    start_event,
+                    "S3 bucket not configured ('aws_s3_bucket' not set): "
+                    "some features are disabled",
                 )
-                start_event["level"] = "warning"
-            if unavailable_models:
-                start_event.setdefault("server_warnings", []).append(
-                    {"unavailable_bedrock_models": unavailable_models}  # type: ignore[dict-item]
-                )
-                start_event["level"] = "warning"
-            if invalid_arn_mappings:
-                start_event.setdefault("server_warnings", []).append(
-                    {"invalid_bedrock_model_arn_mappings": invalid_arn_mappings}  # type: ignore[dict-item]
-                )
-                start_event["level"] = "warning"
-            if unmatched_restrict_keys:
-                start_event.setdefault("server_warnings", []).append(
-                    f"'aws_bedrock_model_region_restrict' has no matching available model for: {', '.join(sorted(unmatched_restrict_keys))}. "
-                    f"Check for unknown model IDs/prefixes or models not available in the configured regions."
-                )
-                start_event["level"] = "warning"
+            start_event["server_start_time_ms"] = (time_ns() - start) // 1000000
             write_log_event(start_event)
             yield
     except (BotoCoreError, ClientError, ServerError) as exception:

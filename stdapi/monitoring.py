@@ -161,6 +161,17 @@ _PUBLISHED_LOG_LEVELS = _init_log_levels()
 del _init_log_levels
 
 
+def add_server_warning(start_event: EventLog, warning: JsonValue) -> None:
+    """Append a warning to a "start" event log and raise its level to ``warning``.
+
+    Args:
+        start_event: Startup event log to update.
+        warning: Warning message or structured detail to record.
+    """
+    start_event.setdefault("server_warnings", []).append(warning)
+    start_event["level"] = "warning"
+
+
 def write_log_event(log: EventLog) -> None:
     """Writes a log event to the standard output in JSON format.
 

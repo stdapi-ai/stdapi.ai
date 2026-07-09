@@ -33,7 +33,14 @@ from stdapi.config import SETTINGS
 from stdapi.input_file import get_s3_input_regions, resolve_all_bedrock_content_blocks
 from stdapi.models.capabilities import ROUTE_CAPABILITIES, Capability
 from stdapi.models.deprecation import DEPRECATED_MODELS
-from stdapi.monitoring import REQUEST_ID, REQUEST_LOG, build_metadata, log_error_details
+from stdapi.monitoring import (
+    REQUEST_ID,
+    REQUEST_LOG,
+    EventLog,
+    add_server_warning,
+    build_metadata,
+    log_error_details,
+)
 from stdapi.region_routing import REGION_ROUTER, ROUTING_RETRYABLE_CODES
 from stdapi.utils import match_bedrock_app_profile_arn, match_bedrock_prompt_router_arn
 
@@ -953,18 +960,16 @@ async def _get_bedrock_models_from_region(region: RegionName) -> list[ModelDetai
     ]
 
 
-async def initialize_bedrock_models() -> tuple[
-    bool, dict[str, dict[str, list[str]]], dict[str, str], set[str]
-]:
+async def initialize_bedrock_models(start_event: EventLog | None = None) -> bool:
     """Refresh the Bedrock model cache from all configured regions if stale.
 
+    Args:
+        start_event: Optional startup event log to record warnings on for
+            unavailable models, invalid ARN mappings, and unmatched
+            ``aws_bedrock_model_region_restrict`` keys.
+
     Returns:
-        Tuple of (updated, unavailable_models, invalid_arn_mappings, unmatched_restrict_keys) where
-        *updated* is ``True`` if the cache was refreshed, *unavailable_models* maps
-        model IDs to per-region availability issues, *invalid_arn_mappings* maps
-        model IDs to ARN-mapping error messages, and *unmatched_restrict_keys* is the
-        set of ``aws_bedrock_model_region_restrict`` keys that did not match any
-        available model.
+        ``True`` if the cache was refreshed, ``False`` otherwise.
     """
     updated = False
     unavailable_models: dict[str, dict[str, list[str]]] = {}
@@ -1029,7 +1034,46 @@ async def initialize_bedrock_models() -> tuple[
         else:
             invalid_arn_mappings = {}
             unmatched_restrict_keys = set()
-    return updated, unavailable_models, invalid_arn_mappings, unmatched_restrict_keys
+    _warn_bedrock_startup_issues(
+        start_event, unavailable_models, invalid_arn_mappings, unmatched_restrict_keys
+    )
+    return updated
+
+
+def _warn_bedrock_startup_issues(
+    start_event: EventLog | None,
+    unavailable_models: dict[str, dict[str, list[str]]],
+    invalid_arn_mappings: dict[str, str],
+    unmatched_restrict_keys: set[str],
+) -> None:
+    """Record startup warnings for Bedrock model availability/configuration issues.
+
+    Args:
+        start_event: Startup event log to record warnings on, if any.
+        unavailable_models: Model IDs mapped to per-region availability issues.
+        invalid_arn_mappings: Model IDs mapped to ARN-mapping error messages.
+        unmatched_restrict_keys: ``aws_bedrock_model_region_restrict`` keys that
+            did not match any available model.
+    """
+    if start_event is None:
+        return
+    if unavailable_models:
+        add_server_warning(
+            start_event,
+            {"unavailable_bedrock_models": unavailable_models},  # type: ignore[dict-item]
+        )
+    if invalid_arn_mappings:
+        add_server_warning(
+            start_event,
+            {"invalid_bedrock_model_arn_mappings": invalid_arn_mappings},  # type: ignore[dict-item]
+        )
+    if unmatched_restrict_keys:
+        add_server_warning(
+            start_event,
+            "'aws_bedrock_model_region_restrict' has no matching available model "
+            f"for: {', '.join(sorted(unmatched_restrict_keys))}. Check for unknown "
+            "model IDs/prefixes or models not available in the configured regions.",
+        )
 
 
 def _apply_user_profiles(all_models: dict[str, ModelDetails]) -> dict[str, str]:
