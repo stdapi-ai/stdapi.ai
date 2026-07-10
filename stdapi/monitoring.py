@@ -5,7 +5,15 @@ from contextvars import ContextVar
 from re import compile as re_compile
 from time import perf_counter_ns
 from traceback import format_exception
-from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict, TypeVar
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Literal,
+    NotRequired,
+    TypedDict,
+    TypeVar,
+    get_args,
+)
 
 from botocore.exceptions import ClientError, HTTPClientError
 from botocore.exceptions import ConnectionError as BotocoreConnectionError
@@ -45,7 +53,10 @@ else:
 
 otel_manager = OpenTelemetryManager()
 
+#: Generic element type for stream-rebuilding helpers below.
 T = TypeVar("T")
+
+#: Per-region latency stat keys reported in the "start" event's region_latencies.
 RegionLatenciesStatsKeys = Literal["latency_ms", "stddev_ms"]
 
 
@@ -102,7 +113,7 @@ ParamsT = TypeVar("ParamsT", bound="BaseModel | dict[str, Any] | list[Any] | Non
 #: Request ID (x-request-id header)
 REQUEST_ID: ContextVar[str] = ContextVar("request_id")
 
-# Request TZ aware datetime
+#: Request-scoped, timezone-aware start timestamp.
 REQUEST_TIME: ContextVar[AwareDatetime] = ContextVar("request_time")
 
 #: Request log dict
@@ -126,8 +137,8 @@ LOGGING_PATHS_IGNORE: frozenset[str] = frozenset(
     }
 )
 
-#: Sorted log levels
-_SORTED_LOG_LEVELS: tuple[LogLevel, ...] = ("info", "warning", "error", "critical")
+#: Log levels, least to most severe -- derived from LogLevel so the two can't drift apart.
+_SORTED_LOG_LEVELS: tuple[LogLevel, ...] = get_args(LogLevel)
 
 #: stdapi.ai custom prefix for metadata and tags
 _STDAPI_METADATA_PREFIX = "stdapi-ai."
@@ -136,31 +147,22 @@ _STDAPI_METADATA_PREFIX = "stdapi-ai."
 _METADATA_VALUE_STRIP_RE = re_compile(r"[^a-zA-Z0-9\s:_@$#=/+,.\-]")
 
 
-def _init_log_levels() -> set[LogLevel]:
-    """Initializes a set of log levels based on the current application setting.
+def _published_log_levels(level: LogLevel | Literal["disabled"]) -> set[LogLevel]:
+    """Return the log levels to publish to stdout for the configured level.
 
-    This function generates a set of log levels, starting from the highest
-    log level in the configuration and including all levels up to and
-    including the configured log level. The log levels are considered in
-    reverse order of severity.
+    Args:
+        level: The minimum severity to publish, or "disabled" for none.
 
     Returns:
-        set[LogLevel]: A set containing log levels lower or equal to the
-        configured log level.
+        The levels at or above *level*'s severity.
     """
-    levels: set[LogLevel] = set()
-    if SETTINGS.log_level == "disabled":
-        return levels
-    for level in reversed(_SORTED_LOG_LEVELS):
-        levels.add(level)
-        if level == SETTINGS.log_level:
-            break
-    return levels
+    if level == "disabled":
+        return set()
+    return set(_SORTED_LOG_LEVELS[_SORTED_LOG_LEVELS.index(level) :])
 
 
-#: Log levels to publish
-_PUBLISHED_LOG_LEVELS = _init_log_levels()
-del _init_log_levels
+#: Levels at or above SETTINGS.log_level's severity -- these get published to stdout.
+_PUBLISHED_LOG_LEVELS = _published_log_levels(SETTINGS.log_level)
 
 
 def add_server_warning(start_event: EventLog, warning: JsonValue) -> None:

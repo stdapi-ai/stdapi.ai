@@ -262,7 +262,7 @@ curl -X POST "$BASE/v1/embeddings" \
 
     - S3 bucket **must be in the same AWS region** as the Bedrock model
     - The stdapi.ai server **must have read access** to the S3 object
-    - For TwelveLabs Marengo models: S3 bucket **must be in the same AWS account** as the STDAPI server
+    - For TwelveLabs Marengo models: S3 bucket **must be in the same AWS account** as the stdapi.ai server
 
 **Option 3: Files API reference (`file-id:`)**
 

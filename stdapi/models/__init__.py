@@ -7,7 +7,7 @@ from importlib import import_module
 from pkgutil import iter_modules
 from re import Pattern
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Never, TypedDict, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Never, TypedDict, TypeVar
 
 from botocore.exceptions import ClientError, HTTPClientError
 from botocore.exceptions import ConnectionError as BotocoreConnectionError
@@ -86,6 +86,9 @@ if TYPE_CHECKING:
 
 else:
     type RegionName = str
+
+#: Prefix Bedrock uses for its global cross-region inference profile IDs.
+_GLOBAL_INFERENCE_PROFILE_PREFIX: Final = "global."
 
 #: Bedrock models details
 _MODELS: dict[str, ModelDetails] = {}
@@ -233,7 +236,12 @@ class ModelDetails(BaseModel):
         if region is not None and (profile := profiles.get(region)):
             return profile
         if global_profile := next(
-            (pid for pid in profiles.values() if pid.startswith("global.")), None
+            (
+                pid
+                for pid in profiles.values()
+                if pid.startswith(_GLOBAL_INFERENCE_PROFILE_PREFIX)
+            ),
+            None,
         ):
             return global_profile
         if region is None:
@@ -868,12 +876,22 @@ def _filter_inference_profiles(
             and not model_restricted
             and (
                 profile := next(
-                    (pid for pid in profile_ids if pid.startswith("global.")), None
+                    (
+                        pid
+                        for pid in profile_ids
+                        if pid.startswith(_GLOBAL_INFERENCE_PROFILE_PREFIX)
+                    ),
+                    None,
                 )
             )
         ) or (
             profile := next(
-                (pid for pid in profile_ids if not pid.startswith("global.")), None
+                (
+                    pid
+                    for pid in profile_ids
+                    if not pid.startswith(_GLOBAL_INFERENCE_PROFILE_PREFIX)
+                ),
+                None,
             )
         ):
             profiles[model_id] = profile

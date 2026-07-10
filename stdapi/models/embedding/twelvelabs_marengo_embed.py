@@ -232,8 +232,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
 
         await prefetch_all_content_types()
 
-        text_image = await self._get_text_image_input(inputs)
-        if text_image:
+        if text_image := await self._get_text_image_input(inputs):
             embeddings.extend(
                 vector["embedding"]
                 for vector in (
@@ -464,7 +463,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             inputs: List of input values.
 
         Returns:
-            Tuple of (text_value, image_value, image_content_type, image_size) if detected, None otherwise.
+            (text_value, image_value) if detected, None otherwise.
         """
         if len(inputs) == 2 and not self._is_v2():
             media_types = [

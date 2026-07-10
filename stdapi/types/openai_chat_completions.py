@@ -1237,7 +1237,7 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
     }
 
     @model_validator(mode="after")
-    def _unsupported(self) -> Self:  # noqa: C901,PLR0912
+    def _unsupported(self) -> Self:
         """Validate unsupported or incompatible chat completion options.
 
         Returns:
@@ -1250,6 +1250,22 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
         if self.n is not None and self.n != 1 and self.stream is True:
             msg = "Multiple choices (n>1) are not supported with streaming enabled on this backend."
             raise ValueError(msg)
+        self._validate_audio_modalities()
+        if self.functions is not None and self.tools is not None:
+            msg = "Only one of `functions` or `tools` can be specified. `functions` is deprecated."
+            raise ValueError(msg)
+        if self.parallel_tool_calls is False:
+            msg = "parallel_tool_calls=False is not supported on this backend."
+            raise ValueError(msg)
+        self._validate_tool_choice()
+        self._validate_thinking_options()
+        self._validate_no_custom_tools()
+        for key in self._UNSUPPORTED & self.model_fields_set:
+            raise UnsupportedParameterError(key)
+        return self
+
+    def _validate_audio_modalities(self) -> None:
+        """Validate audio modality options."""
         if self.modalities is not None and "audio" in self.modalities:
             if "text" not in self.modalities:
                 msg = "Invalid value for 'modalities'. Only ['text'] and ['text', 'audio'] are supported."
@@ -1260,15 +1276,18 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
             if self.audio is None:
                 msg = "`audio` parameters are required when requesting audio output modality."
                 raise ValueError(msg)
-        if self.functions is not None and self.tools is not None:
-            msg = "Only one of `functions` or `tools` can be specified. `functions` is deprecated."
-            raise ValueError(msg)
-        if self.parallel_tool_calls is False:
-            msg = "parallel_tool_calls=False is not supported on this backend."
-            raise ValueError(msg)
+
+    def _validate_tool_choice(self) -> None:
+        """Validate tool_choice parameter restrictions."""
         if isinstance(self.tool_choice, ChatCompletionAllowedToolChoiceParam):
             msg = "`allowed_tools` tool_choice is not supported on this backend."
             raise ValueError(msg)  # noqa: TRY004
+        if self.tool_choice == "none":
+            msg = "`none` tool_choice is not supported on this backend."
+            raise ValueError(msg)
+
+    def _validate_thinking_options(self) -> None:
+        """Validate thinking budget and reasoning effort options."""
         if self.thinking_budget is not None and self.reasoning_effort is not None:
             msg = (
                 "Only one of `thinking_budget` or `reasoning_effort` can be specified."
@@ -1277,9 +1296,9 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
         if self.thinking_budget is not None and not self.enable_thinking:
             msg = "`thinking_budget` requires `enable_thinking` to be set to `true` ."
             raise ValueError(msg)
-        if self.tool_choice == "none":
-            msg = "`none` tool_choice is not supported on this backend."
-            raise ValueError(msg)
+
+    def _validate_no_custom_tools(self) -> None:
+        """Validate that custom tools are not used."""
         if (
             any(
                 isinstance(tool, ChatCompletionCustomToolParam)
@@ -1296,6 +1315,3 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
         ):
             msg = "`custom` tools are not supported on this backend."
             raise ValueError(msg)
-        for key in self._UNSUPPORTED & self.model_fields_set:
-            raise UnsupportedParameterError(key)
-        return self

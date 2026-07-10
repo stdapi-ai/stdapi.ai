@@ -65,9 +65,11 @@ _SYNC_LIMIT_SIZES: dict[_MediaTypes, int] = {
     "text": 50_000,  # 1 MB; 50,000 characters
 }
 
-# Default constants
+#: Default segmented-embedding video mode when not otherwise specified.
 _DEFAULT_VIDEO_EMBEDDING_MODE: _VideoEmbeddingMode = "AUDIO_VIDEO_COMBINED"
+#: Default segmented-embedding text truncation mode when not otherwise specified.
 _DEFAULT_TEXT_TRUNCATION_MODE: _TextTruncationMode = "END"
+#: Maximum text length accepted by the synchronous (non-segmented) embedding path.
 _TEXT_SIZE_LIMIT = 8192
 
 
