@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 _REASONING_EFFORT_BUDGET_FACTOR: dict[Effort, float] = {
     "low": 0.25,
     "medium": 0.5,
-    "high": 75.0,
+    "high": 0.75,
     "xhigh": 1.0,
     "max": 1.0,
 }
