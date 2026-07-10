@@ -113,6 +113,7 @@ if TYPE_CHECKING:
         ToolUseBlockTypeDef,
     )
 
+    from stdapi.models.chat import ReasoningParams
     from stdapi.types import JsonMapping
     from stdapi.types.anthropic_messages import ServerTools
     from stdapi.types.openai_responses import (
@@ -591,6 +592,26 @@ def translate_request(
         ),
         (dict(request.metadata) if request.metadata else None),
     )
+
+
+def extract_reasoning(request: ResponseCreateParams) -> ReasoningParams | None:
+    """Extract reasoning parameters from an OpenAI Responses request.
+
+    Args:
+        request: Responses API creation request.
+
+    Returns:
+        Reasoning parameters to configure, or None if the request has no
+        ``reasoning`` field set.
+    """
+    if request.reasoning is None:
+        return None
+    return {
+        "enabled": request.reasoning.effort not in (None, "none", "disabled"),
+        "reasoning_effort": request.reasoning.effort,
+        "budget_tokens": None,
+        "max_tokens": request.max_output_tokens,
+    }
 
 
 async def _convert_input_content(part: ResponseInputContent) -> ContentBlockTypeDef:

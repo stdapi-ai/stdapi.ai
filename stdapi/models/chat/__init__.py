@@ -12,7 +12,7 @@ Design:
 """
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
 
 from stdapi.models import ModelBase, get_model, load_model_plugins
 
@@ -35,6 +35,17 @@ if TYPE_CHECKING:
 
     #: Merged reasoning effort type
     Effort = ReasoningEffort | ThinkingEffort
+
+    class ReasoningParams(TypedDict):
+        """Reasoning parameters resolved from a route-specific request.
+
+        Matches the keyword arguments of ``ModelBase._req_configure_reasoning``.
+        """
+
+        enabled: bool
+        reasoning_effort: Effort | None
+        budget_tokens: int | None
+        max_tokens: int | None
 
 
 class ChatModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):

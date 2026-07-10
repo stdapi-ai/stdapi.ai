@@ -80,6 +80,7 @@ if TYPE_CHECKING:
         ToolUseBlockTypeDef,
     )
 
+    from stdapi.models.chat import ReasoningParams
     from stdapi.types import JsonMapping
     from stdapi.types.openai_chat_completions import (
         ChatCompletionAssistantMessageParam,
@@ -375,6 +376,37 @@ def translate_request(
         build_output_config(request.response_format),
         request.metadata or None,
     )
+
+
+def extract_reasoning(request: CompletionCreateParams) -> ReasoningParams | None:
+    """Extract reasoning parameters from an OpenAI Chat Completions request.
+
+    Args:
+        request: OpenAI chat completion creation request.
+
+    Returns:
+        Reasoning parameters to configure, or None if the request has no
+        reasoning-related field set.
+    """
+    if (
+        request.reasoning_effort is None
+        and request.enable_thinking is None
+        and request.thinking is None
+    ):
+        return None
+    return {
+        "enabled": (
+            (
+                request.reasoning_effort is not None
+                and request.reasoning_effort != "none"
+            )
+            or request.enable_thinking is True
+            or (request.thinking is not None and request.thinking.type == "enabled")
+        ),
+        "reasoning_effort": request.reasoning_effort,
+        "budget_tokens": request.thinking_budget,
+        "max_tokens": request.max_completion_tokens or request.max_tokens,
+    }
 
 
 def _extract_system_content_blocks(

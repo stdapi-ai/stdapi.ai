@@ -141,27 +141,9 @@ class ChatModel(ChatModelBase[Any, Any]):
             bedrock_messages=bedrock_messages,
         )
 
-        if (
-            request.reasoning_effort is not None
-            or request.enable_thinking is not None
-            or request.thinking is not None
-        ):
+        if reasoning := openai_adapter.extract_reasoning(request):
             self._req_configure_reasoning(
-                additional_request_fields=additional_request_fields,
-                enabled=(
-                    (
-                        request.reasoning_effort is not None
-                        and request.reasoning_effort != "none"
-                    )
-                    or request.enable_thinking is True
-                    or (
-                        request.thinking is not None
-                        and request.thinking.type == "enabled"
-                    )
-                ),
-                reasoning_effort=request.reasoning_effort,
-                budget_tokens=request.thinking_budget,
-                max_tokens=request.max_completion_tokens or request.max_tokens,
+                additional_request_fields=additional_request_fields, **reasoning
             )
 
         self._req_enable_prompt_caching(
@@ -348,27 +330,9 @@ class ChatModel(ChatModelBase[Any, Any]):
             bedrock_messages=bedrock_messages,
         )
 
-        if request.thinking is not None or (
-            request.output_config is not None
-            and request.output_config.effort is not None
-        ):
-            reasoning_enabled = (
-                request.thinking is not None
-                and request.thinking.type in ("enabled", "adaptive")
-            ) or (
-                request.output_config is not None
-                and request.output_config.effort is not None
-            )
+        if reasoning := anthropic_adapter.extract_reasoning(request):
             self._req_configure_reasoning(
-                additional_request_fields=additional_request_fields,
-                enabled=reasoning_enabled,
-                reasoning_effort=request.output_config.effort
-                if request.output_config is not None
-                else None,
-                budget_tokens=request.thinking.budget_tokens
-                if request.thinking is not None and request.thinking.type == "enabled"
-                else None,
-                max_tokens=request.max_tokens,
+                additional_request_fields=additional_request_fields, **reasoning
             )
 
         if prompt_caching is not None:
@@ -467,17 +431,9 @@ class ChatModel(ChatModelBase[Any, Any]):
             bedrock_messages=bedrock_messages,
         )
 
-        if request.reasoning is not None:
-            reasoning_enabled = request.reasoning.effort not in (
-                None,
-                "none",
-                "disabled",
-            )
+        if reasoning := responses_adapter.extract_reasoning(request):
             self._req_configure_reasoning(
-                additional_request_fields=additional_request_fields,
-                enabled=reasoning_enabled,
-                reasoning_effort=request.reasoning.effort,
-                max_tokens=request.max_output_tokens,
+                additional_request_fields=additional_request_fields, **reasoning
             )
 
         if prompt_caching:

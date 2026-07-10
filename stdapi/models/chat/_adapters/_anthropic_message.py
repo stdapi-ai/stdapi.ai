@@ -127,6 +127,7 @@ if TYPE_CHECKING:
         ToolTypeDef,
     )
 
+    from stdapi.models.chat import ReasoningParams
     from stdapi.types import JsonMapping
     from stdapi.types.anthropic_messages import ServerTools
 
@@ -815,6 +816,41 @@ async def translate_request(
         automatic_prompt_caching_ttl,
         _build_output_config(request.output_config),
     )
+
+
+def extract_reasoning(request: MessageCreateParams) -> ReasoningParams | None:
+    """Extract reasoning parameters from an Anthropic Messages request.
+
+    Args:
+        request: Anthropic message creation parameters.
+
+    Returns:
+        Reasoning parameters to configure, or None if the request has no
+        reasoning-related field set.
+    """
+    if request.thinking is None and (
+        request.output_config is None or request.output_config.effort is None
+    ):
+        return None
+    return {
+        "enabled": (
+            request.thinking is not None
+            and request.thinking.type in ("enabled", "adaptive")
+        )
+        or (
+            request.output_config is not None
+            and request.output_config.effort is not None
+        ),
+        "reasoning_effort": (
+            request.output_config.effort if request.output_config is not None else None
+        ),
+        "budget_tokens": (
+            request.thinking.budget_tokens
+            if request.thinking is not None and request.thinking.type == "enabled"
+            else None
+        ),
+        "max_tokens": request.max_tokens,
+    }
 
 
 def _map_citations_content_from_bedrock(
