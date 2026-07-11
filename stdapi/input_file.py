@@ -1,7 +1,7 @@
 """Unified input file handling for all source types."""
 
 from abc import ABC, abstractmethod
-from asyncio import TaskGroup
+from asyncio import Semaphore, TaskGroup
 from contextvars import ContextVar
 from enum import IntEnum
 from re import IGNORECASE
@@ -52,6 +52,9 @@ from stdapi.utils import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Iterable
+
+    from aiohttp import ClientResponse
     from pydantic import GetCoreSchemaHandler, GetJsonSchemaHandler
     from pydantic.json_schema import JsonSchemaValue
     from pydantic_core import CoreSchema
@@ -295,10 +298,24 @@ class _FileSource(ABC):
 
         Returns:
             The complete file content.
+
+        Raises:
+            ApiError: When the file exceeds ``max_input_file_size`` (413).
         """
+        await self._enforce_size_limit()
         data = await self._read()
         self._metadata_from_bytes(data)
         return data
+
+    async def _enforce_size_limit(self) -> None:
+        """Reject the input when its resolved size exceeds the configured maximum.
+
+        Raises:
+            ApiError: When the size exceeds ``max_input_file_size`` (413).
+        """
+        if (limit := SETTINGS.max_input_file_size) and await self.get_size() > limit:
+            msg = f"Input file exceeds the maximum allowed size of {limit} bytes."
+            raise ApiError(msg, status=413)
 
     async def to_base64(self) -> str:
         """Return file content as a base64-encoded string.
@@ -590,13 +607,39 @@ class _HttpSource(_FileSource):
             try:
                 async with session.get(self._url) as resp:
                     resp.raise_for_status()
-                    if not (body := await resp.read()):
+                    if not (body := await self._read_capped(resp)):
                         msg = f"Error downloading {strip_url_query(self._url)}: Empty body"
                         raise ApiError(msg)
             except AIOHTTPClientError as error:
                 msg = f"Error downloading {strip_url_query(self._url)}: {error}"
                 raise ApiError(msg, status=ssrf_blocked_status(error)) from error
         return body
+
+    async def _read_capped(self, resp: ClientResponse) -> bytes:
+        """Read the response body, enforcing the configured size limit.
+
+        The declared ``Content-Length`` is attacker-controlled, so the body is
+        streamed and aborted as soon as it exceeds the limit rather than trusting
+        the header.
+
+        Args:
+            resp: The streaming HTTP response.
+
+        Returns:
+            The full response body.
+
+        Raises:
+            ApiError: When the body exceeds ``max_input_file_size`` (413).
+        """
+        if not (limit := SETTINGS.max_input_file_size):
+            return await resp.read()
+        chunks = bytearray()
+        async for chunk in resp.content.iter_chunked(UPLOAD_CHUNK_SIZE):
+            chunks += chunk
+            if len(chunks) > limit:
+                msg = f"Input file exceeds the maximum allowed size of {limit} bytes."
+                raise ApiError(msg, status=413)
+        return bytes(chunks)
 
     async def to_s3(
         self,
@@ -695,6 +738,7 @@ class _DataUriSource(_FileSource):
         Returns:
             The base64-encoded file content.
         """
+        await self._enforce_size_limit()
         try:
             return self._value[self._value.index(",") + 1 :]
         finally:
@@ -708,6 +752,7 @@ class _DataUriSource(_FileSource):
         Returns:
             A data URI string like ``data:image/png;base64,...``.
         """
+        await self._enforce_size_limit()
         try:
             return self._value
         finally:
@@ -764,6 +809,7 @@ class _Base64Source(_FileSource):
         Returns:
             The base64-encoded file content.
         """
+        await self._enforce_size_limit()
         try:
             return self._value
         finally:
@@ -777,6 +823,7 @@ class _Base64Source(_FileSource):
         Returns:
             A data URI string like ``data:image/png;base64,...``.
         """
+        await self._enforce_size_limit()
         try:
             return f"data:{await self.get_content_type() or 'application/octet-stream'};base64,{self._value}"
         finally:
@@ -1440,12 +1487,34 @@ def get_s3_input_regions() -> dict[RegionName, int]:
     return regions
 
 
+async def _gather_bounded(coroutines: Iterable[Awaitable[object]]) -> None:
+    """Await *coroutines* with bounded concurrency.
+
+    Caps the number of simultaneously running tasks (via
+    ``max_concurrent_input_downloads``) so a request carrying many remote
+    inputs cannot spawn an unbounded number of concurrent downloads.
+
+    Args:
+        coroutines: Awaitables to run.
+    """
+    semaphore = Semaphore(SETTINGS.max_concurrent_input_downloads)
+
+    async def _run(coroutine: Awaitable[object]) -> None:
+        """Await the coroutine under the download concurrency semaphore."""
+        async with semaphore:
+            await coroutine
+
+    async with TaskGroup() as task_group:
+        for coroutine in coroutines:
+            task_group.create_task(_run(coroutine))
+
+
 async def prefetch_all_content_types() -> None:
     """Pre-fetch content types for all InputFile instances in the current request context."""
     if input_files := _CURRENT_INPUT_FILES.get([]):
-        async with TaskGroup() as task_group:
-            for input_file in input_files:
-                task_group.create_task(input_file.get_content_type())
+        await _gather_bounded(
+            input_file.get_content_type() for input_file in input_files
+        )
 
 
 async def resolve_all_bedrock_content_blocks(
@@ -1460,10 +1529,9 @@ async def resolve_all_bedrock_content_blocks(
             to ``False`` for models that do not support ``s3Location`` for documents.
     """
     if input_files := _CURRENT_INPUT_FILES.get([]):
-        async with TaskGroup() as task_group:
-            for input_file in input_files:
-                task_group.create_task(
-                    input_file.resolve_bedrock_content_block(
-                        region, to_s3=to_s3, document_s3_location=document_s3_location
-                    )
-                )
+        await _gather_bounded(
+            input_file.resolve_bedrock_content_block(
+                region, to_s3=to_s3, document_s3_location=document_s3_location
+            )
+            for input_file in input_files
+        )

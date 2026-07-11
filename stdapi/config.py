@@ -703,6 +703,33 @@ class _Settings(BaseSettings):
         description="If True, raise error on extra fields in input request.",
     )
 
+    max_input_file_size: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Maximum size in bytes of an inline input file loaded into memory "
+            "(base64, data URI, or a downloaded HTTP(S)/S3 source read for model "
+            "input). Requests exceeding this size are rejected with HTTP 413 "
+            "before the content is fully decoded or downloaded, protecting the "
+            "server against memory-exhaustion. Streaming uploads to S3 (multipart "
+            "form uploads, Files API ingest from URLs, and S3-to-S3 copies) are "
+            "not affected, so large file transfers remain possible.\n\n"
+            "Set to 0 (default) to disable the limit. Example: 26214400 (25 MiB)."
+        ),
+    )
+
+    max_concurrent_input_downloads: int = Field(
+        default=8,
+        gt=0,
+        description=(
+            "Maximum number of input files fetched or resolved concurrently within "
+            "a single request. Bounds the number of simultaneous outbound downloads "
+            "so a request carrying many remote inputs (images, documents, audio) "
+            "cannot exhaust sockets/memory or amplify SSRF against a target. "
+            "Excess inputs queue and run as slots free up. Default: 8."
+        ),
+    )
+
     default_model_params: dict[str, dict[str, JsonValue]] = Field(
         default={},
         description=(

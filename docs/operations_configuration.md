@@ -253,6 +253,8 @@ Choose **one** method (mutually exclusive):
 | [`GRANIAN_SSL_CLIENT_VERIFY`](#graniansslclientverify)                              | `false`  | Enable client certificate verification (mTLS)                                         |
 | [`ENABLE_GZIP`](#enable-gzip)                                                       | `false`  | Enable GZip compression for responses >1KB (prefer AWS ALB/CloudFront compression)    |
 | [`SSRF_PROTECTION_BLOCK_PRIVATE_NETWORKS`](#ssrf-protection-block-private-networks) | `true`   | Block requests to private/local networks for SSRF protection                          |
+| [`MAX_INPUT_FILE_SIZE`](#max-input-file-size)                                       | `0`      | Maximum size in bytes of an inline input file loaded into memory (`0` disables)        |
+| [`MAX_CONCURRENT_INPUT_DOWNLOADS`](#max-concurrent-input-downloads)                 | `8`      | Maximum input files fetched/resolved concurrently per request                          |
 
 ### :material-cog: Application Behavior
 
@@ -2883,6 +2885,67 @@ export SSRF_PROTECTION_BLOCK_PRIVATE_NETWORKS=false
     - :material-firewall: **Firewall Rules** - Restrict outbound connections from application servers
     - :material-security: **Security Groups** - Use AWS security groups to limit network access
     - :material-monitor: **Monitoring** - Log and monitor outbound requests for suspicious patterns
+
+---
+
+#### `MAX_INPUT_FILE_SIZE` { #max-input-file-size }
+
+:octicons-package-24: **Purpose**
+:   Cap the size of an inline input file loaded into memory to protect against memory-exhaustion (DoS)
+
+:octicons-database-24: **Type**
+:   Integer (bytes)
+
+:octicons-gear-24: **Default**
+:   `0` (disabled — no limit)
+
+:octicons-shield-check-24: **Best Practice**
+:   Set a limit aligned with your largest expected inline input (e.g. `26214400` for 25 MiB) when the API is exposed to untrusted clients
+
+```bash
+# Disabled (default) - no size limit
+# No environment variable needed
+
+# Reject inline inputs larger than 25 MiB
+export MAX_INPUT_FILE_SIZE=26214400
+```
+
+!!! info "What is limited"
+    The limit applies to file content that is **loaded into memory** for model input:
+
+    - :material-file-code: Base64 and `data:` URI inputs
+    - :material-download: HTTP(S) and S3 sources downloaded and read for model input
+
+    Requests exceeding the limit are rejected with **HTTP 413** before the content is fully decoded or downloaded. For downloads, the body is streamed and aborted as soon as the limit is exceeded, so a spoofed `Content-Length` cannot bypass it.
+
+    **Streaming uploads are not affected**, so large file transfers remain possible:
+
+    - :material-cloud-upload: Multipart form uploads
+    - :material-file-move: Files API ingest from HTTP(S) URLs and S3-to-S3 copies
+
+---
+
+#### `MAX_CONCURRENT_INPUT_DOWNLOADS` { #max-concurrent-input-downloads }
+
+:octicons-package-24: **Purpose**
+:   Bound the number of input files fetched or resolved concurrently within a single request
+
+:octicons-database-24: **Type**
+:   Integer (> 0)
+
+:octicons-gear-24: **Default**
+:   `8`
+
+:octicons-shield-check-24: **Best Practice**
+:   Keep a modest value so a single request with many remote inputs cannot exhaust sockets/memory or amplify outbound requests against a target
+
+```bash
+# Allow up to 4 concurrent input downloads per request
+export MAX_CONCURRENT_INPUT_DOWNLOADS=4
+```
+
+!!! info "Behaviour"
+    Each remote input (image, document, or audio referenced by URL or S3 URI) is fetched in parallel, capped at this many at a time. Excess inputs queue and run as slots free up, so requests still complete — they are only paced. This prevents a request carrying thousands of URLs from opening thousands of simultaneous connections (socket/memory exhaustion and SSRF amplification).
 
 ---
 
