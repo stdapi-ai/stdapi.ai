@@ -885,6 +885,21 @@ class _Settings(BaseSettings):
         ),
     )
 
+    proxy_trusted_hosts: list[str] | Literal["*"] = Field(
+        default="*",
+        description=(
+            "Trusted proxy hosts/IPs whose X-Forwarded-* headers are honored when "
+            "enable_proxy_headers is True. Only requests whose immediate peer IP is "
+            "in this list have their forwarded client IP and scheme trusted; any "
+            "other peer cannot spoof X-Forwarded-For.\n\n"
+            "Defaults to '*' (trust every peer) for backward compatibility. For "
+            "defense-in-depth, restrict this to your reverse proxy's IP range so "
+            "direct clients cannot forge their source IP.\n\n"
+            "Environment variable format: JSON array or '*'.\n"
+            'Example: ["10.0.0.0/8"] or ["127.0.0.1"]'
+        ),
+    )
+
     enable_gzip: bool = Field(
         default=False,
         description=(

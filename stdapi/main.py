@@ -186,7 +186,9 @@ if SETTINGS.enable_gzip:
 if SETTINGS.enable_proxy_headers:
     from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
-    app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+    app.add_middleware(
+        ProxyHeadersMiddleware, trusted_hosts=SETTINGS.proxy_trusted_hosts
+    )
 
 if SETTINGS.trusted_hosts:
     from fastapi.middleware.trustedhost import TrustedHostMiddleware

@@ -245,6 +245,7 @@ Choose **one** method (mutually exclusive):
 | [`CORS_ALLOW_ORIGINS`](#cors-allow-origins)                                         | None     | JSON array of allowed origins for browser cross-origin requests                       |
 | [`TRUSTED_HOSTS`](#trusted-hosts)                                                   | None     | JSON array of trusted Host header values (prefer ALB host-based routing; see details) |
 | [`ENABLE_PROXY_HEADERS`](#enable-proxy-headers)                                     | `false`  | Trust X-Forwarded-* headers from reverse proxies (only enable behind trusted proxy)   |
+| [`PROXY_TRUSTED_HOSTS`](#proxy-trusted-hosts)                                       | `*`      | Peer IPs/ranges whose X-Forwarded-* headers are trusted (restrict from `*` for safety) |
 | [`GRANIAN_SSL_CERTIFICATE`](#graniansslcertificate)                                 | None     | Path to SSL certificate file for end-to-end encryption                                |
 | [`GRANIAN_SSL_KEYFILE`](#graniansslkeyfile)                                         | None     | Path to SSL private key file (PKCS#8) for end-to-end encryption                       |
 | [`GRANIAN_SSL_KEYFILE_PASSWORD`](#graniansslkeyfilepassword)                        | None     | Password for the SSL private key file                                                 |
@@ -2816,6 +2817,34 @@ export MCP_INCLUDE_TOOLS="openai_chat_completion,search_models"
 ## SSRF Protection
 
 Configure Server-Side Request Forgery (SSRF) protection to prevent unauthorized access to internal networks.
+
+#### `PROXY_TRUSTED_HOSTS` { #proxy-trusted-hosts }
+
+:octicons-package-24: **Purpose**
+:   Restrict which peer IPs may set trusted `X-Forwarded-*` headers when `ENABLE_PROXY_HEADERS` is enabled
+
+:octicons-database-24: **Type**
+:   JSON array of IPs/CIDRs, or `*`
+
+:octicons-gear-24: **Default**
+:   `*` (trust every peer — backward compatible)
+
+:octicons-shield-check-24: **Best Practice**
+:   Restrict to your reverse proxy's IP range so direct clients cannot spoof `X-Forwarded-For`
+
+```bash
+# Trust forwarded headers only from the VPC / proxy range
+export ENABLE_PROXY_HEADERS=true
+export PROXY_TRUSTED_HOSTS='["10.0.0.0/8"]'
+```
+
+!!! warning "Only effective with `ENABLE_PROXY_HEADERS=true`"
+    This setting has no effect unless [`ENABLE_PROXY_HEADERS`](#enable-proxy-headers) is enabled. With the default `*`, any client that can reach the server directly can forge `X-Forwarded-For`, poisoning the client IP recorded in logs and OpenTelemetry spans. Restrict it to the address range of your load balancer or reverse proxy (AWS ALB/CloudFront, nginx, etc.).
+
+!!! tip "Configured automatically by the official Terraform module"
+    The [stdapi-ai Terraform module](https://github.com/stdapi-ai/terraform-aws-stdapi-ai) sets this for you when the ALB is enabled with client IP logging (`alb_enabled = true`, `log_client_ip = true`): it enables proxy headers and pins `PROXY_TRUSTED_HOSTS` to the ALB's subnet CIDRs, so only the load balancer is trusted and direct clients cannot forge `X-Forwarded-For`. Override it with the module's `proxy_trusted_hosts` variable when fronting the ALB with an additional proxy (for example CloudFront).
+
+---
 
 #### `SSRF_PROTECTION_BLOCK_PRIVATE_NETWORKS` { #ssrf-protection-block-private-networks }
 
