@@ -77,7 +77,7 @@ class AuthenticationHandler:
         elif SETTINGS.api_key_secretsmanager_secret:
             api_key = await self._get_api_key_from_secrets_manager()
             SETTINGS.api_key_secretsmanager_secret = None
-        if api_key is not None:
+        if api_key is not None and api_key.get_secret_value():
             self._hash_api_key(api_key)
             return True
         return False
