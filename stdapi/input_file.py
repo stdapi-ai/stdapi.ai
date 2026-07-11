@@ -1010,12 +1010,10 @@ class InputFile:
             key = file_id_s3_key(file_id)
             origin, normalised = _FileOrigin.FILE_ID, f"s3://{bucket}/{key}"
         elif match := _S3_URI_RE(value):
-            origin, normalised, bucket, key = (
-                _FileOrigin.S3_URI,
-                value,
-                match["bucket"],
-                match["key"],
-            )
+            if (bucket := match["bucket"]) not in _ACCEPTED_BUCKETS:
+                msg = f"S3 bucket not allowed: {bucket}."
+                raise ValueError(msg)
+            origin, normalised, key = _FileOrigin.S3_URI, value, match["key"]
         elif _HTTP_URI_RE(value):
             if (match := (_S3_VIRTUAL_HOST_RE(value) or _S3_PATH_STYLE_RE(value))) and (
                 bucket := match["bucket"]

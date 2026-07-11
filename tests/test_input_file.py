@@ -6,7 +6,9 @@ import pytest
 from pybase64 import b64encode
 
 from stdapi.api_errors import ApiError
+from stdapi.aws_s3 import BUCKET_TO_REGION
 from stdapi.config import SETTINGS
+from stdapi.files._multipart import create_multipart_session
 from stdapi.input_file import InputFile
 
 
@@ -42,6 +44,26 @@ async def test_to_bytes_unlimited_when_disabled(
 def test_max_concurrent_input_downloads_default() -> None:
     """The per-request input-download concurrency limit defaults to 8."""
     assert SETTINGS.max_concurrent_input_downloads == 8
+
+
+def test_s3_uri_rejects_unlisted_bucket() -> None:
+    """An s3:// URI pointing at a bucket outside the allowlist is rejected."""
+    with pytest.raises(ValueError, match="not allowed"):
+        InputFile("s3://an-unconfigured-external-bucket-xyz/key.png")
+
+
+def test_s3_uri_accepts_configured_bucket() -> None:
+    """An s3:// URI for a configured/accepted bucket is accepted."""
+    bucket = next(iter(BUCKET_TO_REGION), None)
+    if bucket is None:
+        pytest.skip("No S3 bucket configured in this environment")
+    assert InputFile(f"s3://{bucket}/key.png") is not None
+
+
+async def test_create_multipart_session_rejects_unsafe_filename() -> None:
+    """A filename with header-injection characters is rejected before any S3 call."""
+    with pytest.raises(ApiError):
+        await create_multipart_session('bad"name.txt', "text/plain", "", 10)
 
 
 async def test_to_base64_rejects_oversized_inline_input(
