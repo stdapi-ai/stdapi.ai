@@ -382,8 +382,19 @@ def get_data_uri_data(string: str) -> str:
     return string.split(",", 1)[-1] if _data_uri_matcher(string) else string
 
 
+#: Matches AWS ARNs, redacted from client-facing error messages.
+_ARN_RE = compile_regex(r"arn:aws[\w:/.-]*")
+
+#: Matches bare 12-digit AWS account IDs.
+_ACCOUNT_ID_RE = compile_regex(r"\b\d{12}\b")
+
+
 def hide_security_details(status: int, message: str) -> str:
     """Hide sensitive information from client response in case of HTTP errors.
+
+    AWS error messages routinely embed ARNs and account IDs; these are redacted
+    from every message regardless of status so internal identifiers are not
+    disclosed to clients.
 
     Args:
         status: HTTP status code.
@@ -396,7 +407,7 @@ def hide_security_details(status: int, message: str) -> str:
         return "Unauthorized"
     if status == 403:
         return "Forbidden"
-    return message
+    return _ACCOUNT_ID_RE.sub("<account-id>", _ARN_RE.sub("<arn>", message))
 
 
 #: RFC 6266 / RFC 5987 Content-Disposition filename patterns.

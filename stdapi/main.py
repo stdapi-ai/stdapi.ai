@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from time import time_ns
 from traceback import format_exception
 from typing import TYPE_CHECKING
+from urllib.parse import urlparse
 
 from botocore.exceptions import BotoCoreError, ClientError, HTTPClientError
 from botocore.exceptions import ConnectionError as BotocoreConnectionError
@@ -349,6 +350,42 @@ async def handle_botocore_client_error(
     )
 
 
+#: AWS service host tokens mapped to human-friendly names for error messages.
+_AWS_SERVICE_NAMES: dict[str, str] = {
+    "bedrock": "Bedrock",
+    "bedrock-runtime": "Bedrock",
+    "s3": "S3",
+    "polly": "Polly",
+    "comprehend": "Comprehend",
+    "transcribe": "Transcribe",
+    "translate": "Translate",
+    "ssm": "SSM Parameter Store",
+    "secretsmanager": "Secrets Manager",
+    "sts": "STS",
+}
+
+
+def _upstream_service_name(exc: BotocoreConnectionError | HTTPClientError) -> str:
+    """Return a friendly upstream AWS service name from a connection error.
+
+    Derives the service from the endpoint host embedded in the botocore
+    exception, mapping only recognised AWS service tokens so custom or VPC
+    endpoint identifiers are never disclosed to clients.
+
+    Args:
+        exc: The botocore connection error.
+
+    Returns:
+        A friendly service name, or "The upstream service" when unknown.
+    """
+    endpoint = getattr(exc, "kwargs", {}).get("endpoint_url", "") or ""
+    host = urlparse(endpoint).hostname or ""
+    for token in host.split("."):
+        if name := _AWS_SERVICE_NAMES.get(token):
+            return name
+    return "The upstream service"
+
+
 @app.exception_handler(BotocoreConnectionError)
 @app.exception_handler(HTTPClientError)
 async def handle_botocore_connection_error(
@@ -363,9 +400,15 @@ async def handle_botocore_connection_error(
     Returns:
         JSONResponse with 503 status.
     """
-    message = str(exc)
-    log_error_details(message, status=503)
-    return JSONResponse(*format_http_error(request, 503, message, "server_error"))
+    log_error_details(str(exc), status=503)
+    return JSONResponse(
+        *format_http_error(
+            request,
+            503,
+            f"{_upstream_service_name(exc)} is temporarily unavailable.",
+            "server_error",
+        )
+    )
 
 
 #: All exception handlers
