@@ -2,9 +2,10 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
 from stdapi.api_errors import ApiError
+from stdapi.auth import authenticate
 from stdapi.models import (
     ModelDetails,
     get_all_models_details_and_modalities,
@@ -95,6 +96,7 @@ async def search_models(
             description="Filter by legacy status (true = deprecated models only, false = non-deprecated models only)."
         ),
     ] = None,
+    _: Annotated[None, Depends(authenticate)] = None,
 ) -> list[ModelDetails]:
     """Search the model catalogue with optional filters and return extended metadata.
 

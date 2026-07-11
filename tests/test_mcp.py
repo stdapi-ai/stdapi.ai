@@ -261,6 +261,26 @@ class TestMCPIntegration:
         assert response.status_code == 200
         return response.headers["mcp-session-id"]  # type: ignore[no-any-return]
 
+    def test_mcp_initialize_requires_authentication(self, client: TestClient) -> None:
+        """An unauthenticated request to the MCP transport is rejected with HTTP 401."""
+        if not (SETTINGS.enable_mcp_streamable_http or SETTINGS.enable_mcp_sse):
+            pytest.skip("MCP is not enabled")
+        response = client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "pytest", "version": "1.0"},
+                },
+            },
+            headers={"Accept": "application/json, text/event-stream"},
+        )
+        assert response.status_code == 401
+
     def test_failing_tool_call_produces_no_traceback(
         self,
         client: TestClient,

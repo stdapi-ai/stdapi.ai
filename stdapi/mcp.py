@@ -9,11 +9,13 @@ from logging import ERROR, Handler, LogRecord, getLogger
 from traceback import format_exception
 from typing import TYPE_CHECKING
 
-from fastapi_mcp import FastApiMCP  # type: ignore[import-untyped]
+from fastapi import Depends
+from fastapi_mcp import AuthConfig, FastApiMCP  # type: ignore[import-untyped]
 from httpx import ASGITransport, AsyncClient
 from httpx import Request as HttpxRequest
 
 from stdapi import server
+from stdapi.auth import authenticate
 from stdapi.config import SETTINGS, LogLevel
 from stdapi.metering import EDITION_TITLE
 from stdapi.monitoring import REQUEST, REQUEST_ID, log_error_details
@@ -115,6 +117,7 @@ def mount_mcp(app: FastAPI) -> None:
         description="AWS standardized AI API",
         include_operations=SETTINGS.mcp_include_tools,
         exclude_operations=SETTINGS.mcp_exclude_tools,
+        auth_config=AuthConfig(dependencies=[Depends(authenticate)]),
         http_client=AsyncClient(
             transport=ASGITransport(app=app, raise_app_exceptions=False),
             base_url="http://apiserver",

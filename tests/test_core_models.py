@@ -137,6 +137,21 @@ def _get_ids(
 # ---------------------------------------------------------------------------
 
 
+class TestSearchModelsAuthentication:
+    """The /search_models route requires API-key authentication."""
+
+    def test_missing_api_key_returns_401(self, client: TestClient) -> None:
+        """GET /search_models without credentials is rejected with HTTP 401."""
+        assert client.get("/search_models").status_code == 401
+
+    def test_invalid_api_key_returns_401(self, client: TestClient) -> None:
+        """GET /search_models with a wrong API key is rejected with HTTP 401."""
+        response = client.get(
+            "/search_models", headers={"Authorization": "Bearer wrong-key"}
+        )
+        assert response.status_code == 401
+
+
 class TestSearchModels:
     """Tests for GET /search_models without filters."""
 
