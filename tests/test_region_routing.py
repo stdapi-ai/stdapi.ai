@@ -1674,8 +1674,8 @@ class TestHttpSourceWithPresignedUrl:
         from stdapi.config import AWS_SESSION  # noqa: PLC0415
         from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile  # noqa: PLC0415
 
-        # Clear any cached DNS resolver that may be bound to a different event loop.
-        # validate_url_ssrf lazily creates a new one on the current loop when needed.
+        # Clear any cached DNS resolver that may be bound to a different event loop;
+        # the SSRF connector's resolver lazily recreates one on the current loop.
         _security_mod._RESOLVER_CACHE.clear()  # noqa: SLF001
 
         result = None
@@ -1740,7 +1740,9 @@ class TestHttpSourceMocked:
         token = _CURRENT_INPUT_FILES.set([])
         try:
             with (
-                patch("stdapi.input_file.validate_url_ssrf", new=AsyncMock()),
+                patch(
+                    "stdapi.input_file.ssrf_safe_connector", return_value=MagicMock()
+                ),
                 patch("stdapi.input_file.ClientSession", return_value=mock_session),
             ):
                 f = InputFile("https://example.com/file.png")

@@ -39,7 +39,7 @@ from stdapi.aws_s3 import (
 )
 from stdapi.config import DOWNLOAD_TIMEOUT, SETTINGS
 from stdapi.files import file_id_s3_key, parse_file_id, resolve_file_bucket
-from stdapi.security import validate_url_ssrf
+from stdapi.security import ssrf_blocked_status, ssrf_safe_connector
 from stdapi.server import HTTP_CLIENT_HEADERS
 from stdapi.types import FILE_ID_PATTERN
 from stdapi.utils import (
@@ -487,7 +487,7 @@ class _S3Source(_FileSource):
 class _HttpSource(_FileSource):
     """Source backend for ``http(s)://`` URLs."""
 
-    __slots__ = ("_ssrf_validated", "_url")
+    __slots__ = ("_url",)
 
     def __init__(self, url: str) -> None:
         """Initialise with the target URL.
@@ -496,7 +496,28 @@ class _HttpSource(_FileSource):
             url: The HTTP(S) URL to fetch.
         """
         self._repr = self._url = url
-        self._ssrf_validated = False
+
+    def _client_session(
+        self, extra_headers: dict[str, str] | None = None
+    ) -> ClientSession:
+        """Return an SSRF-validating client session.
+
+        The session's connector validates every connection target — including
+        redirect hops — against SSRF before connecting.
+
+        Args:
+            extra_headers: Additional headers merged over the defaults.
+
+        Returns:
+            A configured aiohttp client session.
+        """
+        return ClientSession(
+            headers={**HTTP_CLIENT_HEADERS, **extra_headers}
+            if extra_headers
+            else HTTP_CLIENT_HEADERS,
+            timeout=DOWNLOAD_TIMEOUT,
+            connector=ssrf_safe_connector(),
+        )
 
     async def _resolve_metadata(self) -> None:
         """Resolve content type and size via HTTP ``HEAD`` request.
@@ -507,10 +528,7 @@ class _HttpSource(_FileSource):
         Raises:
             ApiError: When the HTTP request fails.
         """
-        await self._validate_ssrf()
-        async with ClientSession(
-            headers=HTTP_CLIENT_HEADERS, timeout=DOWNLOAD_TIMEOUT
-        ) as session:
+        async with self._client_session() as session:
             try:
                 async with session.head(self._url) as resp:
                     resp.raise_for_status()
@@ -532,7 +550,7 @@ class _HttpSource(_FileSource):
                     )
             except AIOHTTPClientError as error:
                 msg = f"Error downloading {self._url}: {error}"
-                raise ApiError(msg) from error
+                raise ApiError(msg, status=ssrf_blocked_status(error)) from error
 
         if not hasattr(self, "_content_type"):
             await self._content_type_from_partial()
@@ -543,12 +561,8 @@ class _HttpSource(_FileSource):
         Raises:
             ApiError: When the HTTP range request fails.
         """
-        async with ClientSession(
-            headers={
-                **HTTP_CLIENT_HEADERS,
-                "Range": f"bytes=0-{_MAGIC_PREFIX_SIZE - 1}",
-            },
-            timeout=DOWNLOAD_TIMEOUT,
+        async with self._client_session(
+            {"Range": f"bytes=0-{_MAGIC_PREFIX_SIZE - 1}"}
         ) as session:
             try:
                 async with session.get(self._url) as resp:
@@ -559,7 +573,7 @@ class _HttpSource(_FileSource):
                     )
             except AIOHTTPClientError as error:
                 msg = f"Error downloading {self._url}: {error}"
-                raise ApiError(msg) from error
+                raise ApiError(msg, status=ssrf_blocked_status(error)) from error
 
     async def _read(self) -> bytes:
         """Download the full HTTP response body.
@@ -570,10 +584,7 @@ class _HttpSource(_FileSource):
         Raises:
             ApiError: When the HTTP download fails or returns an empty body.
         """
-        await self._validate_ssrf()
-        async with ClientSession(
-            headers=HTTP_CLIENT_HEADERS, timeout=DOWNLOAD_TIMEOUT
-        ) as session:
+        async with self._client_session() as session:
             try:
                 async with session.get(self._url) as resp:
                     resp.raise_for_status()
@@ -582,7 +593,7 @@ class _HttpSource(_FileSource):
                         raise ApiError(msg)
             except AIOHTTPClientError as error:
                 msg = f"Error downloading {self._url}: {error}"
-                raise ApiError(msg) from error
+                raise ApiError(msg, status=ssrf_blocked_status(error)) from error
         return body
 
     async def to_s3(
@@ -612,14 +623,8 @@ class _HttpSource(_FileSource):
         Returns:
             An ``S3Object`` pointing to the S3 object.
         """
-        await self._validate_ssrf()
         content_type = self._content_type if hasattr(self, "_content_type") else None
-        async with (
-            ClientSession(
-                headers=HTTP_CLIENT_HEADERS, timeout=DOWNLOAD_TIMEOUT
-            ) as session,
-            session.get(self._url) as resp,
-        ):
+        async with self._client_session() as session, session.get(self._url) as resp:
             resp.raise_for_status()
             return await put_s3_object(
                 read_chunks(resp.content, UPLOAD_CHUNK_SIZE),
@@ -631,12 +636,6 @@ class _HttpSource(_FileSource):
                 content_disposition=content_disposition,
                 metadata=metadata,
             )
-
-    async def _validate_ssrf(self) -> None:
-        """Validates the URL against SSRF (Server-Side Request Forgery)."""
-        if not self._ssrf_validated:
-            await validate_url_ssrf(self._url)
-            self._ssrf_validated = True
 
 
 class _DataUriSource(_FileSource):
