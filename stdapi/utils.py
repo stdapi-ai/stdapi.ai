@@ -1,12 +1,14 @@
 """Common utilities."""
 
 import sys
+import warnings
 from asyncio import to_thread
 from base64 import b32encode
 from binascii import Error as BinasciiError
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from io import BytesIO
+from json import JSONDecodeError
 from re import ASCII
 from re import compile as compile_regex
 from typing import (
@@ -42,15 +44,22 @@ if TYPE_CHECKING:
 
 T = TypeVar("T")
 
+#: Maximum decoded image size in pixels, guarding Pillow against decompression bombs.
+_MAX_IMAGE_PIXELS: int = 50_000_000
+# Pillow only raises above 2x its threshold, so halve it to make the cap the hard limit.
+Image.MAX_IMAGE_PIXELS = _MAX_IMAGE_PIXELS // 2
+# Silence the warning Pillow emits in the [cap/2, cap] band; those images are allowed.
+warnings.filterwarnings("ignore", category=Image.DecompressionBombWarning)
 
-#: Application inference profile ARN regex matcher
+
+#: Application inference profile ARN regex matcher (end-anchored to reject trailing data)
 match_bedrock_app_profile_arn = compile_regex(
-    "arn:aws(?:-[^:]+)?:bedrock:(?P<region>[a-z0-9-]{1,20}):[0-9]{12}:(?:inference-profile|application-inference-profile)/[a-zA-Z0-9-:.]+"
+    "arn:aws(?:-[^:]+)?:bedrock:(?P<region>[a-z0-9-]{1,20}):[0-9]{12}:(?:inference-profile|application-inference-profile)/[a-zA-Z0-9_.:-]+\\Z"
 ).match
 
-#: Prompt router ARN regex matcher
+#: Prompt router ARN regex matcher (end-anchored to reject trailing data)
 match_bedrock_prompt_router_arn = compile_regex(
-    "arn:aws(?:-[^:]+)?:bedrock:(?P<region>[a-z0-9-]{1,20}):[0-9]{12}:(?:prompt-router|default-prompt-router)/[a-zA-Z0-9-:.]+"
+    "arn:aws(?:-[^:]+)?:bedrock:(?P<region>[a-z0-9-]{1,20}):[0-9]{12}:(?:prompt-router|default-prompt-router)/[a-zA-Z0-9_.:-]+\\Z"
 ).match
 
 
@@ -244,32 +253,36 @@ def _convert_image(
     if not 0 <= compression <= 100:
         msg = f"Compression must be between 0 and 100, got {compression}"
         raise ValueError(msg)
-    with (
-        BytesIO() as output_buffer,
-        BytesIO(content) as input_buffer,
-        Image.open(input_buffer) as image,
-    ):
-        save_kwargs: _PilImageParams = {"format": output_format, "optimize": True}
+    try:
+        with (
+            BytesIO() as output_buffer,
+            BytesIO(content) as input_buffer,
+            Image.open(input_buffer) as image,
+        ):
+            save_kwargs: _PilImageParams = {"format": output_format, "optimize": True}
 
-        if output_format in ("JPEG", "WEBP"):
-            save_kwargs["quality"] = compression
+            if output_format in ("JPEG", "WEBP"):
+                save_kwargs["quality"] = compression
 
-            if output_format == "JPEG" and image.mode in ("RGBA", "LA"):
-                # Convert transparent to blank background
-                background = Image.new("RGB", image.size, (255, 255, 255))
-                if image.mode == "RGBA":
-                    background.paste(image, mask=image.split()[-1])
-                else:
-                    background.paste(image)
-                image = background  # type: ignore[assignment]
+                if output_format == "JPEG" and image.mode in ("RGBA", "LA"):
+                    # Convert transparent to blank background
+                    background = Image.new("RGB", image.size, (255, 255, 255))
+                    if image.mode == "RGBA":
+                        background.paste(image, mask=image.split()[-1])
+                    else:
+                        background.paste(image)
+                    image = background  # type: ignore[assignment]
 
-        elif output_format == "PNG":
-            # PNG uses compress_level (0-9)
-            save_kwargs["compress_level"] = int((100 - compression) / 100 * 9)
+            elif output_format == "PNG":
+                # PNG uses compress_level (0-9)
+                save_kwargs["compress_level"] = int((100 - compression) / 100 * 9)
 
-        image.save(output_buffer, **save_kwargs)
-        width, height = image.size
-        return output_buffer.getvalue(), width, height
+            image.save(output_buffer, **save_kwargs)
+            width, height = image.size
+            return output_buffer.getvalue(), width, height
+    except Image.DecompressionBombError as error:
+        msg = "Image exceeds the maximum allowed pixel size."
+        raise ValueError(msg) from error
 
 
 def _convert_base64_image(
@@ -329,8 +342,12 @@ async def get_base64_image_size(content: str | Buffer) -> tuple[int, int]:
     Returns:
         A tuple containing the width and height of the image as integers.
     """
-    with BytesIO(await b64decode(content)) as buffer, Image.open(buffer) as image:
-        return image.size
+    try:
+        with BytesIO(await b64decode(content)) as buffer, Image.open(buffer) as image:
+            return image.size
+    except Image.DecompressionBombError as error:
+        msg = "Image exceeds the maximum allowed pixel size."
+        raise ValueError(msg) from error
 
 
 def webuuid() -> str:
