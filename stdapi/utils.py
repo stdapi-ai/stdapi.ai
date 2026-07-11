@@ -410,6 +410,24 @@ def hide_security_details(status: int, message: str) -> str:
     return _ACCOUNT_ID_RE.sub("<account-id>", _ARN_RE.sub("<arn>", message))
 
 
+def strip_url_query(url: str) -> str:
+    """Return *url* with its query string replaced by a redaction marker.
+
+    Used before logging or tracing user-supplied URLs so presigned URL
+    signatures (``X-Amz-Signature`` and friends) are not persisted. When a
+    query string is present it is replaced by ``?<redacted>`` so the censoring
+    is explicit to log readers; a URL without a query is returned unchanged.
+
+    Args:
+        url: The URL to sanitise.
+
+    Returns:
+        The URL with any query string replaced by ``?<redacted>``.
+    """
+    base, sep, _query = url.partition("?")
+    return f"{base}?<redacted>" if sep else base
+
+
 #: RFC 6266 / RFC 5987 Content-Disposition filename patterns.
 _CD_FILENAME_STAR_RE = compile_regex(
     r"""filename\*\s*=\s*(?:[A-Za-z0-9_-]+'')?([^;\s]+)""", ASCII

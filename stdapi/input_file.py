@@ -48,6 +48,7 @@ from stdapi.utils import (
     b64encode,
     parse_content_disposition_filename,
     read_chunks,
+    strip_url_query,
 )
 
 if TYPE_CHECKING:
@@ -495,7 +496,8 @@ class _HttpSource(_FileSource):
         Args:
             url: The HTTP(S) URL to fetch.
         """
-        self._repr = self._url = url
+        self._url = url
+        self._repr = strip_url_query(url)
 
     def _client_session(
         self, extra_headers: dict[str, str] | None = None
@@ -549,7 +551,7 @@ class _HttpSource(_FileSource):
                         else (urlparse(self._url).path.rsplit("/", 1)[-1] or None)
                     )
             except AIOHTTPClientError as error:
-                msg = f"Error downloading {self._url}: {error}"
+                msg = f"Error downloading {strip_url_query(self._url)}: {error}"
                 raise ApiError(msg, status=ssrf_blocked_status(error)) from error
 
         if not hasattr(self, "_content_type"):
@@ -572,7 +574,7 @@ class _HttpSource(_FileSource):
                         await resp.content.read(_MAGIC_PREFIX_SIZE)
                     )
             except AIOHTTPClientError as error:
-                msg = f"Error downloading {self._url}: {error}"
+                msg = f"Error downloading {strip_url_query(self._url)}: {error}"
                 raise ApiError(msg, status=ssrf_blocked_status(error)) from error
 
     async def _read(self) -> bytes:
@@ -589,10 +591,10 @@ class _HttpSource(_FileSource):
                 async with session.get(self._url) as resp:
                     resp.raise_for_status()
                     if not (body := await resp.read()):
-                        msg = f"Error downloading {self._url}: Empty body"
+                        msg = f"Error downloading {strip_url_query(self._url)}: Empty body"
                         raise ApiError(msg)
             except AIOHTTPClientError as error:
-                msg = f"Error downloading {self._url}: {error}"
+                msg = f"Error downloading {strip_url_query(self._url)}: {error}"
                 raise ApiError(msg, status=ssrf_blocked_status(error)) from error
         return body
 

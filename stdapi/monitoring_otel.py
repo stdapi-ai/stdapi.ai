@@ -17,6 +17,7 @@ from opentelemetry.trace import use_span
 
 from stdapi.config import SETTINGS
 from stdapi.monitoring_otel_base import OpenTelemetryManager as _OpenTelemetryManager
+from stdapi.utils import strip_url_query
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -51,7 +52,9 @@ class OpenTelemetryManager(_OpenTelemetryManager):
         self.tracer = trace.get_tracer(__name__)
 
         BotocoreInstrumentor().instrument()  # type: ignore[no-untyped-call]
-        AioHttpClientInstrumentor().instrument()
+        AioHttpClientInstrumentor().instrument(
+            url_filter=lambda url: strip_url_query(str(url))
+        )
 
         propagate.set_global_textmap(AwsXRayPropagator())
 
