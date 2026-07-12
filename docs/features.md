@@ -456,6 +456,17 @@ export MCP_EXCLUDE_TOOLS="openai_files_delete,anthropic_files_delete"
 - Input, output, reasoning, and cached token counts in every API response
 - Consistent reporting across all endpoints (chat, messages, embeddings, images, audio)
 
+### Cost Tracking
+
+- **Real AWS-billed usage** — Token, character, and image counts sourced directly from AWS responses, not estimated
+- **Real-time pricing** — Costs computed from AWS's own published Price List, refreshed automatically; no manual price list to maintain
+- **Per-request and aggregate cost** — When a price resolves, its request log entry includes cost and currency, attributed to the AWS region that served it
+- **Multi-currency aware** — Detects your AWS partition's currency (USD, EUR, CNY) and never sums costs across currencies
+- **Optional CloudWatch cost metrics** — Track spend alongside your other operational metrics
+
+!!! note "Estimate, not a bill"
+    Costs are a best-effort approximation for cost visibility and alerting, not a substitute for your AWS invoice. A few usage types aren't priced yet (reranking, speech/video generation, and some large asynchronously-processed embeddings) — see [Cost Tracking](operations_logging_monitoring.md#cost-tracking-real-time-aws-pricing) for full details and current coverage.
+
 ### Developer Tools
 
 - **Swagger UI** at `/docs` — test endpoints directly in your browser
@@ -467,7 +478,7 @@ export MCP_EXCLUDE_TOOLS="openai_files_delete,anthropic_files_delete"
 - **Model aliases** — Map custom names to Bedrock IDs; Claude model names resolve automatically
 - **Model auto-detection** — Discovers available models across all configured regions at startup
 - **Model list caching** — Fast model listing without repeated AWS API calls
-- **Token estimation** — Optional pre-flight token count via tiktoken (without calling Bedrock); useful for client-side budgeting and routing decisions
+- **Real usage tracking** — Token counts sourced directly from AWS billing data
 - **Safety identifier** — `safety_identifier` field in requests as an alias to `user` for abuse tracking and audit trails
 - **Zero-configuration startup** — Automatic region and model detection; warnings on missing config
 - **Deprecated model failover** — Requests to retired models silently redirect to their replacements

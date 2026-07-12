@@ -2,7 +2,6 @@
 
 from asyncio import gather, sleep
 from contextlib import contextmanager
-from math import ceil
 from typing import TYPE_CHECKING, NotRequired
 
 from botocore.exceptions import ClientError
@@ -28,7 +27,6 @@ from stdapi.monitoring import (
     log_error_details,
     log_response_params,
 )
-from stdapi.tokenizer import estimate_token_count
 from stdapi.types.openai_audio import (
     SUBTITLE_FORMATS,
     AudioResponseFormat,
@@ -46,9 +44,8 @@ from stdapi.types.openai_audio import (
     TranslationCreateResponse,
     TranslationVerbose,
     UsageDuration,
-    UsageInputTokenDetails,
-    UsageTokens,
 )
+from stdapi.usage import record_transcribe_usage
 from stdapi.utils import format_language_code, language_code_to_name
 
 if TYPE_CHECKING:
@@ -158,13 +155,18 @@ def _get_audio_duration(transcript_data: TranscribeJobData) -> float:
         transcript_data: Parsed transcription results from AWS Transcribe
 
     Returns:
-        Duration in seconds
+        Duration in seconds, 0.0 when the response reports no segments
+        (usage then falls back to the AWS 15-second billing minimum).
     """
     try:
-        segment = transcript_data["audio_segments"][-1]
-    except IndexError:
+        return float(transcript_data["audio_segments"][-1]["end_time"])
+    except KeyError, IndexError:
+        log_error_details(
+            "Transcribe response reports no audio segments;"
+            " billing the 15-second minimum.",
+            level="warning",
+        )
         return 0.0
-    return float(segment["end_time"])
 
 
 def _build_transcription_job_params(
@@ -544,6 +546,7 @@ class AudioModel(AudioModelBase[None, None]):
         cls,
         transcript_data: TranscribeJobData,
         response_format: AudioResponseFormat,
+        billed_seconds: int,
         timestamp_granularities: list[AudioTimestampGranularities] | None = None,
         filename: str | None = None,
     ) -> str | TranscriptionCreateResponse | TranscriptionDiarized | Response:
@@ -552,6 +555,7 @@ class AudioModel(AudioModelBase[None, None]):
         Args:
             transcript_data: AWS Transcribe job data
             response_format: Requested response format
+            billed_seconds: Pre-computed billed seconds.
             timestamp_granularities: Optional timestamp granularities for verbose_json
             filename: Original filename of the audio file
 
@@ -569,11 +573,7 @@ class AudioModel(AudioModelBase[None, None]):
             return text
 
         duration = _get_audio_duration(transcript_data)
-        usage_duration = UsageDuration(
-            type="duration",
-            # Minimum AWS Transcribe billed duration is 15s
-            seconds=max(ceil(duration), 15),
-        )
+        usage_duration = UsageDuration(type="duration", seconds=billed_seconds)
 
         if response_format == "verbose_json":
             return _format_json_response(
@@ -671,16 +671,18 @@ class AudioModel(AudioModelBase[None, None]):
                 unsupported file formats are provided
         """
         self._validate_response_formats(response_format, timestamp_granularities)
-        return await self._format_transcription_response(
-            await self._transcribe(
-                audio_content,
-                response_format,
-                language,
-                prompt,
-                temperature,
-                logprobs=logprobs,
-            ),
+        transcript_data = await self._transcribe(
+            audio_content,
             response_format,
+            language,
+            prompt,
+            temperature,
+            logprobs=logprobs,
+        )
+        return await self._format_transcription_response(
+            transcript_data,
+            response_format,
+            record_transcribe_usage(_get_audio_duration(transcript_data)),
             timestamp_granularities,
             await audio_content.get_filename(),
         )
@@ -714,30 +716,16 @@ class AudioModel(AudioModelBase[None, None]):
         transcript_data = await self._transcribe(
             audio_content, response_format, language, prompt, temperature
         )
-
+        record_transcribe_usage(_get_audio_duration(transcript_data))
         full_text_parts: list[str] = []
         for transcript in transcript_data["transcripts"]:
             text = transcript["transcript"]
             full_text_parts.append(text)
             yield TranscriptionTextDeltaEvent(delta=text, type="transcript.text.delta")
 
-        text = " ".join(full_text_parts)
-        estimated_tokens = await estimate_token_count(text) or 0
+        # UsageDuration not supported in streaming mode
         yield TranscriptionTextDoneEvent(
-            text=text,
-            type="transcript.text.done",
-            usage=UsageTokens(
-                # Estimated token count for transcribed text
-                input_tokens=0,
-                output_tokens=estimated_tokens,
-                total_tokens=estimated_tokens,
-                type="tokens",
-                input_token_details=UsageInputTokenDetails(
-                    text_tokens=0, audio_tokens=0
-                ),
-            )
-            if estimated_tokens
-            else None,
+            text=" ".join(full_text_parts), type="transcript.text.done"
         )
 
     async def stt_translate(
@@ -767,7 +755,7 @@ class AudioModel(AudioModelBase[None, None]):
         transcript_data = await self._transcribe(
             audio_content, response_format, prompt=prompt, temperature=temperature
         )
-
+        record_transcribe_usage(_get_audio_duration(transcript_data))
         language = transcript_data["language_code"]
         if "subtitle_content" in transcript_data:
             translated_content = await translate_subtitle(

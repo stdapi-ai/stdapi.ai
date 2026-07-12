@@ -1,0 +1,66 @@
+[
+  {
+    "product": {
+      "attributes": {
+        "regionCode": "us-east-1",
+        "usagetype": "USE1-Nova2.0Lite-output-tokens-cross-region-global",
+        "location": "US East (N. Virginia)",
+        "servicecode": "AmazonBedrock",
+        "inferenceType": "Output tokens",
+        "feature": "On-demand Inference",
+        "servicename": "Amazon Bedrock",
+        "operation": "",
+        "model": "Nova 2.0 Lite"
+      }
+    },
+    "terms": {
+      "OnDemand": {
+        "SKU400.JRTCKXETXF": {
+          "priceDimensions": {
+            "SKU400.JRTCKXETXF.6YSXRJFJ4J8ZQZBA": {
+              "unit": "Tokens",
+              "description": "$0.0000025 per 1-token Output for cross-region Global",
+              "beginRange": "0",
+              "endRange": "Inf",
+              "pricePerUnit": {
+                "USD": "0.0000025"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "product": {
+      "attributes": {
+        "regionCode": "us-east-1",
+        "usagetype": "USE1-Nova2.0Lite-output-tokens-cross-region-global-batch",
+        "location": "US East (N. Virginia)",
+        "servicecode": "AmazonBedrock",
+        "inferenceType": "Output tokens",
+        "feature": "On-demand Inference",
+        "servicename": "Amazon Bedrock",
+        "operation": "",
+        "model": "Nova 2.0 Lite"
+      }
+    },
+    "terms": {
+      "OnDemand": {
+        "SKU401.JRTCKXETXF": {
+          "priceDimensions": {
+            "SKU401.JRTCKXETXF.6YSXRJFJ4J8ZQZBB": {
+              "unit": "Tokens",
+              "description": "$0.00000125 per 1-token Batch Output for cross-region Global",
+              "beginRange": "0",
+              "endRange": "Inf",
+              "pricePerUnit": {
+                "USD": "0.00000125"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+]

@@ -5,9 +5,15 @@ specification, ensuring compatibility with the official OpenAI API behavior.
 """
 
 import base64
+from typing import TYPE_CHECKING
 
 import pytest
 from openai import BadRequestError, NotFoundError, OpenAI
+
+from tests.conftest import logged_usage_entries
+
+if TYPE_CHECKING:
+    from starlette.testclient import TestClient as TestClientType
 
 
 class TestEmbeddings:
@@ -499,3 +505,47 @@ class TestEmbeddings:
         first_embedding_length = len(responses[0].data[0].embedding)
         for response in responses[1:]:
             assert len(response.data[0].embedding) == first_embedding_length
+
+
+class TestEmbeddingsUsage:
+    """Tests for usage logging in embeddings endpoint."""
+
+    def test_embedding_usage_logged(
+        self,
+        test_client: TestClientType | None,
+        embedding_model: str,
+        api_key: str,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        """Test that usage is logged for embedding requests."""
+        if test_client is None:
+            pytest.skip("Requires local test server")
+
+        capfd.readouterr()
+
+        response = test_client.post(
+            "/v1/embeddings",
+            json={"model": embedding_model, "input": "Hello world"},
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+        assert response.status_code == 200
+
+        response_data = response.json()
+        assert "usage" in response_data
+        api_usage = response_data["usage"]
+
+        assert "prompt_tokens" in api_usage
+        assert "total_tokens" in api_usage
+        # Titan/Cohere backends report real Bedrock input-token counts for
+        # non-empty text input (verified below via the raw bedrock usage log).
+        assert api_usage["prompt_tokens"] > 0
+
+        bedrock_entries = logged_usage_entries(
+            capfd.readouterr().out,
+            service="bedrock-runtime",
+            operation="/v1/embeddings",
+            model=embedding_model,
+        )
+        assert bedrock_entries, "Expected bedrock service in usage"
+        bedrock_entry = bedrock_entries[0]
+        assert bedrock_entry["input_tokens"] > 0

@@ -1,0 +1,130 @@
+[
+  {
+    "product": {
+      "attributes": {
+        "regionCode": "us-east-1",
+        "usagetype": "USE1-TitanImageGeneratorG1-T2I-1024-Standard",
+        "location": "US East (N. Virginia)",
+        "servicecode": "AmazonBedrock",
+        "inferenceType": "T2I 1024 Standard",
+        "feature": "On-demand Inference",
+        "servicename": "Amazon Bedrock",
+        "operation": "",
+        "titanModel": "Titan Image Generator G1"
+      }
+    },
+    "terms": {
+      "OnDemand": {
+        "SKU200.JRTCKXETXF": {
+          "priceDimensions": {
+            "SKU200.JRTCKXETXF.6YSXRJFJ4J8ZQZ9Q": {
+              "unit": "Units",
+              "description": "Per image generated - T2I 1024 Standard",
+              "beginRange": "0",
+              "endRange": "Inf",
+              "pricePerUnit": {
+                "USD": "0.01"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "product": {
+      "attributes": {
+        "regionCode": "us-east-1",
+        "usagetype": "USE1-TitanImageGeneratorG1-I2I-1024-Standard",
+        "location": "US East (N. Virginia)",
+        "servicecode": "AmazonBedrock",
+        "inferenceType": "I2I 1024 Standard",
+        "feature": "On-demand Inference",
+        "servicename": "Amazon Bedrock",
+        "operation": "",
+        "titanModel": "Titan Image Generator G1"
+      }
+    },
+    "terms": {
+      "OnDemand": {
+        "SKU201.JRTCKXETXF": {
+          "priceDimensions": {
+            "SKU201.JRTCKXETXF.6YSXRJFJ4J8ZQZ9R": {
+              "unit": "Units",
+              "description": "Per image generated - I2I 1024 Standard",
+              "beginRange": "0",
+              "endRange": "Inf",
+              "pricePerUnit": {
+                "USD": "0.01"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "product": {
+      "attributes": {
+        "regionCode": "us-east-1",
+        "usagetype": "USE1-TitanImageGeneratorG1-T2I-1024-Premium",
+        "location": "US East (N. Virginia)",
+        "servicecode": "AmazonBedrock",
+        "inferenceType": "T2I 1024 Premium",
+        "feature": "On-demand Inference",
+        "servicename": "Amazon Bedrock",
+        "operation": "",
+        "titanModel": "Titan Image Generator G1"
+      }
+    },
+    "terms": {
+      "OnDemand": {
+        "SKU202.JRTCKXETXF": {
+          "priceDimensions": {
+            "SKU202.JRTCKXETXF.6YSXRJFJ4J8ZQZ9S": {
+              "unit": "Units",
+              "description": "Per image generated - T2I 1024 Premium",
+              "beginRange": "0",
+              "endRange": "Inf",
+              "pricePerUnit": {
+                "USD": "0.012"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "product": {
+      "attributes": {
+        "regionCode": "us-east-1",
+        "usagetype": "USE1-TitanImageGeneratorG1-Custom-T2I-1024-Standard",
+        "location": "US East (N. Virginia)",
+        "servicecode": "AmazonBedrock",
+        "inferenceType": "Custom T2I 1024 Standard",
+        "feature": "On-demand Inference",
+        "servicename": "Amazon Bedrock",
+        "operation": "",
+        "titanModel": "Titan Image Generator G1"
+      }
+    },
+    "terms": {
+      "OnDemand": {
+        "SKU203.JRTCKXETXF": {
+          "priceDimensions": {
+            "SKU203.JRTCKXETXF.6YSXRJFJ4J8ZQZ9T": {
+              "unit": "Units",
+              "description": "Per image generated - Custom T2I 1024 Standard",
+              "beginRange": "0",
+              "endRange": "Inf",
+              "pricePerUnit": {
+                "USD": "0.02"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+]

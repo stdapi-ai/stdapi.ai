@@ -12,12 +12,15 @@ from typing import TYPE_CHECKING
 import pytest
 from openai import BadRequestError, OpenAI
 
+from tests.conftest import logged_usage_entries
+
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from openai.types import ImageEditCompletedEvent, ImageEditPartialImageEvent
     from openai.types.image_gen_completed_event import ImageGenCompletedEvent
     from openai.types.image_gen_partial_image_event import ImageGenPartialImageEvent
+    from starlette.testclient import TestClient as TestClientType
 
 
 def validate_base64_image(b64_data: str) -> str:
@@ -644,3 +647,45 @@ class TestImageGeneration:
             or "text-to-image" in error_msg
             or "invalid value" in error_msg
         )
+
+
+class TestImageGenerationUsage:
+    """Tests for usage logging on /v1/images/generations."""
+
+    def test_image_generation_usage_logged(
+        self,
+        test_client: TestClientType | None,
+        image_generation_model: str,
+        api_key: str,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        """Image generation logs usage with output_images."""
+        if test_client is None:
+            pytest.skip("Requires local test server")
+        capfd.readouterr()
+        response = test_client.post(
+            "/v1/images/generations",
+            json={
+                "model": image_generation_model,
+                "prompt": "A red circle on a white background",
+                "n": 1,
+                "size": "512x512",
+            },
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+        if response.status_code != 200 and (
+            "have access to the model" in (detail := response.text.lower())
+            or "does not exist" in detail
+        ):
+            pytest.skip(
+                f"Image model {image_generation_model} is not accessible in this environment"
+            )
+        assert response.status_code == 200
+        entries = logged_usage_entries(
+            capfd.readouterr().out,
+            service="bedrock-runtime",
+            operation="/v1/images/generations",
+            model=image_generation_model,
+        )
+        assert entries, "Expected a bedrock image usage log entry"
+        assert entries[0]["output_images"] == 1

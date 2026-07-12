@@ -5,12 +5,11 @@
 - cohere.embed-v4
 """
 
-from asyncio import create_task, gather
+from asyncio import gather
 from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
 
 from stdapi.input_file import InputFile, InputFileUrl
 from stdapi.models.embedding import EmbeddingModelBase, EmbeddingResponse
-from stdapi.tokenizer import estimate_token_count
 
 if TYPE_CHECKING:
     from stdapi.types import JsonMapping
@@ -129,13 +128,13 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             texts: list[str] = inputs  # type: ignore[assignment]
             request["texts"] = texts
 
-        token_task = create_task(estimate_token_count(*inputs))
-        resp = (await self.invoke(request))["embeddings"]
-        estimated_tokens = await token_task or 0
+        result = await self.invoke(request)
+        resp = result.response["embeddings"]
+        input_tokens = result.input_tokens or 0
         return EmbeddingResponse(
             embeddings=resp["float"] if isinstance(resp, dict) else resp,
-            prompt_tokens=estimated_tokens,
-            total_tokens=estimated_tokens,
+            prompt_tokens=input_tokens,
+            total_tokens=input_tokens + (result.output_tokens or 0),
         )
 
     @staticmethod

@@ -4,7 +4,8 @@
 - twelvelabs.marengo-embed-3-0-v1:0
 """
 
-from asyncio import create_task, gather
+from asyncio import gather
+from math import ceil
 from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
 
 from stdapi.api_errors import ApiError
@@ -13,11 +14,13 @@ from stdapi.aws_bedrock import BEDROCK_BODY_SIZE_LIMIT
 from stdapi.aws_s3 import S3Object
 from stdapi.input_file import InputFileUrl, prefetch_all_content_types
 from stdapi.models.embedding import EmbeddingModelBase, EmbeddingResponse
-from stdapi.tokenizer import estimate_token_count
+from stdapi.usage import record_bedrock_usage
 
 if TYPE_CHECKING:
     from types_aiobotocore_bedrock.literals import RegionName
 
+    from stdapi.models import InvokeResult
+    from stdapi.pricing import Routing
     from stdapi.types import JsonMapping
 
 
@@ -227,25 +230,24 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             raise ApiError(msg)
 
         force_s3_data = bool(extra_params.pop("force_s3_data", False))
-        token_task = create_task(estimate_token_count(*inputs))
         embeddings: list[list[float]] = []
 
         await prefetch_all_content_types()
 
         if text_image := await self._get_text_image_input(inputs):
-            embeddings.extend(
-                vector["embedding"]
-                for vector in (
-                    await self._embed_text_image(
-                        image_text=text_image[0],
-                        value=text_image[1],
-                        extra_params=extra_params,
-                        force_s3_data=force_s3_data,
-                    )
-                )["data"]
+            result = await self._embed_text_image(
+                image_text=text_image[0],
+                value=text_image[1],
+                extra_params=extra_params,
+                force_s3_data=force_s3_data,
             )
+            embeddings.extend(vector["embedding"] for vector in result.response["data"])
+            input_tokens = result.input_tokens or 0
+            output_tokens = result.output_tokens or 0
         else:
-            for response in await gather(
+            input_tokens = 0
+            output_tokens = 0
+            for result in await gather(
                 *(
                     self._embed(
                         value=value,
@@ -255,13 +257,16 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
                     for value in inputs
                 )
             ):
-                embeddings.extend(vector["embedding"] for vector in response["data"])
+                embeddings.extend(
+                    vector["embedding"] for vector in result.response["data"]
+                )
+                input_tokens += result.input_tokens or 0
+                output_tokens += result.output_tokens or 0
 
-        estimated_tokens = await token_task or 0
         return EmbeddingResponse(
             embeddings=embeddings,
-            prompt_tokens=estimated_tokens,
-            total_tokens=estimated_tokens,
+            prompt_tokens=input_tokens,
+            total_tokens=input_tokens + output_tokens,
         )
 
     def _build_request(
@@ -367,7 +372,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         extra_params: JsonMapping,
         *,
         force_s3_data: bool = False,
-    ) -> _Response:
+    ) -> InvokeResult[_Response]:
         """Handle media input with automatic S3 upload for large files.
 
         Args:
@@ -376,7 +381,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             force_s3_data: Force S3 upload regardless of size.
 
         Returns:
-            Response from the model.
+            InvokeResult wrapping the model response and billing attribution.
         """
         media_type: _MediaTypes = (
             "text"
@@ -392,8 +397,13 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         )
 
         if isinstance(data, S3Object) or media_type in _ASYNC_MEDIA_TYPES:
-            return await self.invoke_async(request, inference_profile=False)
-        return await self.invoke(request, region=region)
+            result = await self.invoke_async(request, inference_profile=False)
+        else:
+            result = await self.invoke(request, region=region)
+        self._record_media_usage(
+            media_type, result.response, region=result.region, routing=result.routing
+        )
+        return result
 
     async def _embed_text_image(
         self,
@@ -402,7 +412,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         extra_params: JsonMapping,
         *,
         force_s3_data: bool = False,
-    ) -> _Response:
+    ) -> InvokeResult[_Response]:
         """Embed text and image together as text_image type (v3 only).
 
         Args:
@@ -412,10 +422,10 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             force_s3_data: Force S3 upload regardless of size.
 
         Returns:
-            Response from the model.
+            InvokeResult wrapping the model response and billing attribution.
         """
         region = await self._select_fixed_region(value, force_s3_data=force_s3_data)
-        return await self.invoke(
+        result = await self.invoke(
             self._build_request(
                 media_type="text_image",
                 value=await self._process_media_value(
@@ -426,6 +436,46 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             ),
             region=region,
         )
+        self._record_media_usage(
+            "image", result.response, region=result.region, routing=result.routing
+        )
+        return result
+
+    def _record_media_usage(
+        self,
+        media_type: _MediaTypes,
+        response: _Response,
+        *,
+        region: str = "",
+        routing: Routing | None = None,
+    ) -> None:
+        """Record billed input-media usage for a completed embedding call.
+
+        Args:
+            media_type: The type of media that was embedded ("text"/"text_image"
+                are ignored -- text carries no input-media billing here).
+            response: The parsed response, used to derive audio/video duration
+                from each entry's ``endSec`` when present.
+            region: Region that served the call (per-call, race-free
+                attribution -- see :func:`stdapi.usage.record_bedrock_usage`).
+            routing: Serving profile of the call.
+        """
+        if media_type == "image":
+            record_bedrock_usage(
+                self._model_id, region=region, routing=routing, input_images=1
+            )
+        elif media_type in ("audio", "video"):
+            end_seconds = [
+                entry["endSec"] for entry in response["data"] if "endSec" in entry
+            ]
+            if end_seconds:
+                record_bedrock_usage(
+                    self._model_id,
+                    region=region,
+                    routing=routing,
+                    input_seconds=ceil(max(end_seconds)),
+                    media_spec=media_type,
+                )
 
     async def _select_fixed_region(
         self, value: InputFileUrl | str, *, force_s3_data: bool

@@ -218,7 +218,7 @@ flowchart LR
   <br>Amazon Polly (text-to-speech), Transcribe (speech-to-text with speaker diarization), Translate—all unified under OpenAI-compatible endpoints.
 
 - :material-chart-line: __Full observability__
-  <br>OpenTelemetry integration for traces and metrics. Detailed request/response logging. Swagger and ReDoc API documentation served by the application.
+  <br>OpenTelemetry integration for traces and metrics. Detailed request/response logging. Real-time AWS cost tracking per request. Swagger and ReDoc API documentation served by the application.
 
 - :material-connection: __Agent-ready by design__
   <br>Expose every API endpoint as a Model Context Protocol tool. AI agents connect directly — no HTTP client code. Streamable HTTP and SSE transports, configurable tool selection.

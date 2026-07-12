@@ -12,7 +12,7 @@ Design:
 - The package auto-loads and registers these classes once on import.
 """
 
-from asyncio import Lock, as_completed, gather
+from asyncio import Lock, as_completed, ensure_future, gather
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from pydantic import BaseModel
@@ -22,12 +22,16 @@ from stdapi.aws_s3 import put_object_and_get_url
 from stdapi.models import ModelBase, get_model, load_model_plugins
 from stdapi.models.capabilities import Capability
 from stdapi.monitoring import REQUEST_ID
+from stdapi.usage import IMAGE_SPEC, record_bedrock_usage
 from stdapi.utils import b64decode, convert_base64_image, get_base64_image_size
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Awaitable, Iterable
+    from collections.abc import AsyncGenerator, Awaitable, Iterable, Mapping
     from re import Pattern
 
+    from types_aiobotocore_bedrock_runtime.literals import ServiceTierTypeType
+
+    from stdapi.pricing import Routing
     from stdapi.types import JsonMapping
     from stdapi.types.openai_images import ImageOutputFormats, ImageOutputQuality
 
@@ -66,10 +70,12 @@ class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"]:
         "_count",
         "_extra_params",
         "_height",
+        "_input_tokens",
         "_is_url",
         "_model",
         "_output_compression",
         "_output_format",
+        "_output_tokens",
         "_prompt",
         "_quality",
         "_response_height",
@@ -134,6 +140,10 @@ class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"]:
         # Real image quality from model response
         self._response_quality: ImageOutputQuality = "medium"
 
+        # Invocation usage from ModelBase.invoke()
+        self._input_tokens: int | None = None
+        self._output_tokens: int | None = None
+
     @property
     def prompt(self) -> str:
         """Input prompt."""
@@ -163,6 +173,16 @@ class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"]:
     def output_format(self) -> ImageOutputFormats:
         """Final output image format."""
         return self._output_format or self._response_output_format
+
+    @property
+    def input_tokens(self) -> int | None:
+        """Input tokens from the model invocation."""
+        return self._input_tokens
+
+    @property
+    def output_tokens(self) -> int | None:
+        """Output tokens from the model invocation."""
+        return self._output_tokens
 
     @staticmethod
     def _validate_no_mask(mask: str | None, reason: str = "") -> None:
@@ -405,11 +425,10 @@ class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"]:
         Yields:
             Streamed images.
         """
-        results = await self._generate_images_from_text()
-        for result in as_completed(
-            self._ensure_image_output_format(result) for result in results
+        async for image in self._stream_completed_images(
+            await self._generate_images_from_text()
         ):
-            yield await result
+            yield image
 
     async def _edit_images_stream(
         self,
@@ -427,11 +446,38 @@ class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"]:
         Yields:
             Streamed images.
         """
-        results = await self._edit_image(images, mask)
-        for result in as_completed(
-            self._ensure_image_output_format(result) for result in results
+        async for image in self._stream_completed_images(
+            await self._edit_image(images, mask)
         ):
-            yield await result
+            yield image
+
+    async def _stream_completed_images(
+        self, results: Iterable[Awaitable[ImageGenerationResponse]]
+    ) -> AsyncGenerator[ImageGenerationResponse]:
+        """Yield formatted images in completion order, stopping jobs on early exit.
+
+        An abandoned stream (client disconnect) must cancel the in-flight
+        jobs: an image completing after the last usage drain would record
+        billed usage nothing ever reads.
+
+        Args:
+            results: Awaitable image generation responses.
+
+        Yields:
+            Formatted images, in completion order.
+        """
+        tasks = [
+            ensure_future(self._ensure_image_output_format(result))
+            for result in results
+        ]
+        try:
+            for task in as_completed(tasks):
+                yield await task
+        finally:
+            for task in tasks:
+                task.cancel()
+            # Await cancellation so asyncio doesn't log unretrieved exceptions at GC.
+            await gather(*tasks, return_exceptions=True)
 
     async def _ensure_image_output_format(
         self, response: Awaitable[ImageGenerationResponse] | ImageGenerationResponse
@@ -530,6 +576,46 @@ class ImageModelBase[RequestT, ResponseT, ImageGenerationJobT](
         return (
             job_cls.get_supported_operations() if job_cls is not None else Capability(0)
         )
+
+    def _record_invoke_usage(
+        self,
+        input_tokens: int | None,
+        output_tokens: int | None,
+        response: Mapping[str, Any],
+        *,
+        region: str = "",
+        tier: ServiceTierTypeType | None = None,
+        routing: Routing | None = None,
+    ) -> None:
+        """Record invoke usage plus the billed output images.
+
+        Args:
+            input_tokens: Number of input tokens consumed.
+            output_tokens: Number of output tokens consumed.
+            response: The parsed response body -- its ``images`` list (when
+                present) is the actual number of images AWS billed for.
+            region: Region that served the call.
+            tier: Service tier that served the call.
+            routing: Serving profile of the call.
+        """
+        super()._record_invoke_usage(
+            input_tokens,
+            output_tokens,
+            response,
+            region=region,
+            tier=tier,
+            routing=routing,
+        )
+        if images := response.get("images"):
+            record_bedrock_usage(
+                self._model_id,
+                tier=tier,
+                region=region,
+                routing=routing,
+                output_images=len(images),
+            )
+        # Clear IMAGE_SPEC to avoid stale values from earlier calls in the same context.
+        IMAGE_SPEC.set("")
 
     def get_image_generation_job(
         self,

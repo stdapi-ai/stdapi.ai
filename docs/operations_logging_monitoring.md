@@ -126,6 +126,276 @@ Each event shares core fields and may add type‑specific ones.
     - `server_warnings` (on the `start` event) often highlights missing configuration and features that have been disabled as a result (for example, no S3 bucket configured disables certain image/audio features).
     - `error_detail` (on any event) contains formatted exception traces and diagnostic hints, which frequently point to missing configuration, unavailable dependencies, or disabled features.
 
+## :material-cash-multiple: Usage Metrics Fields
+
+Usage is reported as a nested `usage` list on `request` / `request_stream` events. Each entry represents billed quantities for a specific **(service, model, operation, region, tier, routing, context)** combination. Zero/empty fields are omitted.
+
+### Entry Structure
+
+| Field                       | Type | Description                                                                                            |
+|:----------------------------|:-----|:-------------------------------------------------------------------------------------------------------|
+| `service`                   | str | AWS service/API: `bedrock-runtime`, `polly`, `transcribe`, `translate`, `comprehend`                  |
+| `model`                     | str | Model identifier (e.g., `amazon.titan-embed-v1`, `amazon.transcribe`)                                 |
+| `operation`                 | str | Request route path (e.g., `/v1/chat/completions`, `/v1/embeddings`, `/v1/audio/speech`)              |
+| `region`                    | str | AWS region that served the request (part of the aggregation key)                                       |
+| `tier`                      | str | Service tier that actually served the call (AWS-reported when available, else as requested): `standard`, `flex`, `priority`, `batch` |
+| `routing`                   | str | Serving profile, present as `"global"` (cross-region global routing) or `"latency"` (latency-optimized) |
+| `context`                   | str | Present as `"long"` only when the call's prompt (input + cache read/write tokens) exceeded 200K tokens — billed at the long-context rate where AWS publishes one |
+| `cost`                      | str | Exact cost as plain-decimal text (no exponent, no trailing zeros, e.g. `"0.000015"`)                   |
+| `currency`                  | str | ISO currency code for `cost`                                                                            |
+| `costs`                     | dict| Per-currency exact cost text, replacing `cost`/`currency` when dimensions span multiple currencies      |
+| `input_tokens`              | int | Real input token count (Converse, InvokeModel, embeddings)                                            |
+| `output_tokens`             | int | Real output token count (Converse, InvokeModel)                                                        |
+| `total_tokens`              | int | Real total tokens (Converse provides this directly)                                                    |
+| `cached_tokens`             | int | Real cached read tokens from Converse prompt caching                                                   |
+| `cache_write_tokens`        | int | Real cache write tokens from Converse prompt caching                                                   |
+| `cache_write_tokens_by_ttl` | dict| Cache write tokens by TTL, from Converse `cacheDetails` (e.g., `{"1h": 700, "5m": 100}`)            |
+| `output_images`             | int | Real output image count from image generation models                                                   |
+| `output_images_by_spec`     | dict| Output image count keyed by `"<resolution>:<quality>"`, for models priced per resolution/quality       |
+| `input_seconds`             | int | Real input media duration in seconds (Transcribe with a 15s minimum; audio/video embedding inputs)     |
+| `input_seconds_by_spec`     | dict| Input seconds keyed by modality (e.g., `{"audio": 42}`), for models priced per media type              |
+| `input_images`              | int | Input image count (multimodal embeddings, billed per image)                                            |
+| `input_images_by_spec`      | dict| Input image count keyed by rate bucket (e.g., `{"document": 1}`)                                       |
+| `input_characters`          | int | Real input character count (Polly `RequestCharacters`, Translate source text)                         |
+| `comprehend_units`          | int | Real Comprehend units (100-char units, 3-unit minimum per call)                                       |
+| `grounding_requests`        | int | Built-in grounding tool invocations (e.g., Amazon Nova Grounding `web_search`, billed per request)     |
+| `search_units`              | int | Rerank search units (one per rerank query)                                                             |
+
+!!! note "Usage field placement"
+    - **Non-streaming requests**: Usage appears on the `request` event
+    - **Streaming requests**: Usage appears on the `request_stream` event (not `request`) — this includes streaming speech-to-text
+    - **Polly / Translate**: Always on `request` event
+    - Cost dashboards must aggregate **both** entry types by request `id`
+
+!!! note "Zero values are omitted"
+    Fields are only populated when non-zero. Query for present fields rather than filtering by `> 0`. Missing fields = zero.
+
+!!! note "Client disconnect behavior"
+    If a stream is abandoned before the Converse `metadata.usage` event or final `invocationMetrics` chunk arrives, no usage is produced and logged.
+
+!!! note "No estimates"
+    All values are real AWS-billed quantities. No estimation is performed — if AWS doesn't return a count, the field is absent (zero).
+
+## :material-chart-line: CloudWatch Metrics (EMF)
+
+When `CLOUDWATCH_METRICS=true` is enabled, usage is emitted as CloudWatch Embedded Metric Format (EMF) lines to stdout. These are automatically extracted as CloudWatch Metrics on ECS with no extra IAM/API calls.
+
+### Configuration
+
+| Setting                          | Default  | Description                               |
+|:----------------------------------|:---------|:-------------------------------------------|
+| `CLOUDWATCH_METRICS`             | `false`  | Enable/disable EMF emission               |
+| `CLOUDWATCH_METRICS_NAMESPACE`   | `stdapi` | CloudWatch namespace for the metrics      |
+
+### EMF Line Structure
+
+Each billed usage entry generates one EMF JSON line:
+
+```json
+{
+  "_aws": {
+    "Timestamp": 1748716800000,
+    "CloudWatchMetrics": [{
+      "Namespace": "stdapi",
+      "Dimensions": [["Model"]],
+      "Metrics": [
+        {"Name": "InputTokens", "Unit": "Count"},
+        {"Name": "OutputTokens", "Unit": "Count"}
+      ]
+    }]
+  },
+  "Model": "anthropic.claude-3-5-sonnet-20241022",
+  "operation": "/v1/chat/completions",
+  "InputTokens": 1500,
+  "OutputTokens": 450
+}
+```
+
+### Metric Details
+
+- **Single dimension**: `Model` — provides low cardinality for cost control
+- **`operation`**: Included as a queryable field (not a dimension)
+- **Metric units**: `Count` for all token/image/character counts, `Seconds` for audio duration
+
+!!! tip "Querying EMF metrics"
+    Use CloudWatch Logs Insights to search EMF lines:
+    ```
+    fields @timestamp, Model, InputTokens, OutputTokens
+    | filter _aws.CloudWatchMetrics is not null
+    | sort @timestamp desc
+    | limit 20
+    ```
+
+## :material-currency-usd: Cost Tracking (Real-Time AWS Pricing)
+
+When `COST_TRACKING=true` is enabled, stdapi.ai computes real-time costs from live AWS pricing. Costs are attributed to the actual region where each request was served.
+
+!!! warning "Pricing is an estimate, not a bill"
+    stdapi.ai resolves prices from AWS's own Price List API and does its best to match every request to the right unit price — including tier, cache TTL, cross-region routing, region fallback, and image resolution/quality where applicable. This is still a **best-effort approximation**, not a guarantee: AWS's Price List API doesn't reliably map a Bedrock model ID to its own pricing rows, some pricing dimensions aren't modeled at all (see [Known Limitations](#known-limitations)), and fallbacks (regional, tier) substitute a nearby price when the exact one isn't published. For billing-critical use, always reconcile against AWS Cost Explorer or your actual invoice.
+
+### How It Works
+
+1. **Price Catalog**: At startup, stdapi.ai fetches the AWS Price List API for all configured regions and services, then caches in memory
+2. **On-Demand Refresh**: The catalog is refreshed whenever a newly available Bedrock model is discovered with no catalog entry yet — not on a proactive schedule
+3. **Per-Request Computation**: For each request, costs are computed by multiplying billed quantities by the resolved unit price
+4. **Built-in Defaults**: A few models are priced only on the [AWS pricing page](https://aws.amazon.com/bedrock/pricing/), not in the Price List API (e.g. the Stability AI Image Services) — their page rates ship built in, used only when AWS publishes no row for the model; `COST_PRICE_OVERRIDES` still takes precedence
+5. **Fallback on a Missing Price**: Once the catalog has been fetched, if a specific model/dimension has no resolvable price in it, the cost field is omitted for that entry rather than blocking the request, and the request log carries a `warning`-level `error_detail` naming the model and unpriced dimensions (a hint to supply the missing price via `COST_PRICE_OVERRIDES`)
+
+!!! warning "Fetch/refresh failures are not yet resilient"
+    Steps 1 and 2 call the AWS Price List API directly. If that call itself fails (network error, missing IAM permission, throttling, etc.), the error currently propagates instead of being handled gracefully — this can fail server startup, or fail the request that triggered an on-demand refresh. Improving resilience here (e.g. falling back to no pricing instead of failing) is planned but not yet implemented. This is distinct from step 4 above, which only covers a price missing from an already-fetched catalog.
+
+### Configuration
+
+| Setting | Default | Description |
+|:--------|:--------|:------------|
+| `COST_TRACKING` | `false` | Enable/disable real-time cost computation (needs `pricing:GetProducts`) |
+| `COST_PRICE_OVERRIDES` | `{}` | JSON map for operator-supplied prices for models not in AWS catalog |
+
+### Request Log Format
+
+Each usage entry includes cost and currency when resolved:
+
+```json
+{
+  "service": "bedrock-runtime",
+  "model": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+  "operation": "/v1/chat/completions",
+  "region": "us-east-1",
+  "input_tokens": 1500,
+  "output_tokens": 450,
+  "cost": "0.004575",
+  "currency": "USD"
+}
+```
+
+Costs are exact plain-decimal strings (never floats), so no precision is lost and no exponent or trailing zeros ever appear. The request-level total is also logged:
+
+```json
+{
+  "cost": {
+    "USD": "0.012345"
+  }
+}
+```
+
+### EMF Cost Metric
+
+When CloudWatch metrics are enabled, a `Cost` metric (unit: None) is emitted under the `["Model", "Currency"]` dimension set — a **separate directive** from the quantity metrics, which stay under `["Model"]`. A single directive spanning both sets would also publish `Cost` bare-by-`Model`, silently summing across currencies. Query `Cost` with **both** `Model` and `Currency` dimensions:
+
+```json
+{
+  "_aws": {
+    "CloudWatchMetrics": [
+      {
+        "Namespace": "stdapi",
+        "Dimensions": [["Model"]],
+        "Metrics": [{"Name": "InputTokens", "Unit": "Count"}]
+      },
+      {
+        "Namespace": "stdapi",
+        "Dimensions": [["Model", "Currency"]],
+        "Metrics": [{"Name": "Cost", "Unit": "None"}]
+      }
+    ]
+  },
+  "Model": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+  "Currency": "USD",
+  "Cost": 0.004575,
+  "InputTokens": 1500
+}
+```
+
+### Regional Price Fallback
+
+Some models — mostly older/deprecated ones — aren't published in every region's Price List (e.g. priced in `us-east-1` but not any EU region). A region with no price for a given model/dimension/tier always borrows one from a nearby region instead of omitting the cost:
+
+1. Prefers another region in the same geography (`eu-west-3` tries other `eu-*` regions first)
+2. Falls back to `us-east-1`, `eu-west-1`, or `us-west-2` — the regions always fetched regardless of your configured Bedrock regions
+3. If neither is available, the cost is omitted as usual
+
+This is a substitute price, not the actual published price for that region.
+
+### Multi-Currency Support
+
+stdapi.ai detects currency from the AWS partition:
+- Standard AWS: USD
+- AWS European Sovereign Cloud (EUSC): EUR
+- AWS US GovCloud: USD
+- AWS China: CNY
+
+Costs are **never summed across currencies** — this safety behavior is always on, regardless of settings. It matters when a single request's billed dimensions resolve to different currencies, which can happen with [regional fallback](#regional-price-fallback) crossing a partition boundary (e.g. a EUSC deployment falling back to a standard-AWS-priced region). A usage entry that spans more than one currency reports a `costs` map (instead of `cost`/`currency`) with every currency's own amount:
+
+```json
+{
+  "service": "bedrock-runtime",
+  "model": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+  "input_tokens": 1500,
+  "output_tokens": 450,
+  "costs": {
+    "EUR": "0.0021",
+    "USD": "0.0028"
+  }
+}
+```
+
+When only one currency is involved, the entry's `cost`/`currency` reports that currency directly instead. The request-level `cost` total still aggregates cleanly per currency either way.
+
+### Routing-Tier Pricing
+
+AWS prices some models differently per serving profile: the cross-region "global" routing profile is *lower* than the plain/regional rate for some marketplace-listed models (confirmed live: Claude Sonnet 4.5 input tokens at $3.30/M regional vs $3.00/M global), while latency-optimized serving (requested via the `X-Amzn-Bedrock-PerformanceConfig-Latency: optimized` header) is *higher*. stdapi.ai tracks the profile that served each request (`"routing": "global"` or `"latency"`) and prices it at the matching rate, falling back to the regional rate when AWS publishes no distinct one.
+
+### Long-Context Pricing
+
+Some 1M-context-capable models (currently Claude Sonnet 4, via the `context-1m` `anthropic-beta` flag) are billed by AWS at a higher rate — roughly double for input-side tokens — when a call's prompt (input + cache read/write tokens) exceeds 200K tokens. stdapi.ai detects this per model call and prices the whole call at the published long-context rate, reporting it with `"context": "long"` in the usage entry. When AWS publishes no long-context rate for a model, the standard rate is used as the best available estimate.
+
+### Built-in Tool Pricing
+
+Amazon Nova's built-in grounding tool (`web_search` → `nova_grounding`, supported by Nova 2 and Nova Premier) is billed by AWS per grounding request, on top of token usage. stdapi.ai counts grounding invocations in the model response and reports them as `grounding_requests`, priced from the model's published per-request rate.
+
+### Image Pricing Granularity
+
+Some image-generation models (currently: Amazon Titan Image Generator G1/V2 and Nova Canvas) are priced by AWS per resolution/quality combination, not a flat per-image rate. stdapi.ai automatically prices these per-image, based on the actual requested size and quality, falling back to a flat per-image rate for models where this isn't wired up yet (e.g. Stability). No configuration needed — this is purely additive precision with no accuracy trade-off.
+
+### Media Input Pricing
+
+Multimodal embedding inputs are billed by AWS per media unit on top of (or instead of) tokens: per input image (with a distinct "document image" rate where offered) and per second of audio/video. stdapi.ai records image counts directly and audio/video durations from the AWS-reported segment timings of the asynchronous (segmented) processing path, reported as `input_images`/`input_seconds` with their `*_by_spec` breakdowns. Rerank queries are recorded as `search_units` (one per query).
+
+### Known Limitations
+
+- **Speech-modality tokens** (speech-to-speech models): AWS bills speech tokens at a higher rate than text tokens, but reported token usage doesn't distinguish modalities — all tokens are priced at the text rate, which underestimates speech-heavy calls.
+- **Asynchronous (segmented) embeddings**: AWS reports no token usage for this processing path (used automatically for large inputs), so segmented text embeddings report no token cost; audio/video durations are recovered from the AWS-reported segment timings and billed.
+- **Synchronous audio/video embedding inputs**: media duration is only available from AWS on the segmented (asynchronous) processing path — small audio/video inputs processed synchronously report no duration and no per-second cost. No estimate is substituted (this app only reports AWS-confirmed real usage).
+- **Client disconnect during streaming**: AWS bills the input tokens and everything generated up to the cancellation, but the stream's final usage report never arrives, so nothing is recorded for that call. No estimate is substituted.
+- **Rerank queries with more than 100 documents**: AWS bills one search unit per 100 documents; the document count isn't visible at recording time, so one unit per query is recorded.
+- **Reserved capacity pricing**: if a request explicitly asks for AWS's Reserved Capacity service tier, its cost is computed at the standard on-demand rate instead — Reserved Capacity uses a separate monthly-commitment pricing model this app doesn't ingest. Avoid relying on this app's cost figures for Reserved Capacity workloads.
+- Some very new or region-specific models may have no published price anywhere yet — AWS publishes pricing after model availability, sometimes with a delay.
+- **AWS GovCloud**: the Price List API has no GovCloud endpoint, so catalog prices cannot be fetched there — usage is still recorded, a startup warning is emitted, and only `cost_price_overrides` entries produce costs.
+
+### Override Map for Missing Models
+
+Some models (e.g., mid-tier Claude) may not appear in the AWS Price List API. Use `cost_price_overrides` to fill gaps (Bedrock models only — Polly/Transcribe/Translate/Comprehend prices always come from the catalog):
+
+```bash
+export COST_PRICE_OVERRIDES='{"anthropic.claude-3-5-sonnet-20241022":{"input_tokens":0.000003,"output_tokens":0.000015}}'
+```
+
+Prices are per **one unit** (token, character, second) in your partition's currency.
+
+### IAM Permissions
+
+Ensure your IAM role includes pricing read access (the Price List API serves identical data from its three commercial endpoints, and sovereign partitions such as EUSC host their own; the nearest one is selected automatically from your configured Bedrock regions):
+
+```json
+{
+  "Effect": "Allow",
+  "Action": ["pricing:GetProducts"],
+  "Resource": "*"
+}
+```
+
+!!! note "Performance"
+    EMF lines bypass log-level filtering and write directly to stdout. This ensures metrics are always available on ECS where CloudWatch Agent scrapes stdout.
+
 ## :material-link-variant: Correlating Logs and Traces
 
 - Group events by `id` to reconstruct a full request lifecycle (request → stream(s) → background).

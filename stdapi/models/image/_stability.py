@@ -226,7 +226,10 @@ class StabilityImageGenerationJobBase(
         Raises:
             ApiError: If request was filtered.
         """
-        response = await self._model.invoke(request)
+        result = await self._model.invoke(request)
+        self._input_tokens = result.input_tokens
+        self._output_tokens = result.output_tokens
+        response = result.response
         try:
             finish_reasons = response["finish_reasons"]
         except KeyError:

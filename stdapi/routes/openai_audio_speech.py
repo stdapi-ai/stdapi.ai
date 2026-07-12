@@ -65,21 +65,17 @@ async def _speech_audio_bytestream(
 
 
 async def _speech_audio_sse(
-    stream: AsyncGenerator[bytes], characters_count: int
+    stream: AsyncGenerator[bytes], input_tokens: int, output_tokens: int
 ) -> AsyncGenerator[JSONServerSentEvent]:
-    """Generate Server-Sent Events for real-time audio streaming.
-
-    Converts audio stream into OpenAI-compatible Server-Sent Events
-    for real-time audio delivery. Emits delta events for incremental
-    audio chunks and a final done event with usage statistics.
+    """Generate SSE events for real-time audio streaming.
 
     Args:
-        stream: Audio stream yielding audio bytes chunks
-        characters_count: Input text characters count for usage tracking
+        stream: Audio stream yielding bytes chunks.
+        input_tokens: Input token count for usage tracking.
+        output_tokens: Output token count for usage tracking.
 
     Yields:
-        JSONServerSentEvent: SSE events with speech.audio.delta and
-            speech.audio.done event types following OpenAI streaming format
+        JSONServerSentEvent with speech.audio.delta and speech.audio.done events.
     """
     try:
         async for chunk in stream:
@@ -94,10 +90,9 @@ async def _speech_audio_sse(
             data=log_response_params(
                 SpeechAudioDoneEvent(
                     usage=SpeechUsage(
-                        # Polly is billed by character count, not token
-                        input_tokens=characters_count,
-                        output_tokens=0,
-                        total_tokens=characters_count,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        total_tokens=input_tokens + output_tokens,
                     )
                 ).model_dump(mode="json", exclude_none=True)
             )
@@ -196,7 +191,11 @@ async def create_speech(
         is_mcp() and "stream_format" not in request.model_fields_set
     ):
         return EventSourceResponse(
-            _speech_audio_sse(audio_stream, tts_response["characters_count"])
+            _speech_audio_sse(
+                audio_stream,
+                tts_response["input_tokens"],
+                tts_response["output_tokens"],
+            )
         )
 
     return StreamingResponse(

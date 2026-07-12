@@ -2,6 +2,7 @@
 
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 
 from botocore.exceptions import ClientError
@@ -64,6 +65,22 @@ if TYPE_CHECKING:
         serviceTier: NotRequired[ServiceTierTypeDef]
         outputConfig: NotRequired[OutputConfigTypeDef]
 
+    class AmazonBedrockInvocationMetrics(TypedDict):
+        """amazon-bedrock-invocationMetrics field in responses."""
+
+        inputTokenCount: int
+        outputTokenCount: int
+        invocationLatency: int
+        firstByteLatency: int
+
+    BedrockInvocationTypeDef = TypedDict(
+        "BedrockInvocationTypeDef",
+        {
+            "amazon-bedrock-invocationMetrics": NotRequired[
+                AmazonBedrockInvocationMetrics
+            ]
+        },
+    )
 
 #: Bedrock documents types with the matching MIME type
 MIME_TYPES_TO_DOCUMENT_TYPE: dict[str, DocumentFormatType] = {
@@ -445,3 +462,29 @@ def check_stream_event(event: ResponseStreamTypeDef) -> None:
             )
     msg = f"Received unexpected streaming event type: {list(event.keys())}"  # pragma: no cover
     raise RuntimeError(msg)  # pragma: no cover
+
+
+@dataclass(frozen=True, slots=True)
+class BedrockTokenUsage:
+    """Token counts extracted from a Bedrock streaming invocation-metrics event."""
+
+    input_tokens: int
+    output_tokens: int
+
+
+def usage_from_amazon_bedrock_invocation_metrics(
+    data: Mapping[str, Any],
+) -> BedrockTokenUsage:
+    """Get usage tokens from "amazon-bedrock-invocationMetrics" if present.
+
+    Args:
+        data: A mapping including potential Amazon Bedrock invocation metrics.
+
+    Returns:
+        Extracted token usage, zeroed when the metrics field is absent.
+    """
+    if metrics := data.get("amazon-bedrock-invocationMetrics"):
+        return BedrockTokenUsage(
+            metrics.get("inputTokenCount", 0), metrics.get("outputTokenCount", 0)
+        )
+    return BedrockTokenUsage(0, 0)

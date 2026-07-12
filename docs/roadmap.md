@@ -312,7 +312,7 @@ Introduces a full Anthropic-compatible API layer, enabling direct use of the Ant
 |---------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------|
 | `ANTHROPIC_ROUTES_PREFIX` configuration                 | Configurable base path prefix for Anthropic-compatible routes (default: `/anthropic`)                                                              |
 | `OPENAI_ROUTES_PREFIX` configuration                    | Configurable base path prefix for OpenAI-compatible routes                                                                                         |
-| Token count estimation (`TOKENS_ESTIMATION`)            | Estimate token counts via tiktoken when models don't provide them; configurable encoding via `TOKENS_ESTIMATION_DEFAULT_ENCODING`                  |
+| Real usage tracking (`usage` in logs)                   | Token counts sourced directly from AWS billing data (replaces tiktoken-based estimation)                                                           |
 | Anthropic beta flag filtering (`ANTHROPIC_BETA_FILTER`) | Automatically filter unsupported `anthropic-beta` flags to prevent Bedrock `ValidationException` errors; extensible via `ANTHROPIC_BETA_ALLOWLIST` |
 | Claude model name aliases                               | Use official Anthropic model names (e.g., `claude-opus-4-8`) auto-resolved to AWS Bedrock identifiers                                              |
 

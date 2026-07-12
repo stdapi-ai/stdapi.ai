@@ -178,9 +178,10 @@ class AudioModel(AudioModelBase[_Request, _Response]):
         """
         self._validate_response_formats(response_format, timestamp_granularities)
 
-        response: _Response = await self.invoke(
+        result = await self.invoke(
             await self._build_request(audio_content, prompt, temperature, language)
         )
+        response = result.response
         choice = response["choices"][0]
         content = choice["message"]["content"]
 
@@ -297,12 +298,12 @@ class AudioModel(AudioModelBase[_Request, _Response]):
             ApiError: When transcription or translation fails
         """
         self._validate_response_formats(response_format)
-        response: _Response = await self.invoke(
+        result = await self.invoke(
             await self._build_request(
                 audio_content, prompt, temperature, translate=True
             )
         )
-        content = response["choices"][0]["message"]["content"]
+        content = result.response["choices"][0]["message"]["content"]
 
         if response_format == "text":
             return content

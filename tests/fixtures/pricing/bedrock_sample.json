@@ -1,0 +1,215 @@
+[
+  {
+    "product": {
+      "attributes": {
+        "regionCode": "us-east-1",
+        "usagetype": "USE1-NovaLite-input-tokens",
+        "location": "US East (N. Virginia)",
+        "servicecode": "AmazonBedrock",
+        "inferenceType": "Input tokens",
+        "model": "Nova Lite",
+        "provider": "Amazon",
+        "feature": "On-demand Inference"
+      }
+    },
+    "terms": {
+      "OnDemand": {
+        "SKU123.JRTCKXETXF": {
+          "priceDimensions": {
+            "SKU123.JRTCKXETXF.6YSXRJFJ4J8ZQZ9H": {
+              "unit": "1K tokens",
+              "description": "Input tokens per 1K",
+              "beginRange": "0",
+              "endRange": "Inf",
+              "pricePerUnit": {
+                "USD": "0.00008"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "product": {
+      "attributes": {
+        "regionCode": "us-east-1",
+        "usagetype": "USE1-NovaLite-output-tokens",
+        "location": "US East (N. Virginia)",
+        "servicecode": "AmazonBedrock",
+        "inferenceType": "Output tokens",
+        "model": "Nova Lite",
+        "provider": "Amazon",
+        "feature": "On-demand Inference"
+      }
+    },
+    "terms": {
+      "OnDemand": {
+        "SKU124.JRTCKXETXF": {
+          "priceDimensions": {
+            "SKU124.JRTCKXETXF.6YSXRJFJ4J8ZQZ9J": {
+              "unit": "1K tokens",
+              "description": "Output tokens per 1K",
+              "beginRange": "0",
+              "endRange": "Inf",
+              "pricePerUnit": {
+                "USD": "0.0004"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "product": {
+      "attributes": {
+        "regionCode": "us-east-1",
+        "usagetype": "USE1-Claude4Sonnet-input-tokens-cross-region-global",
+        "location": "US East (N. Virginia)",
+        "servicecode": "AmazonBedrockService",
+        "inferenceType": "Input tokens",
+        "model": "Claude Sonnet 4.5",
+        "provider": "Anthropic",
+        "feature": "On-demand Inference"
+      }
+    },
+    "terms": {
+      "OnDemand": {
+        "SKU125.JRTCKXETXF": {
+          "priceDimensions": {
+            "SKU125.JRTCKXETXF.6YSXRJFJ4J8ZQZ9K": {
+              "unit": "1K tokens",
+              "description": "Input tokens per 1K",
+              "beginRange": "0",
+              "endRange": "Inf",
+              "pricePerUnit": {
+                "USD": "0.003"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "product": {
+      "attributes": {
+        "regionCode": "eu-west-1",
+        "usagetype": "EUW1-NovaPro-input-tokens",
+        "location": "EU (Ireland)",
+        "servicecode": "AmazonBedrock",
+        "inferenceType": "Input tokens",
+        "model": "Nova Pro",
+        "provider": "Amazon",
+        "feature": "On-demand Inference"
+      }
+    },
+    "terms": {
+      "OnDemand": {
+        "SKU126.JRTCKXETXF": {
+          "priceDimensions": {
+            "SKU126.JRTCKXETXF.6YSXRJFJ4J8ZQZ9L": {
+              "unit": "1K tokens",
+              "description": "Input tokens per 1K",
+              "beginRange": "0",
+              "endRange": "Inf",
+              "pricePerUnit": {
+                "USD": "0.0016"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "product": {
+      "attributes": {
+        "regionCode": "us-east-1",
+        "usagetype": "USE1-MP:USE1_created_image_stable_image_core-Units",
+        "location": "US East (N. Virginia)",
+        "servicecode": "AmazonBedrockFoundationModels",
+        "model": null,
+        "feature": "On-demand Inference"
+      }
+    },
+    "terms": {
+      "OnDemand": {
+        "SKU127.JRTCKXETXF": {
+          "priceDimensions": {
+            "SKU127.JRTCKXETXF.6YSXRJFJ4J8ZQZ9M": {
+              "unit": "Units",
+              "description": "Per image generated",
+              "beginRange": "0",
+              "endRange": "Inf",
+              "pricePerUnit": {
+                "USD": "0.0036"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "product": {
+      "attributes": {
+        "regionCode": "us-east-1",
+        "usagetype": "USE1-Claude4Sonnet-input-tokens-flex",
+        "location": "US East (N. Virginia)",
+        "servicecode": "AmazonBedrockService",
+        "inferenceType": "Input tokens",
+        "model": "Claude Sonnet 4.5",
+        "provider": "Anthropic",
+        "feature": "On-demand Inference",
+        "service_tier": "Flex"
+      }
+    },
+    "terms": {
+      "OnDemand": {
+        "SKU128.JRTCKXETXF": {
+          "priceDimensions": {
+            "SKU128.JRTCKXETXF.6YSXRJFJ4J8ZQZ9N": {
+              "unit": "1K tokens",
+              "description": "Input tokens per 1K - Flex tier",
+              "beginRange": "0",
+              "endRange": "Inf",
+              "pricePerUnit": {
+                "USD": "0.002"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "product": {
+      "attributes": {
+        "regionCode": "us-east-1",
+        "usagetype": "USE1-MP:USE1_InputTokenCount_Global-Units",
+        "location": "US East (N. Virginia)",
+        "servicecode": "AmazonBedrockFoundationModels",
+        "servicename": "Claude Opus 4.5 (Amazon Bedrock Edition)"
+      }
+    },
+    "terms": {
+      "OnDemand": {
+        "SKU129.JRTCKXETXF": {
+          "priceDimensions": {
+            "SKU129.JRTCKXETXF.6YSXRJFJ4J8ZQZ9P": {
+              "unit": "Units",
+              "description": "Per 1M input tokens - Global",
+              "beginRange": "0",
+              "endRange": "Inf",
+              "pricePerUnit": {
+                "USD": "3.00"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+]

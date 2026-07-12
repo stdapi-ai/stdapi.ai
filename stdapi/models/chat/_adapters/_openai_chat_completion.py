@@ -17,7 +17,6 @@ from stdapi.aws_bedrock import build_system_blocks, set_inference_configuration
 from stdapi.models.audio import synthesize_speech
 from stdapi.models.chat._adapters import _openai_common
 from stdapi.monitoring import log_response_params
-from stdapi.tokenizer import estimate_token_count
 from stdapi.types.openai import (
     FunctionDefinition,
     ResponseFormatJSONObject,
@@ -46,7 +45,6 @@ from stdapi.types.openai_chat_completions import (
     ChoiceDeltaFunctionCall,
     ChoiceDeltaToolCall,
     ChunkChoice,
-    CompletionTokensDetails,
     CompletionUsage,
     File,
     FunctionCall,
@@ -912,7 +910,6 @@ async def format_response(
     """
     choices: list[Choice] = []
     usage = CompletionUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
-    reasoning_contents: list[str] = []
     tts_tasks: dict[int, Task[Any]] = {}
     cached_tokens = 0
     legacy_function = _LEGACY_FUNCTION.get()
@@ -929,8 +926,6 @@ async def format_response(
         )
         content, reasoning_content = extract_output_text(message)
         annotations = extract_citations(message)
-        if reasoning_content:
-            reasoning_contents.append(reasoning_content)
         if audio_params and content:
             tts_tasks[index] = create_task(
                 _get_or_generate_audio(
@@ -955,12 +950,6 @@ async def format_response(
         )
     if cached_tokens:
         usage.prompt_tokens_details = PromptTokensDetails(cached_tokens=cached_tokens)
-    if reasoning_contents:
-        reasoning_tokens = await estimate_token_count(*reasoning_contents)
-        if reasoning_tokens:
-            usage.completion_tokens_details = CompletionTokensDetails(
-                reasoning_tokens=reasoning_tokens
-            )
 
     for index, tts_task in tts_tasks.items():
         choices[index].message.audio = await tts_task

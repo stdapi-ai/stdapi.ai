@@ -7,9 +7,17 @@ specification, ensuring compatibility with the official OpenAI API behavior.
 from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING
 
 import pytest
 from openai import BadRequestError, NotFoundError, OpenAI
+
+from stdapi import usage
+from stdapi.config import SETTINGS
+from stdapi.usage import record_bedrock_usage
+
+if TYPE_CHECKING:
+    from starlette.testclient import TestClient as TestClientType
 
 
 class TestResponses:
@@ -2246,3 +2254,210 @@ class TestCodeInterpreterTool:
             assert code_interp_done_count >= 1, (
                 "Expected at least one code_interpreter_call output_item.done from official API"
             )
+
+
+class TestUsageLogging:
+    """Tests for usage logging to stdout."""
+
+    def test_response_usage_logged(
+        self, test_client: TestClientType | None, responses_model: str, api_key: str
+    ) -> None:
+        """Test that usage is recorded and logged in API response and stdout."""
+        if test_client is None:
+            pytest.skip("Requires local test server")
+
+        response = test_client.post(
+            "/v1/responses",
+            json={"model": responses_model, "input": "Say hello."},
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+        assert response.status_code == 200
+
+        response_data = response.json()
+        assert "usage" in response_data, (
+            f"Response missing usage: {response_data.keys()}"
+        )
+        api_usage = response_data["usage"]
+        assert api_usage is not None, "Response usage is None"
+        assert api_usage.get("input_tokens", 0) > 0, "Expected input_tokens > 0"
+        assert api_usage.get("output_tokens", 0) > 0, "Expected output_tokens > 0"
+
+        assert "input_tokens" in api_usage
+        assert "output_tokens" in api_usage
+        assert "total_tokens" in api_usage
+
+
+class TestUsageAggregation:
+    """Tests for usage aggregation across multiple requests."""
+
+    def test_multiple_requests_aggregate_usage(
+        self, test_client: TestClientType | None, chat_legacy_model: str, api_key: str
+    ) -> None:
+        """Test that multiple requests to same model produce valid usage."""
+        if test_client is None:
+            pytest.skip("Requires local test server")
+
+        for _ in range(3):
+            response = test_client.post(
+                "/v1/responses",
+                json={"model": chat_legacy_model, "input": "Say hi."},
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+            assert response.status_code == 200
+
+            api_usage = response.json()["usage"]
+            assert api_usage["input_tokens"] > 0
+            assert api_usage["output_tokens"] > 0
+
+    @pytest.mark.local
+    def test_record_usage_twice_sums_values(self) -> None:
+        """Test that calling record_usage twice produces one entry with summed values."""
+        token = usage.init_usage()
+        try:
+            record_bedrock_usage("test-model", input_tokens=100, output_tokens=50)
+            record_bedrock_usage("test-model", input_tokens=200, output_tokens=75)
+
+            entries = list(usage.usage_log_entries())
+        finally:
+            usage.USAGE.reset(token)
+        assert len(entries) == 1, (
+            "Expected exactly one usage entry after two record_bedrock_usage calls"
+        )
+
+        entry = entries[0]
+        assert entry["service"] == "bedrock-runtime"
+        assert entry["model"] == "test-model"
+        assert entry["input_tokens"] == 300, "input_tokens should be summed"
+        assert entry["output_tokens"] == 125, "output_tokens should be summed"
+
+    @pytest.mark.local
+    def test_cache_write_tokens_by_ttl_logged(self) -> None:
+        """Test that cache_write_tokens_by_ttl appears in usage entries."""
+        token = usage.init_usage()
+        try:
+            record_bedrock_usage(
+                "test-model",
+                input_tokens=1000,
+                output_tokens=100,
+                cache_write_tokens_by_ttl={"5m": 500, "1h": 200},
+            )
+
+            entries = list(usage.usage_log_entries())
+        finally:
+            usage.USAGE.reset(token)
+        assert len(entries) == 1, "Expected exactly one usage entry"
+
+        entry = entries[0]
+        assert "cache_write_tokens_by_ttl" in entry, (
+            "Expected cache_write_tokens_by_ttl in entry"
+        )
+        cache_tokens = entry["cache_write_tokens_by_ttl"]
+        assert cache_tokens["5m"] == 500
+        assert cache_tokens["1h"] == 200
+
+
+class TestUsageEMF:
+    """Tests for CloudWatch EMF (Embedded Metric Format) usage emission."""
+
+    def test_emf_metrics_emitted_when_enabled(
+        self,
+        test_client: TestClientType | None,
+        responses_model: str,
+        api_key: str,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        """Test that EMF metrics are emitted when cloudwatch_metrics=True."""
+        if test_client is None:
+            pytest.skip("Requires local test server")
+
+        capfd.readouterr()
+
+        response = test_client.post(
+            "/v1/responses",
+            json={"model": responses_model, "input": "Hello."},
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+        assert response.status_code == 200
+
+        captured = capfd.readouterr()
+        emf_lines = []
+        for line in captured.out.split("\n"):
+            if line.strip() and '"_aws"' in line:
+                try:
+                    emf_lines.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+
+        assert emf_lines, "Expected at least one EMF line in stdout"
+
+        emf = emf_lines[0]
+        assert "_aws" in emf, "EMF line missing _aws key"
+        aws = emf["_aws"]
+        assert "CloudWatchMetrics" in aws, "EMF missing CloudWatchMetrics"
+        assert "Timestamp" in aws, "EMF missing Timestamp"
+
+        metrics_spec = aws["CloudWatchMetrics"][0]
+        dimensions = metrics_spec["Dimensions"]
+        assert ["Model"] in dimensions, "EMF dimensions should include ['Model']"
+        for dimension_set in dimensions:
+            for name in dimension_set:
+                assert name in emf, (
+                    f"EMF declares dimension {name!r} with no matching field"
+                )
+        assert "Metrics" in metrics_spec, "EMF missing Metrics"
+
+        assert emf.get("Model") == responses_model, "EMF missing or wrong Model"
+        assert "operation" in emf, "EMF missing operation field"
+
+        metric_names = [m["Name"] for m in metrics_spec["Metrics"]]
+        assert "InputTokens" in metric_names, "Expected InputTokens metric"
+        assert "OutputTokens" in metric_names, "Expected OutputTokens metric"
+
+        assert emf.get("InputTokens", 0) > 0, "InputTokens should be > 0"
+        assert emf.get("OutputTokens", 0) > 0, "OutputTokens should be > 0"
+
+    @pytest.mark.local
+    def test_no_emf_when_cloudwatch_metrics_disabled(
+        self, capfd: pytest.CaptureFixture[str]
+    ) -> None:
+        """Test that EMF metrics are NOT emitted when cloudwatch_metrics=False."""
+        token = usage.init_usage()
+        try:
+            record_bedrock_usage("test-model", input_tokens=100, output_tokens=50)
+
+            capfd.readouterr()
+            with pytest.MonkeyPatch.context() as mp:
+                mp.setattr(SETTINGS, "cloudwatch_metrics", False)
+                usage.emit_usage_metrics()
+        finally:
+            usage.USAGE.reset(token)
+
+        captured = capfd.readouterr()
+        emf_lines = []
+        for line in captured.out.split("\n"):
+            if line.strip() and '"_aws"' in line:
+                try:
+                    emf_lines.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+
+        assert not emf_lines, "Expected no EMF lines when cloudwatch_metrics=False"
+
+
+@pytest.mark.local
+class TestDeprecation:
+    """Tests for the SETTINGS.deprecated() helper."""
+
+    def test_tokens_estimation_deprecated(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Setting a deprecated field is reported by deprecated()."""
+        monkeypatch.setattr(SETTINGS, "__pydantic_fields_set__", {"tokens_estimation"})
+
+        assert SETTINGS.deprecated() == {"tokens_estimation"}
+
+    def test_no_deprecated_setting(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No deprecated setting is reported when none was explicitly set."""
+        monkeypatch.setattr(SETTINGS, "__pydantic_fields_set__", set())
+
+        assert SETTINGS.deprecated() == set()

@@ -45,11 +45,13 @@ class TTSResponse(TypedDict):
 
     Attributes:
         audio_stream: Async generator yielding audio bytes.
-        characters_count: Number of characters in input text.
+        input_tokens: Billed characters reported as tokens for OpenAI parity.
+        output_tokens: 0 when the backend reports no output metric.
     """
 
     audio_stream: AsyncGenerator[bytes]
-    characters_count: int
+    input_tokens: int
+    output_tokens: int
 
 
 class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):

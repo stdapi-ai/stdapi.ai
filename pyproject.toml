@@ -18,7 +18,6 @@ dependencies = [
     "python-magic",
     "pybase64",
     "pillow",
-    "tiktoken",
 ]
 
 [project.optional-dependencies]
@@ -52,7 +51,7 @@ lint = [
     "stdapi[opentelemetry, uvicorn]",
     "mypy",
     "ruff",
-    "types-aiobotocore[bedrock, bedrock-runtime, polly, comprehend, meteringmarketplace, s3, sts, transcribe, translate]",
+    "types-aiobotocore[bedrock, bedrock-runtime, polly, comprehend, meteringmarketplace, pricing, s3, sts, transcribe, translate]",
     "types-PyYAML",
 ]
 docs = [
@@ -151,6 +150,7 @@ addopts = [
 markers = [
     "expensive",
     "agentic",
+    "local: tests the local implementation in-process, skipped with --server-url or --use-official-api",
     "xdist_group: group tests to run on the same xdist worker",
 ]
 filterwarnings = [

@@ -15,7 +15,6 @@ from sse_starlette import EventSourceResponse, JSONServerSentEvent
 from stdapi.api_errors import ApiError
 from stdapi.aws_bedrock import (
     GUARDTRAIL_CONFIG_VAR,
-    PERFORMANCE_CONFIG_VAR,
     PROMPT_CACHING_DEFAULT,
     PromptCaching,
 )
@@ -552,7 +551,6 @@ class ChatModel(ChatModelBase[Any, Any]):
             Bedrock Converse request payload with ``modelId`` set to an empty
             string placeholder; the routing layer fills in the real value.
         """
-        latency, perf_service_tier = PERFORMANCE_CONFIG_VAR.get()
         request: ConverseRequestBaseTypeDef = {
             "modelId": "",  # placeholder — overwritten by converse()/converse_stream()
             "messages": bedrock_messages,
@@ -568,14 +566,9 @@ class ChatModel(ChatModelBase[Any, Any]):
             additional_request_fields
         ):
             request["additionalModelRequestFields"] = additional_request_fields
-        if service_tier := (
-            service_tier
-            or perf_service_tier
-            or SETTINGS.default_model_service_tiers.get(self._model_id)
-        ):
+        if service_tier:
+            # Fallback chain and performanceConfig are applied later, in ModelBase._prepare_converse_request_for_region.
             request["serviceTier"] = {"type": service_tier}
-        if latency:
-            request["performanceConfig"] = {"latency": latency}
         if output_config:
             request["outputConfig"] = {
                 "textFormat": {

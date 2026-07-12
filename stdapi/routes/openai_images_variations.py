@@ -251,11 +251,10 @@ async def create_image_variations(
         extra_params=get_extra_model_parameters(model_id, request),
     )
 
-    results = await job.create_variations(images=[await input_image.to_base64()])
     return await build_images_response(
         job=job,
-        results=results,
+        results=await job.create_variations(images=[await input_image.to_base64()]),
         response_format=request.response_format,
-        image_count=request.n,
-        image_tokens=1,
+        output_image_count=request.n,
+        input_image_count=1,
     )

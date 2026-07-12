@@ -5,7 +5,6 @@ specification, calling AWS Bedrock image generation models (e.g., Stability AI,
 Amazon Nova Canvas) to generate images.
 """
 
-from asyncio import create_task
 from typing import TYPE_CHECKING, Annotated, Any
 
 from fastapi import APIRouter, Depends
@@ -29,7 +28,6 @@ from stdapi.monitoring import (
     log_response_params,
 )
 from stdapi.routes._images_common import build_images_response
-from stdapi.tokenizer import estimate_token_count
 from stdapi.types.openai_images import (
     ImageGenCompletedEvent,
     ImageGenerateParams,
@@ -81,20 +79,16 @@ async def stream_generator(
     Yields:
         JSONServerSentEvent containing partial image data or the final completed image.
     """
-    token_task = create_task(estimate_token_count(job.prompt)) if job.prompt else None
     indexes: dict[int, int] = {}
-    estimated_input_tokens: int | None = None
+    # Bedrock streaming responses carry no token usage, unlike the
+    # non-streaming path where ModelBase.invoke() reports it.
+    usage = Usage(
+        input_tokens=0,
+        input_tokens_details=UsageInputTokensDetails(image_tokens=0, text_tokens=0),
+        output_tokens=job.count,
+        total_tokens=job.count,
+    )
     async for result in image_stream:
-        if estimated_input_tokens is None:
-            estimated_input_tokens = (await token_task or 0) if token_task else 0
-        usage = Usage(
-            input_tokens=estimated_input_tokens,
-            input_tokens_details=UsageInputTokensDetails(
-                image_tokens=0, text_tokens=estimated_input_tokens
-            ),
-            output_tokens=job.count,
-            total_tokens=estimated_input_tokens + job.count,
-        )
         if result.partial:
             index = indexes[result.index] = indexes.get(result.index, 0) + 1
             yield JSONServerSentEvent(
@@ -122,16 +116,6 @@ async def stream_generator(
                     usage=usage,
                 ).model_dump(mode="json", exclude_none=True)
             )
-    if estimated_input_tokens is None:
-        estimated_input_tokens = (await token_task or 0) if token_task else 0
-    usage = Usage(
-        input_tokens=estimated_input_tokens,
-        input_tokens_details=UsageInputTokensDetails(
-            image_tokens=0, text_tokens=estimated_input_tokens
-        ),
-        output_tokens=job.count,
-        total_tokens=estimated_input_tokens + job.count,
-    )
     log_response_params(
         {
             "created_at": created,
@@ -253,15 +237,9 @@ async def create_images(
         )
 
     # Handle non-streaming requests
-    token_task = create_task(estimate_token_count(request.prompt))
-    results = await job.generate_images()
-    text_tokens = await token_task or 0
-
     return await build_images_response(
         job=job,
-        results=results,
+        results=await job.generate_images(),
         response_format=request.response_format,
-        image_count=request.n,
-        text_tokens=text_tokens,
-        image_tokens=0,
+        output_image_count=request.n,
     )

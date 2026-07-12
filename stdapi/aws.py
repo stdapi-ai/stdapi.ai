@@ -44,18 +44,6 @@ CONFIG = AioConfig(
     read_timeout=SETTINGS.ai_response_timeout,
 )
 
-#: No-retry configuration — used when the application retry loop manages failover across regions
-CONFIG_NO_RETRY = AioConfig(
-    user_agent=server.USER_AGENT,
-    retries={
-        "max_attempts": 1,
-        "mode": "adaptive" if SETTINGS.aws_adaptive_retry else "standard",
-    },
-    max_pool_connections=SETTINGS.aws_max_pool_connections,
-    parameter_validation=False,
-    connect_timeout=SETTINGS.aws_connect_timeout,
-    read_timeout=SETTINGS.ai_response_timeout,
-)
 
 getLogger("aiobotocore").setLevel("CRITICAL")
 
@@ -82,26 +70,41 @@ class AWSConnectionManager:
             AWSConnectionManager: The initialized connection manager.
         """
         await self._exit_stack.__aenter__()
+
+        services_configs: dict[str, AioConfig] = {
+            "s3.accelerate": AioConfig(
+                user_agent=server.USER_AGENT,
+                retries=_RETRIES,
+                max_pool_connections=SETTINGS.aws_max_pool_connections,
+                parameter_validation=False,
+                connect_timeout=SETTINGS.aws_connect_timeout,
+                s3={"use_accelerate_endpoint": SETTINGS.aws_s3_accelerate},
+            ),
+            "pricing": AioConfig(
+                user_agent=server.USER_AGENT,
+                retries={
+                    # No dedicated pricing setting; reuses the Bedrock retry count.
+                    "max_attempts": SETTINGS.aws_bedrock_max_retries + 1,
+                    # Always adaptive: the Pricing API rate quota is very low.
+                    "mode": "adaptive",
+                },
+                max_pool_connections=SETTINGS.aws_max_pool_connections,
+                parameter_validation=False,
+                connect_timeout=SETTINGS.aws_connect_timeout,
+            ),
+        }
+
         for service, region in {
             (service, region or SETTINGS.aws_bedrock_regions[0])
             for service, region in self._client_specs
         }:
-            if service == "s3.accelerate":
-                config = AioConfig(
-                    user_agent=server.USER_AGENT,
-                    retries=_RETRIES,
-                    max_pool_connections=SETTINGS.aws_max_pool_connections,
-                    parameter_validation=False,
-                    connect_timeout=SETTINGS.aws_connect_timeout,
-                    s3={"use_accelerate_endpoint": SETTINGS.aws_s3_accelerate},
-                )
-            else:
-                config = CONFIG
             _CLIENTS.setdefault(service, {})[
                 region
             ] = await self._exit_stack.enter_async_context(
                 AWS_SESSION.create_client(  # type: ignore[call-overload]
-                    service.split(".", 1)[0], region_name=region, config=config
+                    service.split(".", 1)[0],
+                    region_name=region,
+                    config=services_configs.get(service, CONFIG),
                 )
             )
 
@@ -109,12 +112,23 @@ class AWSConnectionManager:
             SETTINGS.aws_bedrock_region_routing != "disabled"
             and "bedrock-runtime" in _CLIENTS
         ):
+            no_retry = AioConfig(
+                user_agent=server.USER_AGENT,
+                retries={
+                    "max_attempts": 1,
+                    "mode": "adaptive" if SETTINGS.aws_adaptive_retry else "standard",
+                },
+                max_pool_connections=SETTINGS.aws_max_pool_connections,
+                parameter_validation=False,
+                connect_timeout=SETTINGS.aws_connect_timeout,
+                read_timeout=SETTINGS.ai_response_timeout,
+            )
             for region in _CLIENTS["bedrock-runtime"]:
                 _CLIENTS.setdefault("bedrock-runtime.no-retry", {})[
                     region
                 ] = await self._exit_stack.enter_async_context(
                     AWS_SESSION.create_client(
-                        "bedrock-runtime", region_name=region, config=CONFIG_NO_RETRY
+                        "bedrock-runtime", region_name=region, config=no_retry
                     )
                 )
         return self

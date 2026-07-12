@@ -9,6 +9,7 @@ from botocore.exceptions import ClientError
 
 from stdapi.api_errors import ApiError
 from stdapi.aws import get_client
+from stdapi.usage import record_translate_usage
 from stdapi.utils import language_code_to_name
 
 if TYPE_CHECKING:
@@ -41,13 +42,13 @@ async def translate(
 
     try:
         translate_client: TranslateClient = get_client("translate")
-        return (
-            await translate_client.translate_text(
-                Text=text,
-                SourceLanguageCode=source_language_code,
-                TargetLanguageCode=target_language_code,
-            )
-        )["TranslatedText"]
+        result = await translate_client.translate_text(
+            Text=text,
+            SourceLanguageCode=source_language_code,
+            TargetLanguageCode=target_language_code,
+        )
+        record_translate_usage(len(text))
+        return result["TranslatedText"]
 
     except ClientError as error:
         if error.response["Error"]["Code"] == "UnsupportedLanguagePairException":

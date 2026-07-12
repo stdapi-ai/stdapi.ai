@@ -1,0 +1,58 @@
+[
+  {
+    "product": {
+      "attributes": {
+        "regionCode": "us-east-1",
+        "usagetype": "USE1-TranscribeAudio",
+        "location": "US East (N. Virginia)",
+        "servicecode": "AmazonTranscribe",
+        "operation": "TranscribeAudio"
+      }
+    },
+    "terms": {
+      "OnDemand": {
+        "SKU301": {
+          "priceDimensions": {
+            "SKU301.6YSXRJFJ4J8ZQZ9R": {
+              "unit": "Seconds",
+              "description": "Per second of audio",
+              "beginRange": "0",
+              "endRange": "Inf",
+              "pricePerUnit": {
+                "USD": "0.0024"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "product": {
+      "attributes": {
+        "regionCode": "eu-west-1",
+        "usagetype": "EUW1-TranscribeAudio",
+        "location": "EU (Ireland)",
+        "servicecode": "AmazonTranscribe",
+        "operation": "TranscribeAudio"
+      }
+    },
+    "terms": {
+      "OnDemand": {
+        "SKU302": {
+          "priceDimensions": {
+            "SKU302.6YSXRJFJ4J8ZQZ9S": {
+              "unit": "Seconds",
+              "description": "Per second of audio",
+              "beginRange": "0",
+              "endRange": "Inf",
+              "pricePerUnit": {
+                "USD": "0.0026"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+]

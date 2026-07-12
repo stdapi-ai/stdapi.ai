@@ -2,18 +2,11 @@
 
 from contextlib import contextmanager, suppress
 from contextvars import ContextVar
+from decimal import Decimal
 from re import compile as re_compile
 from time import perf_counter_ns
 from traceback import format_exception
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Literal,
-    NotRequired,
-    TypedDict,
-    TypeVar,
-    get_args,
-)
+from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict, get_args
 
 from botocore.exceptions import ClientError, HTTPClientError
 from botocore.exceptions import ConnectionError as BotocoreConnectionError
@@ -27,10 +20,24 @@ from stdapi.api_providers import format_http_error
 from stdapi.aws_bedrock import AWS_ERROR_MAP
 from stdapi.config import SETTINGS, LogLevel
 from stdapi.metering import SERVER_FULL_VERSION
+from stdapi.usage import (
+    IMAGE_SPEC,
+    MODEL_STATE,
+    OPERATION,
+    USAGE,
+    UsageLogEntry,
+    compute_costs,
+    emit_usage_metrics,
+    format_cost,
+    init_model_state,
+    init_usage,
+    usage_log_entries,
+)
 from stdapi.utils import hide_security_details, stdout_write, webuuid
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Generator, Mapping
+    from collections.abc import AsyncGenerator, Generator, Iterable, Mapping
+    from contextvars import Token
 
     from pydantic.main import IncEx
     from types_aiobotocore_bedrock.literals import RegionName
@@ -40,6 +47,7 @@ if TYPE_CHECKING:
 
     from stdapi.monitoring_otel import OpenTelemetryManager
     from stdapi.types import JsonList, JsonMappingOrList
+    from stdapi.usage import ModelInvocationState, UsageKey, UsageRecord
 
 if not SETTINGS.otel_enabled:
     from stdapi.monitoring_otel_base import (  # type: ignore[assignment]
@@ -52,9 +60,6 @@ else:
     from stdapi.monitoring_otel import OpenTelemetryManager
 
 otel_manager = OpenTelemetryManager()
-
-#: Generic element type for stream-rebuilding helpers below.
-T = TypeVar("T")
 
 #: Per-region latency stat keys reported in the "start" event's region_latencies.
 RegionLatenciesStatsKeys = Literal["latency_ms", "stddev_ms"]
@@ -107,8 +112,12 @@ class EventLog(TypedDict):
     ]  # Request params (Body, form, query, ...)
     request_response: NotRequired[JsonMappingOrList]  # Request response
 
+    # Usage metrics (real AWS-billed usage, per service+model+operation)
+    usage: NotRequired[list[UsageLogEntry]]
 
-ParamsT = TypeVar("ParamsT", bound="BaseModel | dict[str, Any] | list[Any] | None")
+    # Request-level cost total per currency, as exact plain-decimal text
+    cost: NotRequired[dict[str, str]]
+
 
 #: Request ID (x-request-id header)
 REQUEST_ID: ContextVar[str] = ContextVar("request_id")
@@ -165,6 +174,79 @@ def _published_log_levels(level: LogLevel | Literal["disabled"]) -> set[LogLevel
 _PUBLISHED_LOG_LEVELS = _published_log_levels(SETTINGS.log_level)
 
 
+def _add_warnings(
+    log: EventLog, warnings: Iterable[JsonValue], level: LogLevel = "warning"
+) -> None:
+    """Append *warnings* to *log*'s ``error_detail`` and raise its level to *level*.
+
+    Args:
+        log: The event log to update in place.
+        warnings: Messages or structured details to append.
+        level: Severity to raise the log's level to (never lowered).
+    """
+    for warning in warnings:
+        log.setdefault("error_detail", []).append(warning)
+        if _SORTED_LOG_LEVELS.index(level) > _SORTED_LOG_LEVELS.index(log["level"]):
+            log["level"] = level
+
+
+def _finalize_usage(log: EventLog) -> None:
+    """Compute costs, attach usage entries/totals to *log*, emit metrics, then drain.
+
+    Multi-currency cost warnings are folded into *log*'s ``error_detail``/
+    ``level`` instead of being logged separately.
+
+    Args:
+        log: The event log to populate in place.
+    """
+    try:
+        if SETTINGS.cost_tracking:
+            _add_warnings(log, compute_costs())
+        if entries := usage_log_entries():
+            log["usage"] = entries
+            if SETTINGS.cost_tracking:
+                # Entry costs are exact plain-decimal strings; summing in
+                # Decimal keeps the rollup exact too.
+                cost_by_currency: dict[str, Decimal] = {}
+                for entry in entries:
+                    if (cost := entry.get("cost")) and (
+                        currency := entry.get("currency")
+                    ):
+                        pairs: Iterable[tuple[str, str]] = ((currency, cost),)
+                    elif costs := entry.get("costs"):
+                        pairs = costs.items()
+                    else:
+                        continue
+                    for currency, cost in pairs:
+                        cost_by_currency[currency] = cost_by_currency.get(
+                            currency, Decimal(0)
+                        ) + Decimal(cost)
+                if cost_by_currency:
+                    log["cost"] = {
+                        c: format_cost(s) for c, s in cost_by_currency.items()
+                    }
+        emit_usage_metrics()
+    finally:
+        # Drain synchronously (atomic on the event loop), even on failure so
+        # a later stream finalize can't re-log the same records: tasks
+        # spawned before a stream's log scope keep recording into this same
+        # dict, so the stream finalize picks up exactly the later records.
+        if (records := USAGE.get(None)) is not None:
+            records.clear()
+
+
+def _finalize_usage_safely(log: EventLog) -> None:
+    """Run :func:`_finalize_usage`, folding any failure into *log* instead of raising.
+
+    Args:
+        log: The event log to finalize and update in place.
+    """
+    try:
+        _finalize_usage(log)
+    except Exception as exc:  # noqa: BLE001
+        _add_warnings(log, ["\n".join(format_exception(exc))], level="error")
+
+
 def add_server_warning(start_event: EventLog, warning: JsonValue) -> None:
     """Append a warning to a "start" event log and raise its level to ``warning``.
 
@@ -187,6 +269,38 @@ def write_log_event(log: EventLog) -> None:
     """
     if log["level"] in _PUBLISHED_LOG_LEVELS:
         stdout_write(log)  # type: ignore[arg-type]
+
+
+def _reset_request_context(
+    request_id_token: Token[str],
+    request_token: Token[Request],
+    operation_token: Token[str],
+    request_log_token: Token[EventLog],
+    request_time_token: Token[AwareDatetime],
+    usage_token: Token[dict[UsageKey, UsageRecord]],
+    model_state_token: Token[dict[str, ModelInvocationState]],
+) -> None:
+    """Reset every per-request ContextVar.
+
+    Args:
+        request_id_token: Token restoring ``REQUEST_ID``.
+        request_token: Token restoring ``REQUEST``.
+        operation_token: Token restoring ``OPERATION``.
+        request_log_token: Token restoring ``REQUEST_LOG``.
+        request_time_token: Token restoring ``REQUEST_TIME``.
+        usage_token: Token restoring ``USAGE``.
+        model_state_token: Token restoring ``MODEL_STATE``.
+    """
+    REQUEST_ID.reset(request_id_token)
+    REQUEST.reset(request_token)
+    OPERATION.reset(operation_token)
+    REQUEST_LOG.reset(request_log_token)
+    REQUEST_TIME.reset(request_time_token)
+    USAGE.reset(usage_token)
+    MODEL_STATE.reset(model_state_token)
+    # Token-less: set mid-request by image jobs; cleared defensively so a
+    # failed invoke can't leak a stale spec into a later request context.
+    IMAGE_SPEC.set("")
 
 
 @contextmanager
@@ -227,6 +341,9 @@ def log_request_event(request: Request) -> Generator[EventLog]:
             path=request.url.path,
         )
     )
+    usage_token = init_usage()
+    model_state_token = init_model_state()
+    operation_token = OPERATION.set(request.url.path)
     request_token = REQUEST.set(request)
     span_context = otel_manager.start_span(
         f"{request.method} {request.url.path}",
@@ -266,10 +383,16 @@ def log_request_event(request: Request) -> Generator[EventLog]:
         raise
     finally:
         log["execution_time_ms"] = (perf_counter_ns() - start) // 1000000
-        REQUEST_ID.reset(request_id_token)
-        REQUEST.reset(request_token)
-        REQUEST_LOG.reset(request_log_token)
-        REQUEST_TIME.reset(request_time_token)
+        _finalize_usage_safely(log)
+        _reset_request_context(
+            request_id_token,
+            request_token,
+            operation_token,
+            request_log_token,
+            request_time_token,
+            usage_token,
+            model_state_token,
+        )
         if span_context:
             span_context.set_attribute("http.status_code", log.get("status_code", 200))
             span_context.set_attribute("duration_ms", log["execution_time_ms"])
@@ -332,12 +455,7 @@ def log_error_details(
     level = level or (
         ("warning" if status < 500 else "error") if status else "critical"
     )
-    log = REQUEST_LOG.get()
-    log.setdefault("error_detail", []).extend(error_detail)
-    if level and _SORTED_LOG_LEVELS.index(level) > _SORTED_LOG_LEVELS.index(
-        log["level"]
-    ):
-        log["level"] = level
+    _add_warnings(REQUEST_LOG.get(), error_detail, level=level)
 
 
 def _format_params(
@@ -409,19 +527,22 @@ def log_background_event(event: str, request_id: str) -> Generator[EventLog]:
 async def _rebuild_and_log_stream[T](
     first_chunk: T, stream: AsyncGenerator[T]
 ) -> AsyncGenerator[T]:
-    """Rebuilds a given asynchronous generator stream while logging its execution details.
+    """Log a "request_stream" event for streamed response portions.
 
-    This function processes an asynchronous generator stream by injecting logging and
-    monitoring functionalities. It yields the first chunk immediately, starts a tracing span,
-    and logs the performance metrics and errors encountered during the execution.
-    The stream is closed automatically upon completion or in case of an exception.
+    Yields ``first_chunk`` immediately (before any logging setup runs),
+    then logs the remaining stream's performance and usage as its own
+    separate log entry.  The ``USAGE`` accumulator is shared with the
+    request scope: the request finalize drains what it logged, and tasks
+    spawned before this point (which captured the request context) keep
+    recording into the same dict, so their usage lands here instead of
+    being lost.
 
     Args:
         first_chunk: Initial chunk to be yielded before consuming the stream.
         stream: An asynchronous generator representing the stream to process and log.
 
     Yields:
-        Yields items from the input stream including the first_chunk.
+        Every item from the input stream, including ``first_chunk``.
     """
     try:
         request_id = REQUEST_ID.get()
@@ -453,24 +574,23 @@ async def _rebuild_and_log_stream[T](
             raise
         finally:
             log["execution_time_ms"] = (perf_counter_ns() - start) // 1000000
+            _finalize_usage_safely(log)
             write_log_event(log)
     finally:
         await stream.aclose()
 
 
 async def log_request_stream_event[T](stream: AsyncGenerator[T]) -> AsyncGenerator[T]:
-    """Logs and processes events of a stream while preserving the original structure.
+    """Wrap a plain async-generator stream with a "request_stream" log entry.
 
-    This function takes the first yielded element of the stream, processes it
-    by re-logging or modifying it as needed, and then combines it with the remaining original
-    events of the input stream for consumption.
+    Consumes the stream's first item up front and delegates the rest to
+    :func:`_rebuild_and_log_stream`.
 
     Args:
-        stream:
-            An asynchronous generator stream producing events of type T.
+        stream: An asynchronous generator stream producing events of type T.
 
     Yields:
-        Items from the input asynchronous generator in their modified or original form.
+        Every item from *stream*, unmodified.
     """
     return _rebuild_and_log_stream(await stream.__anext__(), stream)
 

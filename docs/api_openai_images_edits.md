@@ -67,7 +67,7 @@ Edit images using inpainting with AWS Bedrock image models through an OpenAI-com
 | WEBP format                    |       :material-cog:{ .model-dep }       | Modern format with compression (model-specific)                                                                                                |
 | Streaming response             |   :material-check-circle:{ .success }    | Server-sent events with partial and final images                                                                                               |
 | **Usage tracking**             |                                          |                                                                                                                                                |
-| Input text tokens              |   :material-check-circle:{ .success }    | Estimated from prompt                                                                                                                          |
+| Input text tokens              |   :material-check-circle:{ .success }    | Sourced from AWS billing when available                                                                                                                          |
 | Input image tokens             |   :material-check-circle:{ .success }    | Count of input images (image + mask)                                                                                                           |
 | Output image tokens            |   :material-check-circle:{ .success }    | Image count (billing unit)                                                                                                                     |
 | **Other**                      |                                          |                                                                                                                                                |
@@ -84,6 +84,7 @@ Edit images using inpainting with AWS Bedrock image models through an OpenAI-com
 * :material-cog:{ .model-dep } **Available on Select Models** — Check your model's capabilities
 * :material-minus-circle:{ .partial } **Partial** — Supported with limitations
 * :material-close-circle:{ .unsupported } **Unsupported** — Not available in this implementation
+* :material-plus-circle:{ .extra-feature } **Extra Feature** — Enhanced capability beyond OpenAI API
 
 </div>
 
@@ -806,6 +807,6 @@ curl -X POST "$BASE/v1/images/edits" \
 
 The API tracks token usage for billing and monitoring:
 
-- **Text tokens**: Estimated from your prompt using tiktoken
-- **Image tokens**: Count of input images (image files + mask file if provided)
-- **Output tokens**: Number of images generated (`n` parameter)
+- **Image tokens**: Count of input images (image files + mask file if provided), capped at the total billed input tokens
+- **Text tokens**: Remainder of the billed input tokens after subtracting image tokens
+- **Output tokens**: Sourced from AWS billing data when available; falls back to the image count (`n`)

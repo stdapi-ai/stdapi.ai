@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 import sys
 from io import BytesIO
-from json import dumps
+from json import JSONDecodeError, dumps, loads
 from os import environ, getenv
 from pathlib import Path
 from secrets import token_hex
@@ -22,8 +22,78 @@ from starlette.testclient import TestClient
 
 if TYPE_CHECKING:
     from collections.abc import Generator
+    from typing import Any
 
     from pluggy import Result as _PluggyResult
+
+    from stdapi.pricing import Dimension
+
+
+def logged_usage_entries(
+    captured_stdout: str,
+    *,
+    service: str | None = None,
+    operation: str | None = None,
+    model: str | None = None,
+) -> list[dict[str, Any]]:
+    """Extract usage entries from captured JSON logs, optionally filtered.
+
+    Args:
+        captured_stdout: Captured stdout with one JSON log event per line.
+        service: Filter to entries with this service.
+        operation: Filter to entries with this operation.
+        model: Filter to entries with this model.
+
+    Returns:
+        Matching usage entry dicts, in log order.
+    """
+    entries: list[dict[str, Any]] = []
+    for line in captured_stdout.splitlines():
+        if '"usage"' not in line:
+            continue
+        try:
+            event = loads(line)
+        except JSONDecodeError:
+            continue
+        entries.extend(
+            usage
+            for usage in event.get("usage", [])
+            if (service is None or usage.get("service") == service)
+            and (operation is None or usage.get("operation") == operation)
+            and (model is None or usage.get("model") == model)
+        )
+    return entries
+
+
+def set_test_price(
+    model: str, region: str, dimension: Dimension, amount: str, currency: str
+) -> None:
+    """Seed the price index with one test price (standard tier, no TTL/routing bucket).
+
+    Shared by pricing/usage/monitoring tests that need a real, resolvable
+    price rather than mocking ``resolve_price`` itself. *model* is used
+    as-is, not normalized -- pick a name with no "-"/"_" separators so
+    normalize_model_key() doesn't alter it. For a non-standard tier or a
+    bucketed price, build a ``PriceKey`` directly instead (see
+    ``TestRoutingTierPricing._set_routed_prices`` in test_usage.py).
+    """
+    from decimal import Decimal  # noqa: PLC0415
+
+    from stdapi.pricing import Price, PriceKey, Service, _state  # noqa: PLC0415
+
+    key = PriceKey(Service.BEDROCK, model, region, dimension, "standard")
+    _state.price_index[key] = Price(Decimal(amount), currency)
+
+
+@pytest.fixture(autouse=True)
+def _clean_price_index() -> Generator[None]:
+    """Reset the price index before each test to prevent leakage."""
+    from stdapi.pricing import _state  # noqa: PLC0415
+
+    original = _state.price_index
+    _state.price_index = {}
+    yield
+    _state.price_index = original
 
 
 _loaded_env_file: str | None = None
@@ -111,7 +181,7 @@ environ.update(
         "log_request_params": "true",
         "model_cache_seconds": "10",
         "otel_enabled": "true",
-        "tokens_estimation": "true",
+        "cloudwatch_metrics": "true",
         "trusted_hosts": '["*"]',
         # Model-specific extra configuration
         "aws_bedrock_legacy": "true",
@@ -133,6 +203,8 @@ environ.update(
         ),
     }
 )
+# Disable cost tracking unless a profile enables it (avoids AWS Pricing API calls).
+environ.setdefault("cost_tracking", "false")
 
 # Model mappings for different test contexts
 MODEL_MAPPINGS = {
@@ -217,13 +289,6 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption(
         "--agentic", action="store_true", default=False, help="Run agentic tests"
     )
-    parser.addoption(
-        "--info",
-        action="store_true",
-        default=False,
-        help="Run the test server with 'info' log level. "
-        "Only if --server-url and --use-official-api are not specified.",
-    )
 
 
 def pytest_report_header() -> str | None:
@@ -237,6 +302,13 @@ def pytest_collection_modifyitems(
     config: pytest.Config, items: list[pytest.Item]
 ) -> None:
     """Skip expensive tests at collection time unless explicitly requested."""
+    if config.getoption("--server-url") or config.getoption("--use-official-api"):
+        skip_marker = pytest.mark.skip(
+            reason="Tests the local implementation (remote target selected)"
+        )
+        for item in items:
+            if item.get_closest_marker("local"):
+                item.add_marker(skip_marker)
     if not config.getoption("--expensive"):
         skip_marker = pytest.mark.skip(
             reason="Need --expensive option to run this test"
@@ -397,8 +469,8 @@ def test_client(request: pytest.FixtureRequest) -> Generator[TestClient | None]:
     if not request.config.getoption(
         "--use-official-api"
     ) and not request.config.getoption("--server-url"):
-        # log_level depends on a CLI flag, so it cannot be set at module level.
-        environ["log_level"] = "info" if request.config.getoption("--info") else "error"
+        # Enable JSON logs so tests can assert on captured log events.
+        environ["log_level"] = "info"
         from stdapi.main import app  # noqa: PLC0415
 
         with TestClient(app) as test_client:

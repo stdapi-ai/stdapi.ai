@@ -813,15 +813,58 @@ class _Settings(BaseSettings):
 
     tokens_estimation: bool = Field(
         default=False,
+        deprecated=True,
+        description="Deprecated and ignored: token estimation has been removed; "
+        "only real AWS-billed usage is reported.",
+    )
+
+    tokens_estimation_default_encoding: str | None = Field(
+        default=None,
+        deprecated=True,
+        description="Deprecated and ignored: token estimation has been removed.",
+    )
+
+    cloudwatch_metrics: bool = Field(
+        default=False,
+        description="If True, emit per-request AWS-billed usage as CloudWatch "
+        "Embedded Metric Format (EMF) log lines (extracted as metrics on ECS).",
+    )
+
+    cloudwatch_metrics_namespace: str = Field(
+        default="stdapi",
+        description="CloudWatch namespace for the emitted usage metrics.",
+    )
+
+    # Cost tracking settings
+    cost_tracking: bool = Field(
+        default=False,
         description=(
-            "If True, estimate the number of tokens using a tokenizer based on the "
-            "request input/output text when not directly returned by the model itself."
+            "Enable real-time cost tracking from live AWS pricing. Disabled by "
+            "default: it requires the extra pricing:GetProducts IAM permission, "
+            "which existing deployments may not grant. When enabled, "
+            "request logs include per-entry cost/currency and request-level totals. "
+            "Pricing data is fetched from AWS Price List API at startup and cached "
+            "in memory, then refreshed on demand whenever a newly available Bedrock "
+            "model has no catalog entry yet. Costs are computed from actual "
+            "AWS-billed quantities (tokens, characters, seconds, etc.) multiplied "
+            "by the resolved unit price. Silently omits the cost on a pricing miss "
+            "rather than blocking request processing."
         ),
     )
 
-    tokens_estimation_default_encoding: str = Field(
-        default="o200k_base",
-        description="Tiktoken Tokenizer encoding to use for token count estimation.",
+    cost_price_overrides: dict[str, dict[str, float]] = Field(
+        default={},
+        description=(
+            "Operator-supplied unit price overrides for Bedrock models not covered "
+            "by the AWS Price List API (other services always use the catalog). "
+            "The key is the Bedrock model ID (as used by the API), and the inner "
+            "dict maps dimension name to price per ONE unit.\n\n"
+            "Example (for a model with missing pricing):\n"
+            'COST_PRICE_OVERRIDES=\'{"anthropic.claude-3-5-sonnet-20241022": '
+            '{"input_tokens": 0.000003, "output_tokens": 0.000015}}\'\n\n'
+            "Prices are per one unit (token, character, second, etc.) in the "
+            "deployment's partition currency (USD for standard AWS, EUR for EUSC)."
+        ),
     )
 
     enable_docs: bool = Field(
@@ -1257,6 +1300,16 @@ class _Settings(BaseSettings):
             Current timezone-aware datetime.
         """
         return datetime.now(self.timezone)
+
+    def deprecated(self) -> set[str]:
+        """Return the deprecated settings that were explicitly set.
+
+        Returns:
+            Names of settings marked with ``Field(deprecated=...)`` found in
+            ``model_fields_set``.
+        """
+        fields = type(self).model_fields
+        return {name for name in self.model_fields_set if fields[name].deprecated}
 
 
 try:

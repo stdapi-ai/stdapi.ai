@@ -1,8 +1,10 @@
 """Models."""
 
 from asyncio import Lock, gather, sleep
+from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import timedelta
-from functools import cached_property
+from functools import cached_property, partial
 from importlib import import_module
 from pkgutil import iter_modules
 from re import Pattern
@@ -23,6 +25,7 @@ from stdapi.aws_bedrock import (
     bedrock_client,
     check_stream_event,
     handle_bedrock_client_error,
+    usage_from_amazon_bedrock_invocation_metrics,
 )
 from stdapi.aws_s3 import (
     get_s3_bucket_for_region,
@@ -33,6 +36,11 @@ from stdapi.config import SETTINGS
 from stdapi.input_file import get_s3_input_regions, resolve_all_bedrock_content_blocks
 from stdapi.models.capabilities import ROUTE_CAPABILITIES, Capability
 from stdapi.models.deprecation import DEPRECATED_MODELS
+from stdapi.models.pricing_overrides import (
+    DEFAULT_MODEL_PRICE_REGIONS,
+    DEFAULT_MODEL_PRICES,
+    MODEL_KEY_OVERRIDES,
+)
 from stdapi.monitoring import (
     REQUEST_ID,
     REQUEST_LOG,
@@ -41,16 +49,22 @@ from stdapi.monitoring import (
     build_metadata,
     log_error_details,
 )
+from stdapi.pricing import (
+    Routing,
+    refresh_price_catalog_for_new_models,
+    register_default_prices,
+    register_model_key_overrides,
+)
 from stdapi.region_routing import REGION_ROUTER, ROUTING_RETRYABLE_CODES
+from stdapi.usage import get_model_state, record_bedrock_usage
 from stdapi.utils import match_bedrock_app_profile_arn, match_bedrock_prompt_router_arn
 
 if TYPE_CHECKING:
     from collections.abc import (
         AsyncGenerator,
+        AsyncIterable,
         Awaitable,
         Callable,
-        Iterable,
-        Mapping,
         Sequence,
     )
 
@@ -73,7 +87,7 @@ if TYPE_CHECKING:
         ResponseStreamTypeDef,
     )
 
-    from stdapi.aws_bedrock import ConverseRequestBaseTypeDef
+    from stdapi.aws_bedrock import BedrockTokenUsage, ConverseRequestBaseTypeDef
 
     class _ModelCache(TypedDict):
         """Model cache configuration."""
@@ -87,8 +101,73 @@ if TYPE_CHECKING:
 else:
     type RegionName = str
 
+
+@dataclass(slots=True)
+class InvokeResult[ResponseT]:
+    """Result of a model invocation with optional token counts.
+
+    Attributes:
+        response: The parsed JSON response body from the model.
+        input_tokens: Number of input tokens consumed, or None if not available.
+        output_tokens: Number of output tokens consumed, or None if not available.
+        region: Region that served the call, for usage attribution.
+        tier: Service tier that served the call (AWS-reported when available).
+        routing: Serving profile of the call, for usage attribution.
+    """
+
+    response: ResponseT
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    region: str = ""
+    tier: ServiceTierTypeType | None = None
+    routing: Routing | None = None
+
+
 #: Prefix Bedrock uses for its global cross-region inference profile IDs.
 _GLOBAL_INFERENCE_PROFILE_PREFIX: Final = "global."
+
+#: Built-in Bedrock tool names billed per invocation (counted from toolUse blocks).
+_BILLED_GROUNDING_TOOLS: Final[frozenset[str]] = frozenset({"nova_grounding"})
+
+# Keep stdapi.pricing model-agnostic: its model-key table is owned here.
+register_model_key_overrides(MODEL_KEY_OVERRIDES)
+register_default_prices(DEFAULT_MODEL_PRICES, DEFAULT_MODEL_PRICE_REGIONS)
+
+
+def _request_routing(resolved_model_id: str, latency: str | None) -> Routing:
+    """Serving profile of one prepared request, from its resolved values.
+
+    Args:
+        resolved_model_id: The model/profile ID sent to Bedrock.
+        latency: The request's ``performanceConfig`` latency value, if any.
+
+    Returns:
+        "latency", "global" or "" (plain/regional).
+    """
+    if latency == "optimized":
+        return "latency"
+    if resolved_model_id.startswith(_GLOBAL_INFERENCE_PROFILE_PREFIX):
+        return "global"
+    return ""
+
+
+def _count_grounding_tool_uses(response: ConverseResponseTypeDef) -> int:
+    """Count per-invocation-billed grounding-tool calls in a Converse response.
+
+    Args:
+        response: Converse API response.
+
+    Returns:
+        Number of ``toolUse`` output content blocks naming a
+        :data:`_BILLED_GROUNDING_TOOLS` tool.
+    """
+    content = response.get("output", {}).get("message", {}).get("content", ())
+    return sum(
+        1
+        for block in content
+        if block.get("toolUse", {}).get("name") in _BILLED_GROUNDING_TOOLS
+    )
+
 
 #: Bedrock models details
 _MODELS: dict[str, ModelDetails] = {}
@@ -374,7 +453,7 @@ class ModelBase[RequestT, ResponseT]:
         s3_required: bool = False,
         service_tier: ServiceTierTypeType | None = None,
         guardrail: GuardrailStreamConfigurationTypeDef | None = None,
-    ) -> ResponseT:
+    ) -> InvokeResult[ResponseT]:
         """Invoke the model via ``InvokeModel``.
 
         Args:
@@ -391,40 +470,33 @@ class ModelBase[RequestT, ResponseT]:
                 over context variable. Defaults to None (uses fallback).
 
         Returns:
-            Parsed JSON response body.
+            InvokeResult containing the parsed JSON response body and token counts.
         """
         candidates = await _compute_candidate_regions(
             self._model_id, region=region, s3_required=s3_required
         )
-        return await _route_and_execute(
+        resp = await _route_and_execute(
             self._model_id,
             candidates,
-            lambda r: _invoke(  # type: ignore[return-value,arg-type]
+            partial(
+                _invoke,
                 self._model_id,
                 body,  # type: ignore[arg-type]
-                r,
                 inference_profile=inference_profile,
                 single_region=len(candidates) == 1,
                 service_tier=service_tier,
                 guardrail=guardrail,
             ),
         )
-
-    async def batch_invoke(
-        self, bodies: Iterable[RequestT], *, inference_profile: bool = True
-    ) -> list[ResponseT]:
-        """Invoke the model concurrently for multiple request bodies.
-
-        Args:
-            bodies: Iterable of JSON request payloads.
-            inference_profile: Use the cross-region inference profile ID when available.
-
-        Returns:
-            List of parsed JSON response bodies, in the same order as *bodies*.
-        """
-        return await gather(
-            *(self.invoke(body, inference_profile=inference_profile) for body in bodies)
+        self._record_invoke_usage(
+            resp.input_tokens,
+            resp.output_tokens,
+            resp.response,
+            region=resp.region,
+            tier=resp.tier,
+            routing=resp.routing,
         )
+        return resp  # type: ignore[return-value]
 
     async def invoke_stream(
         self,
@@ -460,14 +532,15 @@ class ModelBase[RequestT, ResponseT]:
         async for chunk in await _route_and_execute(
             self._model_id,
             candidates,
-            lambda r: _open_invoke_stream(
+            partial(
+                _open_invoke_stream,
                 self._model_id,
                 body,  # type: ignore[arg-type]
-                r,
                 inference_profile=inference_profile,
                 single_region=len(candidates) == 1,
                 service_tier=service_tier,
                 guardrail=guardrail,
+                record_usage_callback=self._record_invocation_metrics_usage,
             ),
         ):
             yield chunk
@@ -478,7 +551,7 @@ class ModelBase[RequestT, ResponseT]:
         *,
         inference_profile: bool = True,
         output_file: str = "output.json",
-    ) -> ResponseT:
+    ) -> InvokeResult[ResponseT]:
         """Invoke the model via ``StartAsyncInvoke`` and wait for the result.
 
         Args:
@@ -487,7 +560,8 @@ class ModelBase[RequestT, ResponseT]:
             output_file: Output file name to retrieve from S3.
 
         Returns:
-            Parsed JSON response body.
+            InvokeResult wrapping the parsed response body and billing
+            attribution (async invocations report no token usage).
 
         Raises:
             ApiError: When invocation fails or results cannot be retrieved.
@@ -498,16 +572,15 @@ class ModelBase[RequestT, ResponseT]:
             if REGION_ROUTER
             else candidates
         )[0]
-        _set_effective_region(effective_region)
-
         s3_bucket_name = require_s3_bucket_for_region(effective_region)
         bedrock: BedrockRuntimeClient = get_client("bedrock-runtime", effective_region)
+        resolved_model_id = await _resolve_routed_model_id(
+            self._model_id, effective_region, inference_profile=inference_profile
+        )
         with handle_bedrock_client_error():
             invocation_arn = (
                 await bedrock.start_async_invoke(
-                    modelId=(await get_model_details(self._model_id)).get_id(
-                        effective_region, inference_profile=inference_profile
-                    ),
+                    modelId=resolved_model_id,
                     modelInput=body,  # type: ignore[arg-type]
                     outputDataConfig={
                         "s3OutputDataConfig": {
@@ -527,18 +600,129 @@ class ModelBase[RequestT, ResponseT]:
         track_temporary_s3_objects(
             s3_bucket_name, s3_output_path, f"{s3_key}/manifest.json"
         )
-        return from_json(  # type: ignore[no-any-return]
-            await (
-                await get_client("s3", effective_region).get_object(
-                    Bucket=s3_bucket_name, Key=s3_output_path
-                )
-            )["Body"].read()
+        return InvokeResult(
+            response=from_json(
+                await (
+                    await get_client("s3", effective_region).get_object(
+                        Bucket=s3_bucket_name, Key=s3_output_path
+                    )
+                )["Body"].read()
+            ),
+            region=effective_region,
+            routing=_request_routing(resolved_model_id, None),
         )
+
+    def _record_converse_usage(
+        self,
+        response: ConverseResponseTypeDef,
+        grounding_requests: int = 0,
+        *,
+        region: str = "",
+        requested_tier: ServiceTierTypeType | None = None,
+        routing: Routing | None = None,
+    ) -> None:
+        """Record token usage from a Converse API response.
+
+        Args:
+            response: Converse API response with usage metrics.
+            grounding_requests: Per-invocation-billed built-in grounding-tool
+                calls observed in the response/stream content
+                (see :data:`_BILLED_GROUNDING_TOOLS`).
+            region: Region that served the call (per-call, race-free
+                attribution -- see :func:`stdapi.usage.record_bedrock_usage`).
+            requested_tier: The request's tier, used when the response
+                doesn't report the tier that actually served it.
+            routing: Serving profile of the call.
+        """
+        # Bill counted grounding calls even on a missing/empty usage block.
+        usage = response.get("usage") or {}
+        if not usage and not grounding_requests:
+            return
+        record_bedrock_usage(
+            self._model_id,
+            # AWS reports the tier that actually served the call; it takes
+            # precedence over the requested one.
+            tier=(response.get("serviceTier") or {}).get("type") or requested_tier,
+            region=region,
+            routing=routing,
+            input_tokens=int(usage.get("inputTokens", 0)),
+            output_tokens=int(usage.get("outputTokens", 0)),
+            total_tokens=int(usage.get("totalTokens", 0)),
+            cached_tokens=int(usage.get("cacheReadInputTokens", 0)),
+            cache_write_tokens=int(usage.get("cacheWriteInputTokens", 0)),
+            grounding_requests=grounding_requests,
+            cache_write_tokens_by_ttl={
+                d["ttl"]: int(d["inputTokens"]) for d in usage.get("cacheDetails") or ()
+            },
+        )
+
+    def _record_invoke_usage(
+        self,
+        input_tokens: int | None,
+        output_tokens: int | None,
+        response: Mapping[str, Any],  # noqa: ARG002
+        *,
+        region: str = "",
+        tier: ServiceTierTypeType | None = None,
+        routing: Routing | None = None,
+    ) -> None:
+        """Record usage from a non-Converse API invocation (e.g. InvokeModel).
+
+        Args:
+            input_tokens: Input tokens, or None.
+            output_tokens: Output tokens, or None.
+            response: Response body for subclass extension (e.g. counting images).
+            region: Region that served the call.
+            tier: Service tier that served the call.
+            routing: Serving profile of the call.
+        """
+        record_bedrock_usage(
+            self._model_id,
+            tier=tier,
+            region=region,
+            routing=routing,
+            input_tokens=input_tokens or 0,
+            output_tokens=output_tokens or 0,
+        )
+
+    def _record_invocation_metrics_usage(
+        self,
+        data: Mapping[str, Any],
+        *,
+        region: str = "",
+        tier: ServiceTierTypeType | None = None,
+        routing: Routing | None = None,
+    ) -> BedrockTokenUsage:
+        """Record usage from "amazon-bedrock-invocationMetrics" if present.
+
+        Args:
+            data: A mapping including potential Amazon Bedrock invocation metrics.
+            region: Region that served the call.
+            tier: Service tier that served the call.
+            routing: Serving profile of the call.
+
+        Returns:
+            The extracted token usage (also used by callers that need the raw
+            counts, e.g. to synthesize a Converse-format usage block).
+        """
+        usage = usage_from_amazon_bedrock_invocation_metrics(data)
+        record_bedrock_usage(
+            self._model_id,
+            tier=tier,
+            region=region,
+            routing=routing,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+        )
+        return usage
 
     async def _prepare_converse_request_for_region(
         self, request: ConverseRequestBaseTypeDef, region: RegionName
     ) -> None:
         """Prepare a Converse request in-place for *region*.
+
+        Folds in performance/service-tier context-var values when present,
+        mirroring :func:`_build_invoke_kwargs` for the ``InvokeModel`` path.
 
         Args:
             request: Converse request payload to mutate.
@@ -547,11 +731,22 @@ class ModelBase[RequestT, ResponseT]:
         await resolve_all_bedrock_content_blocks(
             region, document_s3_location=self.S3_LOCATION_DOCUMENT_SUPPORTED
         )
-        _set_effective_region(region)
-        request["modelId"] = (await get_model_details(self._model_id)).get_id(
-            region, inference_profile=True
+        latency, perf_service_tier = PERFORMANCE_CONFIG_VAR.get((None, None))
+        request["modelId"] = await _resolve_routed_model_id(
+            self._model_id, region, inference_profile=True, latency=latency
         )
         request["requestMetadata"] = build_metadata(request.get("requestMetadata"))
+
+        if latency:
+            request["performanceConfig"] = {"latency": latency}
+
+        if service_tier := (
+            request.get("serviceTier", {}).get("type")
+            or perf_service_tier
+            or SETTINGS.default_model_service_tiers.get(self._model_id)
+        ):
+            request["serviceTier"] = {"type": service_tier}
+            get_model_state(self._model_id).service_tier = service_tier
 
     async def _converse(
         self,
@@ -570,11 +765,24 @@ class ModelBase[RequestT, ResponseT]:
         Returns:
             Bedrock Converse response.
         """
+        # Fan-out callers (e.g. n > 1 choices) reuse one request dict across
+        # concurrent calls: a per-call copy keeps its mutation isolated.
+        request = dict(request)  # type: ignore[assignment]
         await self._prepare_converse_request_for_region(request, region)
         with handle_bedrock_client_error():
-            return await bedrock_client(region, single_region=single_region).converse(
-                **request
-            )
+            response = await bedrock_client(
+                region, single_region=single_region
+            ).converse(**request)
+        self._record_converse_usage(
+            response,
+            grounding_requests=_count_grounding_tool_uses(response),
+            region=region,
+            requested_tier=request.get("serviceTier", {}).get("type"),
+            routing=_request_routing(
+                request["modelId"], request.get("performanceConfig", {}).get("latency")
+            ),
+        )
+        return response
 
     async def _converse_stream(
         self,
@@ -595,11 +803,68 @@ class ModelBase[RequestT, ResponseT]:
         Returns:
             Bedrock ConverseStream response containing the event stream.
         """
+        # Fan-out callers (e.g. n > 1 choices) reuse one request dict across
+        # concurrent calls: a per-call copy keeps its mutation isolated.
+        request = dict(request)  # type: ignore[assignment]
         await self._prepare_converse_request_for_region(request, region)
         with handle_bedrock_client_error():
-            return await bedrock_client(
+            response = await bedrock_client(
                 region, single_region=single_region
             ).converse_stream(**request)
+
+        response["stream"] = self._capture_stream_usage(  # type: ignore[typeddict-item]
+            response["stream"],
+            region=region,
+            requested_tier=request.get("serviceTier", {}).get("type"),
+            routing=_request_routing(
+                request["modelId"], request.get("performanceConfig", {}).get("latency")
+            ),
+        )
+        return response
+
+    async def _capture_stream_usage(
+        self,
+        stream: AsyncIterable[Any],
+        *,
+        region: str = "",
+        requested_tier: ServiceTierTypeType | None = None,
+        routing: Routing | None = None,
+    ) -> AsyncGenerator[Any]:
+        """Yield ConverseStream events, recording billed usage from metadata events.
+
+        Per-invocation-billed grounding-tool calls (``contentBlockStart``
+        events naming a :data:`_BILLED_GROUNDING_TOOLS` tool) are counted
+        and attached to the usage recorded at the trailing metadata event.
+
+        Args:
+            stream: Original Bedrock event stream.
+            region: Region that served the call.
+            requested_tier: The request's tier, used when the metadata event
+                doesn't report the tier that actually served the call.
+            routing: Serving profile of the call.
+
+        Yields:
+            Unmodified stream events.
+        """
+        grounding_requests = 0
+        async for event in stream:
+            if (block_start := event.get("contentBlockStart")) and (
+                block_start["start"].get("toolUse", {}).get("name")
+                in _BILLED_GROUNDING_TOOLS
+            ):
+                grounding_requests += 1
+            if (metadata := event.get("metadata")) and metadata.get("usage"):
+                # The metadata event carries the same usage/serviceTier keys
+                # as a non-streaming Converse response.
+                self._record_converse_usage(
+                    metadata,
+                    grounding_requests=grounding_requests,
+                    region=region,
+                    requested_tier=requested_tier,
+                    routing=routing,
+                )
+                grounding_requests = 0
+            yield event
 
     async def converse(
         self, request: ConverseRequestBaseTypeDef
@@ -981,6 +1246,13 @@ async def _get_bedrock_models_from_region(region: RegionName) -> list[ModelDetai
 async def initialize_bedrock_models(start_event: EventLog | None = None) -> bool:
     """Refresh the Bedrock model cache from all configured regions if stale.
 
+    When this is a lazy on-demand refresh (``start_event`` is None, i.e. not
+    the initial startup call) and it discovers model IDs not previously
+    registered, triggers an immediate price-catalog refresh for those model
+    IDs (see :func:`stdapi.pricing.refresh_price_catalog_for_new_models`) so
+    newly released models get cost tracking without waiting on a proactive
+    background poll.
+
     Args:
         start_event: Optional startup event log to record warnings on for
             unavailable models, invalid ARN mappings, and unmatched
@@ -991,6 +1263,7 @@ async def initialize_bedrock_models(start_event: EventLog | None = None) -> bool
     """
     updated = False
     unavailable_models: dict[str, dict[str, list[str]]] = {}
+    new_model_ids: set[str] = set()
 
     async with _CACHE["update_lock"]:
         if _CACHE["update_next"] is None or _CACHE["update_next"] <= SETTINGS.now():
@@ -1035,6 +1308,7 @@ async def initialize_bedrock_models(start_event: EventLog | None = None) -> bool
 
             async with _CACHE["access_lock"]:
                 if all_models != _MODELS:
+                    new_model_ids = set(all_models) - set(_MODELS)
                     _MODELS.clear()
                     _MODELS.update(all_models)
                     updated = True
@@ -1055,7 +1329,25 @@ async def initialize_bedrock_models(start_event: EventLog | None = None) -> bool
     _warn_bedrock_startup_issues(
         start_event, unavailable_models, invalid_arn_mappings, unmatched_restrict_keys
     )
+    await _trigger_price_catalog_refresh(start_event, new_model_ids)
     return updated
+
+
+async def _trigger_price_catalog_refresh(
+    start_event: EventLog | None, new_model_ids: set[str]
+) -> None:
+    """Trigger an on-demand price-catalog refresh for newly discovered Bedrock models.
+
+    No-op for the initial startup call (``start_event`` is not None) -- that
+    one already gets a full catalog from ``start_price_catalog()``.
+
+    Args:
+        start_event: The event log passed to ``initialize_bedrock_models()``.
+        new_model_ids: Model IDs discovered by this refresh that weren't
+            previously registered.
+    """
+    if new_model_ids and start_event is None:
+        await refresh_price_catalog_for_new_models(new_model_ids)
 
 
 def _warn_bedrock_startup_issues(
@@ -1228,7 +1520,7 @@ async def _filter_model(
     ):
         models[model.id] = model
     elif model_region is not None:
-        unavailable_models.setdefault(model.id, {})[model_region] = [
+        issues = [
             issue
             for issue, value, expected in (
                 ("unauthorized", availability["authorizationStatus"], "AUTHORIZED"),
@@ -1242,6 +1534,11 @@ async def _filter_model(
             )
             if value != expected
         ]
+        if issues == ["unavailable"]:
+            # AWS catalog inconsistency (listed but region-unavailable, e.g.
+            # amazon.titan-embed-g1-text-02): not operator-actionable, skip.
+            return
+        unavailable_models.setdefault(model.id, {})[model_region] = issues
 
 
 def load_model_plugins[ModelT: ModelBase[Any, Any]](
@@ -1502,16 +1799,44 @@ def _is_invalid_model_identifier(exc: ClientError) -> bool:
     )
 
 
-def _set_effective_region(region: RegionName) -> None:
-    """Record *region* in the request log's ``model_regions`` set.
+def _set_effective_region(model_id: str, region: RegionName) -> None:
+    """Record *region* in the request log's ``model_regions`` set and *model_id*'s invocation state.
 
     Args:
+        model_id: Bedrock model identifier the region applies to.
         region: AWS region selected for this request.
     """
     log = REQUEST_LOG.get()
     if "model_regions" not in log:
         log["model_regions"] = set()
     log["model_regions"].add(region)
+    get_model_state(model_id).region = region
+
+
+async def _resolve_routed_model_id(
+    model_id: str,
+    region: RegionName,
+    *,
+    inference_profile: bool,
+    latency: str | None = None,
+) -> str:
+    """Resolve the model/profile ID to send to Bedrock for *region* and record its routing.
+
+    Args:
+        model_id: Bedrock model identifier.
+        region: Target AWS region.
+        inference_profile: Use the cross-region inference profile ID when available.
+        latency: The request's ``performanceConfig`` latency value, if any.
+
+    Returns:
+        The resolved model or inference-profile ID to send to Bedrock.
+    """
+    _set_effective_region(model_id, region)
+    resolved_model_id = (await get_model_details(model_id)).get_id(
+        region, inference_profile=inference_profile
+    )
+    get_model_state(model_id).routing = _request_routing(resolved_model_id, latency)
+    return resolved_model_id
 
 
 async def _build_invoke_kwargs(
@@ -1541,10 +1866,12 @@ async def _build_invoke_kwargs(
     Returns:
         Fully populated request kwargs dict.
     """
+    latency, perf_service_tier = PERFORMANCE_CONFIG_VAR.get((None, None))
+    resolved_model_id = await _resolve_routed_model_id(
+        model_id, region, inference_profile=inference_profile, latency=latency
+    )
     kwargs: InvokeModelRequestTypeDef = {
-        "modelId": (await get_model_details(model_id)).get_id(
-            region, inference_profile=inference_profile
-        ),
+        "modelId": resolved_model_id,
         "contentType": "application/json",
         "accept": "application/json",
         "body": to_json(body),
@@ -1556,7 +1883,6 @@ async def _build_invoke_kwargs(
         if trace := guardrail.get("trace"):
             kwargs["trace"] = trace.upper()  # type: ignore[typeddict-item]
 
-    latency, perf_service_tier = PERFORMANCE_CONFIG_VAR.get((None, None))
     if latency:
         kwargs["performanceConfigLatency"] = latency
     if service_tier := (
@@ -1564,7 +1890,7 @@ async def _build_invoke_kwargs(
         or perf_service_tier
         or SETTINGS.default_model_service_tiers.get(model_id)
     ):
-        kwargs["serviceTier"] = service_tier
+        get_model_state(model_id).service_tier = kwargs["serviceTier"] = service_tier
     return kwargs
 
 
@@ -1577,8 +1903,8 @@ async def _invoke(
     single_region: bool,
     service_tier: ServiceTierTypeType | None = None,
     guardrail: GuardrailStreamConfigurationTypeDef | None = None,
-) -> Mapping[str, Any]:
-    """Call ``InvokeModel`` and return the parsed JSON response.
+) -> InvokeResult[Mapping[str, Any]]:
+    """Call ``InvokeModel`` and return the parsed JSON response with token counts.
 
     Args:
         model_id: Bedrock model identifier.
@@ -1590,41 +1916,57 @@ async def _invoke(
         guardrail: Guardrail configuration (takes precedence over context var).
 
     Returns:
-        Parsed JSON response body.
+        InvokeResult containing the response body and token counts.
     """
-    _set_effective_region(region)
+    kwargs = await _build_invoke_kwargs(
+        model_id,
+        body,
+        region,
+        inference_profile=inference_profile,
+        service_tier=service_tier,
+        guardrail=guardrail,
+    )
     with handle_bedrock_client_error():
         response = await bedrock_client(
             region, single_region=single_region
-        ).invoke_model(
-            **(
-                await _build_invoke_kwargs(
-                    model_id,
-                    body,
-                    region,
-                    inference_profile=inference_profile,
-                    service_tier=service_tier,
-                    guardrail=guardrail,
-                )
-            )
-        )
-    return from_json(await response["body"].read())  # type: ignore[no-any-return]
+        ).invoke_model(**kwargs)
+    headers = response.get("ResponseMetadata", {}).get("HTTPHeaders", {})
+    return InvokeResult(
+        response=from_json(await response["body"].read()),
+        input_tokens=(
+            int(v) if (v := headers.get("x-amzn-bedrock-input-token-count")) else None
+        ),
+        output_tokens=(
+            int(v) if (v := headers.get("x-amzn-bedrock-output-token-count")) else None
+        ),
+        region=region,
+        # AWS reports the tier that actually served the call; bill with it.
+        tier=response.get("serviceTier") or kwargs.get("serviceTier"),
+        routing=_request_routing(
+            kwargs["modelId"], kwargs.get("performanceConfigLatency")
+        ),
+    )
 
 
 async def _iter_invoke_stream(
     body: AioEventStream[ResponseStreamTypeDef],
+    record_usage_callback: Callable[..., object] | None = None,
 ) -> AsyncGenerator[JsonValue]:
     """Iterate over an open ``InvokeModelWithResponseStream`` event stream.
 
     Args:
         body: Open event stream from ``invoke_model_with_response_stream``.
+        record_usage_callback: Optional callback to record usage from each event.
 
     Yields:
         Parsed JSON chunks.
     """
     async for event in body:
         if "chunk" in event:
-            yield from_json(event["chunk"]["bytes"])
+            chunk = from_json(event["chunk"]["bytes"])
+            if record_usage_callback is not None and isinstance(chunk, Mapping):
+                record_usage_callback(chunk)
+            yield chunk
         else:
             check_stream_event(event)
 
@@ -1638,6 +1980,7 @@ async def _open_invoke_stream(
     single_region: bool,
     service_tier: ServiceTierTypeType | None = None,
     guardrail: GuardrailStreamConfigurationTypeDef | None = None,
+    record_usage_callback: Callable[..., object] | None = None,
 ) -> AsyncGenerator[JsonValue]:
     """Open an ``InvokeModelWithResponseStream`` connection and return a JSON chunk generator.
 
@@ -1653,28 +1996,36 @@ async def _open_invoke_stream(
         single_region: Selects the botocore client (see :func:`bedrock_client`).
         service_tier: Service tier configuration (takes precedence over context var).
         guardrail: Guardrail configuration (takes precedence over context var).
+        record_usage_callback: Optional callback to record usage from streaming events.
 
     Returns:
         Async generator yielding parsed JSON chunks.
     """
-    _set_effective_region(region)
+    kwargs = await _build_invoke_kwargs(
+        model_id,
+        body,
+        region,
+        inference_profile=inference_profile,
+        service_tier=service_tier,
+        guardrail=guardrail,
+    )
     with handle_bedrock_client_error():
         response = await bedrock_client(
             region, single_region=single_region
-        ).invoke_model_with_response_stream(
-            **(
-                await _build_invoke_kwargs(
-                    model_id,
-                    body,
-                    region,
-                    inference_profile=inference_profile,
-                    service_tier=service_tier,
-                    guardrail=guardrail,
-                )
-            )
+        ).invoke_model_with_response_stream(**kwargs)
+    if record_usage_callback is not None:
+        # Bind this call's attribution (see record_bedrock_usage's `region`).
+        record_usage_callback = partial(
+            record_usage_callback,
+            region=region,
+            # AWS reports the tier that actually served the call.
+            tier=response.get("serviceTier") or kwargs.get("serviceTier"),
+            routing=_request_routing(
+                kwargs["modelId"], kwargs.get("performanceConfigLatency")
+            ),
         )
 
-    return _iter_invoke_stream(response["body"])
+    return _iter_invoke_stream(response["body"], record_usage_callback)
 
 
 def _raise_model_not_found(

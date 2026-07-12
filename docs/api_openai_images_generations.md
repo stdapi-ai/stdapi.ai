@@ -65,8 +65,8 @@ Generate images with AWS Bedrock image models like Stability AI and Amazon Nova 
 | SSE streaming                  |   :material-check-circle:{ .success }    | Server-sent events with partial and final images                    |
 | Partial images                 |       :material-cog:{ .model-dep }       | Progressive previews when available                                 |
 | **Usage tracking**             |                                          |                                                                     |
-| Input text tokens              |   :material-check-circle:{ .success }    | Estimated from prompt using tiktoken                                |
-| Output image tokens            |   :material-check-circle:{ .success }    | Number of images generated (`n` parameter)                          |
+| Input text tokens              |   :material-check-circle:{ .success }    | Sourced from AWS billing when available                             |
+| Output image tokens            |   :material-check-circle:{ .success }    | Sourced from AWS billing data when available; falls back to the image count (`n`) |
 | **Other**                      |                                          |                                                                     |
 | `user`                         |   :material-minus-circle:{ .partial }    | Logged but not used for abuse monitoring                            |
 

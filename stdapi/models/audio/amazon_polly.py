@@ -20,6 +20,7 @@ from stdapi.models.audio import AudioModelBase, TTSResponse
 from stdapi.monitoring import REQUEST_LOG
 from stdapi.types import BaseModelResponse, JsonMapping
 from stdapi.types.openai_audio import OPENAI_VOICES_FEMALE
+from stdapi.usage import record_comprehend_usage, record_polly_usage
 from stdapi.utils import format_language_code, validation_error_handler
 
 if TYPE_CHECKING:
@@ -210,8 +211,8 @@ async def _detect_language(text: str) -> LanguageCodeType:
     """
     if SETTINGS.default_tts_language is None:
         comprehend: ComprehendClient = get_client("comprehend")
-        response = await comprehend.detect_dominant_language(
-            Text=text
+        sample_text = (
+            text
             if len(text) <= _LANG_DETECT_SAMPLE_SIZE
             else text[
                 : (
@@ -221,6 +222,8 @@ async def _detect_language(text: str) -> LanguageCodeType:
                 )
             ]
         )
+        response = await comprehend.detect_dominant_language(Text=sample_text)
+        record_comprehend_usage(len(sample_text), "language-detection")
         if response.get("Languages"):
             language = format_language_code(
                 max(response["Languages"], key=lambda x: x["Score"])["LanguageCode"]
@@ -375,6 +378,8 @@ class AudioModel(AudioModelBase[None, None]):
         with _handle_polly_error(self.model.id, voice_id, engine):
             response = await polly.synthesize_speech(**request)
 
+        input_tokens = record_polly_usage((int(response["RequestCharacters"])), engine)
+
         body = stream_body(response["AudioStream"])
         if encoding:
             audio_stream = encode_audio_stream(
@@ -387,4 +392,6 @@ class AudioModel(AudioModelBase[None, None]):
         else:
             audio_stream = body
 
-        return TTSResponse(audio_stream=audio_stream, characters_count=len(text))
+        return TTSResponse(
+            audio_stream=audio_stream, input_tokens=input_tokens, output_tokens=0
+        )

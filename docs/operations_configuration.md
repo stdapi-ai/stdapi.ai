@@ -229,6 +229,20 @@ Choose **one** method (mutually exclusive):
 | [`LOG_REQUEST_PARAMS`](#validation-and-logging) | `false` | Include request/response parameters in logs (not recommended for production)          |
 | [`LOG_CLIENT_IP`](#client-ip-logging)           | `false` | Log client IP addresses (requires `ENABLE_PROXY_HEADERS` for real IPs behind proxies) |
 
+### :material-chart-box-outline: CloudWatch Metrics
+
+| Variable                                                            | Default  | Description                                                            |
+|-----------------------------------------------------------------------|----------|--------------------------------------------------------------------|
+| [`CLOUDWATCH_METRICS`](#cloudwatch-metrics)                     | `false`  | Emit per-request AWS-billed usage as CloudWatch EMF log lines      |
+| [`CLOUDWATCH_METRICS_NAMESPACE`](#cloudwatch-metrics-namespace) | `stdapi` | CloudWatch namespace for the emitted usage metrics                 |
+
+### :material-currency-usd: Cost Tracking
+
+| Variable                                                    | Default        | Description                                                              |
+|-----------------------------------------------------------------|----------------|-----------------------------------------------------------------------|
+| [`COST_TRACKING`](#cost-tracking)                           | `false`        | Enable real-time cost computation from live AWS pricing                |
+| [`COST_PRICE_OVERRIDES`](#cost-price-overrides)             | `{}`           | JSON map of operator-supplied unit prices for models missing from the AWS catalog |
+
 ### :material-radar: Observability (OpenTelemetry)
 
 | Variable                                            | Default                           | Description                                                                            |
@@ -266,8 +280,8 @@ Choose **one** method (mutually exclusive):
 | [`MODEL_ALIASES`](#model-aliases)                                   | `{}`                    | JSON object mapping custom model name aliases to Bedrock model IDs                         |
 | [`DEFAULT_TTS_MODEL`](#default-tts-model)                           | `amazon.polly-standard` | Default text-to-speech model: `standard`, `neural`, `long-form`, or `generative`           |
 | [`DEFAULT_TTS_LANGUAGE`](#default-tts-language)                     | None                    | Default language for TTS (e.g., `en-US`); when set, skips AWS Comprehend auto-detection    |
-| [`TOKENS_ESTIMATION`](#tokens-estimation)                           | `false`                 | Estimate token counts using tiktoken when model doesn't provide them                       |
-| [`TOKENS_ESTIMATION_DEFAULT_ENCODING`](#tokens-encoding)            | `o200k_base`            | Tiktoken encoding algorithm: `o200k_base` (GPT-4o+), `cl100k_base` (GPT-4), or `p50k_base` |
+| [`TOKENS_ESTIMATION`](#tokens-estimation)                           | `false`                 | Deprecated and ignored (token estimation removed)                                          |
+| [`TOKENS_ESTIMATION_DEFAULT_ENCODING`](#tokens-encoding)            | `o200k_base`            | Deprecated and ignored (token estimation removed)                                          |
 | [`DEFAULT_MODEL_PARAMS`](#default-model-params)                     | `{}`                    | JSON object with per-model default inference parameters (temperature, max_tokens, etc.)    |
 | [`DEFAULT_MODEL_SERVICE_TIERS`](#default-model-service-tiers)       | `{}`                    | JSON object with per-model default service tiers (default, flex, priority, reserved)        |
 | [`MODEL_CACHE_SECONDS`](#model-cache-seconds)                       | `900`                   | Model list cache lifetime in seconds before lazy refresh (default: 15 minutes)             |
@@ -1999,6 +2013,7 @@ Required if you configure API authentication. See [Authentication](#authenticati
 | **Speech-to-Text**                              | `transcribe:StartTranscriptionJob`<br>`transcribe:GetTranscriptionJob`<br>`transcribe:DeleteTranscriptionJob`<br>`transcribe:TagResource` (on `arn:aws:transcribe:*:*:transcription-job/*`)<br>`s3:PutObject` (transcribe bucket)        | `AWS_TRANSCRIBE_REGION`<br>`AWS_TRANSCRIBE_S3_BUCKET`                        |
 | **Language Detection**                          | `comprehend:DetectDominantLanguage`                                                                                                                        | `AWS_COMPREHEND_REGION`                                                      |
 | **Translation**                                 | `translate:TranslateText`                                                                                                                                  | `AWS_TRANSLATE_REGION`                                                       |
+| **Cost Tracking**                               | `pricing:GetProducts`                                                                                                                                      | `COST_TRACKING=true` (opt-in; `false` by default)                            |
 | **SSM Parameter Store**                         | `ssm:GetParameter`<br>`kms:Decrypt` (if encrypted)                                                                                                         | `API_KEY_SSM_PARAMETER`                                                      |
 | **Secrets Manager**                             | `secretsmanager:GetSecretValue`                                                                                                                            | `API_KEY_SECRETSMANAGER_SECRET`                                              |
 
@@ -3393,6 +3408,68 @@ export TIMEZONE=Europe/London
 
 ---
 
+## CloudWatch Metrics and Cost Tracking
+
+The behavior of these settings — EMF line structure, cost log format, pricing accuracy, regional price fallback, known limitations, and the price override format with examples — is documented in [CloudWatch Metrics (EMF)](operations_logging_monitoring.md#cloudwatch-metrics-emf) and [Cost Tracking](operations_logging_monitoring.md#cost-tracking-real-time-aws-pricing) in the Logging and Monitoring guide.
+
+#### `CLOUDWATCH_METRICS` { #cloudwatch-metrics }
+
+:octicons-package-24: **Purpose**
+:   Emit per-request AWS-billed usage as CloudWatch Embedded Metric Format (EMF) log lines
+
+:octicons-database-24: **Type**
+:   Boolean
+
+:octicons-gear-24: **Default**
+:   `false`
+
+```bash
+export CLOUDWATCH_METRICS=true
+```
+
+#### `CLOUDWATCH_METRICS_NAMESPACE` { #cloudwatch-metrics-namespace }
+
+:octicons-package-24: **Purpose**
+:   CloudWatch namespace under which the emitted usage metrics are grouped
+
+:octicons-database-24: **Type**
+:   String
+
+:octicons-gear-24: **Default**
+:   `stdapi`
+
+```bash
+export CLOUDWATCH_METRICS_NAMESPACE=my-app-metrics
+```
+
+#### `COST_TRACKING` { #cost-tracking }
+
+:octicons-package-24: **Purpose**
+:   Enable real-time cost computation from live AWS pricing ([details and accuracy caveats](operations_logging_monitoring.md#cost-tracking-real-time-aws-pricing)). Disabled by default: it requires the extra `pricing:GetProducts` IAM permission.
+
+:octicons-database-24: **Type**
+:   Boolean
+
+:octicons-gear-24: **Default**
+:   `false`
+
+```bash
+export COST_TRACKING=true
+```
+
+#### `COST_PRICE_OVERRIDES` { #cost-price-overrides }
+
+:octicons-package-24: **Purpose**
+:   Operator-supplied unit price overrides for models not covered by the AWS Price List API ([format and example](operations_logging_monitoring.md#override-map-for-missing-models))
+
+:octicons-database-24: **Type**
+:   JSON object — keys are model IDs, values are dicts mapping dimension name to price per one unit
+
+:octicons-gear-24: **Default**
+:   `{}`
+
+---
+
 ## Bedrock Guardrails
 
 Amazon Bedrock Guardrails add content filtering and safety controls to model inputs and outputs.
@@ -3665,8 +3742,11 @@ Control how token usage is calculated and reported in API responses.
 
 #### `TOKENS_ESTIMATION` { #tokens-estimation }
 
+!!! warning "Deprecated"
+    This setting is deprecated and ignored. Token estimation using tiktoken has been removed from the project. Token counts are now sourced directly from AWS billing data when available.
+
 :octicons-package-24: **Purpose**
-:   Estimate token counts using a tokenizer when the model doesn't return them directly
+:   (Deprecated) Estimate token counts using a tokenizer when the model doesn't return them directly
 
 :octicons-database-24: **Type**
 :   Boolean
@@ -3675,28 +3755,24 @@ Control how token usage is calculated and reported in API responses.
 :   `false`
 
 ```bash
-export TOKENS_ESTIMATION=true
+# No longer functional - setting is deprecated and ignored
+# export TOKENS_ESTIMATION=true
 ```
-
-!!! tip "Use Case"
-    Enable for consistent token reporting across all models.
 
 #### `TOKENS_ESTIMATION_DEFAULT_ENCODING` { #tokens-encoding }
 
+!!! warning "Deprecated"
+    This setting is deprecated and ignored. Token estimation using tiktoken has been removed from the project.
+
 :octicons-package-24: **Purpose**
-:   Tiktoken encoding algorithm for token estimation
+:   (Deprecated) Tiktoken encoding algorithm for token estimation
 
 :octicons-gear-24: **Default**
 :   `o200k_base`
 
-| Encoding | Models |
-|----------|--------|
-| `o200k_base` | :material-new-box: GPT-4o and newer models |
-| `cl100k_base` | :material-robot: GPT-3.5-turbo, GPT-4 |
-| `p50k_base` | :material-history: Older GPT-3 models |
-
 ```bash
-export TOKENS_ESTIMATION_DEFAULT_ENCODING=o200k_base
+# No longer functional - setting is deprecated and ignored
+# export TOKENS_ESTIMATION_DEFAULT_ENCODING=o200k_base
 ```
 
 ---

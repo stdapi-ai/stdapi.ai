@@ -10,7 +10,7 @@ Two request formats are supported:
   objects (Files API identifiers or HTTP/data URLs) and an optional ``mask``.
 """
 
-from asyncio import create_task, gather
+from asyncio import gather
 from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
@@ -32,7 +32,6 @@ from stdapi.models.image import get_image_model
 from stdapi.monitoring import REQUEST_TIME, log_request_params, log_request_stream_event
 from stdapi.routes._images_common import build_images_response
 from stdapi.routes.openai_images_generations import stream_generator
-from stdapi.tokenizer import estimate_token_count
 from stdapi.types.openai_images import (
     ImageBackgroundAuto,
     ImageEditJsonBody,
@@ -427,15 +426,10 @@ async def edit_images(
         )
 
     # Handle non-streaming requests
-    token_task = create_task(estimate_token_count(request.prompt))
-    results = await job.edit_images(images=images_b64, mask=mask_b64)
-    text_tokens = await token_task or 0
-
     return await build_images_response(
         job=job,
-        results=results,
+        results=await job.edit_images(images=images_b64, mask=mask_b64),
         response_format=request.response_format,
-        image_count=request.n,
-        text_tokens=text_tokens,
-        image_tokens=len(input_images) + (0 if input_mask is None else 1),
+        output_image_count=request.n,
+        input_image_count=len(input_images) + (0 if input_mask is None else 1),
     )

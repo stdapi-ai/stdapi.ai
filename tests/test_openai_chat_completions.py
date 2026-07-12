@@ -16,8 +16,12 @@ from aiobotocore.session import get_session
 from openai import APIError, BadRequestError, InternalServerError, NotFoundError, OpenAI
 from pybase64 import b64encode
 
+from tests.conftest import logged_usage_entries
+
 if TYPE_CHECKING:
     from collections.abc import Iterable
+
+    from starlette.testclient import TestClient as TestClientType
 
 
 @pytest.fixture(scope="session")
@@ -2806,3 +2810,84 @@ class TestChatCompletions:
             max_completion_tokens=16,
         )
         assert response.choices[0].message.content
+
+
+class TestChatCompletionsUsage:
+    """Tests for usage logging on /v1/chat/completions."""
+
+    def test_chat_completion_usage_logged(
+        self,
+        test_client: TestClientType | None,
+        chat_model: str,
+        api_key: str,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        """Non-streaming chat completion logs real billed usage.
+
+        Verifies the logged usage record includes operation, service, model,
+        and real (non-zero) billed token counts.
+        """
+        if test_client is None:
+            pytest.skip("Requires local test server")
+        capfd.readouterr()
+        response = test_client.post(
+            "/v1/chat/completions",
+            json={
+                "model": chat_model,
+                "messages": [{"role": "user", "content": "Say OK."}],
+                "max_completion_tokens": 16,
+            },
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+        assert response.status_code == 200
+        entries = logged_usage_entries(
+            capfd.readouterr().out,
+            service="bedrock-runtime",
+            operation="/v1/chat/completions",
+            model=chat_model,
+        )
+        assert entries, "Expected a bedrock chat usage log entry"
+        assert entries[0]["input_tokens"] > 0
+        assert entries[0]["output_tokens"] > 0
+
+    def test_chat_completion_streaming_usage_logged(
+        self,
+        test_client: TestClientType | None,
+        chat_model: str,
+        api_key: str,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        """Streaming chat completion logs usage exactly once.
+
+        Verifies the operation path propagates into the separate request_stream
+        event and that usage is not double-counted across the two log events.
+        """
+        if test_client is None:
+            pytest.skip("Requires local test server")
+        capfd.readouterr()
+        with test_client.stream(
+            "POST",
+            "/v1/chat/completions",
+            json={
+                "model": chat_model,
+                "messages": [{"role": "user", "content": "Say OK."}],
+                "max_completion_tokens": 16,
+                "stream": True,
+            },
+            headers={"Authorization": f"Bearer {api_key}"},
+        ) as response:
+            assert response.status_code == 200
+            body = "".join(response.iter_text())
+        assert "data:" in body
+        entries = logged_usage_entries(
+            capfd.readouterr().out,
+            service="bedrock-runtime",
+            operation="/v1/chat/completions",
+            model=chat_model,
+        )
+        assert entries, "Expected a bedrock chat usage log entry for streaming"
+        assert sum(entry["output_tokens"] for entry in entries) > 0
+        assert len(entries) == 1, (
+            f"Usage logged {len(entries)} times for one streaming request; "
+            "expected exactly one (no double-counting)"
+        )

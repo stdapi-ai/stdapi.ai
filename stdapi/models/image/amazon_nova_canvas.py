@@ -15,8 +15,10 @@ from stdapi.models.image import (
 from stdapi.models.image.amazon_titan_image_generator import (
     AmzQuality,
     get_amz_quality,
+    image_spec,
     random_seed,
 )
+from stdapi.usage import IMAGE_SPEC
 from stdapi.utils import get_data_uri_data
 
 if TYPE_CHECKING:
@@ -241,8 +243,21 @@ class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
         self._response_height = self._height
         self._response_width = self._width
         self._response_output_format = "png"
+        IMAGE_SPEC.set(
+            image_spec(
+                self._width,
+                self._height,
+                get_amz_quality(self._quality),
+                low_tier_max=1024,
+                # 1024/2048/4096 pricing tiers (Nova Canvas allows up to 4096px).
+                tiers=3,
+            )
+        )
 
-        response = await self._model.invoke(request)
+        result = await self._model.invoke(request)
+        self._input_tokens = result.input_tokens
+        self._output_tokens = result.output_tokens
+        response = result.response
         if "error" in response:
             raise ApiError(response["error"])
 

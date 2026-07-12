@@ -49,6 +49,7 @@ from stdapi.monitoring import (
     otel_manager,
     write_log_event,
 )
+from stdapi.pricing import pricing_endpoint_region, start_price_catalog
 from stdapi.region_routing import measure_region_latencies
 from stdapi.routes import discover_routers
 from stdapi.server import SERVER_VERSION
@@ -83,6 +84,10 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                 ),
                 ("transcribe", SETTINGS.aws_transcribe_region),
                 ("translate", SETTINGS.aws_translate_region),
+                # None (GovCloud, no Price List endpoint) warms the default
+                # client, which the never-loading catalog then never uses.
+                # type-ignore: the RegionName stub Literal lags EUSC (works live).
+                ("pricing", pricing_endpoint_region()),  # type: ignore[arg-type]
                 ("s3", SETTINGS.aws_transcribe_region),
                 ("s3", SETTINGS.aws_bedrock_regions[0]),
                 ("s3.accelerate", SETTINGS.aws_bedrock_regions[0]),
@@ -108,6 +113,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                     initialize_transcribe_models(),
                     register(start_event),
                     initialize_aws_account_info(),
+                    start_price_catalog(start_event),
                 )
                 update_unified_models_collections()
             if region_latencies:
@@ -117,6 +123,12 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                     start_event,
                     "S3 bucket not configured ('aws_s3_bucket' not set): "
                     "some features are disabled",
+                )
+            if deprecated := SETTINGS.deprecated():
+                add_server_warning(
+                    start_event,
+                    f"Deprecated settings ignored (token estimation removed): "
+                    f"{', '.join(deprecated)}",
                 )
             start_event["server_start_time_ms"] = (time_ns() - start) // 1000000
             write_log_event(start_event)

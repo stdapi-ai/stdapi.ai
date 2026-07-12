@@ -2,8 +2,7 @@
 
 FROM python:3-alpine AS builder
 
-ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    TIKTOKEN_CACHE_DIR=/opt/app/tiktoken/data
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 
 RUN apk add --no-cache tzdata libmagic && \
     pip install uv -q --root-user-action ignore
@@ -17,13 +16,6 @@ RUN mkdir -p build && \
     mv build/lib/python*/site-packages/* app/
 
 WORKDIR /opt/app
-
-RUN mkdir -p $TIKTOKEN_CACHE_DIR && \
-    python -c "import tiktoken;tiktoken.get_encoding('o200k_base')" && \
-    python -c "import tiktoken;tiktoken.get_encoding('cl100k_base')" && \
-    python -c "import tiktoken;tiktoken.get_encoding('p50k_base')" && \
-    python -c "import tiktoken;tiktoken.get_encoding('r50k_base')" && \
-    ls -la /opt/app/tiktoken/data
 
 COPY stdapi /opt/app/stdapi
 
@@ -57,8 +49,7 @@ WORKDIR /opt/app
 # Default GRANIAN_PORT=8000
 EXPOSE 8000
 ENV GRANIAN_LOG_LEVEL="critical" \
-    GRANIAN_LOG_ACCESS_ENABLED="false" \
-    TIKTOKEN_CACHE_DIR=/opt/app/tiktoken/data
+    GRANIAN_LOG_ACCESS_ENABLED="false"
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=30s \
     CMD wget --quiet --tries=1 --spider http://localhost:${GRANIAN_PORT:-8000}/health || exit 1

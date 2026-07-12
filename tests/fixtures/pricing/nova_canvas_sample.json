@@ -1,0 +1,97 @@
+[
+  {
+    "product": {
+      "attributes": {
+        "regionCode": "us-east-1",
+        "usagetype": "USE1-NovaCanvas-T2I-1024-Standard",
+        "location": "US East (N. Virginia)",
+        "servicecode": "AmazonBedrock",
+        "inferenceType": "T2I 1024 Standard",
+        "feature": "On-demand Inference",
+        "servicename": "Amazon Bedrock",
+        "operation": "",
+        "model": "Amazon Nova Canvas"
+      }
+    },
+    "terms": {
+      "OnDemand": {
+        "SKU300.JRTCKXETXF": {
+          "priceDimensions": {
+            "SKU300.JRTCKXETXF.6YSXRJFJ4J8ZQZAA": {
+              "unit": "Units",
+              "description": "Per image generated - T2I 1024 Standard",
+              "beginRange": "0",
+              "endRange": "Inf",
+              "pricePerUnit": {
+                "USD": "0.04"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "product": {
+      "attributes": {
+        "regionCode": "us-east-1",
+        "usagetype": "USE1-NovaCanvas-I2I-2048-Standard",
+        "location": "US East (N. Virginia)",
+        "servicecode": "AmazonBedrock",
+        "inferenceType": "I2I 2048 Standard",
+        "feature": "On-demand Inference",
+        "servicename": "Amazon Bedrock",
+        "operation": "",
+        "model": "Amazon Nova Canvas"
+      }
+    },
+    "terms": {
+      "OnDemand": {
+        "SKU301.JRTCKXETXF": {
+          "priceDimensions": {
+            "SKU301.JRTCKXETXF.6YSXRJFJ4J8ZQZAB": {
+              "unit": "Units",
+              "description": "Per image generated - I2I 2048 Standard",
+              "beginRange": "0",
+              "endRange": "Inf",
+              "pricePerUnit": {
+                "USD": "0.06"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "product": {
+      "attributes": {
+        "regionCode": "us-east-1",
+        "usagetype": "USE1-NovaCanvas-ProvisionedThroughput-NoCommit-ModelUnits",
+        "location": "US East (N. Virginia)",
+        "servicecode": "AmazonBedrock",
+        "feature": "Provisioned Throughput Inference - no commit/1 month/6 months",
+        "servicename": "Amazon Bedrock",
+        "operation": "",
+        "model": "Amazon Nova Canvas"
+      }
+    },
+    "terms": {
+      "OnDemand": {
+        "SKU302.JRTCKXETXF": {
+          "priceDimensions": {
+            "SKU302.JRTCKXETXF.6YSXRJFJ4J8ZQZAC": {
+              "unit": "ModelUnits",
+              "description": "Provisioned Throughput - No commit, per model unit per hour",
+              "beginRange": "0",
+              "endRange": "Inf",
+              "pricePerUnit": {
+                "USD": "30.25"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+]

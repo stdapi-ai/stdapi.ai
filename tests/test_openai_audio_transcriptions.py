@@ -5,9 +5,15 @@ specification, ensuring compatibility with the official OpenAI API behavior.
 """
 
 import io
+from typing import TYPE_CHECKING
 
 import pytest
 from openai import BadRequestError, NotFoundError, OpenAI
+
+from tests.conftest import logged_usage_entries
+
+if TYPE_CHECKING:
+    from starlette.testclient import TestClient as TestClientType
 
 
 class TestAudioTranscriptions:
@@ -751,6 +757,45 @@ class TestAudioTranscriptions:
                 assert segment.speaker.isalpha()
                 assert segment.speaker.isupper()
                 assert len(segment.speaker) == 1
+
+    @pytest.mark.expensive
+    def test_transcription_usage_logged(
+        self,
+        test_client: TestClientType | None,
+        transcription_model: str,
+        api_key: str,
+        sample_audio_file: bytes,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        """Test that usage is logged for transcription requests."""
+        if test_client is None:
+            pytest.skip("Requires local test server")
+
+        capfd.readouterr()
+
+        response = test_client.post(
+            "/v1/audio/transcriptions",
+            files={"file": ("test.wav", io.BytesIO(sample_audio_file), "audio/wav")},
+            data={"model": transcription_model},
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+        assert response.status_code == 200
+
+        response_data = response.json()
+        assert isinstance(response_data.get("text"), str)
+        assert len(response_data["text"].strip()) > 0
+
+        transcribe_entries = logged_usage_entries(
+            capfd.readouterr().out,
+            service="transcribe",
+            operation="/v1/audio/transcriptions",
+        )
+        assert transcribe_entries, "Expected transcribe service in usage"
+        transcribe_entry = transcribe_entries[0]
+        assert transcribe_entry["model"] == "amazon.transcribe"
+        assert "input_seconds" in transcribe_entry
+        # Transcribe uses 15-second minimum billing
+        assert transcribe_entry["input_seconds"] == 15
 
 
 class TestAudioTranscriptionsJsonBody:

@@ -241,6 +241,9 @@ curl -X POST "$BASE/v1/embeddings" \
 
     To allow this behavior, configure regional S3 buckets via `AWS_S3_REGIONAL_BUCKETS` in the same region as your Bedrock model. See [configuration guide](operations_configuration.md#aws-s3-regional-buckets).
 
+!!! warning "Usage Not Available with Asynchronous Invocation"
+    Amazon Nova models do not return token usage information when the asynchronous Bedrock invocation API is used internally (e.g., for large files processed via S3). The `usage` field in the response will report zero tokens in those cases.
+
 !!! warning "Large Base64 Files and Memory Configuration"
     While passing large files as Base64 is supported, ensure your server has sufficient memory configured. Large Base64-encoded files (especially videos) can consume significant memory during processing. Consider using S3 URLs directly for very large files, or adjust your server's memory limits accordingly.
 
@@ -308,6 +311,9 @@ curl -X POST "$BASE/v1/embeddings" \
 ```
 
 **![TwelveLabs](styles/logo_twelvelabs.svg){ style="height: 1.2em; vertical-align: text-bottom;" } TwelveLabs Marengo v3** (requires exactly one text + one image per request):
+
+!!! warning "Usage Not Available"
+    TwelveLabs Marengo models do not return token usage information. The `usage` field in the response will always report zero tokens.
 
 !!! info "Text+Image Pairing for Marengo v3"
     When using `twelvelabs.marengo-embed-3-0-v1:0`, if you provide exactly **2 inputs** where one is text and one is image, they are automatically combined into a single `text_image` embedding. This creates a unified multimodal representation of the text-image pair.

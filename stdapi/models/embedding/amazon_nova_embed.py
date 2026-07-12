@@ -3,7 +3,8 @@
 - amazon.nova-2-multimodal-embeddings-v1:0
 """
 
-from asyncio import create_task, gather
+from asyncio import gather
+from math import ceil
 from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
 
 from pydantic_core import from_json
@@ -18,14 +19,18 @@ from stdapi.aws_s3 import (
     track_temporary_s3_objects,
 )
 from stdapi.input_file import InputFile
+from stdapi.models import InvokeResult
 from stdapi.models.embedding import EmbeddingModelBase, EmbeddingResponse
-from stdapi.tokenizer import estimate_token_count
+from stdapi.usage import record_bedrock_usage
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from types_aiobotocore_bedrock.literals import RegionName
     from types_aiobotocore_s3.client import S3Client
 
     from stdapi.input_file import InputFileUrl
+    from stdapi.pricing import Routing
     from stdapi.types import JsonMapping
 
 _TaskType = Literal["SINGLE_EMBEDDING", "SEGMENTED_EMBEDDING"]
@@ -280,10 +285,10 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         if dimensions is not None:
             base_params["embeddingDimension"] = dimensions  # type:ignore[typeddict-item]
 
-        token_task = create_task(estimate_token_count(*inputs))
         embeddings: list[list[float]] = []
-
-        for response in await gather(
+        input_tokens = 0
+        output_tokens = 0
+        for result in await gather(
             *(
                 self._embed(
                     value=value,
@@ -294,13 +299,16 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
                 for value in inputs
             )
         ):
-            embeddings.extend(item["embedding"] for item in response["embeddings"])
+            embeddings.extend(
+                item["embedding"] for item in result.response["embeddings"]
+            )
+            input_tokens += result.input_tokens or 0
+            output_tokens += result.output_tokens or 0
 
-        estimated_tokens = await token_task or 0
         return EmbeddingResponse(
             embeddings=embeddings,
-            prompt_tokens=estimated_tokens,
-            total_tokens=estimated_tokens,
+            prompt_tokens=input_tokens,
+            total_tokens=input_tokens + output_tokens,
         )
 
     async def _embed(
@@ -310,7 +318,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         extra_params: JsonMapping,
         *,
         force_s3_data: bool = False,
-    ) -> _Response:
+    ) -> InvokeResult[_Response]:
         """Handle media input with automatic S3 upload for large files.
 
         Args:
@@ -320,7 +328,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             force_s3_data: Force S3 upload regardless of size.
 
         Returns:
-            Response from the model.
+            InvokeResult wrapping the model response and billing attribution.
         """
         if isinstance(value, str):
             media_type: _MediaTypes = "text"
@@ -382,8 +390,8 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         base_params: _EmbeddingParams,
         extra_params: JsonMapping,
         region: RegionName | None,
-    ) -> _Response:
-        """Handles synchronous single media embeddings.
+    ) -> InvokeResult[_Response]:
+        """Build a SINGLE_EMBEDDING request for one media value and invoke it.
 
         Args:
             value: The media value or S3 URI.
@@ -397,12 +405,8 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
                 full multi-region retry applies.
 
         Returns:
-            A response object containing the embeddings aggregated from the
-            processed media segments.
-
-        Raises:
-            ApiError: If any part of the segmented embedding result indicates a
-            failure, an exception is raised detailing the error reason and message.
+            InvokeResult wrapping the model response and token usage for this
+            single embedding call.
         """
         source = (
             _MediaSource(s3Location=_S3Location(uri=value.uri))
@@ -446,10 +450,14 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
                 )
         self._add_extra_params(extra_params, media_type, params)
 
-        return await self.invoke(
+        result = await self.invoke(
             _Request(taskType="SINGLE_EMBEDDING", singleEmbeddingParams=params),
             region=region,
         )
+        self._record_media_usage(
+            media_type, params, region=result.region, routing=result.routing
+        )
+        return result
 
     async def _embed_segmented(
         self,
@@ -458,7 +466,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         file_format: str,
         base_params: _EmbeddingParams,
         extra_params: JsonMapping,
-    ) -> _Response:
+    ) -> InvokeResult[_Response]:
         """Handles asynchronous segmented media embeddings.
 
         Args:
@@ -470,8 +478,8 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
                 These parameters are merged into the base settings.
 
         Returns:
-            A response object containing the embeddings aggregated from the
-            processed media segments.
+            InvokeResult wrapping the embeddings aggregated from the processed
+            media segments (segmented calls report no token usage).
 
         Raises:
             ApiError: If any part of the segmented embedding result indicates a
@@ -518,10 +526,11 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
                 )
         self._add_extra_params(extra_params, media_type, params)
 
-        embedding_result: _SegmentedEmbeddingResultResponse = await self.invoke_async(  # type: ignore[assignment]
+        invoke_result = await self.invoke_async(
             _Request(taskType="SEGMENTED_EMBEDDING", segmentedEmbeddingParams=params),
             output_file="segmented-embedding-result.json",
         )
+        embedding_result: _SegmentedEmbeddingResultResponse = invoke_result.response  # type: ignore[assignment]
 
         results: list[tuple[str, str]] = []
         errors: list[str] = []
@@ -538,18 +547,75 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             raise ApiError(msg)
 
         s3_client: S3Client = get_client("s3", BUCKET_TO_REGION.get(results[0][0]))
-        return _Response(
-            embeddings=[
-                embedding
-                for sublist in await gather(
-                    *(
-                        self._fetch_and_parse_embedding_jsonl(s3_client, bucket, key)
-                        for bucket, key in results
-                    )
+        entries = [
+            entry
+            for sublist in await gather(
+                *(
+                    self._fetch_and_parse_embedding_jsonl(s3_client, bucket, key)
+                    for bucket, key in results
                 )
-                for embedding in sublist
-            ]
+            )
+            for entry in sublist
+        ]
+        self._record_media_usage(
+            media_type,
+            params,
+            entries,
+            region=invoke_result.region,
+            routing=invoke_result.routing,
         )
+        return InvokeResult(
+            response=_Response(embeddings=entries),
+            region=invoke_result.region,
+            routing=invoke_result.routing,
+        )
+
+    def _record_media_usage(
+        self,
+        media_type: _MediaTypes,
+        params: _SingleEmbeddingParams | _SegmentedEmbeddingParams,
+        entries: Sequence[_SegmentedEmbeddingData] = (),
+        *,
+        region: str = "",
+        routing: Routing | None = None,
+    ) -> None:
+        """Record billed input-media usage for a completed embedding call.
+
+        Args:
+            media_type: The type of media that was processed.
+            params: The request parameters that were sent (for image detail level).
+            entries: Segmented-job JSONL entries carrying segment timings;
+                empty for the synchronous path (no billable duration known).
+            region: Region that served the call (per-call, race-free
+                attribution -- see :func:`stdapi.usage.record_bedrock_usage`).
+            routing: Serving profile of the call.
+        """
+        if media_type == "image":
+            record_bedrock_usage(
+                self._model_id,
+                region=region,
+                routing=routing,
+                input_images=1,
+                media_spec=(
+                    "document"
+                    if params["image"].get("detailLevel") == "DOCUMENT_IMAGE"
+                    else ""
+                ),
+            )
+        elif media_type in ("audio", "video"):
+            end_seconds = [
+                metadata["segmentEndSeconds"]
+                for entry in entries
+                if "segmentEndSeconds" in (metadata := entry["segmentMetadata"])
+            ]
+            if end_seconds:
+                record_bedrock_usage(
+                    self._model_id,
+                    region=region,
+                    routing=routing,
+                    input_seconds=ceil(max(end_seconds)),
+                    media_spec=media_type,
+                )
 
     @staticmethod
     async def _fetch_and_parse_embedding_jsonl(

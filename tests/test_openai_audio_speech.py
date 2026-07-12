@@ -10,7 +10,7 @@ import magic
 import pytest
 from openai import BadRequestError, NotFoundError, OpenAI
 
-from tests.conftest import SAMPLES_DIR
+from tests.conftest import SAMPLES_DIR, logged_usage_entries
 
 if TYPE_CHECKING:
     from starlette.testclient import TestClient
@@ -604,6 +604,51 @@ class TestAudioSpeech:
         # SSE response should still provide audio content but potentially with different streaming behavior
         assert isinstance(response_sse.content, bytes)
         assert len(response_sse.content) > 0
+
+    def test_speech_usage_logged(
+        self,
+        test_client: TestClient | None,
+        speech_standard_model: str,
+        api_key: str,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        """Test that usage is logged for TTS (speech) requests."""
+        if test_client is None:
+            pytest.skip("Requires local test server")
+
+        text = "Hello world, this is a test."
+
+        capfd.readouterr()
+
+        response = test_client.post(
+            "/v1/audio/speech",
+            json={"model": speech_standard_model, "voice": "alloy", "input": text},
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+        assert response.status_code == 200
+        assert response.content is not None
+        assert len(response.content) > 0
+
+        captured_out = capfd.readouterr().out
+
+        polly_entries = logged_usage_entries(
+            captured_out, service="polly", operation="/v1/audio/speech"
+        )
+        assert polly_entries, "Expected polly service in usage"
+        polly_entry = polly_entries[0]
+        assert polly_entry["model"] == "amazon.polly-standard"
+        assert "input_characters" in polly_entry
+        assert polly_entry["input_characters"] == len(text)
+
+        # Comprehend has a 3-unit minimum for language detection
+        comprehend_entries = logged_usage_entries(
+            captured_out, service="comprehend", operation="/v1/audio/speech"
+        )
+        assert comprehend_entries, "Expected comprehend service in usage"
+        comprehend_entry = comprehend_entries[0]
+        assert comprehend_entry["model"] == "amazon.comprehend-language-detection"
+        assert "comprehend_units" in comprehend_entry
+        assert comprehend_entry["comprehend_units"] == 3
 
 
 class TestAudioSpeechMCP:

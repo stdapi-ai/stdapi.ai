@@ -14,6 +14,7 @@ from stdapi.models.image import (
     ImageGenerationResponse,
     ImageModelBase,
 )
+from stdapi.usage import IMAGE_SPEC
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Iterable
@@ -59,6 +60,41 @@ def get_amz_quality(quality: ImageOutputQuality | str | None) -> AmzQuality | No
         return None
     quality = quality.lower()
     return AMZ_QUALITY_MAP.get(quality, quality)  # type: ignore[no-any-return,call-overload]
+
+
+def image_spec(
+    width: int,
+    height: int,
+    quality: AmzQuality | None,
+    *,
+    low_tier_max: int = 512,
+    tiers: int = 2,
+) -> str:
+    """Resolve the "<resolution>:<quality>" pricing spec for one image-generation call.
+
+    Picks the smallest tier (``low_tier_max * 2**n``) covering
+    ``max(width, height)``; larger dimensions bill at the largest tier.
+
+    Args:
+        width: Requested image width.
+        height: Requested image height.
+        quality: Resolved AWS quality ("standard"/"premium"), or None.
+        low_tier_max: Max size (inclusive) billed at the lowest tier.
+        tiers: Number of doubling tiers (e.g. 2 -> low_tier_max, low_tier_max * 2).
+
+    Returns:
+        "<resolution>:<quality>" e.g. "1024:standard".
+    """
+    max_dim = max(width, height)
+    resolution = next(
+        (
+            low_tier_max * 2**tier
+            for tier in range(tiers)
+            if max_dim <= low_tier_max * 2**tier
+        ),
+        low_tier_max * 2 ** (tiers - 1),
+    )
+    return f"{resolution}:{quality or 'standard'}"
 
 
 def random_seed() -> int:
@@ -211,9 +247,15 @@ class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
         self._response_height = self._height
         self._response_width = self._width
         self._response_output_format = "png"
+        IMAGE_SPEC.set(
+            image_spec(self._width, self._height, get_amz_quality(self._quality))
+        )
+        result = await self._model.invoke(request)
+        self._input_tokens = result.input_tokens
+        self._output_tokens = result.output_tokens
         return tuple(
             self._create_response(image, index)
-            for index, image in enumerate((await self._model.invoke(request))["images"])
+            for index, image in enumerate(result.response["images"])
         )
 
     async def _generate_images_from_text(

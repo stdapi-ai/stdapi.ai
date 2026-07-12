@@ -6,13 +6,13 @@
 """
 
 from asyncio import gather
-from contextlib import suppress
 from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
 
 from stdapi.input_file import InputFile, InputFileUrl
 from stdapi.models.embedding import EmbeddingModelBase, EmbeddingResponse
 
 if TYPE_CHECKING:
+    from stdapi.models import InvokeResult
     from stdapi.types import JsonMapping
 
 
@@ -82,15 +82,26 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         request.update(extra_params)  # type:ignore[typeddict-item]
         if dimensions:
             request["dimensions"] = dimensions
-        input_tokens = 0
-        embeddings = []
-        for response in await gather(*(self._invoke(request, v) for v in inputs)):
-            embeddings.append(response["embedding"])
-            with suppress(KeyError):
-                input_tokens += int(response["inputTextTokenCount"])
-        return EmbeddingResponse(embeddings=embeddings, prompt_tokens=input_tokens)
 
-    async def _invoke(self, request: _Request, value: InputFileUrl | str) -> _Response:
+        input_tokens = 0
+        output_tokens = 0
+        embeddings = []
+        for result in await gather(*(self._invoke(request, v) for v in inputs)):
+            embeddings.append(result.response["embedding"])
+            input_tokens += (
+                result.response.get("inputTextTokenCount") or result.input_tokens or 0
+            )
+            output_tokens += result.output_tokens or 0
+
+        return EmbeddingResponse(
+            embeddings=embeddings,
+            prompt_tokens=input_tokens,
+            total_tokens=input_tokens + output_tokens,
+        )
+
+    async def _invoke(
+        self, request: _Request, value: InputFileUrl | str
+    ) -> InvokeResult[_Response]:
         """Call the model with an input file.
 
         Args:
@@ -98,7 +109,7 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             value: The input value to be used with the request.
 
         Returns:
-            The model response.
+            InvokeResult containing the model response and token counts.
         """
         return await self.invoke(
             _Request(inputImage=await value.to_base64(), **request)

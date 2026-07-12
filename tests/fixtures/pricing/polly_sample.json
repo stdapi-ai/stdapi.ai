@@ -1,0 +1,86 @@
+[
+  {
+    "product": {
+      "attributes": {
+        "regionCode": "us-east-1",
+        "usagetype": "USE1-Standard-Characters",
+        "location": "US East (N. Virginia)",
+        "servicecode": "AmazonPolly",
+        "engine": "Standard"
+      }
+    },
+    "terms": {
+      "OnDemand": {
+        "SKU201": {
+          "priceDimensions": {
+            "SKU201.6YSXRJFJ4J8ZQZ9O": {
+              "unit": "Characters",
+              "description": "Per character",
+              "beginRange": "0",
+              "endRange": "Inf",
+              "pricePerUnit": {
+                "USD": "0.000004"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "product": {
+      "attributes": {
+        "regionCode": "us-east-1",
+        "usagetype": "USE1-Neural-Characters",
+        "location": "US East (N. Virginia)",
+        "servicecode": "AmazonPolly",
+        "engine": "Neural"
+      }
+    },
+    "terms": {
+      "OnDemand": {
+        "SKU202": {
+          "priceDimensions": {
+            "SKU202.6YSXRJFJ4J8ZQZ9P": {
+              "unit": "Characters",
+              "description": "Per character",
+              "beginRange": "0",
+              "endRange": "Inf",
+              "pricePerUnit": {
+                "USD": "0.000012"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "product": {
+      "attributes": {
+        "regionCode": "eu-west-1",
+        "usagetype": "EUW1-Standard-Characters",
+        "location": "EU (Ireland)",
+        "servicecode": "AmazonPolly",
+        "engine": "Standard"
+      }
+    },
+    "terms": {
+      "OnDemand": {
+        "SKU203": {
+          "priceDimensions": {
+            "SKU203.6YSXRJFJ4J8ZQZ9Q": {
+              "unit": "Characters",
+              "description": "Per character",
+              "beginRange": "0",
+              "endRange": "Inf",
+              "pricePerUnit": {
+                "USD": "0.000004"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+]

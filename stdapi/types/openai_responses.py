@@ -2518,7 +2518,7 @@ class InputTokensDetails(BaseModelResponse):
 class OutputTokensDetails(BaseModelResponse):
     """A detailed breakdown of the output tokens."""
 
-    reasoning_tokens: int = Field(description="Reasoning token count.")
+    reasoning_tokens: int = Field(description="Reasoning token count.", default=0)
 
 
 # Ref: openai.types.responses.response_usage.ResponseUsage

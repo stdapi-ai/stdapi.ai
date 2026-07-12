@@ -5,9 +5,42 @@ specification, ensuring compatibility with the official OpenAI API behavior.
 """
 
 import io
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 from openai import BadRequestError, NotFoundError, OpenAI
+
+from tests.conftest import logged_usage_entries
+
+if TYPE_CHECKING:
+    from starlette.testclient import TestClient as TestClientType
+
+
+@pytest.fixture(scope="module")
+def sample_audio_fr_file(openai_client: OpenAI, speech_standard_model: str) -> bytes:
+    """Create a French-language sample audio file for translation usage testing.
+
+    ``aws_translate.translate()`` returns early without billing AWS Translate
+    when the detected source language is English, so exercising the billing
+    path requires non-English audio. Generated via the speech endpoint (same
+    pattern as conftest's ``sample_audio_mp3_file``; MP3 is a native Polly
+    format) and cached under ``tests/.cache/audio_fr.mp3``.
+    """
+    audio_file = Path(__file__).parent / ".cache" / "audio_fr.mp3"
+    if audio_file.exists():
+        with audio_file.open("rb") as file:
+            return file.read()
+    content = openai_client.audio.speech.create(
+        model=speech_standard_model,
+        voice="alloy",
+        input="Ceci est un test simple.",
+        response_format="mp3",
+    ).content
+    audio_file.parent.mkdir(parents=True, exist_ok=True)
+    with audio_file.open("wb") as file:
+        file.write(content)
+    return content
 
 
 class TestAudioTranslations:
@@ -279,6 +312,46 @@ class TestAudioTranslations:
         except BadRequestError:
             # Expected behavior for invalid/minimal audio - translation service should handle gracefully
             pass
+
+    @pytest.mark.expensive
+    def test_translation_usage_logged(
+        self,
+        test_client: TestClientType | None,
+        api_key: str,
+        sample_audio_fr_file: bytes,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        """Test that usage is logged for translation requests."""
+        if test_client is None:
+            pytest.skip("Requires local test server")
+
+        capfd.readouterr()
+
+        response = test_client.post(
+            "/v1/audio/translations",
+            files={
+                "file": ("test.mp3", io.BytesIO(sample_audio_fr_file), "audio/mpeg")
+            },
+            data={"model": "amazon.transcribe"},
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+        assert response.status_code == 200
+
+        response_data = response.json()
+        assert isinstance(response_data.get("text"), str)
+        assert len(response_data["text"].strip()) > 0
+
+        translate_entries = logged_usage_entries(
+            capfd.readouterr().out,
+            service="translate",
+            operation="/v1/audio/translations",
+        )
+        assert translate_entries, "Expected translate service in usage"
+        translate_entry = translate_entries[0]
+        assert translate_entry["model"] == "amazon.translate"
+        assert "input_characters" in translate_entry
+        # Value depends on audio content
+        assert translate_entry["input_characters"] > 0
 
 
 class TestAudioTranslationsJsonBody:

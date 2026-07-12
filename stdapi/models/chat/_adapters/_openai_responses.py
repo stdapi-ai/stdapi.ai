@@ -26,7 +26,6 @@ from stdapi.models import validate_model
 from stdapi.models.chat._adapters import _openai_common
 from stdapi.models.image import get_image_model
 from stdapi.monitoring import log_error_details, log_response_params
-from stdapi.tokenizer import estimate_token_count
 from stdapi.types.openai import ResponseFormatJSONObject, ResponseFormatText
 from stdapi.types.openai_responses import (
     CodeInterpreter,
@@ -1071,15 +1070,6 @@ async def format_response(
     input_tokens = usage_raw["inputTokens"]
     output_tokens = usage_raw["outputTokens"]
 
-    reasoning_parts = [
-        rc["reasoningText"]["text"]
-        for block in contents
-        if (rc := block.get("reasoningContent")) and "reasoningText" in rc
-    ]
-    reasoning_tokens = (
-        (await estimate_token_count(*reasoning_parts) or 0) if reasoning_parts else 0
-    )
-
     return log_response_params(
         _build_response_object(
             response_id,
@@ -1094,11 +1084,9 @@ async def format_response(
                 input_tokens_details=InputTokensDetails(
                     cached_tokens=usage_raw.get("cacheReadInputTokens", 0)
                 ),
-                output_tokens=output_tokens + reasoning_tokens,
-                output_tokens_details=OutputTokensDetails(
-                    reasoning_tokens=reasoning_tokens
-                ),
-                total_tokens=input_tokens + output_tokens + reasoning_tokens,
+                output_tokens=output_tokens,
+                output_tokens_details=OutputTokensDetails(),
+                total_tokens=input_tokens + output_tokens,
             ),
             request,
         )
@@ -1147,8 +1135,6 @@ class _StreamState:
     input_tokens: int = 0
     output_tokens: int = 0
     cached_tokens: int = 0
-    #: Accumulated reasoning text across ``reasoningContent`` deltas.
-    reasoning_text: str = ""
     #: Completed suppressed tool calls as ``(tool_id, tool_name, args_json)``.
     suppressed_tool_calls: list[tuple[str, str, str]] = field(default_factory=list)
     #: Web-search sources keyed by ``item_id`` (see class docstring).
@@ -1349,10 +1335,9 @@ def _handle_block_delta(
 ) -> Generator[JSONServerSentEvent]:
     """Emit SSE delta events for a Bedrock ``contentBlockDelta`` event.
 
-    Handles text, tool-use argument, and reasoning deltas.  Synthesises a
+    Handles text, tool-use argument, and citation deltas.  Synthesises a
     text block start when a text delta arrives without a prior block start.
-    Reasoning deltas are accumulated for later token estimation but are not
-    currently surfaced as a Responses event.
+    Reasoning deltas have no Responses API surface and are ignored.
 
     Args:
         state: Mutable stream state.
@@ -1387,10 +1372,7 @@ def _handle_block_delta(
                 type="response.function_call_arguments.delta",
             ),
         )
-    elif (reasoning_delta := delta.get("reasoningContent")) and (
-        reasoning_text := reasoning_delta.get("text")
-    ):
-        state.reasoning_text += reasoning_text
+    # Reasoning deltas have no Responses API surface and match no branch here.
     elif citation_delta := delta.get("citation"):
         _record_citation(state, citation_delta)
 
@@ -1693,13 +1675,6 @@ async def format_stream(
         ):
             yield sse  # `yield from` is not permitted inside async generators.
 
-    # Reasoning deltas are not billed by Bedrock; estimate locally to match the non-streaming path.
-    reasoning_tokens = (
-        (await estimate_token_count(state.reasoning_text) or 0)
-        if state.reasoning_text
-        else 0
-    )
-
     if post_suppress_handler:
         async for sse in post_suppress_handler(state):
             yield sse
@@ -1731,13 +1706,9 @@ async def format_stream(
                         input_tokens_details=InputTokensDetails(
                             cached_tokens=state.cached_tokens
                         ),
-                        output_tokens=state.output_tokens + reasoning_tokens,
-                        output_tokens_details=OutputTokensDetails(
-                            reasoning_tokens=reasoning_tokens
-                        ),
-                        total_tokens=state.input_tokens
-                        + state.output_tokens
-                        + reasoning_tokens,
+                        output_tokens=state.output_tokens,
+                        output_tokens_details=OutputTokensDetails(),
+                        total_tokens=state.input_tokens + state.output_tokens,
                     ),
                     request,
                 )

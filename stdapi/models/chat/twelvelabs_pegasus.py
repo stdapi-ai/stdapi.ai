@@ -5,9 +5,9 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, NotRequired, TypedDict
 
 from stdapi.api_errors import ApiError
 from stdapi.aws import AWS_ENVIRONMENT
+from stdapi.aws_bedrock import usage_from_amazon_bedrock_invocation_metrics
 from stdapi.aws_s3 import put_s3_object
 from stdapi.models.chat._default import ChatModel as _BaseChatModel
-from stdapi.tokenizer import estimate_token_count
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -18,17 +18,25 @@ if TYPE_CHECKING:
         StopReasonType,
     )
     from types_aiobotocore_bedrock_runtime.type_defs import (
+        ConverseOutputTypeDef,
         ConverseResponseTypeDef,
         ConverseStreamOutputTypeDef,
         ConverseStreamResponseTypeDef,
         GuardrailStreamConfigurationTypeDef,
         MessageTypeDef,
+        TokenUsageTypeDef,
     )
 
-    from stdapi.aws_bedrock import ConverseRequestBaseTypeDef
+    from stdapi.aws_bedrock import BedrockInvocationTypeDef, ConverseRequestBaseTypeDef
 
     #: Pegasus FinishReason type.
     _FinishReason = Literal["stop", "length"]
+
+    class _PegasusChunk(BedrockInvocationTypeDef):
+        """Pegasus streaming chunk type."""
+
+        message: str
+        stopReason: _FinishReason | Literal[""]  # noqa: N815
 
 
 #: Maximum raw-byte size for inline base64 video (Pegasus limit: 25 MB base64 string ≈ 18.75 MB raw).
@@ -85,13 +93,6 @@ class _PegasusResponse(TypedDict):
     finishReason: _FinishReason
 
 
-class _PegasusChunk(TypedDict):
-    """Pegasus streaming chunk type."""
-
-    message: str
-    stopReason: _FinishReason | Literal[""]
-
-
 def _extract_latest_video(messages: list[MessageTypeDef]) -> dict[str, Any] | None:
     """Walk messages in reverse; return the first video content block found."""
     for message in reversed(messages):
@@ -145,24 +146,6 @@ async def _video_to_media_source(
     )
 
 
-async def _format_converse_response(
-    response: _PegasusResponse, prompt_text: str
-) -> ConverseResponseTypeDef:
-    """Build a ConverseResponseTypeDef from a Pegasus non-streaming response."""
-    text = response["message"]
-    in_tokens = await estimate_token_count(prompt_text) or 0
-    out_tokens = await estimate_token_count(text) or 0
-    return {  # type: ignore[typeddict-item]
-        "output": {"message": {"role": "assistant", "content": [{"text": text}]}},
-        "stopReason": _STOP_MAP.get(response.get("finishReason", ""), "end_turn"),
-        "usage": {
-            "inputTokens": in_tokens,
-            "outputTokens": out_tokens,
-            "totalTokens": in_tokens + out_tokens,
-        },
-    }
-
-
 class ChatModel(_BaseChatModel):
     """TwelveLabs Pegasus 1.2 chat model.
 
@@ -186,7 +169,6 @@ class ChatModel(_BaseChatModel):
         self, request: ConverseRequestBaseTypeDef, region: RegionName
     ) -> tuple[
         _PegasusRequest,
-        str,
         ServiceTierTypeType | None,
         GuardrailStreamConfigurationTypeDef | None,
     ]:
@@ -197,7 +179,7 @@ class ChatModel(_BaseChatModel):
             region: AWS region for any needed S3 upload.
 
         Returns:
-            Tuple of (pegasus_body, prompt_text, service_tier, guardrail_config).
+            Tuple of (pegasus_body, service_tier, guardrail_config).
                 service_tier is the service tier string if present, None otherwise.
                 guardrail_config is the guardrail config dict if present, None otherwise.
 
@@ -213,7 +195,7 @@ class ChatModel(_BaseChatModel):
             error.code = "invalid_request_error"
             raise error
         body: _PegasusRequest = {
-            "inputPrompt": (prompt_text := _extract_latest_user_text(messages)),
+            "inputPrompt": _extract_latest_user_text(messages),
             "mediaSource": await _video_to_media_source(video_block, region),
         }
         if inference := request.get("inferenceConfig", {}):
@@ -236,7 +218,6 @@ class ChatModel(_BaseChatModel):
                 )
         return (
             body,
-            prompt_text,
             (
                 service_tier_dict.get("type")
                 if (service_tier_dict := request.get("serviceTier"))
@@ -263,21 +244,30 @@ class ChatModel(_BaseChatModel):
             ConverseResponseTypeDef shaped like a standard Bedrock Converse response.
         """
         await self._prepare_converse_request_for_region(request, region)
-        (
-            body,
-            prompt_text,
-            service_tier,
-            guardrail_config,
-        ) = await self._build_pegasus_body(request, region)
-        return await _format_converse_response(
-            await self.invoke(
-                body,
-                region=region,
-                service_tier=service_tier,
-                guardrail=guardrail_config,
-            ),
-            prompt_text,
+        body, service_tier, guardrail_config = await self._build_pegasus_body(
+            request, region
         )
+        result = await self.invoke(
+            body, region=region, service_tier=service_tier, guardrail=guardrail_config
+        )
+
+        response: _PegasusResponse = result.response
+        output: ConverseOutputTypeDef = {
+            "message": {"role": "assistant", "content": [{"text": response["message"]}]}
+        }
+        stop_reason: StopReasonType = _STOP_MAP.get(
+            response.get("finishReason", "stop"), "end_turn"
+        )
+
+        input_tokens = result.input_tokens or 0
+        output_tokens = result.output_tokens or 0
+        usage: TokenUsageTypeDef = {
+            "inputTokens": input_tokens,
+            "outputTokens": output_tokens,
+            "totalTokens": input_tokens + output_tokens,
+        }
+
+        return {"output": output, "stopReason": stop_reason, "usage": usage}  # type: ignore[typeddict-item]
 
     async def _converse_stream(
         self,
@@ -297,36 +287,30 @@ class ChatModel(_BaseChatModel):
             ConverseStreamResponseTypeDef with an async generator in the "stream" key.
         """
         await self._prepare_converse_request_for_region(request, region)
-        (
-            body,
-            prompt_text,
-            service_tier,
-            guardrail_config,
-        ) = await self._build_pegasus_body(request, region)
+        body, service_tier, guardrail_config = await self._build_pegasus_body(
+            request, region
+        )
         raw_stream = self.invoke_stream(
             body, region=region, service_tier=service_tier, guardrail=guardrail_config
         )
-        return {
-            "stream": self._format_converse_stream(raw_stream, prompt_text),  # type: ignore[typeddict-item,arg-type]
-            "ResponseMetadata": {},  # type: ignore[typeddict-item]
-        }
+        return {"stream": self._format_converse_stream(raw_stream)}  # type: ignore[typeddict-item]
 
     async def _format_converse_stream(
-        self, raw_stream: AsyncGenerator[_PegasusChunk], prompt_text: str
+        self, raw_stream: AsyncGenerator[_PegasusChunk]
     ) -> AsyncGenerator[ConverseStreamOutputTypeDef]:
         """Translate Pegasus delta-style stream to Bedrock ConverseStream event format.
 
-        Pegasus streaming format (confirmed by live experiment):
-        - Mid-stream chunks: {"message": " delta_text", "stopReason": ""}
-        - Final chunk: {"message": "", "stopReason": "stop", "amazon-bedrock-invocationMetrics": {...}}
-        - inputTokenCount is always 0 in metrics; must estimate from prompt_text.
+        Args:
+            raw_stream: Async generator of Pegasus streaming chunks.
+
+        Yields:
+            Bedrock ConverseStream events.
         """
-        out_tokens = 0
-        full_text = []
+        input_tokens = 0
+        output_tokens = 0
         yield {"messageStart": {"role": "assistant"}}
         async for chunk in raw_stream:
             if delta := chunk["message"]:
-                full_text.append(delta)
                 yield {
                     "contentBlockDelta": {
                         "contentBlockIndex": 0,
@@ -334,23 +318,22 @@ class ChatModel(_BaseChatModel):
                     }
                 }
             if stop_reason := chunk.get("stopReason"):
-                metrics = chunk.get("amazon-bedrock-invocationMetrics")
-                if metrics:
-                    out_tokens = metrics.get("outputTokenCount", 0)  # type: ignore[attr-defined]
                 yield {"contentBlockStop": {"contentBlockIndex": 0}}
                 yield {
                     "messageStop": {
                         "stopReason": _STOP_MAP.get(stop_reason, "end_turn")
                     }
                 }
-        in_tokens = await estimate_token_count(prompt_text) or 0
-        out_tokens = out_tokens or (await estimate_token_count("".join(full_text))) or 0
-        yield {
-            "metadata": {  # type: ignore[typeddict-item]
-                "usage": {
-                    "inputTokens": in_tokens,
-                    "outputTokens": out_tokens,
-                    "totalTokens": in_tokens + out_tokens,
-                }
-            }
+
+                # Usage is recorded by invoke_stream(); extract here only for the
+                # metadata event. inputTokenCount is always 0 for Pegasus streams.
+                bedrock_usage = usage_from_amazon_bedrock_invocation_metrics(chunk)
+                input_tokens = bedrock_usage.input_tokens
+                output_tokens = bedrock_usage.output_tokens
+
+        usage: TokenUsageTypeDef = {
+            "inputTokens": input_tokens,
+            "outputTokens": output_tokens,
+            "totalTokens": input_tokens + output_tokens,
         }
+        yield {"metadata": {"usage": usage}}  # type: ignore[typeddict-item]
