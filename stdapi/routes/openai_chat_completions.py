@@ -31,6 +31,10 @@ from stdapi.models import validate_model
 from stdapi.models.capabilities import register_route_capability
 from stdapi.models.chat import get_chat_model
 from stdapi.monitoring import REQUEST_ID, REQUEST_TIME, log_request_params
+from stdapi.routes._moderation import (
+    apply_request_moderation,
+    build_response_moderation,
+)
 from stdapi.types.openai_chat_completions import ChatCompletion, CompletionCreateParams
 
 if TYPE_CHECKING:
@@ -177,7 +181,8 @@ async def create_chat_completion(
         ApiError: If model is invalid or does not support text output.
     """
     log_request_params(request, user_id=request.safety_identifier or request.user)
-    return await get_chat_model(
+    apply_request_moderation(request.moderation)
+    result = await get_chat_model(
         (
             await validate_model(
                 request.model, input_modality="TEXT", output_modality="TEXT"
@@ -186,3 +191,6 @@ async def create_chat_completion(
     ).create_completion(
         request, f"chatcmpl-{REQUEST_ID.get()}", int(REQUEST_TIME.get().timestamp())
     )
+    if isinstance(result, ChatCompletion):
+        result.moderation = build_response_moderation(request.moderation)
+    return result

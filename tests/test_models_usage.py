@@ -15,11 +15,12 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from botocore.exceptions import ClientError
+from pydantic_core import to_json
 
 import stdapi.models
 from stdapi import usage
 from stdapi.config import SETTINGS
-from stdapi.models import ModelBase, _count_grounding_tool_uses
+from stdapi.models import ModelBase, _count_grounding_tool_uses, _iter_invoke_stream
 from stdapi.monitoring import REQUEST_LOG, EventLog
 from stdapi.pricing import Dimension, Price, PriceKey, Service, _state
 from stdapi.region_routing import RegionRouter
@@ -165,6 +166,36 @@ class TestCaptureStreamUsage:
         _ = [e async for e in model._capture_stream_usage(fake_stream())]  # noqa: SLF001
 
         assert next(iter(usage.USAGE.get())).tier == "flex"
+
+
+class TestIterInvokeStream:
+    """_iter_invoke_stream: the usage callback fires only for metrics-carrying chunks."""
+
+    async def test_usage_callback_skipped_for_chunks_without_invocation_metrics(
+        self,
+    ) -> None:
+        """Chunks lacking 'amazon-bedrock-invocationMetrics' don't invoke the callback."""
+
+        async def fake_body() -> AsyncIterator[dict[str, Any]]:
+            yield {"chunk": {"bytes": to_json({"text": "hello"})}}
+            yield {
+                "chunk": {
+                    "bytes": to_json(
+                        {"amazon-bedrock-invocationMetrics": {"inputTokenCount": 1}}
+                    )
+                }
+            }
+            yield {"chunk": {"bytes": to_json({"text": "world"})}}
+
+        calls: list[Any] = []
+        chunks = [
+            chunk
+            async for chunk in _iter_invoke_stream(fake_body(), calls.append)  # type: ignore[arg-type]
+        ]
+
+        assert len(chunks) == 3
+        assert len(calls) == 1
+        assert "amazon-bedrock-invocationMetrics" in calls[0]
 
 
 class TestRecordConverseUsageEffectiveTier:
@@ -380,7 +411,7 @@ class TestConverseFailoverUsage:
         monkeypatch.setattr(SETTINGS, "aws_bedrock_max_retries", 1)
         monkeypatch.setattr(stdapi.models, "REGION_ROUTER", RegionRouter())
         monkeypatch.setattr(
-            stdapi.models, "_compute_candidate_regions", _fake_candidates
+            stdapi.models, "compute_candidate_regions", _fake_candidates
         )
         monkeypatch.setattr(
             ModelBase, "_prepare_converse_request_for_region", _noop_prepare

@@ -144,7 +144,7 @@ class TestRerankCall:
         async def _candidates(_model_id: str) -> list[RegionName]:
             return [region]  # type: ignore[list-item]
 
-        monkeypatch.setattr(bedrock_rerank, "_compute_candidate_regions", _candidates)
+        monkeypatch.setattr(bedrock_rerank, "compute_candidate_regions", _candidates)
         monkeypatch.setattr(
             bedrock_rerank, "get_client", lambda _service, _region: client
         )

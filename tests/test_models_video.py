@@ -353,8 +353,8 @@ class TestStartVideoGeneration:
         async def _resolve(model_id: str, _region: str, **_kwargs: object) -> str:
             return model_id
 
-        monkeypatch.setattr(video, "_compute_candidate_regions", _candidates)
-        monkeypatch.setattr(video, "_resolve_routed_model_id", _resolve)
+        monkeypatch.setattr(video, "compute_candidate_regions", _candidates)
+        monkeypatch.setattr(video, "resolve_routed_model_id", _resolve)
         monkeypatch.setattr(video, "require_s3_bucket_for_region", lambda _r: "bucket")
         monkeypatch.setattr(video, "get_client", lambda _service, _region: client)
 
@@ -804,8 +804,8 @@ class TestListVideoJobs:
             _arn("aaa111"),
         ]
         # Tagged job uses its tags; untagged one falls back to model defaults.
-        assert (listings[0].seconds, listings[0].size) == ("12", "1280x720")
-        assert (listings[1].seconds, listings[1].size) == ("6", "1280x720")
+        assert (listings[0].seconds, listings[0].size) == (12, "1280x720")
+        assert (listings[1].seconds, listings[1].size) == (6, "1280x720")
         assert listings[0].job.status == "completed"
         assert listings[0].job.completed_at == 290
 
@@ -866,6 +866,28 @@ class TestListVideoJobs:
 
         assert len(listings) == 2
         assert client.requests[1]["nextToken"] == "page2"
+
+    async def test_scan_caps_examined_summaries_not_matches(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The scan stops after examining _LIST_SCAN_LIMIT summaries, even with zero matches."""
+        monkeypatch.setattr(video, "_LIST_SCAN_LIMIT", 4)
+        foreign_page = {
+            "asyncInvokeSummaries": [
+                _summary("aaa", 100, s3_uri="s3://other/videos/x"),
+                _summary("bbb", 200, s3_uri="s3://other/videos/y"),
+            ],
+            "nextToken": "next",
+        }
+        client = _StubListClient([foreign_page, foreign_page, foreign_page])
+        self._patch_client(monkeypatch, client)
+
+        listings, has_more = await video.list_video_jobs()
+
+        assert listings == []
+        assert not has_more
+        # 2 non-matching summaries per page: the cap is hit after 2 pages.
+        assert len(client.requests) == 2
 
     async def test_unknown_model_without_tags_is_dropped(
         self, monkeypatch: pytest.MonkeyPatch

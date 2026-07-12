@@ -1,7 +1,7 @@
 """Unit tests for region-safe model identifier resolution and failover.
 
 Covers :meth:`ModelDetails.get_id` (never emit a geo-mismatched inference
-profile) and :func:`_route_and_execute` (skip a region that cannot serve the
+profile) and :func:`route_and_execute` (skip a region that cannot serve the
 model instead of surfacing the error), both fast and AWS-free.
 """
 
@@ -17,7 +17,7 @@ from stdapi.models import (
     ModelDetails,
     ModelRegionUnavailableError,
     _is_invalid_model_identifier,
-    _route_and_execute,
+    route_and_execute,
 )
 from stdapi.monitoring import REQUEST_LOG
 from stdapi.region_routing import RegionRouter
@@ -127,7 +127,7 @@ _CANDIDATES = cast("list[RegionName]", ["us-east-1", "eu-west-1"])
 
 
 class TestRouteAndExecuteFailover:
-    """_route_and_execute skips regions that cannot serve the model."""
+    """route_and_execute skips regions that cannot serve the model."""
 
     async def test_skips_region_on_invalid_model_identifier(
         self, routed: RegionRouter
@@ -141,7 +141,7 @@ class TestRouteAndExecuteFailover:
                 raise _invalid_identifier_error()
             return f"ok:{region}"
 
-        result = await _route_and_execute("vendor.model-v1", _CANDIDATES, fn)
+        result = await route_and_execute("vendor.model-v1", _CANDIDATES, fn)
 
         assert result == "ok:eu-west-1"
         assert seen == ["us-east-1", "eu-west-1"]
@@ -160,7 +160,7 @@ class TestRouteAndExecuteFailover:
                 raise ModelRegionUnavailableError(msg, region=region)
             return f"ok:{region}"
 
-        result = await _route_and_execute("vendor.model-v1", _CANDIDATES, fn)
+        result = await route_and_execute("vendor.model-v1", _CANDIDATES, fn)
         assert result == "ok:eu-west-1"
 
     async def test_reraises_unrelated_validation_error(
@@ -180,7 +180,7 @@ class TestRouteAndExecuteFailover:
             )
 
         with pytest.raises(ClientError):
-            await _route_and_execute("vendor.model-v1", _CANDIDATES, fn)
+            await route_and_execute("vendor.model-v1", _CANDIDATES, fn)
 
     async def test_single_region_unavailable_becomes_api_error(self) -> None:
         """With one candidate, an unavailable region surfaces as a clean ApiError."""
@@ -190,6 +190,6 @@ class TestRouteAndExecuteFailover:
             raise ModelRegionUnavailableError(msg, region=region)
 
         with pytest.raises(ApiError):
-            await _route_and_execute(
+            await route_and_execute(
                 "vendor.model-v1", cast("list[RegionName]", ["us-east-1"]), fn
             )

@@ -20,6 +20,7 @@ import stdapi.region_routing as _region_routing
 from stdapi.api_errors import ApiError, UnsupportedModelError
 from stdapi.aws import get_client
 from stdapi.aws_bedrock import (
+    GUARDRAIL_TRACE_VAR,
     GUARDTRAIL_CONFIG_VAR,
     PERFORMANCE_CONFIG_VAR,
     bedrock_client,
@@ -438,7 +439,7 @@ class ModelBase[RequestT, ResponseT]:
         Returns:
             AWS region string.
         """
-        candidates = await _compute_candidate_regions(
+        candidates = await compute_candidate_regions(
             self._model_id, s3_required=s3_required
         )
         return (
@@ -475,10 +476,10 @@ class ModelBase[RequestT, ResponseT]:
         Returns:
             InvokeResult containing the parsed JSON response body and token counts.
         """
-        candidates = await _compute_candidate_regions(
+        candidates = await compute_candidate_regions(
             self._model_id, region=region, s3_required=s3_required
         )
-        resp = await _route_and_execute(
+        resp = await route_and_execute(
             self._model_id,
             candidates,
             partial(
@@ -529,10 +530,10 @@ class ModelBase[RequestT, ResponseT]:
         Yields:
             Parsed JSON chunks from the streaming response.
         """
-        candidates = await _compute_candidate_regions(
+        candidates = await compute_candidate_regions(
             self._model_id, region=region, s3_required=s3_required
         )
-        async for chunk in await _route_and_execute(
+        async for chunk in await route_and_execute(
             self._model_id,
             candidates,
             partial(
@@ -569,7 +570,7 @@ class ModelBase[RequestT, ResponseT]:
         Raises:
             ApiError: When invocation fails or results cannot be retrieved.
         """
-        candidates = await _compute_candidate_regions(self._model_id, s3_required=True)
+        candidates = await compute_candidate_regions(self._model_id, s3_required=True)
         effective_region = (
             REGION_ROUTER.ordered_regions(self._model_id, candidates)
             if REGION_ROUTER
@@ -577,7 +578,7 @@ class ModelBase[RequestT, ResponseT]:
         )[0]
         s3_bucket_name = require_s3_bucket_for_region(effective_region)
         bedrock: BedrockRuntimeClient = get_client("bedrock-runtime", effective_region)
-        resolved_model_id = await _resolve_routed_model_id(
+        resolved_model_id = await resolve_routed_model_id(
             self._model_id, effective_region, inference_profile=inference_profile
         )
         with handle_bedrock_client_error():
@@ -735,7 +736,7 @@ class ModelBase[RequestT, ResponseT]:
             region, document_s3_location=self.S3_LOCATION_DOCUMENT_SUPPORTED
         )
         latency, perf_service_tier = PERFORMANCE_CONFIG_VAR.get((None, None))
-        request["modelId"] = await _resolve_routed_model_id(
+        request["modelId"] = await resolve_routed_model_id(
             self._model_id, region, inference_profile=True, latency=latency
         )
         request["requestMetadata"] = build_metadata(request.get("requestMetadata"))
@@ -880,12 +881,17 @@ class ModelBase[RequestT, ResponseT]:
         Returns:
             Bedrock Converse response.
         """
-        candidates = await _compute_candidate_regions(self._model_id)
-        return await _route_and_execute(
+        candidates = await compute_candidate_regions(self._model_id)
+        response = await route_and_execute(
             self._model_id,
             candidates,
             lambda r: self._converse(request, r, single_region=len(candidates) == 1),
         )
+        if (trace_holder := GUARDRAIL_TRACE_VAR.get(None)) is not None and (
+            trace := response.get("trace", {}).get("guardrail")
+        ):
+            trace_holder.update(trace)
+        return response
 
     async def converse_stream(
         self, request: ConverseRequestBaseTypeDef
@@ -901,8 +907,8 @@ class ModelBase[RequestT, ResponseT]:
         Returns:
             Bedrock ConverseStream response containing the event stream.
         """
-        candidates = await _compute_candidate_regions(self._model_id)
-        return await _route_and_execute(
+        candidates = await compute_candidate_regions(self._model_id)
+        return await route_and_execute(
             self._model_id,
             candidates,
             lambda r: self._converse_stream(
@@ -1212,71 +1218,77 @@ async def _get_bedrock_models_from_region(region: RegionName) -> list[ModelDetai
     )
     restrictions = SETTINGS.aws_bedrock_model_region_restrict
     next_refresh = SETTINGS.now() + _CACHE["update_interval"]
-    return [
-        ModelDetails(
-            id=model["modelId"],
-            name=model["modelName"],
-            provider=model["providerName"],
-            regions=[region],
-            input_modalities=model["inputModalities"],  # type: ignore[arg-type]
-            output_modalities=_advertised_output_modalities(
-                model["modelId"],
-                model["outputModalities"],  # type: ignore[arg-type]
-            ),
-            response_streaming=model.get("responseStreamingSupported"),
-            inference_profiles={region: inference_profile}
-            if (inference_profile := profiles.get(model["modelId"]))
-            else None,
-            legacy=(
-                model["modelLifecycle"]["status"] == "LEGACY"
-                or (legacy_time is not None and legacy_time <= next_refresh)
-                or None
-            ),
-            start_of_life_time=model["modelLifecycle"].get("startOfLifeTime"),
-            end_of_life_time=model["modelLifecycle"].get("endOfLifeTime"),
-            legacy_time=model["modelLifecycle"].get("legacyTime"),
-            public_extended_access_time=model["modelLifecycle"].get(
-                "publicExtendedAccessTime"
-            ),
-        )
-        for model in foundation_models["modelSummaries"]
+    models: list[ModelDetails] = []
+    for model in foundation_models["modelSummaries"]:
         # A legacy time reached before the next refresh counts as legacy.
-        if (
-            (legacy_time := model["modelLifecycle"].get("legacyTime")) is None
-            or legacy_time > next_refresh
-            or SETTINGS.aws_bedrock_legacy
-        )
-        and (
-            SETTINGS.aws_bedrock_legacy
-            or (model["modelLifecycle"]["status"] != "LEGACY")
-        )
-        and (
-            (eol := model["modelLifecycle"].get("endOfLifeTime")) is None
-            or eol > next_refresh
-        )
-        and (
-            (set(model["inferenceTypesSupported"]) & _INFERENCE_TYPES)
-            or (
-                "PROVISIONED" in model["inferenceTypesSupported"]
-                and model["modelId"] in provisioned_models
-            )
-        )
-        and (
+        legacy_time = model["modelLifecycle"].get("legacyTime")
+        if not (
             (
-                allowed := restrictions.get(model["modelId"])
-                or next(
-                    (
-                        v
-                        for k, v in restrictions.items()
-                        if model["modelId"].startswith(k)
-                    ),
-                    None,
+                legacy_time is None
+                or legacy_time > next_refresh
+                or SETTINGS.aws_bedrock_legacy
+            )
+            and (
+                SETTINGS.aws_bedrock_legacy
+                or (model["modelLifecycle"]["status"] != "LEGACY")
+            )
+            and (
+                (eol := model["modelLifecycle"].get("endOfLifeTime")) is None
+                or eol > next_refresh
+            )
+            and (
+                (set(model["inferenceTypesSupported"]) & _INFERENCE_TYPES)
+                or (
+                    "PROVISIONED" in model["inferenceTypesSupported"]
+                    and model["modelId"] in provisioned_models
                 )
             )
-            is None
-            or region in allowed
+            and (
+                (
+                    allowed := restrictions.get(model["modelId"])
+                    or next(
+                        (
+                            v
+                            for k, v in restrictions.items()
+                            if model["modelId"].startswith(k)
+                        ),
+                        None,
+                    )
+                )
+                is None
+                or region in allowed
+            )
+        ):
+            continue
+        models.append(
+            ModelDetails(
+                id=model["modelId"],
+                name=model["modelName"],
+                provider=model["providerName"],
+                regions=[region],
+                input_modalities=model["inputModalities"],  # type: ignore[arg-type]
+                output_modalities=_advertised_output_modalities(
+                    model["modelId"],
+                    model["outputModalities"],  # type: ignore[arg-type]
+                ),
+                response_streaming=model.get("responseStreamingSupported"),
+                inference_profiles={region: inference_profile}
+                if (inference_profile := profiles.get(model["modelId"]))
+                else None,
+                legacy=(
+                    model["modelLifecycle"]["status"] == "LEGACY"
+                    or (legacy_time is not None and legacy_time <= next_refresh)
+                    or None
+                ),
+                start_of_life_time=model["modelLifecycle"].get("startOfLifeTime"),
+                end_of_life_time=model["modelLifecycle"].get("endOfLifeTime"),
+                legacy_time=model["modelLifecycle"].get("legacyTime"),
+                public_extended_access_time=model["modelLifecycle"].get(
+                    "publicExtendedAccessTime"
+                ),
+            )
         )
-    ]
+    return models
 
 
 async def _collect_region_candidates(
@@ -1456,13 +1468,23 @@ async def _trigger_price_catalog_refresh(
     No-op for the initial startup call (``start_event`` is not None) -- that
     one already gets a full catalog from ``start_price_catalog()``.
 
+    A refresh failure (Pricing API throttling/permission errors) is warned
+    about instead of propagating: it must not fail model listing.
+
     Args:
         start_event: The event log passed to ``initialize_bedrock_models()``.
         new_model_ids: Model IDs discovered by this refresh that weren't
             previously registered.
     """
     if new_model_ids and start_event is None:
-        await refresh_price_catalog_for_new_models(new_model_ids)
+        try:
+            await refresh_price_catalog_for_new_models(new_model_ids)
+        except (BotoCoreError, ClientError) as exc:
+            if REQUEST_LOG.get(None) is not None:
+                log_error_details(
+                    f"Price-catalog refresh for new models failed: {exc}",
+                    level="warning",
+                )
 
 
 def _warn_bedrock_refresh_issues(
@@ -1760,7 +1782,7 @@ def get_model[ModelT: ModelBase[Any, Any]](
         return cache[model_id]
 
 
-async def _compute_candidate_regions(
+async def compute_candidate_regions(
     model_id: str, *, region: RegionName | None = None, s3_required: bool = False
 ) -> list[RegionName]:
     """Return ordered candidate regions for routing, taking S3 input locality into account.
@@ -1845,7 +1867,7 @@ async def _compute_candidate_regions(
     return regions
 
 
-async def _route_and_execute[T](
+async def route_and_execute[T](
     model_id: str,
     candidates: list[RegionName],
     fn: Callable[[RegionName], Awaitable[T]],
@@ -1866,8 +1888,8 @@ async def _route_and_execute[T](
 
     Args:
         model_id: Used for router health bookkeeping.
-        candidates: From ``_compute_candidate_regions``. Single-element means region-locked.
-        fn: Must call ``_set_effective_region`` before the AWS call.
+        candidates: From ``compute_candidate_regions``. Single-element means region-locked.
+        fn: Must call ``set_effective_region`` before the AWS call.
 
     Returns:
         Result of the first successful ``fn`` call.
@@ -1934,7 +1956,7 @@ def _is_invalid_model_identifier(exc: ClientError) -> bool:
     )
 
 
-def _set_effective_region(model_id: str, region: RegionName) -> None:
+def set_effective_region(model_id: str, region: RegionName) -> None:
     """Record *region* in the request log's ``model_regions`` set and *model_id*'s invocation state.
 
     Args:
@@ -1948,7 +1970,7 @@ def _set_effective_region(model_id: str, region: RegionName) -> None:
     get_model_state(model_id).region = region
 
 
-async def _resolve_routed_model_id(
+async def resolve_routed_model_id(
     model_id: str,
     region: RegionName,
     *,
@@ -1966,7 +1988,7 @@ async def _resolve_routed_model_id(
     Returns:
         The resolved model or inference-profile ID to send to Bedrock.
     """
-    _set_effective_region(model_id, region)
+    set_effective_region(model_id, region)
     resolved_model_id = (await get_model_details(model_id)).get_id(
         region, inference_profile=inference_profile
     )
@@ -2002,7 +2024,7 @@ async def _build_invoke_kwargs(
         Fully populated request kwargs dict.
     """
     latency, perf_service_tier = PERFORMANCE_CONFIG_VAR.get((None, None))
-    resolved_model_id = await _resolve_routed_model_id(
+    resolved_model_id = await resolve_routed_model_id(
         model_id, region, inference_profile=inference_profile, latency=latency
     )
     kwargs: InvokeModelRequestTypeDef = {
@@ -2099,7 +2121,11 @@ async def _iter_invoke_stream(
     async for event in body:
         if "chunk" in event:
             chunk = from_json(event["chunk"]["bytes"])
-            if record_usage_callback is not None and isinstance(chunk, Mapping):
+            if (
+                record_usage_callback is not None
+                and isinstance(chunk, Mapping)
+                and "amazon-bedrock-invocationMetrics" in chunk
+            ):
                 record_usage_callback(chunk)
             yield chunk
         else:
@@ -2120,7 +2146,7 @@ async def _open_invoke_stream(
     """Open an ``InvokeModelWithResponseStream`` connection and return a JSON chunk generator.
 
     The HTTP connection is established before the first ``yield`` so
-    :func:`_route_and_execute` can retry on a different region if the open fails.
+    :func:`route_and_execute` can retry on a different region if the open fails.
     Once the stream is open, retrying is no longer possible.
 
     Args:

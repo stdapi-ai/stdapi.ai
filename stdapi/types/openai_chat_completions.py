@@ -15,9 +15,11 @@ from stdapi.types.openai import (
     FunctionLiteral,
     LegacyFunction,
     Metadata,
+    RequestModeration,
     ResponseFormatJSONObject,
     ResponseFormatJSONSchema,
     ResponseFormatText,
+    ResponseModeration,
     TextLiteral,
 )
 
@@ -972,6 +974,11 @@ class _Completion(BaseModelResponse):
         default=None,
         description="Backend configuration fingerprint. Use with `seed` to check for determinism changes.",
     )
+    moderation: ResponseModeration | None = Field(
+        default=None,
+        description="Guardrail moderation results, when the request set "
+        "`moderation` (non-streaming responses only).",
+    )
 
 
 # Ref: openai.types.chat.chat_completion.ChatCompletion
@@ -1224,6 +1231,12 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
     thinking: MoonshotThinkingOptions | None = Field(
         default=None,
         description="Enable/disable thinking. Extra field from Moonshot Chat Completion API.",
+    )
+
+    moderation: RequestModeration | None = Field(
+        default=None,
+        description="Apply an AWS Bedrock guardrail to this request; results "
+        "are reported in the response `moderation` field (non-streaming only).",
     )
 
     # Extra validations

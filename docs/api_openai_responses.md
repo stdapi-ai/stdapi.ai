@@ -79,6 +79,7 @@ Generate model responses with AWS Bedrock foundation models through an OpenAI Re
 | `conversation`                                                        | :material-close-circle:{ .unsupported } | Returns `400`; use `previous_response_id` or `input`                         |
 | `prompt` (template reference)                                         | :material-close-circle:{ .unsupported } | Returns `400`; not supported                                                 |
 | `safety_identifier`                                                   | :material-close-circle:{ .unsupported } | Returns `400`; not supported                                                 |
+| `moderation`                                                          |   :material-check-circle:{ .success }   | Applies an AWS Bedrock guardrail; results in the response (non-streaming)   |
 | **Output Format**                                                     |                                         |                                                                              |
 | `text.format: "text"`                                                 |   :material-check-circle:{ .success }   | Plain text output                                                            |
 | `text.format: "json_object"`                                          |      :material-cog:{ .model-dep }       | JSON object output via Bedrock outputConfig                                  |

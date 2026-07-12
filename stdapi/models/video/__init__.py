@@ -33,11 +33,11 @@ from stdapi.aws_s3 import get_s3_bucket_for_region, require_s3_bucket_for_region
 from stdapi.config import SETTINGS
 from stdapi.models import (
     ModelBase,
-    _compute_candidate_regions,
-    _resolve_routed_model_id,
-    _route_and_execute,
+    compute_candidate_regions,
     get_model,
     load_model_plugins,
+    resolve_routed_model_id,
+    route_and_execute,
 )
 from stdapi.models.capabilities import Capability
 from stdapi.monitoring import build_metadata
@@ -213,11 +213,13 @@ class VideoModelBase(ModelBase[Any, Any]):
             reference_image=image,
             extra_params=extra_params,
         )
-        invocation_arn, region = await _route_and_execute(
+        invocation_arn, region = await route_and_execute(
             self._model_id,
-            await _compute_candidate_regions(self._model_id, s3_required=True),
+            await compute_candidate_regions(self._model_id, s3_required=True),
             partial(self._start_in_region, body, seconds, size),
         )
+        # Billed at submission, not completion: job state is not tracked here, so
+        # a later failure is never reconciled against this recorded usage.
         record_bedrock_usage(self._model_id, region=region, output_seconds=seconds)
         return VideoGenerationStart(
             invocation_arn=invocation_arn, seconds=seconds, size=size
@@ -241,7 +243,7 @@ class VideoModelBase(ModelBase[Any, Any]):
             Tuple of (invocation ARN, region that served the call).
         """
         bucket = require_s3_bucket_for_region(region)
-        resolved_model_id = await _resolve_routed_model_id(
+        resolved_model_id = await resolve_routed_model_id(
             self._model_id, region, inference_profile=False
         )
         client: BedrockRuntimeClient = get_client("bedrock-runtime", region)
@@ -369,7 +371,7 @@ class VideoListing(NamedTuple):
     """
 
     job: VideoJob
-    seconds: str
+    seconds: int
     size: str
 
 
@@ -394,18 +396,21 @@ async def _scan_region_jobs(
         return []
     client: BedrockRuntimeClient = get_client("bedrock-runtime", region)
     jobs: list[VideoJob] = []
+    scanned = 0
     token: str | None = None
     with handle_bedrock_client_error():
-        while len(jobs) < _LIST_SCAN_LIMIT:
+        while scanned < _LIST_SCAN_LIMIT:
             response = await client.list_async_invokes(
                 maxResults=100,
                 sortBy="SubmissionTime",
                 sortOrder=sort_order,
                 **({"nextToken": token} if token else {}),  # type: ignore[arg-type]
             )
+            summaries = response.get("asyncInvokeSummaries", ())
+            scanned += len(summaries)
             jobs.extend(
                 _to_video_job(summary["invocationArn"], summary)
-                for summary in response.get("asyncInvokeSummaries", ())
+                for summary in summaries
                 if summary["outputDataConfig"]["s3OutputDataConfig"][
                     "s3Uri"
                 ].startswith(uri_prefix)
@@ -443,7 +448,7 @@ async def _listing_details(job: VideoJob) -> VideoListing | None:
             return None
         seconds = seconds if seconds.isdigit() else str(model.DEFAULT_SECONDS)
         size = size or model.DEFAULT_SIZE
-    return VideoListing(job, seconds, size)
+    return VideoListing(job, int(seconds), size)
 
 
 async def list_video_jobs(

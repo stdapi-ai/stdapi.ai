@@ -84,6 +84,7 @@ Your existing applications, SDKs, and tools work immediately — no plugins or c
 | `/v1/responses/input_tokens` | Count input tokens without generating a response                          | AWS Bedrock CountTokens API          |
 | `/v1/responses/compact`      | Compact a conversation into a reusable summary item                       | AWS Bedrock Converse API             |
 | `/v1/embeddings`             | Vector embeddings for search & RAG                                        | AWS Bedrock Embedding Models         |
+| `/v1/moderations`            | Content safety classification                                             | AWS Bedrock Guardrails               |
 | `/v1/images/generations`     | Text-to-image generation                                                  | AWS Bedrock Image Models             |
 | `/v1/images/edits`           | Image editing, inpainting & transformations                               | AWS Bedrock Image Models             |
 | `/v1/images/variations`      | Image variations                                                          | AWS Bedrock Image Models             |
@@ -534,6 +535,7 @@ All four solutions below expose an OpenAI-compatible API in front of AWS Bedrock
 | **OpenAI Image editing**                    |  :material-check:{ .green-check }   |                    —                    |                    —                    |                    —                    |
 | **OpenAI Image variations**                 |  :material-check:{ .green-check }   |                    —                    |                    —                    |                    —                    |
 | **OpenAI Videos API**                       |  :material-check:{ .green-check }   |                    —                    |                    —                    |                    —                    |
+| **OpenAI Moderations API**                  |  :material-check:{ .green-check }   |                    —                    |                    —                    |                    —                    |
 | **OpenAI TTS (speech)**                     |  :material-check:{ .green-check }   | :material-check:{ .yellow-check } [^12] |                    —                    |                    —                    |
 | **OpenAI STT (transcription)**              |  :material-check:{ .green-check }   |                    —                    |                    —                    |                    —                    |
 | **OpenAI Files & Uploads API**              |  :material-check:{ .green-check }   |                    —                    |                    —                    |                    —                    |

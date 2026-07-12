@@ -11,9 +11,9 @@ from typing import TYPE_CHECKING
 from stdapi.aws import get_client
 from stdapi.aws_bedrock import handle_bedrock_client_error
 from stdapi.models import (
-    _compute_candidate_regions,
-    _route_and_execute,
-    _set_effective_region,
+    compute_candidate_regions,
+    route_and_execute,
+    set_effective_region,
 )
 from stdapi.models.rerank import RerankedDocument, RerankModelBase, RerankResponse
 from stdapi.pricing import partition_of_region
@@ -58,9 +58,9 @@ class RerankModel(RerankModelBase):
         Returns:
             Rerank response with billed search units.
         """
-        results, region = await _route_and_execute(
+        results, region = await route_and_execute(
             self._model_id,
-            await _compute_candidate_regions(self._model_id),
+            await compute_candidate_regions(self._model_id),
             partial(self._rerank_in_region, query, documents, top_n, extra_params),
         )
         search_units = (len(documents) + 99) // 100
@@ -95,7 +95,7 @@ class RerankModel(RerankModelBase):
         Returns:
             Tuple of (raw rerank results, region that served the call).
         """
-        _set_effective_region(self._model_id, region)
+        set_effective_region(self._model_id, region)
         client: AgentsforBedrockRuntimeClient = get_client(
             "bedrock-agent-runtime", region
         )

@@ -93,6 +93,7 @@ Generate conversational AI responses with AWS Bedrock foundation models—includ
 | `store`                                  | :material-close-circle:{ .unsupported }  | OpenAI-specific storage feature                                 |
 | `safety_identifier` / `user`             |   :material-minus-circle:{ .partial }    | Logged                                                          |
 | Bedrock Guardrails                       | :material-plus-circle:{ .extra-feature } | Content safety policies                                         |
+| `moderation`                             |   :material-check-circle:{ .success }    | Applies an AWS Bedrock guardrail; results in the response (non-streaming) |
 
 </div>
 

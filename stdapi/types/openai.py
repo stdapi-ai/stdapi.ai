@@ -107,3 +107,45 @@ class ResponseFormatJSONSchema(BaseModelResponse, _Strict):
     json_schema: JSONSchema = Field(
         description="Structured Outputs JSON Schema configuration."
     )
+
+
+# Ref: openai.types.responses.response_create_params.Moderation
+class RequestModeration(BaseModelRequest):
+    """Moderation configuration applied to a generation request."""
+
+    model: str = Field(
+        min_length=1,
+        max_length=2048,
+        description="AWS Bedrock guardrail as `<id>`, `<id>:<version>`, or ARN; "
+        "OpenAI moderation model names resolve to the server's configured "
+        "guardrail.",
+    )
+
+
+class ModerationResult(BaseModelResponse):
+    """Moderation outcome for one direction of a generation."""
+
+    type: Literal["moderation_result"] = Field(
+        default="moderation_result",
+        description="The object type, which is always `moderation_result`.",
+    )
+    flagged: bool = Field(description="Whether the guardrail flagged the content.")
+    categories: dict[str, bool] = Field(
+        description="Per-category violation flags (OpenAI moderation categories)."
+    )
+    category_scores: dict[str, float] = Field(
+        description="Per-category scores derived from guardrail confidence levels."
+    )
+    model: str = Field(description="The guardrail that classified the content.")
+
+
+# Ref: openai.types.responses.response.Moderation
+class ResponseModeration(BaseModelResponse):
+    """Moderation results for the request input and generated output."""
+
+    input: ModerationResult | None = Field(
+        default=None, description="Moderation result for the request input."
+    )
+    output: ModerationResult | None = Field(
+        default=None, description="Moderation result for the generated output."
+    )

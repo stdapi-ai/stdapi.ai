@@ -268,6 +268,135 @@ def set_guardrail_configuration(headers: Headers) -> None:
     GUARDTRAIL_CONFIG_VAR.set(config)
 
 
+#: OpenAI moderation model name prefixes resolved to the configured guardrail.
+_OPENAI_MODERATION_PREFIXES = ("omni-moderation", "text-moderation")
+
+#: Bedrock guardrail content filter types mapped to OpenAI moderation categories.
+_GUARDRAIL_FILTER_CATEGORIES: dict[str, str] = {
+    "HATE": "hate",
+    "INSULTS": "harassment",
+    "SEXUAL": "sexual",
+    "VIOLENCE": "violence",
+    "MISCONDUCT": "illicit",
+}
+
+#: Bedrock guardrail confidence levels mapped to OpenAI-style scores.
+_GUARDRAIL_CONFIDENCE_SCORES: dict[str, float] = {
+    "NONE": 0.0,
+    "LOW": 0.25,
+    "MEDIUM": 0.5,
+    "HIGH": 0.75,
+}
+
+#: Guardrail policies scanned for interventions, as (policy, entry list) keys.
+_GUARDRAIL_POLICY_ENTRIES: tuple[tuple[str, str], ...] = (
+    ("contentPolicy", "filters"),
+    ("topicPolicy", "topics"),
+    ("wordPolicy", "customWords"),
+    ("wordPolicy", "managedWordLists"),
+    ("sensitiveInformationPolicy", "piiEntities"),
+    ("sensitiveInformationPolicy", "regexes"),
+    ("contextualGroundingPolicy", "filters"),
+)
+
+#: Per-request holder for Bedrock Converse guardrail trace assessments, shared across the request's tasks.
+GUARDRAIL_TRACE_VAR: ContextVar[dict[str, Any]] = ContextVar("guardrail_trace")
+
+
+def resolve_guardrail_model(model: str | None) -> tuple[str, str]:
+    """Resolve a moderation ``model`` value to a guardrail (identifier, version).
+
+    OpenAI moderation model names (or ``None``) resolve to the request's
+    configured guardrail; an explicit guardrail ``<id>``, ``<id>:<version>``,
+    or ARN is honored when guardrail override is allowed.
+
+    Args:
+        model: The moderation ``model`` value, if any.
+
+    Returns:
+        Tuple of (guardrail identifier, guardrail version).
+
+    Raises:
+        ApiError: When no guardrail is configured or the override is not allowed.
+    """
+    configured = GUARDTRAIL_CONFIG_VAR.get(None)
+    if model is None or model.startswith(_OPENAI_MODERATION_PREFIXES):
+        if configured is None:
+            # Imported here because stdapi.monitoring imports this module.
+            from stdapi.monitoring import log_error_details  # noqa: PLC0415
+
+            log_error_details(
+                "No moderation guardrail is configured "
+                "(aws_bedrock_guardrail_identifier): 'moderation' rejected.",
+                level="warning",
+            )
+            msg = (
+                "Moderation is not enabled on the current server. Please "
+                "contact the administrator to enable it, or pass an AWS "
+                "Bedrock guardrail as the moderation model."
+            )
+            raise ApiError(msg)
+        return configured["guardrailIdentifier"], configured["guardrailVersion"]
+    identifier, version = model, "DRAFT"
+    head, sep, tail = model.rpartition(":")
+    version_given = bool(sep and (tail == "DRAFT" or tail.isdigit()))
+    if version_given:
+        identifier, version = head, tail
+    if (
+        configured
+        and identifier == configured["guardrailIdentifier"]
+        and (not version_given or version == configured["guardrailVersion"])
+    ):
+        return configured["guardrailIdentifier"], configured["guardrailVersion"]
+    if not SETTINGS.aws_bedrock_allow_guardrail_override:
+        msg = "Selecting a guardrail via 'model' is not allowed on this server."
+        raise ApiError(msg)
+    return identifier, version
+
+
+def map_guardrail_filters(
+    assessments: Sequence[Mapping[str, Any]],
+) -> tuple[dict[str, bool], dict[str, float], bool]:
+    """Map guardrail assessments to OpenAI moderation categories and scores.
+
+    Only content policy filters map to categories; every other guardrail
+    policy (topics, words, sensitive information, grounding) contributes to
+    the returned intervention flag.
+
+    Args:
+        assessments: Guardrail assessments (ApplyGuardrail or Converse trace).
+
+    Returns:
+        Tuple of (category flags, category scores, whether any policy hit).
+    """
+    categories: dict[str, bool] = {}
+    scores: dict[str, float] = {}
+    intervened = False
+    for assessment in assessments:
+        for policy, entries in _GUARDRAIL_POLICY_ENTRIES:
+            for entry in assessment.get(policy, {}).get(entries, ()):
+                detected = entry.get("detected") is True or entry.get("action") in (
+                    "BLOCKED",
+                    "ANONYMIZED",
+                )
+                intervened = intervened or detected
+                category = (
+                    _GUARDRAIL_FILTER_CATEGORIES.get(entry.get("type", ""))
+                    if policy == "contentPolicy"
+                    else None
+                )
+                if category is None:
+                    continue
+                categories[category] = categories.get(category, False) or detected
+                scores[category] = max(
+                    scores.get(category, 0.0),
+                    _GUARDRAIL_CONFIDENCE_SCORES.get(
+                        entry.get("confidence", "NONE"), 0.0
+                    ),
+                )
+    return categories, scores, intervened
+
+
 def set_performance_configuration(headers: Headers) -> None:
     """Set the performance context var for the current request.
 

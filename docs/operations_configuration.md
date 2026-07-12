@@ -1672,7 +1672,7 @@ Required only if you enable ARN-based routing features that allow users to pass 
 
 **Environment Variables**: [`AWS_BEDROCK_GUARDRAIL_IDENTIFIER`](#aws-bedrock-guardrail-identifier), [`AWS_BEDROCK_GUARDRAIL_VERSION`](#aws-bedrock-guardrail-version)
 
-Required only if you configure Bedrock Guardrails for content filtering. See [Bedrock Guardrails](#bedrock-guardrails) configuration section.
+Required if you configure Bedrock Guardrails for content filtering, or use the [Moderations API](api_openai_moderations.md) or the `moderation` request parameter. See [Bedrock Guardrails](#bedrock-guardrails) configuration section.
 
 ??? example "Bedrock Guardrails IAM Policy Statement"
     ```json
@@ -2064,7 +2064,7 @@ Required if you configure API authentication. See [Authentication](#authenticati
 | **Bedrock Models (Discovery)**                  | `bedrock:ListFoundationModels`<br>`bedrock:GetFoundationModelAvailability`<br>`bedrock:ListProvisionedModelThroughputs`<br>`bedrock:ListInferenceProfiles` | Always required                                                              |
 | **Bedrock Marketplace Auto-Subscribe**          | `aws-marketplace:Subscribe`<br>`aws-marketplace:ViewSubscriptions`                                                                                         | `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE=true` (default)                      |
 | **Bedrock Inference Profiles & Prompt Routers** | `bedrock:GetInferenceProfile`<br>`bedrock:GetPromptRouter`                                                                                                 | `AWS_BEDROCK_ALLOW_*_ARN=true` or `AWS_BEDROCK_MODEL_ARN_MAPPING` configured |
-| **Bedrock Guardrails**                          | `bedrock:ApplyGuardrail`                                                                                                                                   | `AWS_BEDROCK_GUARDRAIL_IDENTIFIER`                                           |
+| **Bedrock Guardrails & Moderations**            | `bedrock:ApplyGuardrail`                                                                                                                                   | `AWS_BEDROCK_GUARDRAIL_IDENTIFIER`                                           |
 | **File Storage**                                | `s3:PutObject`<br>`s3:PutObjectTagging`<br>`s3:GetObject`<br>`s3:DeleteObject`<br>`s3:CreateMultipartUpload`<br>`s3:UploadPart`<br>`s3:CompleteMultipartUpload`<br>`s3:AbortMultipartUpload`<br>`s3:ListMultipartUploadParts`<br>`s3:ListBucket`<br>`s3:ListBucketMultipartUploads` | `AWS_S3_BUCKET`                                                              |
 | **Video Generation**                            | Bedrock invoke permissions (incl. `bedrock:GetAsyncInvoke`, `bedrock:ListAsyncInvokes`, `bedrock:ListTagsForResource`, `bedrock:TagResource`)<br>File Storage S3 permissions on each regional bucket | `AWS_S3_REGIONAL_BUCKETS`                                                    |
 | **KMS Encrypted S3 Buckets**                    | `kms:Decrypt`<br>`kms:GenerateDataKey`<br>with `kms:ViaService` condition                                                                                  | If S3 buckets use KMS encryption                                             |
@@ -3551,7 +3551,7 @@ export COST_TRACKING=true
 
 ## Bedrock Guardrails
 
-Amazon Bedrock Guardrails add content filtering and safety controls to model inputs and outputs.
+Amazon Bedrock Guardrails add content filtering and safety controls to model inputs and outputs. The configured guardrail also powers the [OpenAI-compatible Moderations API](api_openai_moderations.md) (`POST /v1/moderations`).
 
 !!! info "Configuration Options"
     Guardrails can be configured in three ways:

@@ -139,9 +139,9 @@ class TestInvokeImageBilling:
             return model_id
 
         monkeypatch.setattr(
-            stdapi.models, "_compute_candidate_regions", _fake_candidates
+            stdapi.models, "compute_candidate_regions", _fake_candidates
         )
-        monkeypatch.setattr(stdapi.models, "_resolve_routed_model_id", _fake_resolve)
+        monkeypatch.setattr(stdapi.models, "resolve_routed_model_id", _fake_resolve)
         monkeypatch.setattr(
             stdapi.models,
             "bedrock_client",

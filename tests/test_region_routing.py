@@ -160,10 +160,10 @@ async def _routing_fixture_context(
     _aws_mod._CLIENTS["bedrock-runtime.no-retry"] = no_retry_clients  # type: ignore[assignment]  # noqa: SLF001
 
     try:
-        # _compute_candidate_regions returns all model.available_regions from the
+        # compute_candidate_regions returns all model.available_regions from the
         # startup-time cache, which may include regions absent in effective_regions.
         # Wrap it to restrict candidates so bedrock_client() never KeyErrors.
-        _orig_ccr = _models_mod._compute_candidate_regions  # noqa: SLF001
+        _orig_ccr = _models_mod.compute_candidate_regions
         _effective_regions_set = set(effective_regions)
 
         async def _filtered_ccr(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
@@ -186,7 +186,7 @@ async def _routing_fixture_context(
             patch.object(_rr_mod, "REGION_ROUTER", router),
             patch.object(_rr_mod, "ORDERED_BEDROCK_REGIONS", list(effective_regions)),
             patch.object(_models_mod, "REGION_ROUTER", router),
-            patch.object(_models_mod, "_compute_candidate_regions", _filtered_ccr),
+            patch.object(_models_mod, "compute_candidate_regions", _filtered_ccr),
         ):
             yield RoutingFixture(
                 openai=openai_client, router=router, no_retry_clients=no_retry_clients
@@ -567,7 +567,7 @@ class TestSingleRegionMode:
 
 
 # ---------------------------------------------------------------------------
-# Group 7 — _compute_candidate_regions (pure logic, no real AWS)
+# Group 7 — compute_candidate_regions (pure logic, no real AWS)
 # ---------------------------------------------------------------------------
 
 
@@ -586,11 +586,11 @@ def _make_model_details(available_regions: list[str]) -> Any:  # noqa: ANN401
 
 
 class TestCandidateRegions:
-    """Unit tests for ``_compute_candidate_regions`` — fully mocked, no real AWS."""
+    """Unit tests for ``compute_candidate_regions`` — fully mocked, no real AWS."""
 
     async def test_s3_input_overlap_returns_single_best_region(self) -> None:
         """When an S3 input file is in one region, only that region is returned."""
-        from stdapi.models import _compute_candidate_regions  # noqa: PLC0415
+        from stdapi.models import compute_candidate_regions  # noqa: PLC0415
 
         model = _make_model_details([ROUTING_PRIMARY, ROUTING_SECONDARY])
         with (
@@ -601,11 +601,11 @@ class TestCandidateRegions:
                 return_value={ROUTING_PRIMARY: 100, ROUTING_SECONDARY: 500},
             ),
         ):
-            assert await _compute_candidate_regions(MODEL) == [ROUTING_SECONDARY]
+            assert await compute_candidate_regions(MODEL) == [ROUTING_SECONDARY]
 
     async def test_s3_input_no_overlap_falls_back_to_bucketed_region(self) -> None:
         """When the S3 file region doesn't match any model region, fall back to a region with a configured bucket."""
-        from stdapi.models import _compute_candidate_regions  # noqa: PLC0415
+        from stdapi.models import compute_candidate_regions  # noqa: PLC0415
 
         model = _make_model_details([ROUTING_PRIMARY, ROUTING_SECONDARY])
         with (
@@ -618,12 +618,12 @@ class TestCandidateRegions:
                 side_effect=lambda r: "b" if r == ROUTING_PRIMARY else None,
             ),
         ):
-            assert await _compute_candidate_regions(MODEL) == [ROUTING_PRIMARY]
+            assert await compute_candidate_regions(MODEL) == [ROUTING_PRIMARY]
 
     async def test_s3_input_no_overlap_no_bucket_raises(self) -> None:
         """ApiError is raised when the S3 file has no overlap and no bucket is configured."""
         from stdapi.api_errors import ApiError  # noqa: PLC0415
-        from stdapi.models import _compute_candidate_regions  # noqa: PLC0415
+        from stdapi.models import compute_candidate_regions  # noqa: PLC0415
 
         model = _make_model_details([ROUTING_PRIMARY, ROUTING_SECONDARY])
         with (
@@ -634,7 +634,7 @@ class TestCandidateRegions:
             patch("stdapi.models.get_s3_bucket_for_region", return_value=None),
             pytest.raises(ApiError),
         ):
-            await _compute_candidate_regions(MODEL)
+            await compute_candidate_regions(MODEL)
 
     async def test_s3_required_input_overlap_without_bucket_falls_back_to_bucketed_region(
         self,
@@ -661,7 +661,7 @@ class TestCandidateRegions:
 
     async def test_s3_required_with_bucket_returns_capable_regions(self) -> None:
         """With s3_required=True, only regions with a configured bucket are returned."""
-        from stdapi.models import _compute_candidate_regions  # noqa: PLC0415
+        from stdapi.models import compute_candidate_regions  # noqa: PLC0415
 
         model = _make_model_details([ROUTING_PRIMARY, ROUTING_SECONDARY])
         with (
@@ -672,14 +672,14 @@ class TestCandidateRegions:
                 side_effect=lambda r: "b" if r == ROUTING_SECONDARY else None,
             ),
         ):
-            assert await _compute_candidate_regions(MODEL, s3_required=True) == [
+            assert await compute_candidate_regions(MODEL, s3_required=True) == [
                 ROUTING_SECONDARY
             ]
 
     async def test_s3_required_no_bucket_raises(self) -> None:
         """ApiError is raised when s3_required=True but no region has a bucket."""
         from stdapi.api_errors import ApiError  # noqa: PLC0415
-        from stdapi.models import _compute_candidate_regions  # noqa: PLC0415
+        from stdapi.models import compute_candidate_regions  # noqa: PLC0415
 
         model = _make_model_details([ROUTING_PRIMARY, ROUTING_SECONDARY])
         with (
@@ -688,7 +688,7 @@ class TestCandidateRegions:
             patch("stdapi.models.get_s3_bucket_for_region", return_value=None),
             pytest.raises(ApiError),
         ):
-            await _compute_candidate_regions(MODEL, s3_required=True)
+            await compute_candidate_regions(MODEL, s3_required=True)
 
 
 # ---------------------------------------------------------------------------
@@ -845,7 +845,7 @@ class TestRegionRouterUnit:
             ),
             patch("stdapi.region_routing.log_error_details"),
         ):
-            # Mimic what _route_and_execute passes for a BotocoreConnectionError.
+            # Mimic what route_and_execute passes for a BotocoreConnectionError.
             router.mark_error(MODEL, ROUTING_PRIMARY, "ConnectTimeoutError")
 
         state = router._index.get(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
@@ -1019,12 +1019,12 @@ class TestMeasureRegionLatencies:
 
 
 # ---------------------------------------------------------------------------
-# Group 10 — _route_and_execute unit tests (pure logic, no real AWS)
+# Group 10 — route_and_execute unit tests (pure logic, no real AWS)
 # ---------------------------------------------------------------------------
 
 
 class TestRouteAndExecute:
-    """Unit tests for _route_and_execute — fully mocked, no real AWS calls."""
+    """Unit tests for route_and_execute — fully mocked, no real AWS calls."""
 
     async def test_botocore_connection_error_is_reraised_after_retries_exhausted(
         self,
@@ -1044,7 +1044,7 @@ class TestRouteAndExecute:
             patch.object(SETTINGS, "aws_bedrock_max_retries", 1),
             pytest.raises(BotocoreConnectionError),
         ):
-            await _models._route_and_execute(  # noqa: SLF001
+            await _models.route_and_execute(
                 MODEL,
                 list(_ROUTING_REGIONS),  # type: ignore[arg-type]
                 always_fails,
@@ -1072,7 +1072,7 @@ class TestRouteAndExecute:
             patch.object(_rr_mod.RegionRouter, "mark_error") as mock_mark_error,
             pytest.raises(BotocoreConnectionError),
         ):
-            await _models._route_and_execute(  # noqa: SLF001
+            await _models.route_and_execute(
                 MODEL,
                 list(_ROUTING_REGIONS),  # type: ignore[arg-type]
                 always_fails,
@@ -1337,17 +1337,17 @@ class TestS3SourceToS3:
 
 
 class TestS3ComputeCandidateRegions:
-    """Integration tests for ``_compute_candidate_regions`` with real S3 inputs."""
+    """Integration tests for ``compute_candidate_regions`` with real S3 inputs."""
 
     async def test_s3_input_routes_to_file_region(self, s3_file: S3FileFixture) -> None:
-        """_compute_candidate_regions pins to the region where the S3 file lives."""
+        """compute_candidate_regions pins to the region where the S3 file lives."""
         _require_s3_bucket()
         from stdapi.input_file import (  # noqa: PLC0415
             _CURRENT_INPUT_FILES,
             InputFile,
             prefetch_all_content_types,
         )
-        from stdapi.models import _compute_candidate_regions  # noqa: PLC0415
+        from stdapi.models import compute_candidate_regions  # noqa: PLC0415
 
         model = _make_model_details([s3_file.region, ROUTING_SECONDARY])
 
@@ -1358,7 +1358,7 @@ class TestS3ComputeCandidateRegions:
             with patch(
                 "stdapi.models.get_model_details", new=AsyncMock(return_value=model)
             ):
-                candidates = await _compute_candidate_regions(MODEL)
+                candidates = await compute_candidate_regions(MODEL)
         finally:
             _CURRENT_INPUT_FILES.reset(token)
 
@@ -1376,7 +1376,7 @@ class TestS3ComputeCandidateRegions:
             InputFile,
             prefetch_all_content_types,
         )
-        from stdapi.models import _compute_candidate_regions  # noqa: PLC0415
+        from stdapi.models import compute_candidate_regions  # noqa: PLC0415
 
         # Pick a model region that is NOT the s3_file region but has a bucket.
         bucketed_region = next(
@@ -1402,7 +1402,7 @@ class TestS3ComputeCandidateRegions:
             with patch(
                 "stdapi.models.get_model_details", new=AsyncMock(return_value=model)
             ):
-                candidates = await _compute_candidate_regions(MODEL)
+                candidates = await compute_candidate_regions(MODEL)
         finally:
             _CURRENT_INPUT_FILES.reset(token)
 

@@ -89,7 +89,7 @@ def _install_converse_seams(
             """Return the canned Converse response."""
             return response
 
-    monkeypatch.setattr("stdapi.models._compute_candidate_regions", candidates)
+    monkeypatch.setattr("stdapi.models.compute_candidate_regions", candidates)
     monkeypatch.setattr(ModelBase, "_prepare_converse_request_for_region", prepare)
     monkeypatch.setattr(
         "stdapi.models.bedrock_client", lambda _region, **_kwargs: FakeBedrockClient()

@@ -11,7 +11,13 @@ from stdapi.types import (
     BaseModelResponse,
     JsonMapping,
 )
-from stdapi.types.openai import Metadata, ResponseFormatJSONObject, ResponseFormatText
+from stdapi.types.openai import (
+    Metadata,
+    RequestModeration,
+    ResponseFormatJSONObject,
+    ResponseFormatText,
+    ResponseModeration,
+)
 
 # ---------------------------------------------------------------------------
 # Literals / type aliases
@@ -2682,6 +2688,11 @@ class Response(BaseModelResponse):
     incomplete_details: IncompleteDetails | None = Field(
         default=None, description="Incomplete details."
     )
+    moderation: ResponseModeration | None = Field(
+        default=None,
+        description="Guardrail moderation results, when the request set "
+        "`moderation` (non-streaming responses only).",
+    )
     instructions: str | list[ResponseInputItem] | None = Field(
         default=None, description="System or developer message."
     )
@@ -3751,6 +3762,12 @@ class ResponseCreateParams(BaseModelRequest):
     )
 
     # Extra validations
+    moderation: RequestModeration | None = Field(
+        default=None,
+        description="Apply an AWS Bedrock guardrail to this request; results "
+        "are reported in the response `moderation` field (non-streaming only).",
+    )
+
     _UNSUPPORTED: ClassVar[set[str]] = {
         # Ignored silently: "background", "store"
         "context_management",

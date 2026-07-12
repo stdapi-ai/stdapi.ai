@@ -23,6 +23,7 @@ from stdapi.models import (
     _check_model_availability,
     _collect_region_candidates,
     _merge_candidate,
+    _trigger_price_catalog_refresh,
 )
 from stdapi.monitoring import REQUEST_LOG, EventLog
 
@@ -538,3 +539,42 @@ class TestBedrockModelLifecycleFilter:
             legacy=True,
         )
         assert models == []
+
+
+class TestTriggerPriceCatalogRefresh:
+    """_trigger_price_catalog_refresh: a Pricing API failure is warned, not raised."""
+
+    async def test_client_error_is_warned_and_does_not_propagate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A ClientError from the catalog reload is recorded as a warning on the request log."""
+
+        async def _fail(_model_ids: set[str]) -> None:
+            error = ClientError(
+                {"Error": {"Code": "ThrottlingException", "Message": "slow down"}},
+                "GetProducts",
+            )
+            raise error
+
+        monkeypatch.setattr(
+            stdapi.models, "refresh_price_catalog_for_new_models", _fail
+        )
+        request_log = EventLog(
+            type="request",
+            level="info",
+            date=datetime.now(UTC),
+            server_id="test",
+            server_version="0.0.0",
+        )
+        token = REQUEST_LOG.set(request_log)
+        try:
+            # Does not raise: model listing must still succeed.
+            await _trigger_price_catalog_refresh(None, {"vendor.new-model"})
+        finally:
+            REQUEST_LOG.reset(token)
+
+        assert request_log["level"] == "warning"
+        assert any(
+            "Price-catalog refresh" in str(detail)
+            for detail in request_log["error_detail"]
+        )

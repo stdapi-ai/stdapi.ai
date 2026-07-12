@@ -28,6 +28,10 @@ from stdapi.monitoring import (
     log_request_params,
     log_response_params,
 )
+from stdapi.routes._moderation import (
+    apply_request_moderation,
+    build_response_moderation,
+)
 from stdapi.types.openai_responses import (
     CompactedResponse,
     CompactParams,
@@ -128,15 +132,19 @@ async def create_response(
         ApiError: If model is invalid or does not support text output.
     """
     log_request_params(request, user_id=request.safety_identifier or request.user)
+    apply_request_moderation(request.moderation)
     response_id = f"resp-{REQUEST_ID.get()}"
     created_at = REQUEST_TIME.get().timestamp()
-    return await get_chat_model(
+    result = await get_chat_model(
         (
             await validate_model(
                 request.model, input_modality="TEXT", output_modality="TEXT"
             )
         ).id
     ).create_response(request, response_id, created_at)
+    if isinstance(result, Response):
+        result.moderation = build_response_moderation(request.moderation)
+    return result
 
 
 @router.post(
