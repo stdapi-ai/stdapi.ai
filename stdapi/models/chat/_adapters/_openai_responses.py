@@ -5,6 +5,7 @@ Bedrock Converse API-native types. Handles tool mapping, input mapping,
 response formatting (both streaming and non-streaming), and streaming events.
 """
 
+from base64 import b64decode, urlsafe_b64encode
 from contextlib import suppress
 from dataclasses import dataclass, field
 from enum import Enum
@@ -29,6 +30,7 @@ from stdapi.monitoring import log_error_details, log_response_params
 from stdapi.types.openai import ResponseFormatJSONObject, ResponseFormatText
 from stdapi.types.openai_responses import (
     CodeInterpreter,
+    CompactionItemParam,
     EasyInputMessage,
     FunctionCallInput,
     FunctionCallOutput,
@@ -803,19 +805,79 @@ async def map_input(
         return bedrock_messages, system_blocks
 
     for item in input_param:
-        match item:
-            case EasyInputMessage() | InputMessage():
-                await _map_message_item(item, bedrock_messages, system_blocks)
-            case ResponseOutputMessage():
-                await _map_output_message(item, bedrock_messages)
-            case FunctionCallInput():
-                await _map_function_call(item, bedrock_messages)
-            case FunctionCallOutput():
-                await _map_function_call_output(item, bedrock_messages)
-            case ResponseReasoningItem():
-                _map_reasoning_item(item, bedrock_messages)
+        await _map_input_item(item, bedrock_messages, system_blocks)
 
     return bedrock_messages, system_blocks
+
+
+async def _map_input_item(
+    item: ResponseInputItem,
+    bedrock_messages: list[MessageTypeDef],
+    system_blocks: list[SystemContentBlockTypeDef],
+) -> None:
+    """Map a single Responses input item to Bedrock messages or system blocks.
+
+    Unsupported item types are ignored.
+
+    Args:
+        item: The input item to map.
+        bedrock_messages: Mutable Bedrock messages list to append to.
+        system_blocks: Mutable system blocks list to append to.
+    """
+    match item:
+        case EasyInputMessage() | InputMessage():
+            await _map_message_item(item, bedrock_messages, system_blocks)
+        case ResponseOutputMessage():
+            await _map_output_message(item, bedrock_messages)
+        case FunctionCallInput():
+            await _map_function_call(item, bedrock_messages)
+        case FunctionCallOutput():
+            await _map_function_call_output(item, bedrock_messages)
+        case ResponseReasoningItem():
+            _map_reasoning_item(item, bedrock_messages)
+        case CompactionItemParam():
+            _map_compaction_item(item, bedrock_messages)
+
+
+def encode_compaction_content(summary: str) -> str:
+    """Encode a conversation summary as opaque compaction item content.
+
+    The content is self-contained so that compaction round-trips work without
+    any server-side state; it is encoded, not encrypted.
+
+    Args:
+        summary: Conversation summary text.
+
+    Returns:
+        Opaque content for a ``compaction`` item.
+    """
+    return urlsafe_b64encode(summary.encode()).decode()
+
+
+def _map_compaction_item(
+    item: CompactionItemParam, bedrock_messages: list[MessageTypeDef]
+) -> None:
+    """Map a ``compaction`` input item back to a user message with its summary.
+
+    Args:
+        item: The compaction item produced by POST /v1/responses/compact.
+        bedrock_messages: Mutable Bedrock messages list to append to.
+
+    Raises:
+        ApiError: When the compaction content cannot be decoded.
+    """
+    try:
+        summary = b64decode(
+            item.encrypted_content, altchars=b"-_", validate=True
+        ).decode()
+    except (ValueError, UnicodeDecodeError) as exc:
+        msg = "Invalid compaction item content."
+        raise ApiError(msg) from exc
+    _append_or_merge(
+        bedrock_messages,
+        "user",
+        [{"text": f"Summary of the earlier conversation:\n{summary}"}],
+    )
 
 
 def _map_reasoning_item(

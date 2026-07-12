@@ -20,6 +20,7 @@ from stdapi.models.capabilities import register_route_capability
 from stdapi.models.chat import get_chat_model
 from stdapi.models.chat._adapters._openai_responses import (
     count_input_tokens_via_bedrock,
+    encode_compaction_content,
 )
 from stdapi.monitoring import (
     REQUEST_ID,
@@ -28,10 +29,20 @@ from stdapi.monitoring import (
     log_response_params,
 )
 from stdapi.types.openai_responses import (
+    CompactedResponse,
+    CompactParams,
+    EasyInputMessage,
     InputTokenCountParams,
     InputTokenCountResponse,
+    InputTokensDetails,
+    OutputTokensDetails,
     Response,
+    ResponseCompactionItem,
     ResponseCreateParams,
+    ResponseInputItem,
+    ResponseOutputMessage,
+    ResponseOutputText,
+    ResponseUsage,
 )
 
 if TYPE_CHECKING:
@@ -48,8 +59,22 @@ register_route_capability(
     "TEXT",
 )
 
+register_route_capability(
+    "openai_response_compact",
+    f"{SETTINGS.openai_routes_prefix}/v1/responses/compact",
+    "TEXT",
+    "TEXT",
+)
+
 router = APIRouter(
     prefix=f"{SETTINGS.openai_routes_prefix}/v1/responses", tags=["Chat", TAG_OPENAI]
+)
+
+#: Directive appended to the conversation to produce the compaction summary.
+_COMPACTION_PROMPT = (
+    "Summarize the conversation above in detail, preserving every fact, "
+    "decision, constraint, open task, and tool result needed to continue it. "
+    "Reply with the summary only."
 )
 
 
@@ -171,5 +196,107 @@ async def count_input_tokens(
             input_tokens=await count_input_tokens_via_bedrock(
                 request, model.get_id(), model.regions[0]
             )
+        )
+    )
+
+
+@router.post(
+    "/compact",
+    summary="Compact a conversation into a reusable summary item (OpenAI format)",
+    operation_id="openai_response_compact",
+    description=(
+        "Compacts a conversation into a single `compaction` output item "
+        "(OpenAI Responses API).\n\n"
+        "The model summarises the provided `input`; the summary is returned as "
+        "an opaque `compaction` item. Include that item in the `input` of later "
+        "`openai_response` calls to continue the conversation with a reduced "
+        "context window.\n\n"
+        "Stateless: the compaction content is self-contained, so no "
+        "conversation state is stored on the server.\n\n"
+        "**Find compatible models:** Call `search_models` with "
+        "`mcp_tool=openai_response_compact` to discover model IDs that "
+        "support this endpoint."
+    ),
+    response_description="The compacted response.",
+    status_code=200,
+    response_model=CompactedResponse,
+    responses={
+        400: {"description": "Invalid request or unsupported parameters."},
+        404: {"description": "Model not found."},
+    },
+    response_model_exclude_none=True,
+)
+async def compact_response(
+    request: CompactParams, _: Annotated[None, Depends(authenticate)] = None
+) -> CompactedResponse:
+    """Compact a conversation into a single compaction item.
+
+    Runs a summarisation pass on AWS Bedrock and wraps the resulting summary
+    in an opaque ``compaction`` item that later requests can send back as
+    input.
+
+    Args:
+        request: Compaction request following the OpenAI Responses spec.
+
+    Returns:
+        CompactedResponse holding the compaction item and token usage.
+
+    Raises:
+        ApiError: If the model is invalid or the request is unsupported.
+    """
+    log_request_params(request)
+    model_id = (
+        await validate_model(
+            request.model, input_modality="TEXT", output_modality="TEXT"
+        )
+    ).id
+    response_id = f"resp-{REQUEST_ID.get()}"
+    created_at = REQUEST_TIME.get().timestamp()
+    items: list[ResponseInputItem] = (
+        [EasyInputMessage(role="user", content=request.input)]
+        if isinstance(request.input, str)
+        else list(request.input or ())
+    )
+    items.append(EasyInputMessage(role="user", content=_COMPACTION_PROMPT))
+    generation = ResponseCreateParams(
+        model=request.model,
+        input=items,
+        instructions=request.instructions,
+        prompt_cache_key=request.prompt_cache_key,
+        prompt_cache_retention=request.prompt_cache_retention,
+        service_tier=request.service_tier,
+    )
+    response = await get_chat_model(model_id).create_response(
+        generation, response_id, created_at
+    )
+    if not isinstance(response, Response):  # pragma: no cover - stream is never set
+        msg = "Unexpected streaming response."
+        raise TypeError(msg)
+    summary = "".join(
+        part.text
+        for item in response.output
+        if isinstance(item, ResponseOutputMessage)
+        for part in item.content
+        if isinstance(part, ResponseOutputText)
+    )
+    return log_response_params(
+        CompactedResponse(
+            id=response_id,
+            created_at=int(created_at),
+            output=[
+                ResponseCompactionItem(
+                    id=f"ci-{REQUEST_ID.get()}",
+                    encrypted_content=encode_compaction_content(summary),
+                    type="compaction",
+                )
+            ],
+            usage=response.usage
+            or ResponseUsage(
+                input_tokens=0,
+                input_tokens_details=InputTokensDetails(cached_tokens=0),
+                output_tokens=0,
+                output_tokens_details=OutputTokensDetails(reasoning_tokens=0),
+                total_tokens=0,
+            ),
         )
     )

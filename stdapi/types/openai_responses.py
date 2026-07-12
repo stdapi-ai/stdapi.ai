@@ -3862,3 +3862,66 @@ class InputTokenCountResponse(BaseModelResponse):
 
     object: Literal["response.input_tokens"] = "response.input_tokens"
     input_tokens: int = Field(description="Total input token count.")
+
+
+# Ref: openai.resources.responses.Responses.compact (openai-python SDK)
+class CompactParams(BaseModelRequest):
+    """Request body for POST /v1/responses/compact.
+
+    Compacts a conversation into a single ``compaction`` item that later
+    requests can send back as input.
+    """
+
+    model: str = Field(description="Model ID.")
+    input: ResponseInputParam | None = Field(
+        default=None, description="Conversation inputs to compact."
+    )
+    instructions: str | None = Field(
+        default=None, description="System message inserted into the model's context."
+    )
+    previous_response_id: str | None = Field(
+        default=None,
+        description="Previous response ID for multi-turn.\n"
+        "UNSUPPORTED on this implementation.",
+    )
+    prompt_cache_key: str | None = Field(
+        default=None, description="Cache key for similar requests."
+    )
+    prompt_cache_retention: Literal["in-memory", "24h", "1h", "5m"] | None = Field(
+        default=None, description="Cache retention policy."
+    )
+    service_tier: Literal["auto", "default", "flex", "scale", "priority"] | None = (
+        Field(default=None, description="Service tier for request.")
+    )
+
+    # Extra validations
+    _UNSUPPORTED: ClassVar[set[str]] = {"previous_response_id"}
+
+    @model_validator(mode="after")
+    def _unsupported(self) -> Self:
+        """Validate that unsupported parameters are not used.
+
+        Raises:
+            UnsupportedParameterError: If a parameter marked as unsupported is used.
+        """
+        for key in self._UNSUPPORTED & self.model_fields_set:
+            raise UnsupportedParameterError(key)
+        return self
+
+
+# Ref: openai.types.responses.compacted_response.CompactedResponse
+class CompactedResponse(BaseModelResponse):
+    """Response body for POST /v1/responses/compact."""
+
+    id: str = Field(description="Compacted response ID.")
+    created_at: int = Field(
+        description="Unix timestamp (in seconds) when the compaction was created."
+    )
+    object: Literal["response.compaction"] = Field(
+        default="response.compaction",
+        description="The object type, which is always `response.compaction`.",
+    )
+    output: list[ResponseCompactionItem] = Field(
+        description="Output items holding the compaction item."
+    )
+    usage: ResponseUsage = Field(description="Token usage of the compaction request.")

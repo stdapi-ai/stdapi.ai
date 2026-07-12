@@ -32,6 +32,7 @@ Generate model responses with AWS Bedrock foundation models through an OpenAI Re
 |------------------------------|--------|--------------------------------------------------|-----------------------------|--------------------------------|
 | `/v1/responses`              | `POST` | Create a model response                          | AWS Bedrock Converse API    | `openai_response`              |
 | `/v1/responses/input_tokens` | `POST` | Count input tokens without generating a response | AWS Bedrock CountTokens API | `openai_response_input_tokens` |
+| `/v1/responses/compact`      | `POST` | Compact a conversation into a reusable summary   | AWS Bedrock Converse API    | `openai_response_compact`      |
 
 ## Feature Compatibility
 
@@ -84,6 +85,7 @@ Generate model responses with AWS Bedrock foundation models through an OpenAI Re
 | `text.format: "json_schema"`                                          |      :material-cog:{ .model-dep }       | Structured JSON output with schema validation                                |
 | **Multi-Turn**                                                        |                                         |                                                                              |
 | `previous_response_id`                                                | :material-close-circle:{ .unsupported } | Not supported; pass full conversation history in `input`                     |
+| Compaction (`POST /v1/responses/compact`)                             |   :material-check-circle:{ .success }   | Stateless summary item; send it back in `input` to continue                  |
 | **Streaming**                                                         |                                         |                                                                              |
 | `stream: true`                                                        |   :material-check-circle:{ .success }   | SSE stream with full lifecycle events                                        |
 | `response.created`                                                    |   :material-check-circle:{ .success }   | Emitted at stream start                                                      |
@@ -631,6 +633,52 @@ curl -X POST "$BASE/v1/responses/input_tokens" \
 
 !!! note "Limitations"
     The `previous_response_id` and `conversation` parameters are not supported for token counting.
+
+## Conversation Compaction
+
+Compact a long conversation into a single `compaction` item to keep multi-turn sessions within the context window. The model summarises the provided `input`; the summary comes back as an opaque item that you include in the `input` of later requests instead of the full history.
+
+```bash
+curl -X POST "$BASE/v1/responses/compact" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "amazon.nova-pro-v1:0",
+    "input": [
+      {"role": "user", "content": "..."},
+      {"role": "assistant", "content": "..."}
+    ]
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "id": "resp-...",
+  "object": "response.compaction",
+  "created_at": 1752000000,
+  "output": [
+    {"id": "ci-...", "type": "compaction", "encrypted_content": "..."}
+  ],
+  "usage": {"input_tokens": 1500, "output_tokens": 220, "total_tokens": 1720}
+}
+```
+
+Continue the conversation by sending the compaction item back, followed by new messages:
+
+```json
+{
+  "model": "amazon.nova-pro-v1:0",
+  "input": [
+    {"id": "ci-...", "type": "compaction", "encrypted_content": "..."},
+    {"role": "user", "content": "Next question..."}
+  ]
+}
+```
+
+!!! note "Stateless compaction"
+    The compaction content is fully self-contained (encoded, not encrypted): the server stores no conversation state, and any server instance can expand it. The `previous_response_id` parameter is not supported — always pass the compaction item explicitly.
 
 ---
 
