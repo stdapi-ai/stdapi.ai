@@ -45,10 +45,7 @@ from stdapi.responses_store import (
     save_stored_response,
     try_create_stored_response_session,
 )
-from stdapi.routes._moderation import (
-    apply_request_moderation,
-    build_response_moderation,
-)
+from stdapi.routes._moderation import apply_request_moderation, build_chat_moderation
 from stdapi.types.openai_chat_completions import (
     ChatCompletion,
     ChatCompletionDeleted,
@@ -236,7 +233,7 @@ async def create_chat_completion(
             await discard_stored_response_session(completion_id)
         raise
     if isinstance(result, ChatCompletion):
-        result.moderation = build_response_moderation(request.moderation)
+        result.moderation = build_chat_moderation(request.moderation)
         if store:
             await save_stored_response(
                 completion_id,

@@ -124,6 +124,7 @@ class RequestModeration(BaseModelRequest):
     )
 
 
+# Ref: openai.types.responses.response.ModerationInputModerationResult
 class ModerationResult(BaseModelResponse):
     """Moderation outcome for one direction of a generation."""
 
@@ -138,6 +139,10 @@ class ModerationResult(BaseModelResponse):
     category_scores: dict[str, float] = Field(
         description="Per-category scores derived from guardrail confidence levels."
     )
+    category_applied_input_types: dict[str, list[Literal["text", "image"]]] = Field(
+        description="Which modalities of input are reflected by the score for "
+        "each category."
+    )
     model: str = Field(description="The guardrail that classified the content.")
 
 
@@ -145,9 +150,49 @@ class ModerationResult(BaseModelResponse):
 class ResponseModeration(BaseModelResponse):
     """Moderation results for the request input and generated output."""
 
-    input: ModerationResult | None = Field(
-        default=None, description="Moderation result for the request input."
+    input: ModerationResult = Field(
+        description="Moderation result for the request input."
     )
-    output: ModerationResult | None = Field(
-        default=None, description="Moderation result for the generated output."
+    output: ModerationResult = Field(
+        description="Moderation result for the generated output."
+    )
+
+
+# Ref: openai.types.chat.chat_completion.ModerationInputModerationResults
+class ChatModerationResults(BaseModelResponse):
+    """Successful moderation results for one direction of a chat completion."""
+
+    type: Literal["moderation_results"] = Field(
+        default="moderation_results",
+        description="The object type, which is always `moderation_results`.",
+    )
+    model: str = Field(description="The moderation model used to generate the results.")
+    results: list[ModerationResult] = Field(description="A list of moderation results.")
+
+
+# Ref: openai.types.chat.chat_completion.Moderation
+class ChatModeration(BaseModelResponse):
+    """Moderation results for the request input and generated output."""
+
+    input: ChatModerationResults = Field(
+        description="Moderation results for the request input."
+    )
+    output: ChatModerationResults = Field(
+        description="Moderation results for the generated output."
+    )
+
+
+class PaginatedListEnvelope(BaseModelResponse):
+    """Common pagination fields shared by paginated list responses.
+
+    Subclasses add their own `object` literal and typed `data` field.
+    """
+
+    has_more: bool = Field(description="Whether more results exist after this page.")
+    first_id: str | None = Field(
+        default=None,
+        description="ID of the first item in the list, or null when empty.",
+    )
+    last_id: str | None = Field(
+        default=None, description="ID of the last item in the list, or null when empty."
     )

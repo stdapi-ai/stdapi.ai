@@ -15,6 +15,7 @@ from stdapi.types import (
 from stdapi.types.bedrock import AmazonBedrockGuardrailConfigParams
 from stdapi.types.openai import (
     AssistantRoleLiteral,
+    ChatModeration,
     CustomLiteral,
     FunctionDefinition,
     FunctionLiteral,
@@ -24,7 +25,6 @@ from stdapi.types.openai import (
     ResponseFormatJSONObject,
     ResponseFormatJSONSchema,
     ResponseFormatText,
-    ResponseModeration,
     TextLiteral,
 )
 
@@ -979,7 +979,7 @@ class _Completion(BaseModelResponse):
         default=None,
         description="Backend configuration fingerprint. Use with `seed` to check for determinism changes.",
     )
-    moderation: ResponseModeration | None = Field(
+    moderation: ChatModeration | None = Field(
         default=None,
         description="Guardrail moderation results, when the request set "
         "`moderation` (non-streaming responses only).",

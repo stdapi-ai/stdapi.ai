@@ -5,7 +5,7 @@ guardrail; the guardrail trace of the resulting Converse call is mapped back
 to OpenAI-style moderation results.
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from stdapi.api_errors import ApiError
 from stdapi.aws_bedrock import (
@@ -15,7 +15,13 @@ from stdapi.aws_bedrock import (
     map_guardrail_filters,
     resolve_guardrail_model,
 )
-from stdapi.types.openai import ModerationResult, RequestModeration, ResponseModeration
+from stdapi.types.openai import (
+    ChatModeration,
+    ChatModerationResults,
+    ModerationResult,
+    RequestModeration,
+    ResponseModeration,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -55,7 +61,7 @@ def apply_request_moderation(moderation: RequestModeration | None) -> None:
 
 def _to_moderation_result(
     assessments: Sequence[Mapping[str, Any]], model: str
-) -> ModerationResult | None:
+) -> ModerationResult:
     """Map guardrail trace assessments to a moderation result.
 
     Args:
@@ -63,32 +69,35 @@ def _to_moderation_result(
         model: The request moderation model value, echoed in the result.
 
     Returns:
-        The moderation result, or ``None`` without assessments.
+        The moderation result; unflagged with empty categories when
+        `assessments` is empty.
     """
-    if not assessments:
-        return None
     categories, scores, intervened = map_guardrail_filters(assessments)
+    applied_types: dict[str, list[Literal["text", "image"]]] = {
+        category: ["text"] for category in categories
+    }
     return ModerationResult(
         flagged=intervened or any(categories.values()),
         categories=categories,
         category_scores=scores,
+        category_applied_input_types=applied_types,
         model=model,
     )
 
 
-def build_response_moderation(
-    moderation: RequestModeration | None,
-) -> ResponseModeration | None:
-    """Build the response ``moderation`` field from the guardrail trace.
+def _trace_results(
+    moderation: RequestModeration,
+) -> tuple[ModerationResult, ModerationResult] | None:
+    """Map the guardrail trace to input and output moderation results.
 
     Args:
-        moderation: The request ``moderation`` parameter, if any.
+        moderation: The request ``moderation`` parameter.
 
     Returns:
-        Moderation results, or ``None`` when not requested or no trace is
+        Tuple of (input result, output result), or ``None`` when no trace is
         available (e.g. streaming responses).
     """
-    if moderation is None or not (trace := GUARDRAIL_TRACE_VAR.get(None)):
+    if not (trace := GUARDRAIL_TRACE_VAR.get(None)):
         return None
     input_result = _to_moderation_result(
         list(trace.get("inputAssessment", {}).values()), moderation.model
@@ -101,6 +110,43 @@ def build_response_moderation(
         ],
         moderation.model,
     )
-    if input_result is None and output_result is None:
+    return input_result, output_result
+
+
+def build_response_moderation(
+    moderation: RequestModeration | None,
+) -> ResponseModeration | None:
+    """Build the Responses API ``moderation`` field from the guardrail trace.
+
+    Args:
+        moderation: The request ``moderation`` parameter, if any.
+
+    Returns:
+        Moderation results, or ``None`` when not requested or no trace is
+        available (e.g. streaming responses).
+    """
+    if moderation is None or (results := _trace_results(moderation)) is None:
         return None
+    input_result, output_result = results
     return ResponseModeration(input=input_result, output=output_result)
+
+
+def build_chat_moderation(
+    moderation: RequestModeration | None,
+) -> ChatModeration | None:
+    """Build the Chat Completions ``moderation`` field from the guardrail trace.
+
+    Args:
+        moderation: The request ``moderation`` parameter, if any.
+
+    Returns:
+        Moderation results, or ``None`` when not requested or no trace is
+        available (e.g. streaming responses).
+    """
+    if moderation is None or (results := _trace_results(moderation)) is None:
+        return None
+    input_result, output_result = results
+    return ChatModeration(
+        input=ChatModerationResults(model=moderation.model, results=[input_result]),
+        output=ChatModerationResults(model=moderation.model, results=[output_result]),
+    )

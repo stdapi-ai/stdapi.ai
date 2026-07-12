@@ -2,6 +2,7 @@
 
 from base64 import b64encode
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 import pytest
 from starlette.testclient import TestClient
@@ -109,6 +110,9 @@ class TestModerationsRoute:
         assert result["categories"]["sexual"] is False
         assert result["category_scores"]["hate"] == 0.75
         assert result["category_scores"]["harassment"] == 0.25
+        applied = result["category_applied_input_types"]
+        assert len(applied) == 13
+        assert all(value == ["text"] for value in applied.values())
         (request,) = stub.requests
         assert request["guardrailIdentifier"] == "gr123"
         assert request["guardrailVersion"] == "1"
@@ -261,6 +265,30 @@ class TestModerationsRoute:
         (block,) = request["content"]
         assert block["image"]["format"] == "png"
         assert block["image"]["source"]["bytes"] == _PNG
+        (result,) = response.json()["results"]
+        applied = result["category_applied_input_types"]
+        assert applied["sexual"] == ["image"]
+        assert applied["violence/graphic"] == ["image"]
+        assert applied["hate"] == []
+        assert applied["harassment"] == []
+
+    def test_inputs_exceeding_batch_size_are_all_classified(
+        self,
+        client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        configured_guardrail: None,
+    ) -> None:
+        """More inputs than the concurrency batch size still yield one result each."""
+        stub, _ = _stub_client(monkeypatch, _CLEAN_RESPONSE)
+        count = 2 * openai_moderations._INPUT_BATCH_SIZE + 5  # noqa: SLF001
+
+        response = client.post(
+            "/v1/moderations", json={"input": [f"text-{i}" for i in range(count)]}
+        )
+
+        assert response.status_code == 200, response.text
+        assert len(response.json()["results"]) == count
+        assert len(stub.requests) == count
 
     def test_unsupported_image_format_rejected(
         self,
@@ -279,6 +307,19 @@ class TestModerationsRoute:
 
         assert response.status_code == 400
         assert "PNG or JPEG" in response.json()["error"]["message"]
+
+    def test_empty_input_list_rejected(
+        self,
+        client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        configured_guardrail: None,
+    ) -> None:
+        """An empty `input` list is rejected with 400, not classified as zero results."""
+        _stub_client(monkeypatch, _CLEAN_RESPONSE)
+
+        response = client.post("/v1/moderations", json={"input": []})
+
+        assert response.status_code == 400
 
 
 #: A Comprehend toxicity result with violent-threat and profanity labels.
@@ -300,7 +341,11 @@ _CLEAN_RESULT: dict[str, Any] = {
 def _stub_toxicity(
     monkeypatch: pytest.MonkeyPatch, results: list[list[dict[str, Any]]]
 ) -> list[list[str]]:
-    """Stub the Comprehend failover call, returning one canned result list per call.
+    """Stub the Comprehend failover call, returning one result entry per segment.
+
+    Each call returns the canned result list for that call, padded with
+    zero-score entries so that, as with the real API, every submitted segment
+    gets one ``ResultList`` entry.
 
     Returns:
         The recorded text-segment batches, one entry per API call.
@@ -316,7 +361,11 @@ def _stub_toxicity(
         ) -> dict[str, Any]:
             assert LanguageCode == "en"
             batches.append([segment["Text"] for segment in TextSegments])
-            return {"ResultList": results[min(len(batches), len(results)) - 1]}
+            canned = results[min(len(batches), len(results)) - 1]
+            padding: list[dict[str, Any]] = [{"Labels": [], "Toxicity": 0.0}] * (
+                len(TextSegments) - len(canned)
+            )
+            return {"ResultList": canned + padding}
 
     async def _call(
         service: str,
@@ -334,6 +383,12 @@ def _stub_toxicity(
 class TestComprehendModerationsRoute:
     """POST /v1/moderations: Amazon Comprehend toxicity backend."""
 
+    @pytest.fixture(autouse=True)
+    def _no_ambient_guardrail(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Ensure no guardrail from the environment leaks into these tests."""
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_identifier", None)
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_version", None)
+
     def test_default_backend_without_guardrail(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -350,21 +405,25 @@ class TestComprehendModerationsRoute:
         assert result["categories"]["violence"] is True
         assert result["categories"]["harassment"] is False
         assert result["category_scores"]["violence"] == 0.91
+        applied = result["category_applied_input_types"]
+        assert len(applied) == 13
+        assert all(value == ["text"] for value in applied.values())
         assert batches == [["threatening text"]]
 
+    @pytest.mark.parametrize(
+        "model", ["omni-moderation-latest", "text-moderation-latest"]
+    )
     def test_openai_model_name_falls_back_to_comprehend(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, model: str
     ) -> None:
         """OpenAI moderation names use Comprehend when no guardrail is set."""
         _stub_toxicity(monkeypatch, [[_CLEAN_RESULT]])
 
-        response = client.post(
-            "/v1/moderations", json={"input": "x", "model": "omni-moderation-latest"}
-        )
+        response = client.post("/v1/moderations", json={"input": "x", "model": model})
 
         assert response.status_code == 200, response.text
         body = response.json()
-        assert body["model"] == "omni-moderation-latest"
+        assert body["model"] == model
         assert body["results"][0]["flagged"] is False
 
     def test_default_guardrail_model_requires_guardrail(
@@ -380,6 +439,70 @@ class TestComprehendModerationsRoute:
         message = response.json()["error"]["message"]
         assert "administrator" in message
         assert "aws_bedrock_guardrail_identifier" not in message.lower()
+
+    def test_graphic_label_maps_to_violence_graphic(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A GRAPHIC hit serializes under the violence/graphic JSON key."""
+        _stub_toxicity(
+            monkeypatch,
+            [[{"Labels": [{"Name": "GRAPHIC", "Score": 0.8}], "Toxicity": 0.4}]],
+        )
+
+        response = client.post("/v1/moderations", json={"input": "x"})
+
+        assert response.status_code == 200, response.text
+        (result,) = response.json()["results"]
+        assert result["flagged"] is True
+        assert result["categories"]["violence/graphic"] is True
+        assert result["categories"]["violence"] is False
+        assert result["category_scores"]["violence/graphic"] == 0.8
+
+    def test_text_object_input(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A {"type": "text"} input part is classified like a plain string."""
+        batches = _stub_toxicity(monkeypatch, [[_CLEAN_RESULT]])
+
+        response = client.post(
+            "/v1/moderations", json={"input": [{"type": "text", "text": "hello"}]}
+        )
+
+        assert response.status_code == 200, response.text
+        (result,) = response.json()["results"]
+        assert result["flagged"] is False
+        assert batches == [["hello"]]
+
+    def test_each_input_gets_own_result(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Two inputs in one request yield two independent results."""
+        batches = _stub_toxicity(monkeypatch, [[_TOXIC_RESULT], [_CLEAN_RESULT]])
+
+        response = client.post("/v1/moderations", json={"input": ["bad", "ok"]})
+
+        assert response.status_code == 200, response.text
+        toxic, clean = response.json()["results"]
+        assert toxic["flagged"] is True
+        assert clean["flagged"] is False
+        assert batches == [["bad"], ["ok"]]
+
+    def test_score_at_threshold_flags(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A label score of exactly 0.5 flags the input (threshold is inclusive)."""
+        _stub_toxicity(
+            monkeypatch,
+            [[{"Labels": [{"Name": "SEXUAL", "Score": 0.5}], "Toxicity": 0.1}]],
+        )
+
+        response = client.post("/v1/moderations", json={"input": "x"})
+
+        assert response.status_code == 200, response.text
+        (result,) = response.json()["results"]
+        assert result["flagged"] is True
+        assert result["categories"]["sexual"] is True
+        assert result["category_scores"]["sexual"] == 0.5
 
     def test_explicit_comprehend_model_bypasses_guardrail(
         self,
@@ -436,15 +559,18 @@ class TestComprehendModerationsRoute:
         assert result["categories"]["hate"] is True
         assert result["category_scores"]["hate"] == 0.7
 
-    @pytest.mark.parametrize("char", ["é", "🎉"])
+    @pytest.mark.parametrize(
+        ("char", "sizes"),
+        [("é", [1_000, 200]), ("€", [999, 201]), ("🎉", [1_000, 200])],
+    )
     def test_multibyte_characters_stay_whole_at_segment_boundaries(
-        self, char: str
+        self, char: str, sizes: list[int]
     ) -> None:
         """Splitting counts UTF-8 bytes without breaking characters apart."""
         text = char * (1_200 // len(char.encode()))  # 1200 bytes total
         segments = openai_moderations._split_toxicity_segments(text)  # noqa: SLF001
         assert "".join(segments) == text
-        assert [len(segment.encode()) for segment in segments] == [1_000, 200]
+        assert [len(segment.encode()) for segment in segments] == sizes
 
     def test_overall_toxicity_score_alone_flags(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
@@ -499,18 +625,19 @@ def live_guardrail(use_official_api: bool) -> Iterator[str]:
     On the official API no guardrail exists; tests use the OpenAI moderation
     model instead. The server (local or --server-url) must allow guardrail
     overrides, which is automatic when no global guardrail is configured.
+    Yields the guardrail ARN so the server resolves the guardrail's region.
     """
     if use_official_api:
         yield ""
         return
     import time  # noqa: PLC0415
 
-    import boto3  # noqa: PLC0415
+    import boto3  # type: ignore[import-untyped]  # noqa: PLC0415
 
     region = SETTINGS.aws_bedrock_regions[0]
     bedrock = boto3.client("bedrock", region_name=region)
     created = bedrock.create_guardrail(
-        name="stdapi-tests-moderations",
+        name=f"stdapi-tests-moderations-{uuid4().hex[:8]}",
         blockedInputMessaging="Blocked by test guardrail.",
         blockedOutputsMessaging="Blocked by test guardrail.",
         wordPolicyConfig={"wordsConfig": [{"text": "BLOCKWORDXYZ"}]},
@@ -526,7 +653,10 @@ def live_guardrail(use_official_api: bool) -> Iterator[str]:
         if bedrock.get_guardrail(guardrailIdentifier=guardrail_id)["status"] == "READY":
             break
         time.sleep(1)
-    yield guardrail_id
+    else:
+        bedrock.delete_guardrail(guardrailIdentifier=guardrail_id)
+        pytest.fail("Test guardrail never reached READY status.")
+    yield created["guardrailArn"]
     bedrock.delete_guardrail(guardrailIdentifier=guardrail_id)
 
 
@@ -572,8 +702,11 @@ class TestModerationsLive:
         assert completion.choices[0].message.content
         moderation = completion.moderation
         assert moderation is not None
-        assert moderation.input.flagged is False
+        assert moderation.input.type == "moderation_results"
         assert moderation.input.model == live_guardrail
+        (input_result,) = moderation.input.results
+        assert input_result.flagged is False
+        assert input_result.model == live_guardrail
 
 
 class TestComprehendModerationsLive:

@@ -1,6 +1,6 @@
 """OpenAI Moderations API types."""
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field
 
@@ -34,11 +34,14 @@ class ModerationTextInput(BaseModelRequest):
 class ModerationCreateParams(BaseModelRequest):
     """Request body for POST /v1/moderations."""
 
-    input: str | list[str] | list[ModerationImageURLInput | ModerationTextInput] = (
-        Field(
-            description="Text or image inputs to classify. Each element yields "
-            "one result."
-        )
+    input: (
+        str
+        | Annotated[list[str], Field(min_length=1)]
+        | Annotated[
+            list[ModerationImageURLInput | ModerationTextInput], Field(min_length=1)
+        ]
+    ) = Field(
+        description="Text or image inputs to classify. Each element yields one result."
     )
     model: str | None = Field(
         default=None,
@@ -173,6 +176,74 @@ class ModerationCategoryScores(BaseModelResponse):
     )
 
 
+# Ref: openai.types.moderation.CategoryAppliedInputTypes
+class ModerationCategoryAppliedInputTypes(BaseModelResponse):
+    """Per-category input type(s) that the score applies to."""
+
+    harassment: list[Literal["text"]] = Field(
+        default_factory=list,
+        description="The applied input type(s) for the category 'harassment'.",
+    )
+    harassment_threatening: list[Literal["text"]] = Field(
+        default_factory=list,
+        alias="harassment/threatening",
+        description="The applied input type(s) for the category "
+        "'harassment/threatening'.",
+    )
+    hate: list[Literal["text"]] = Field(
+        default_factory=list,
+        description="The applied input type(s) for the category 'hate'.",
+    )
+    hate_threatening: list[Literal["text"]] = Field(
+        default_factory=list,
+        alias="hate/threatening",
+        description="The applied input type(s) for the category 'hate/threatening'.",
+    )
+    illicit: list[Literal["text"]] = Field(
+        default_factory=list,
+        description="The applied input type(s) for the category 'illicit'.",
+    )
+    illicit_violent: list[Literal["text"]] = Field(
+        default_factory=list,
+        alias="illicit/violent",
+        description="The applied input type(s) for the category 'illicit/violent'.",
+    )
+    self_harm: list[Literal["text", "image"]] = Field(
+        default_factory=list,
+        alias="self-harm",
+        description="The applied input type(s) for the category 'self-harm'.",
+    )
+    self_harm_instructions: list[Literal["text", "image"]] = Field(
+        default_factory=list,
+        alias="self-harm/instructions",
+        description="The applied input type(s) for the category "
+        "'self-harm/instructions'.",
+    )
+    self_harm_intent: list[Literal["text", "image"]] = Field(
+        default_factory=list,
+        alias="self-harm/intent",
+        description="The applied input type(s) for the category 'self-harm/intent'.",
+    )
+    sexual: list[Literal["text", "image"]] = Field(
+        default_factory=list,
+        description="The applied input type(s) for the category 'sexual'.",
+    )
+    sexual_minors: list[Literal["text"]] = Field(
+        default_factory=list,
+        alias="sexual/minors",
+        description="The applied input type(s) for the category 'sexual/minors'.",
+    )
+    violence: list[Literal["text", "image"]] = Field(
+        default_factory=list,
+        description="The applied input type(s) for the category 'violence'.",
+    )
+    violence_graphic: list[Literal["text", "image"]] = Field(
+        default_factory=list,
+        alias="violence/graphic",
+        description="The applied input type(s) for the category 'violence/graphic'.",
+    )
+
+
 # Ref: openai.types.moderation.Moderation
 class Moderation(BaseModelResponse):
     """Moderation result for a single input element."""
@@ -186,6 +257,10 @@ class Moderation(BaseModelResponse):
     category_scores: ModerationCategoryScores = Field(
         description="Per-category scores from guardrail confidence levels or "
         "Comprehend label scores."
+    )
+    category_applied_input_types: ModerationCategoryAppliedInputTypes = Field(
+        default_factory=ModerationCategoryAppliedInputTypes,
+        description="Per-category input type(s) that the score applies to.",
     )
 
 

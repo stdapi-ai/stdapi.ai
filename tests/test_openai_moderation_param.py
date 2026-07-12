@@ -143,14 +143,22 @@ def chat_backend(monkeypatch: pytest.MonkeyPatch) -> _StubChatBackend:
     return stub
 
 
-def _assert_moderation(moderation: dict[str, Any]) -> None:
-    assert moderation["input"]["flagged"] is True
-    assert moderation["input"]["categories"] == {"sexual": True}
-    assert moderation["input"]["category_scores"] == {"sexual": 0.75}
-    assert moderation["input"]["model"] == "gr123"
-    assert moderation["output"]["flagged"] is False
-    assert moderation["output"]["categories"] == {"violence": False}
-    assert moderation["output"]["category_scores"] == {"violence": 0.25}
+def _assert_input_result(result: dict[str, Any]) -> None:
+    assert result["type"] == "moderation_result"
+    assert result["flagged"] is True
+    assert result["categories"] == {"sexual": True}
+    assert result["category_scores"] == {"sexual": 0.75}
+    assert result["category_applied_input_types"] == {"sexual": ["text"]}
+    assert result["model"] == "gr123"
+
+
+def _assert_output_result(result: dict[str, Any]) -> None:
+    assert result["type"] == "moderation_result"
+    assert result["flagged"] is False
+    assert result["categories"] == {"violence": False}
+    assert result["category_scores"] == {"violence": 0.25}
+    assert result["category_applied_input_types"] == {"violence": ["text"]}
+    assert result["model"] == "gr123"
 
 
 class TestChatModerationParam:
@@ -175,7 +183,14 @@ class TestChatModerationParam:
             "guardrailVersion": "1",
             "trace": "enabled",
         }
-        _assert_moderation(response.json()["moderation"])
+        moderation = response.json()["moderation"]
+        for direction in ("input", "output"):
+            assert moderation[direction]["type"] == "moderation_results"
+            assert moderation[direction]["model"] == "gr123"
+        (input_result,) = moderation["input"]["results"]
+        _assert_input_result(input_result)
+        (output_result,) = moderation["output"]["results"]
+        _assert_output_result(output_result)
 
     def test_without_moderation_no_field(
         self, client: TestClient, chat_backend: _StubChatBackend
@@ -289,7 +304,15 @@ class TestResponsesModerationParam:
         }
         moderation = response.json()["moderation"]
         assert moderation["input"]["model"] == "omni-moderation-latest"
+        assert moderation["input"]["type"] == "moderation_result"
         assert moderation["input"]["flagged"] is True
+        assert moderation["input"]["category_applied_input_types"] == {
+            "sexual": ["text"]
+        }
+        assert moderation["output"]["flagged"] is False
+        assert moderation["output"]["category_applied_input_types"] == {
+            "violence": ["text"]
+        }
 
     def test_unknown_guardrail_override_rejected(
         self,

@@ -42,6 +42,7 @@ from stdapi.monitoring import (
 from stdapi.types.openai_moderations import (
     Moderation,
     ModerationCategories,
+    ModerationCategoryAppliedInputTypes,
     ModerationCategoryScores,
     ModerationCreateParams,
     ModerationCreateResponse,
@@ -91,6 +92,47 @@ _TOXICITY_SEGMENT_BYTES: int = 1_000
 
 #: Maximum text segments per Comprehend DetectToxicContent call.
 _TOXICITY_SEGMENTS_PER_CALL: int = 10
+
+#: Number of inputs classified concurrently per batch.
+_INPUT_BATCH_SIZE: int = 10
+
+#: JSON keys of all OpenAI moderation categories.
+_ALL_CATEGORIES: tuple[str, ...] = tuple(
+    field.alias or name
+    for name, field in ModerationCategoryAppliedInputTypes.model_fields.items()
+)
+
+#: Categories whose applied input types may include images (per the OpenAI schema).
+_IMAGE_CATEGORIES: frozenset[str] = frozenset(
+    {
+        "self-harm",
+        "self-harm/instructions",
+        "self-harm/intent",
+        "sexual",
+        "violence",
+        "violence/graphic",
+    }
+)
+
+
+def _applied_input_types(*, image: bool) -> ModerationCategoryAppliedInputTypes:
+    """Build the per-category applied input types for one input element.
+
+    Args:
+        image: Whether the classified input is an image.
+
+    Returns:
+        Every category with ``["text"]`` for text inputs; for image inputs,
+        ``["image"]`` for image-capable categories and ``[]`` otherwise.
+    """
+    return ModerationCategoryAppliedInputTypes.model_validate(
+        {
+            category: (["image"] if category in _IMAGE_CATEGORIES else [])
+            if image
+            else ["text"]
+            for category in _ALL_CATEGORIES
+        }
+    )
 
 
 async def _to_content_block(
@@ -160,6 +202,9 @@ async def _moderate(
         or any(categories.values()),
         categories=ModerationCategories(**categories),
         category_scores=ModerationCategoryScores(**scores),
+        category_applied_input_types=_applied_input_types(
+            image=isinstance(item, ModerationImageURLInput)
+        ),
     )
 
 
@@ -267,6 +312,7 @@ async def _moderate_toxicity(
             **{name: score >= _TOXICITY_THRESHOLD for name, score in scores.items()}
         ),
         category_scores=ModerationCategoryScores(**scores),
+        category_applied_input_types=_applied_input_types(image=False),
     )
 
 
@@ -352,20 +398,25 @@ async def create_moderation(
     """
     log_request_params(body)
     items = [body.input] if isinstance(body.input, str) else list(body.input)
+    results: list[Moderation] = []
     if (resolved := resolve_moderation_model(body.model)) is None:
-        results = await gather(*map(_moderate_toxicity, items))
+        for batch in batched(items, _INPUT_BATCH_SIZE, strict=False):
+            results.extend(await gather(*map(_moderate_toxicity, batch)))
         model = body.model or COMPREHEND_MODERATION_MODEL
     else:
         identifier, version = resolved
         client: BedrockRuntimeClient = get_client(
             "bedrock-runtime", guardrail_region(identifier)
         )
-        results = await gather(
-            *(_moderate(client, identifier, version, item) for item in items)
-        )
+        for batch in batched(items, _INPUT_BATCH_SIZE, strict=False):
+            results.extend(
+                await gather(
+                    *(_moderate(client, identifier, version, item) for item in batch)
+                )
+            )
         model = body.model or f"{identifier}:{version}"
     return log_response_params(
         ModerationCreateResponse(
-            id=f"modr-{REQUEST_ID.get()}", model=model, results=list(results)
+            id=f"modr-{REQUEST_ID.get()}", model=model, results=results
         )
     )
