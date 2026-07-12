@@ -1,12 +1,17 @@
-"""Tests for stdapi.aws_bedrock.resolve_guardrail_model."""
+"""Tests for stdapi.aws_bedrock.get_extra_model_parameters and resolve_guardrail_model."""
 
 from typing import TYPE_CHECKING
 
 import pytest
 
 from stdapi.api_errors import ApiError
-from stdapi.aws_bedrock import GUARDTRAIL_CONFIG_VAR, resolve_guardrail_model
+from stdapi.aws_bedrock import (
+    GUARDTRAIL_CONFIG_VAR,
+    get_extra_model_parameters,
+    resolve_guardrail_model,
+)
 from stdapi.config import SETTINGS
+from stdapi.types import BaseModelRequestWithExtra
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -29,6 +34,61 @@ def configured_guardrail() -> Iterator[None]:
     token = GUARDTRAIL_CONFIG_VAR.set(config)
     yield
     GUARDTRAIL_CONFIG_VAR.reset(token)
+
+
+class _Request(BaseModelRequestWithExtra):
+    """Minimal request carrying arbitrary extra fields."""
+
+    model: str
+
+
+class TestGetExtraModelParameters:
+    """get_extra_model_parameters: default/extra merge and settings isolation."""
+
+    def test_merges_defaults_with_request_extras(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Request extras are merged over the configured defaults, taking precedence."""
+        monkeypatch.setattr(
+            SETTINGS,
+            "default_model_params",
+            {"model-a": {"temperature": 0.5, "top_k": 10}},
+        )
+        request = _Request.model_validate(
+            {"model": "model-a", "top_k": 99, "max_tokens": 42}
+        )
+
+        params = get_extra_model_parameters("model-a", request)
+
+        assert params == {"temperature": 0.5, "top_k": 99, "max_tokens": 42}
+
+    def test_unknown_model_returns_extras_only(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A model with no configured defaults returns only the request extras."""
+        monkeypatch.setattr(SETTINGS, "default_model_params", {})
+        request = _Request.model_validate({"model": "unknown", "foo": "bar"})
+
+        params = get_extra_model_parameters("unknown", request)
+
+        assert params == {"foo": "bar"}
+
+    def test_extras_do_not_leak_between_calls(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression: one request's extras must not persist in SETTINGS or a later call."""
+        monkeypatch.setattr(
+            SETTINGS, "default_model_params", {"model-a": {"temperature": 0.5}}
+        )
+        first_request = _Request.model_validate({"model": "model-a", "top_k": 1})
+        second_request = _Request.model_validate({"model": "model-a", "max_tokens": 2})
+
+        first_params = get_extra_model_parameters("model-a", first_request)
+        second_params = get_extra_model_parameters("model-a", second_request)
+
+        assert first_params == {"temperature": 0.5, "top_k": 1}
+        assert second_params == {"temperature": 0.5, "max_tokens": 2}
+        assert SETTINGS.default_model_params["model-a"] == {"temperature": 0.5}
 
 
 @pytest.mark.usefixtures("configured_guardrail")

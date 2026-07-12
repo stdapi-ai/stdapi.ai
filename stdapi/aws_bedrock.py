@@ -574,12 +574,10 @@ def get_extra_model_parameters(
     Returns:
         Merged parameter dict.
     """
-    try:
-        params: JsonMapping = SETTINGS.default_model_params[model_id]
-    except KeyError:
-        params = {}
-    params.update(request.model_extra or {})
-    return params
+    return {
+        **SETTINGS.default_model_params.get(model_id, {}),
+        **(request.model_extra or {}),
+    }
 
 
 @contextmanager
