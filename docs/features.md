@@ -86,7 +86,7 @@ Your existing applications, SDKs, and tools work immediately — no plugins or c
 | `/v1/responses/{id}`         | Retrieve, continue (`previous_response_id`), or delete stored responses   | AWS Bedrock Sessions                 |
 | `/v1/chat/completions/{id}`  | Retrieve or delete stored chat completions                                 | AWS Bedrock Sessions                 |
 | `/v1/embeddings`             | Vector embeddings for search & RAG                                        | AWS Bedrock Embedding Models         |
-| `/v1/moderations`            | Content safety classification                                             | AWS Bedrock Guardrails               |
+| `/v1/moderations`            | Content safety classification                                             | AWS Bedrock Guardrails, Amazon Comprehend |
 | `/v1/images/generations`     | Text-to-image generation                                                  | AWS Bedrock Image Models             |
 | `/v1/images/edits`           | Image editing, inpainting & transformations                               | AWS Bedrock Image Models             |
 | `/v1/images/variations`      | Image variations                                                          | AWS Bedrock Image Models             |

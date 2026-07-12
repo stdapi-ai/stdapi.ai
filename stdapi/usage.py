@@ -34,7 +34,7 @@ from stdapi.pricing import (
 from stdapi.utils import stdout_write
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Iterable, Mapping
 
     from pydantic import JsonValue
     from types_aiobotocore_bedrock_runtime.literals import ServiceTierTypeType
@@ -105,11 +105,12 @@ class UsageRecord:
     quantities: dict[Dimension, int] = field(default_factory=dict)
     # Informational only (Converse API); not billed, no Dimension
     total_tokens: int = 0
-    # Breakdown by cache TTL ("5m"/"1h"): prices each bucket separately since AWS charges differently per TTL
+    # By cache TTL bucket ("5m"/"1h"): AWS charges each TTL differently.
     cache_write_tokens_by_ttl: dict[CacheTtlBucket, int] = field(default_factory=dict)
-    # Breakdown by "<resolution>:<quality>" image spec: prices each bucket separately since AWS
-    # charges per resolution/quality. Falls back to flat per-image when empty.
+    # By "<resolution>:<quality>" image spec (falls back to flat per-image).
     output_images_by_spec: dict[str, int] = field(default_factory=dict)
+    # By resolution spec bucket ("hd"); falls back to flat per-second.
+    output_seconds_by_spec: dict[str, int] = field(default_factory=dict)
     # Input-media breakdowns by spec bucket ("document", "audio", "video", ...).
     input_images_by_spec: dict[str, int] = field(default_factory=dict)
     input_seconds_by_spec: dict[str, int] = field(default_factory=dict)
@@ -141,6 +142,7 @@ class UsageLogEntry(TypedDict, total=False):
     output_images: int
     output_images_by_spec: dict[str, int]
     output_seconds: int
+    output_seconds_by_spec: dict[str, int]
     input_images: int
     input_images_by_spec: dict[str, int]
     input_seconds: int
@@ -228,6 +230,7 @@ def _record_usage(
     total_tokens: int = 0,
     cache_write_tokens_by_ttl: Mapping[CacheTtlBucket, int] | None = None,
     output_images_by_spec: Mapping[str, int] | None = None,
+    output_seconds_by_spec: Mapping[str, int] | None = None,
     input_images_by_spec: Mapping[str, int] | None = None,
     input_seconds_by_spec: Mapping[str, int] | None = None,
 ) -> None:
@@ -253,6 +256,8 @@ def _record_usage(
             TTL bucket.
         output_images_by_spec: Output image counts broken down by
             resolution/quality spec.
+        output_seconds_by_spec: Output media seconds broken down by
+            resolution spec bucket.
         input_images_by_spec: Input image counts broken down by spec bucket.
         input_seconds_by_spec: Input media seconds broken down by spec bucket.
     """
@@ -264,6 +269,7 @@ def _record_usage(
         _positive_values(breakdown)
         for breakdown in (
             output_images_by_spec,
+            output_seconds_by_spec,
             input_images_by_spec,
             input_seconds_by_spec,
         )
@@ -296,6 +302,7 @@ def _record_usage(
     _add_cache_ttl_breakdown(record, cache_ttl_to_add, quantities_to_add)
     record_breakdowns = (
         record.output_images_by_spec,
+        record.output_seconds_by_spec,
         record.input_images_by_spec,
         record.input_seconds_by_spec,
     )
@@ -431,6 +438,7 @@ def _dimension_price_buckets(
         return _reconcile_buckets(buckets, quantity)
     spec_breakdown = {
         Dimension.OUTPUT_IMAGES: record.output_images_by_spec,
+        Dimension.OUTPUT_SECONDS: record.output_seconds_by_spec,
         Dimension.INPUT_IMAGES: record.input_images_by_spec,
         Dimension.INPUT_SECONDS: record.input_seconds_by_spec,
     }.get(dimension)
@@ -541,7 +549,10 @@ def _add_dimension_cost(
 
 
 def record_comprehend_usage(
-    text_length: int, feature: Literal["language-detection"], *, region: str = ""
+    text_length: int,
+    feature: Literal["language-detection", "toxicity"],
+    *,
+    region: str = "",
 ) -> int:
     """Record AWS Comprehend usage.
 
@@ -640,6 +651,7 @@ def record_bedrock_usage(
     cache_write_tokens: int | None = None,
     output_images: int | None = None,
     output_seconds: int | None = None,
+    output_seconds_spec: str = "",
     grounding_requests: int | None = None,
     search_units: int | None = None,
     input_images: int | None = None,
@@ -664,6 +676,8 @@ def record_bedrock_usage(
         cache_write_tokens: Number of tokens written to prompt cache.
         output_images: Number of generated images.
         output_seconds: Generated media duration in seconds (e.g. video).
+        output_seconds_spec: Resolution spec bucket for output media
+            ("hd", ...), when the model's pricing distinguishes it.
         grounding_requests: Number of built-in grounding-tool invocations
             (e.g. Amazon Nova Grounding, billed per request).
         search_units: Number of rerank search units.
@@ -706,6 +720,9 @@ def record_bedrock_usage(
         output_images_by_spec={image_spec: output_images}
         if image_spec and output_images
         else None,
+        output_seconds_by_spec={output_seconds_spec: output_seconds}
+        if output_seconds_spec and output_seconds
+        else None,
         input_images_by_spec={media_spec: input_images}
         if media_spec and input_images
         else None,
@@ -726,6 +743,30 @@ def format_cost(amount: Decimal) -> str:
         "0.000015", "12.5") -- float conversion would reintroduce both.
     """
     return format(amount.normalize(), "f")
+
+
+def total_costs_by_currency(entries: Iterable[UsageLogEntry]) -> dict[str, Decimal]:
+    """Sum a list of usage log entries' cost(s), grouped by currency.
+
+    Args:
+        entries: Usage log entries, each carrying either cost/currency or costs.
+
+    Returns:
+        Total cost per currency, summed in Decimal to keep the rollup exact.
+    """
+    totals: dict[str, Decimal] = {}
+    for entry in entries:
+        if (cost := entry.get("cost")) and (currency := entry.get("currency")):
+            pairs: Iterable[tuple[str, str]] = ((currency, cost),)
+        elif costs := entry.get("costs"):
+            pairs = costs.items()
+        else:
+            continue
+        for entry_currency, entry_cost in pairs:
+            totals[entry_currency] = totals.get(entry_currency, Decimal(0)) + Decimal(
+                entry_cost
+            )
+    return totals
 
 
 def _add_cost_fields(entry: UsageLogEntry, record: UsageRecord) -> None:
@@ -783,6 +824,8 @@ def usage_log_entries() -> list[UsageLogEntry]:
             entry["cache_write_tokens_by_ttl"] = dict(record.cache_write_tokens_by_ttl)
         if record.output_images_by_spec:
             entry["output_images_by_spec"] = dict(record.output_images_by_spec)
+        if record.output_seconds_by_spec:
+            entry["output_seconds_by_spec"] = dict(record.output_seconds_by_spec)
         if record.input_images_by_spec:
             entry["input_images_by_spec"] = dict(record.input_images_by_spec)
         if record.input_seconds_by_spec:

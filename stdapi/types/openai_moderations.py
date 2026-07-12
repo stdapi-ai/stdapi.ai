@@ -44,9 +44,15 @@ class ModerationCreateParams(BaseModelRequest):
         default=None,
         min_length=1,
         max_length=2048,
-        description="AWS Bedrock guardrail as `<id>`, `<id>:<version>`, or ARN; "
-        "omit to use the server's configured guardrail. OpenAI moderation "
-        "model names resolve to the configured guardrail.",
+        description="The moderation model: an AWS Bedrock guardrail "
+        "(`amazon.bedrock-runtime-guardrail` for the server's default "
+        "guardrail, or an explicit `<id>`, `<id>:<version>`, or ARN), or "
+        "`amazon.comprehend-toxicity` for Amazon Comprehend toxicity "
+        "detection. Omitted resolves to the server's default moderation "
+        "model; OpenAI moderation model names are aliases "
+        "(`omni-moderation-*` for the default guardrail, falling back to "
+        "Comprehend when none is configured; `text-moderation-*` for "
+        "Comprehend).",
     )
 
 
@@ -54,72 +60,83 @@ class ModerationCreateParams(BaseModelRequest):
 class ModerationCategories(BaseModelResponse):
     """Per-category violation flags.
 
-    Categories without an AWS Bedrock Guardrails counterpart are always
-    ``false``; violations they would cover surface through the closest mapped
-    category or the overall ``flagged`` field.
+    Categories without a model counterpart (guardrail content filter or
+    Comprehend toxicity label) are always ``false``; violations they would
+    cover surface through the closest mapped category or the overall
+    ``flagged`` field.
     """
 
     harassment: bool = Field(
-        default=False, description="Harassing content (guardrail INSULTS filter)."
+        default=False,
+        description="Harassing content (guardrail INSULTS filter; Comprehend "
+        "HARASSMENT_OR_ABUSE and INSULT labels).",
     )
     harassment_threatening: bool = Field(
         default=False,
         alias="harassment/threatening",
-        description="Threatening harassment. Always `false` (no guardrail filter).",
+        description="Threatening harassment. Always `false` (no backend counterpart).",
     )
     hate: bool = Field(
-        default=False, description="Hateful content (guardrail HATE filter)."
+        default=False,
+        description="Hateful content (guardrail HATE filter; Comprehend "
+        "HATE_SPEECH label).",
     )
     hate_threatening: bool = Field(
         default=False,
         alias="hate/threatening",
-        description="Threatening hate. Always `false` (no guardrail filter).",
+        description="Threatening hate. Always `false` (no backend counterpart).",
     )
     illicit: bool = Field(
-        default=False, description="Advice on wrongdoing (guardrail MISCONDUCT filter)."
+        default=False,
+        description="Advice on wrongdoing (guardrail MISCONDUCT filter; no "
+        "Comprehend label).",
     )
     illicit_violent: bool = Field(
         default=False,
         alias="illicit/violent",
-        description="Violent wrongdoing. Always `false` (no guardrail filter).",
+        description="Violent wrongdoing. Always `false` (no backend counterpart).",
     )
     self_harm: bool = Field(
         default=False,
         alias="self-harm",
-        description="Self-harm content. Always `false` (no guardrail filter).",
+        description="Self-harm content. Always `false` (no backend counterpart).",
     )
     self_harm_instructions: bool = Field(
         default=False,
         alias="self-harm/instructions",
-        description="Self-harm instructions. Always `false` (no guardrail filter).",
+        description="Self-harm instructions. Always `false` (no backend counterpart).",
     )
     self_harm_intent: bool = Field(
         default=False,
         alias="self-harm/intent",
-        description="Self-harm intent. Always `false` (no guardrail filter).",
+        description="Self-harm intent. Always `false` (no backend counterpart).",
     )
     sexual: bool = Field(
-        default=False, description="Sexual content (guardrail SEXUAL filter)."
+        default=False,
+        description="Sexual content (guardrail SEXUAL filter; Comprehend "
+        "SEXUAL label).",
     )
     sexual_minors: bool = Field(
         default=False,
         alias="sexual/minors",
         description="Sexual content involving minors. Always `false` "
-        "(no guardrail filter).",
+        "(no backend counterpart).",
     )
     violence: bool = Field(
-        default=False, description="Violent content (guardrail VIOLENCE filter)."
+        default=False,
+        description="Violent content (guardrail VIOLENCE filter; Comprehend "
+        "VIOLENCE_OR_THREAT label).",
     )
     violence_graphic: bool = Field(
         default=False,
         alias="violence/graphic",
-        description="Graphic violence. Always `false` (no guardrail filter).",
+        description="Graphic violence (Comprehend GRAPHIC label; no guardrail filter).",
     )
 
 
 # Ref: openai.types.moderation.CategoryScores
 class ModerationCategoryScores(BaseModelResponse):
-    """Per-category scores derived from guardrail confidence levels."""
+    """Per-category scores from guardrail confidence levels or Comprehend labels."""
 
     harassment: float = Field(default=0.0, description="Harassment score.")
     harassment_threatening: float = Field(
@@ -161,13 +178,14 @@ class Moderation(BaseModelResponse):
     """Moderation result for a single input element."""
 
     flagged: bool = Field(
-        description="Whether the guardrail flagged any policy on this input."
+        description="Whether any policy or toxicity label flagged this input."
     )
     categories: ModerationCategories = Field(
         description="Per-category violation flags."
     )
     category_scores: ModerationCategoryScores = Field(
-        description="Per-category scores derived from guardrail confidence levels."
+        description="Per-category scores from guardrail confidence levels or "
+        "Comprehend label scores."
     )
 
 
@@ -176,5 +194,7 @@ class ModerationCreateResponse(BaseModelResponse):
     """Response body for POST /v1/moderations."""
 
     id: str = Field(description="Unique identifier of the moderation request.")
-    model: str = Field(description="The guardrail used to classify the inputs.")
+    model: str = Field(
+        description="The guardrail or Comprehend model used to classify the inputs."
+    )
     results: list[Moderation] = Field(description="One result per input element.")

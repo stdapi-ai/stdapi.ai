@@ -268,8 +268,17 @@ def set_guardrail_configuration(headers: Headers) -> None:
     GUARDTRAIL_CONFIG_VAR.set(config)
 
 
-#: OpenAI moderation model name prefixes resolved to the configured guardrail.
-_OPENAI_MODERATION_PREFIXES = ("omni-moderation", "text-moderation")
+#: OpenAI moderation model name prefix aliasing the default guardrail model.
+_OMNI_MODERATION_PREFIX = "omni-moderation"
+
+#: OpenAI moderation model name prefix aliasing the Comprehend moderation model.
+_TEXT_MODERATION_PREFIX = "text-moderation"
+
+#: Moderation model ID selecting the Amazon Comprehend toxicity backend.
+COMPREHEND_MODERATION_MODEL: str = "amazon.comprehend-toxicity"
+
+#: Moderation model ID selecting the server's default Bedrock guardrail.
+GUARDRAIL_MODERATION_MODEL: str = "amazon.bedrock-runtime-guardrail"
 
 #: Bedrock guardrail content filter types mapped to OpenAI moderation categories.
 _GUARDRAIL_FILTER_CATEGORIES: dict[str, str] = {
@@ -303,12 +312,43 @@ _GUARDRAIL_POLICY_ENTRIES: tuple[tuple[str, str], ...] = (
 GUARDRAIL_TRACE_VAR: ContextVar[dict[str, Any]] = ContextVar("guardrail_trace")
 
 
+def is_comprehend_moderation_model(model: str) -> bool:
+    """Whether *model* selects (or aliases) Amazon Comprehend toxicity detection.
+
+    Args:
+        model: The moderation ``model`` value.
+
+    Returns:
+        True for ``amazon.comprehend-toxicity`` and its ``text-moderation-*``
+        OpenAI aliases.
+    """
+    return model == COMPREHEND_MODERATION_MODEL or model.startswith(
+        _TEXT_MODERATION_PREFIX
+    )
+
+
+def _is_default_guardrail_model(model: str) -> bool:
+    """Whether *model* selects (or aliases) the server's default guardrail.
+
+    Args:
+        model: The moderation ``model`` value.
+
+    Returns:
+        True for ``amazon.bedrock-runtime-guardrail`` and its
+        ``omni-moderation-*`` OpenAI aliases.
+    """
+    return model == GUARDRAIL_MODERATION_MODEL or model.startswith(
+        _OMNI_MODERATION_PREFIX
+    )
+
+
 def resolve_guardrail_model(model: str | None) -> tuple[str, str]:
     """Resolve a moderation ``model`` value to a guardrail (identifier, version).
 
-    OpenAI moderation model names (or ``None``) resolve to the request's
-    configured guardrail; an explicit guardrail ``<id>``, ``<id>:<version>``,
-    or ARN is honored when guardrail override is allowed.
+    ``amazon.bedrock-runtime-guardrail``, its ``omni-moderation-*`` OpenAI
+    aliases, and ``None`` resolve to the request's configured guardrail; an
+    explicit guardrail ``<id>``, ``<id>:<version>``, or ARN is honored when
+    guardrail override is allowed.
 
     Args:
         model: The moderation ``model`` value, if any.
@@ -320,7 +360,7 @@ def resolve_guardrail_model(model: str | None) -> tuple[str, str]:
         ApiError: When no guardrail is configured or the override is not allowed.
     """
     configured = GUARDTRAIL_CONFIG_VAR.get(None)
-    if model is None or model.startswith(_OPENAI_MODERATION_PREFIXES):
+    if model is None or _is_default_guardrail_model(model):
         if configured is None:
             # Imported here because stdapi.monitoring imports this module.
             from stdapi.monitoring import log_error_details  # noqa: PLC0415
@@ -352,6 +392,48 @@ def resolve_guardrail_model(model: str | None) -> tuple[str, str]:
         msg = "Selecting a guardrail via 'model' is not allowed on this server."
         raise ApiError(msg)
     return identifier, version
+
+
+def resolve_moderation_model(model: str | None) -> tuple[str, str] | None:
+    """Resolve a moderation ``model`` to a guardrail or the Comprehend backend.
+
+    ``amazon.comprehend-toxicity`` and its ``text-moderation-*`` aliases select
+    Amazon Comprehend toxicity detection. An omitted model or an
+    ``omni-moderation-*`` alias resolves to the configured guardrail when one
+    is set and falls back to Comprehend otherwise, while
+    ``amazon.bedrock-runtime-guardrail`` requires a configured guardrail.
+
+    Args:
+        model: The moderation ``model`` value, if any.
+
+    Returns:
+        Tuple of (guardrail identifier, guardrail version), or ``None`` for
+        the Amazon Comprehend toxicity backend.
+
+    Raises:
+        ApiError: When no guardrail is available or the override is not allowed.
+    """
+    if model is not None and is_comprehend_moderation_model(model):
+        return None
+    if (
+        model is None or model.startswith(_OMNI_MODERATION_PREFIX)
+    ) and GUARDTRAIL_CONFIG_VAR.get(None) is None:
+        return None
+    return resolve_guardrail_model(model)
+
+
+def guardrail_region(identifier: str) -> RegionName:
+    """Return the AWS region hosting the guardrail.
+
+    Args:
+        identifier: Guardrail identifier or ARN.
+
+    Returns:
+        The region embedded in the ARN, or the primary Bedrock region.
+    """
+    if identifier.startswith("arn:"):
+        return identifier.split(":")[3]  # type: ignore[return-value]
+    return SETTINGS.aws_bedrock_regions[0]
 
 
 def map_guardrail_filters(

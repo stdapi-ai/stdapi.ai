@@ -264,6 +264,57 @@ class TestImageSpecPricing:
         assert flat_record.cost == Decimal("0.007200")
 
 
+class TestOutputSecondsSpecPricing:
+    """output_seconds_spec -> UsageRecord.output_seconds_by_spec -> resolve_price plumbing."""
+
+    def test_mixed_spec_seconds_price_each_bucket_independently(self) -> None:
+        """A flat call and an "hd"-spec call in one record must each use their own price."""
+        usage.init_usage()
+        get_model_state("videomodel").region = "us-east-1"
+        set_test_price(
+            "videomodel", "us-east-1", Dimension.OUTPUT_SECONDS, "0.06", "USD"
+        )
+        set_test_price(
+            "videomodel",
+            "us-east-1",
+            Dimension.OUTPUT_SECONDS,
+            "0.08",
+            "USD",
+            spec="hd",
+        )
+
+        record_bedrock_usage("videomodel", output_seconds=5)
+        record_bedrock_usage("videomodel", output_seconds=5, output_seconds_spec="hd")
+
+        record = next(iter(usage.USAGE.get().values()))
+        assert record.output_seconds_by_spec == {"hd": 5}
+        assert record.quantities[Dimension.OUTPUT_SECONDS] == 10
+        compute_costs()
+        # 5 * 0.06 (flat remainder) + 5 * 0.08 (hd) = 0.3 + 0.4 = 0.7
+        assert record.cost == Decimal("0.700000")
+
+    def test_no_spec_falls_back_to_flat_price(self) -> None:
+        """A model with no spec bucket must still price via the flat per-second rate."""
+        usage.init_usage()
+        get_model_state("flatvideomodel").region = "us-east-1"
+        set_test_price(
+            "flatvideomodel", "us-east-1", Dimension.OUTPUT_SECONDS, "0.05", "USD"
+        )
+        record_bedrock_usage("flatvideomodel", output_seconds=6)
+        record = next(iter(usage.USAGE.get().values()))
+        assert record.output_seconds_by_spec == {}
+        compute_costs()
+        assert record.cost == Decimal("0.300000")
+
+    def test_usage_log_entry_reports_output_seconds_by_spec(self) -> None:
+        """usage_log_entries() must surface the accumulated output_seconds_by_spec breakdown."""
+        usage.init_usage()
+        get_model_state("videomodel").region = "us-east-1"
+        record_bedrock_usage("videomodel", output_seconds=5, output_seconds_spec="hd")
+        entry = next(iter(usage.usage_log_entries()))
+        assert entry["output_seconds_by_spec"] == {"hd": 5}
+
+
 class TestCacheTtlPricing:
     """cache_write_tokens_by_ttl -> UsageRecord -> resolve_price plumbing.
 

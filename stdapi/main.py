@@ -48,6 +48,7 @@ from stdapi.models.audio.amazon_transcribe import (
     initialize_transcribe_models,
     transcribe_job_candidates,
 )
+from stdapi.models.moderation import initialize_moderation_models
 from stdapi.monitoring import (
     LOGGING_PATHS_IGNORE,
     EventLog,
@@ -153,6 +154,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                             initialize_bedrock_models(start_event),
                             initialize_polly_models(start_event),
                             initialize_transcribe_models(),
+                            initialize_moderation_models(),
                             register(start_event),
                             initialize_aws_account_info(),
                             return_exceptions=True,

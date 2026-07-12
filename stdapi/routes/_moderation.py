@@ -7,9 +7,11 @@ to OpenAI-style moderation results.
 
 from typing import TYPE_CHECKING
 
+from stdapi.api_errors import ApiError
 from stdapi.aws_bedrock import (
     GUARDRAIL_TRACE_VAR,
     GUARDTRAIL_CONFIG_VAR,
+    is_comprehend_moderation_model,
     map_guardrail_filters,
     resolve_guardrail_model,
 )
@@ -34,6 +36,12 @@ def apply_request_moderation(moderation: RequestModeration | None) -> None:
     """
     if moderation is None:
         return
+    if is_comprehend_moderation_model(moderation.model):
+        msg = (
+            "Amazon Comprehend moderation is only available on the Moderations "
+            "API; the 'moderation' parameter requires an AWS Bedrock guardrail."
+        )
+        raise ApiError(msg)
     identifier, version = resolve_guardrail_model(moderation.model)
     GUARDTRAIL_CONFIG_VAR.set(
         {

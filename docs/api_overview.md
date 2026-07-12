@@ -48,7 +48,7 @@ stdapi.ai provides multiple interfaces for exploring and testing the API—choos
 |                   | `POST /v1/audio/transcriptions`   | Speech-to-text transcription                                                | [Transcriptions →](api_openai_audio_transcriptions.md) |
 |                   | `POST /v1/audio/translations`     | Speech-to-English translation                                               | [Translations →](api_openai_audio_translations.md)     |
 | **🧠 Embeddings** | `POST /v1/embeddings`             | Vector embeddings for semantic search                                       | [Embeddings →](api_openai_embeddings.md)               |
-| **🛡️ Moderations** | `POST /v1/moderations`           | Content safety classification via AWS Bedrock Guardrails                    | [Moderations →](api_openai_moderations.md)             |
+| **🛡️ Moderations** | `POST /v1/moderations`           | Content safety classification via AWS Bedrock Guardrails or Amazon Comprehend | [Moderations →](api_openai_moderations.md)             |
 | **📋 Models**     | `GET /v1/models`                  | List available models                                                       | [Models →](api_openai_models.md)                       |
 | **📁 Files**      | `POST/GET/DELETE /v1/files`       | Upload, list, retrieve, download, delete files                              | [Files →](api_openai_files.md)                         |
 |                   | `POST /v1/uploads`                | Multipart upload sessions for large files                                   | [Files →](api_openai_files.md)                         |

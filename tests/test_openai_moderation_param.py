@@ -78,6 +78,10 @@ class _StubChatBackend:
         if (holder := GUARDRAIL_TRACE_VAR.get(None)) is not None:
             holder.update(_TRACE)
 
+    def native_store_supported(self) -> bool:
+        """Local-store stub: no Mantle native storage."""
+        return False
+
     async def create_completion(
         self,
         request: Any,  # noqa: ANN401
@@ -186,6 +190,56 @@ class TestChatModerationParam:
         )
         assert response.status_code == 200, response.text
         assert "moderation" not in response.json()
+
+    def test_comprehend_model_is_rejected(
+        self, client: TestClient, chat_backend: _StubChatBackend
+    ) -> None:
+        """The Comprehend moderation model is not usable as request parameter."""
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "amazon.nova-micro-v1:0",
+                "messages": [{"role": "user", "content": "hello"}],
+                "moderation": {"model": "amazon.comprehend-toxicity"},
+            },
+        )
+        assert response.status_code == 400
+        assert "guardrail" in response.json()["error"]["message"]
+        assert not chat_backend.guardrail_configs
+
+    def test_default_guardrail_model_id(
+        self, client: TestClient, chat_backend: _StubChatBackend
+    ) -> None:
+        """amazon.bedrock-runtime-guardrail selects the configured guardrail."""
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "amazon.nova-micro-v1:0",
+                "messages": [{"role": "user", "content": "hello"}],
+                "moderation": {"model": "amazon.bedrock-runtime-guardrail"},
+            },
+        )
+        assert response.status_code == 200, response.text
+        (config,) = chat_backend.guardrail_configs
+        assert config["guardrailIdentifier"] == "gr123"
+        moderation = response.json()["moderation"]
+        assert moderation["input"]["model"] == "amazon.bedrock-runtime-guardrail"
+
+    def test_text_moderation_model_is_rejected(
+        self, client: TestClient, chat_backend: _StubChatBackend
+    ) -> None:
+        """text-moderation-* aliases Comprehend and is rejected here."""
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "amazon.nova-micro-v1:0",
+                "messages": [{"role": "user", "content": "hello"}],
+                "moderation": {"model": "text-moderation-latest"},
+            },
+        )
+        assert response.status_code == 400
+        assert "guardrail" in response.json()["error"]["message"]
+        assert not chat_backend.guardrail_configs
 
     def test_no_guardrail_configured_hides_settings(
         self,

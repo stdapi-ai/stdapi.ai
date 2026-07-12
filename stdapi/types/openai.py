@@ -116,9 +116,11 @@ class RequestModeration(BaseModelRequest):
     model: str = Field(
         min_length=1,
         max_length=2048,
-        description="AWS Bedrock guardrail as `<id>`, `<id>:<version>`, or ARN; "
-        "OpenAI moderation model names resolve to the server's configured "
-        "guardrail.",
+        description="AWS Bedrock guardrail (`amazon.bedrock-runtime-guardrail` "
+        "or `omni-moderation-*` for the server's default guardrail, or an "
+        "explicit `<id>`, `<id>:<version>`, or ARN). Amazon Comprehend "
+        "moderation (`amazon.comprehend-toxicity`, `text-moderation-*`) is "
+        "not supported here.",
     )
 
 

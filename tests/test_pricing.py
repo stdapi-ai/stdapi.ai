@@ -417,17 +417,25 @@ class _FakePricingPaginator:
         self,
         items_by_service_code: dict[str, list[dict[str, object]]],
         delay_by_service_code: dict[str, float],
+        raise_by_service_code: dict[str, Exception] | None = None,
+        completed: list[str] | None = None,
     ) -> None:
         self._items = items_by_service_code
         self._delays = delay_by_service_code
+        self._raises = raise_by_service_code or {}
+        self._completed = completed
 
     async def paginate(self, **kwargs: object) -> AsyncIterator[dict[str, object]]:
-        """Yield one page of the ServiceCode's items, after its optional delay."""
+        """Yield one page of the ServiceCode's items, after its optional delay/error."""
         service_code = str(kwargs["ServiceCode"])
         if delay := self._delays.get(service_code, 0.0):
             await asyncio.sleep(delay)
+        if error := self._raises.get(service_code):
+            raise error
         items = self._items.get(service_code, [])
         yield {"PriceList": [json.dumps(item) for item in items]}
+        if self._completed is not None:
+            self._completed.append(service_code)
 
 
 class _FakePricingClient:
@@ -437,9 +445,14 @@ class _FakePricingClient:
         self,
         items_by_service_code: dict[str, list[dict[str, object]]],
         delay_by_service_code: dict[str, float] | None = None,
+        raise_by_service_code: dict[str, Exception] | None = None,
+        completed: list[str] | None = None,
     ) -> None:
         self._paginator = _FakePricingPaginator(
-            items_by_service_code, delay_by_service_code or {}
+            items_by_service_code,
+            delay_by_service_code or {},
+            raise_by_service_code,
+            completed,
         )
 
     def get_paginator(self, _name: str) -> _FakePricingPaginator:
@@ -551,6 +564,34 @@ class TestCrossFetchCollisionDetection:
         )
         assert any("collision" in d.lower() for d in diagnostics)
         assert index[self._KEY].amount == Decimal("0.002") / 1000
+
+
+class TestFetchCancellationOnFailure:
+    """One fetch failing must cancel its sibling fetches, not let them run to completion."""
+
+    async def test_sibling_fetch_is_cancelled_after_a_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A slow sibling fetch must be cancelled before it completes."""
+        error_response = {"Error": {"Code": "ThrottlingException", "Message": "x"}}
+        completed: list[str] = []
+        client = _FakePricingClient(
+            {"AmazonBedrock": [], "AmazonBedrockService": []},
+            delay_by_service_code={"AmazonBedrockService": 0.2},
+            raise_by_service_code={
+                "AmazonBedrock": ClientError(error_response, "GetProducts")  # type: ignore[arg-type]
+            },
+            completed=completed,
+        )
+        monkeypatch.setattr(pricing, "get_client", lambda *_a, **_k: client)
+        monkeypatch.setattr(pricing, "_catalog_regions", lambda: {"us-east-1"})
+        monkeypatch.setattr(SETTINGS, "cost_price_overrides", {})
+        monkeypatch.setattr(pricing._state, "price_index", {})  # noqa: SLF001
+
+        with pytest.raises(ClientError):
+            await pricing._load_price_catalog([])  # noqa: SLF001
+
+        assert "AmazonBedrockService" not in completed
 
 
 class TestNativeCacheTtl:
@@ -1871,6 +1912,40 @@ class TestTranslateAndComprehendIngestion:
         )
         assert price is not None
         assert price.amount == Decimal("0.0001")
+
+    def test_detect_toxic_content_ingests_under_the_toxicity_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A DetectToxicContent row must key under "amazon.comprehend-toxicity"."""
+        results: dict[PriceKey, Price] = {}
+        _ingest_price_list_item(
+            self._item(
+                "DetectToxicContent", "USE1-DetectToxicContent", "Units", "0.0004"
+            ),
+            Service.COMPREHEND,
+            "us-east-1",
+            "USD",
+            results,
+        )
+        key = PriceKey(
+            Service.COMPREHEND,
+            normalize_model_key("amazon.comprehend-toxicity"),
+            "us-east-1",
+            Dimension.COMPREHEND_UNITS,
+            "standard",
+        )
+        assert key in results
+        assert results[key].amount == Decimal("0.0004")
+
+        monkeypatch.setattr(pricing._state, "price_index", results)  # noqa: SLF001
+        price = resolve_price(
+            Service.COMPREHEND,
+            "amazon.comprehend-toxicity",
+            "us-east-1",
+            Dimension.COMPREHEND_UNITS,
+        )
+        assert price is not None
+        assert price.amount == Decimal("0.0004")
 
 
 class TestUsagetypeTokenFallbackTierSuffixes:

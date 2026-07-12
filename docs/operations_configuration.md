@@ -83,7 +83,7 @@ export AWS_S3_REGIONAL_BUCKETS='{"us-west-2": "my-stdapi-us-west-2-bucket", "eu-
 # AWS AI services regions (optional - defaults to first AWS_BEDROCK_REGIONS if not specified)
 export AWS_POLLY_REGION=us-east-1           # Text-to-speech
 export AWS_TRANSCRIBE_REGION=us-east-1      # Speech-to-text (audio transcription)
-export AWS_COMPREHEND_REGION=us-east-1      # Language detection
+export AWS_COMPREHEND_REGION=us-east-1      # Language detection & moderation
 export AWS_TRANSLATE_REGION=us-east-1       # Text translation
 
 # Authentication
@@ -170,7 +170,7 @@ This section provides a quick reference of all available configuration options. 
 | Variable                                          | Default                     | Description                                                 |
 |---------------------------------------------------|-----------------------------|-------------------------------------------------------------|
 | [`AWS_POLLY_REGION`](#aws-polly-region)           | All `AWS_BEDROCK_REGIONS`   | Region for Amazon Polly; unset = per-engine regional discovery with automatic failover |
-| [`AWS_COMPREHEND_REGION`](#aws-comprehend-region) | All `AWS_BEDROCK_REGIONS`   | Region for Amazon Comprehend language detection; unset = automatic failover across all Bedrock regions |
+| [`AWS_COMPREHEND_REGION`](#aws-comprehend-region) | All `AWS_BEDROCK_REGIONS`   | Region for Amazon Comprehend (language detection, toxicity moderation); unset = automatic failover across all Bedrock regions |
 | [`AWS_TRANSCRIBE_REGION`](#aws-transcribe-region) | All `AWS_BEDROCK_REGIONS`   | Region for Amazon Transcribe; unset = failover across Bedrock regions with a co-located bucket |
 | [`AWS_TRANSLATE_REGION`](#aws-translate-region)   | All `AWS_BEDROCK_REGIONS`   | Region for Amazon Translate; unset = automatic failover across all Bedrock regions |
 
@@ -1411,20 +1411,20 @@ export AWS_POLLY_REGION=us-east-1
 #### `AWS_COMPREHEND_REGION` { #aws-comprehend-region }
 
 :octicons-package-24: **Purpose**
-:   Region for Amazon Comprehend language detection service
+:   Region for the Amazon Comprehend services (language detection and toxicity moderation)
 
 :octicons-gear-24: **Default**
 :   All regions in `AWS_BEDROCK_REGIONS`, tried in order with automatic failover
 
 :octicons-workflow-24: **Behavior**
-:   When unset, language-detection calls try each `AWS_BEDROCK_REGIONS` entry in order and fail over to the next region on region-level errors (throttling, service unavailability, network issues). Setting an explicit region pins Comprehend to that single region with no failover.
+:   When unset, Comprehend calls try each `AWS_BEDROCK_REGIONS` entry in order and fail over to the next region on region-level errors (throttling, service unavailability, network issues). Setting an explicit region pins Comprehend to that single region with no failover.
 
 ```bash
 export AWS_COMPREHEND_REGION=us-east-1
 ```
 
 !!! warning "Amazon Comprehend Regional Availability"
-    Amazon Comprehend is not available in all AWS regions. stdapi.ai uses the `detect_dominant_language` feature for language detection. Verify service and feature availability in your target region (with the default multi-region behavior, a region without Comprehend simply fails over to the next one). See [Amazon Comprehend supported regions](https://docs.aws.amazon.com/comprehend/latest/dg/guidelines-and-limits.html#limits-regions) for regional availability.
+    Amazon Comprehend is not available in all AWS regions. stdapi.ai uses the `detect_dominant_language` feature for language detection and `detect_toxic_content` for [Comprehend moderation](#comprehend-moderation). Verify service and feature availability in your target region (with the default multi-region behavior, a region without Comprehend simply fails over to the next one). See [Amazon Comprehend supported regions](https://docs.aws.amazon.com/comprehend/latest/dg/guidelines-and-limits.html#limits-regions) for regional availability.
 
 #### `AWS_TRANSCRIBE_REGION` { #aws-transcribe-region }
 
@@ -1673,7 +1673,7 @@ Required only if you enable ARN-based routing features that allow users to pass 
 
 **Environment Variables**: [`AWS_BEDROCK_GUARDRAIL_IDENTIFIER`](#aws-bedrock-guardrail-identifier), [`AWS_BEDROCK_GUARDRAIL_VERSION`](#aws-bedrock-guardrail-version)
 
-Required if you configure Bedrock Guardrails for content filtering, or use the [Moderations API](api_openai_moderations.md) or the `moderation` request parameter. See [Bedrock Guardrails](#bedrock-guardrails) configuration section.
+Required if you configure Bedrock Guardrails for content filtering, use the `moderation` request parameter, or select a guardrail on the [Moderations API](api_openai_moderations.md) (without a guardrail, that API falls back to [Comprehend toxicity moderation](#comprehend-moderation)). See [Bedrock Guardrails](#bedrock-guardrails) configuration section.
 
 ??? example "Bedrock Guardrails IAM Policy Statement"
     ```json
@@ -1853,6 +1853,24 @@ Required for automatic language detection (used by TTS for voice selection).
       "Effect": "Allow",
       "Action": [
         "comprehend:DetectDominantLanguage"
+      ],
+      "Resource": "*"
+    }
+    ```
+
+### Comprehend Moderation (Optional) { #comprehend-moderation }
+
+**Environment Variables**: [`AWS_COMPREHEND_REGION`](#aws-comprehend-region)
+
+Required for the [Moderations API](api_openai_moderations.md) toxicity backend — the default backend when no Bedrock guardrail is configured, and always available as the `amazon.comprehend-toxicity` model.
+
+??? example "Comprehend Moderation IAM Policy Statement"
+    ```json
+    {
+      "Sid": "ComprehendModeration",
+      "Effect": "Allow",
+      "Action": [
+        "comprehend:DetectToxicContent"
       ],
       "Resource": "*"
     }
@@ -2101,6 +2119,7 @@ Required if you configure API authentication. See [Authentication](#authenticati
 | **Text-to-Speech**                              | `polly:SynthesizeSpeech`<br>`polly:DescribeVoices`                                                                                                         | `AWS_POLLY_REGION`                                                           |
 | **Speech-to-Text**                              | `transcribe:StartTranscriptionJob`<br>`transcribe:GetTranscriptionJob`<br>`transcribe:DeleteTranscriptionJob`<br>`transcribe:TagResource` (on `arn:aws:transcribe:*:*:transcription-job/*`)<br>`s3:PutObject` (transcribe bucket)        | `AWS_TRANSCRIBE_REGION`<br>`AWS_TRANSCRIBE_S3_BUCKET`                        |
 | **Language Detection**                          | `comprehend:DetectDominantLanguage`                                                                                                                        | `AWS_COMPREHEND_REGION`                                                      |
+| **Comprehend Moderations**                      | `comprehend:DetectToxicContent`                                                                                                                            | Moderations API without a configured guardrail                              |
 | **Translation**                                 | `translate:TranslateText`                                                                                                                                  | `AWS_TRANSLATE_REGION`                                                       |
 | **Cost Tracking**                               | `pricing:GetProducts`                                                                                                                                      | `COST_TRACKING=true` (opt-in; `false` by default)                            |
 | **SSM Parameter Store**                         | `ssm:GetParameter`<br>`kms:Decrypt` (if encrypted)                                                                                                         | `API_KEY_SSM_PARAMETER`                                                      |

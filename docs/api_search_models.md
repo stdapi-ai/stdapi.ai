@@ -25,7 +25,7 @@ All query parameters are optional. Parameters combine with **AND** logic — onl
 | Parameter           | Type      | Description                                                                                                                                                              |
 |---------------------|-----------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `input_modalities`  | `string`  | Filter by input modality: `TEXT`, `IMAGE`, `VIDEO`, `AUDIO`, `SPEECH`                                                                                                    |
-| `output_modalities` | `string`  | Filter by output modality: `TEXT`, `IMAGE`, `VIDEO`, `SPEECH`, `EMBEDDING`, `RERANKING`                                                                                  |
+| `output_modalities` | `string`  | Filter by output modality: `TEXT`, `IMAGE`, `VIDEO`, `SPEECH`, `EMBEDDING`, `RERANKING`, `MODERATION`                                                                    |
 | `route`             | `string`  | Filter to models supporting a route path (e.g. `/v1/chat/completions`) **or** an MCP tool name (e.g. `openai_chat_completion`) — both formats are accepted transparently |
 | `region`            | `string`  | Filter to models available in a specific AWS region (e.g. `us-east-1`)                                                                                                   |
 | `streaming`         | `boolean` | `true` = streaming-capable models only, `false` = non-streaming only                                                                                                     |

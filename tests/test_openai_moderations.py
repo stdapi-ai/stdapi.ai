@@ -1,4 +1,4 @@
-"""Tests for the OpenAI-compatible /v1/moderations route (unit)."""
+"""Tests for the OpenAI-compatible /v1/moderations route (unit and live)."""
 
 from base64 import b64encode
 from typing import TYPE_CHECKING, Any
@@ -149,6 +149,43 @@ class TestModerationsRoute:
         assert response.json()["model"] == "omni-moderation-latest"
         assert stub.requests[0]["guardrailIdentifier"] == "gr123"
 
+    def test_default_guardrail_model_id(
+        self,
+        client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        configured_guardrail: None,
+    ) -> None:
+        """amazon.bedrock-runtime-guardrail selects the configured guardrail."""
+        stub, _ = _stub_client(monkeypatch, _CLEAN_RESPONSE)
+
+        response = client.post(
+            "/v1/moderations",
+            json={"input": "x", "model": "amazon.bedrock-runtime-guardrail"},
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["model"] == "amazon.bedrock-runtime-guardrail"
+        assert stub.requests[0]["guardrailIdentifier"] == "gr123"
+
+    def test_text_moderation_name_uses_comprehend(
+        self,
+        client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        configured_guardrail: None,
+    ) -> None:
+        """text-moderation-* aliases Comprehend even when a guardrail is set."""
+        stub, _ = _stub_client(monkeypatch, _CLEAN_RESPONSE)
+        batches = _stub_toxicity(monkeypatch, [[_CLEAN_RESULT]])
+
+        response = client.post(
+            "/v1/moderations", json={"input": "x", "model": "text-moderation-latest"}
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["model"] == "text-moderation-latest"
+        assert not stub.requests
+        assert batches == [["x"]]
+
     def test_explicit_guardrail_requires_override(
         self,
         client: TestClient,
@@ -204,19 +241,6 @@ class TestModerationsRoute:
         assert request["guardrailIdentifier"] == arn
         assert request["guardrailVersion"] == "DRAFT"
 
-    def test_no_guardrail_configured_is_rejected(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Without any configured guardrail the request fails with 400."""
-        _stub_client(monkeypatch, _CLEAN_RESPONSE)
-        monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_identifier", None)
-        monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_version", None)
-
-        response = client.post("/v1/moderations", json={"input": "x"})
-
-        assert response.status_code == 400
-        assert "No guardrail" in response.json()["error"]["message"]
-
     def test_image_input_data_uri(
         self,
         client: TestClient,
@@ -255,6 +279,217 @@ class TestModerationsRoute:
 
         assert response.status_code == 400
         assert "PNG or JPEG" in response.json()["error"]["message"]
+
+
+#: A Comprehend toxicity result with violent-threat and profanity labels.
+_TOXIC_RESULT: dict[str, Any] = {
+    "Labels": [
+        {"Name": "VIOLENCE_OR_THREAT", "Score": 0.91},
+        {"Name": "PROFANITY", "Score": 0.10},
+    ],
+    "Toxicity": 0.88,
+}
+
+#: A Comprehend toxicity result without any label above the threshold.
+_CLEAN_RESULT: dict[str, Any] = {
+    "Labels": [{"Name": "INSULT", "Score": 0.02}],
+    "Toxicity": 0.01,
+}
+
+
+def _stub_toxicity(
+    monkeypatch: pytest.MonkeyPatch, results: list[list[dict[str, Any]]]
+) -> list[list[str]]:
+    """Stub the Comprehend failover call, returning one canned result list per call.
+
+    Returns:
+        The recorded text-segment batches, one entry per API call.
+    """
+    batches: list[list[str]] = []
+
+    class _StubComprehendClient:
+        async def detect_toxic_content(
+            self,
+            *,
+            TextSegments: list[dict[str, str]],  # noqa: N803
+            LanguageCode: str,  # noqa: N803
+        ) -> dict[str, Any]:
+            assert LanguageCode == "en"
+            batches.append([segment["Text"] for segment in TextSegments])
+            return {"ResultList": results[min(len(batches), len(results)) - 1]}
+
+    async def _call(
+        service: str,
+        regions: list[str],
+        call: Any,  # noqa: ANN401
+    ) -> tuple[dict[str, Any], str]:
+        assert service == "comprehend"
+        return await call(_StubComprehendClient(), regions[0]), regions[0]
+
+    monkeypatch.setattr(openai_moderations, "call_with_region_failover", _call)
+    return batches
+
+
+@pytest.mark.local
+class TestComprehendModerationsRoute:
+    """POST /v1/moderations: Amazon Comprehend toxicity backend."""
+
+    def test_default_backend_without_guardrail(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Without a configured guardrail, moderation runs on Comprehend."""
+        batches = _stub_toxicity(monkeypatch, [[_TOXIC_RESULT]])
+
+        response = client.post("/v1/moderations", json={"input": "threatening text"})
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["model"] == "amazon.comprehend-toxicity"
+        (result,) = body["results"]
+        assert result["flagged"] is True
+        assert result["categories"]["violence"] is True
+        assert result["categories"]["harassment"] is False
+        assert result["category_scores"]["violence"] == 0.91
+        assert batches == [["threatening text"]]
+
+    def test_openai_model_name_falls_back_to_comprehend(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """OpenAI moderation names use Comprehend when no guardrail is set."""
+        _stub_toxicity(monkeypatch, [[_CLEAN_RESULT]])
+
+        response = client.post(
+            "/v1/moderations", json={"input": "x", "model": "omni-moderation-latest"}
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["model"] == "omni-moderation-latest"
+        assert body["results"][0]["flagged"] is False
+
+    def test_default_guardrail_model_requires_guardrail(
+        self, client: TestClient
+    ) -> None:
+        """amazon.bedrock-runtime-guardrail errors when no guardrail is set."""
+        response = client.post(
+            "/v1/moderations",
+            json={"input": "x", "model": "amazon.bedrock-runtime-guardrail"},
+        )
+
+        assert response.status_code == 400
+        message = response.json()["error"]["message"]
+        assert "administrator" in message
+        assert "aws_bedrock_guardrail_identifier" not in message.lower()
+
+    def test_explicit_comprehend_model_bypasses_guardrail(
+        self,
+        client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        configured_guardrail: None,
+    ) -> None:
+        """amazon.comprehend-toxicity is honored even with a guardrail set."""
+        batches = _stub_toxicity(monkeypatch, [[_CLEAN_RESULT]])
+
+        response = client.post(
+            "/v1/moderations",
+            json={"input": "x", "model": "amazon.comprehend-toxicity"},
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["model"] == "amazon.comprehend-toxicity"
+        assert batches == [["x"]]
+
+    def test_unmapped_label_contributes_to_flagged_only(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A PROFANITY hit flags the input without setting any category."""
+        _stub_toxicity(
+            monkeypatch,
+            [[{"Labels": [{"Name": "PROFANITY", "Score": 0.75}], "Toxicity": 0.3}]],
+        )
+
+        response = client.post("/v1/moderations", json={"input": "x"})
+
+        assert response.status_code == 200, response.text
+        (result,) = response.json()["results"]
+        assert result["flagged"] is True
+        assert not any(result["categories"].values())
+
+    def test_long_text_is_chunked_and_scores_aggregated(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Long inputs split into 1 KB segments, 10 per call, keeping max scores."""
+        hate = {"Labels": [{"Name": "HATE_SPEECH", "Score": 0.7}], "Toxicity": 0.6}
+        batches = _stub_toxicity(monkeypatch, [[_CLEAN_RESULT], [hate]])
+        text = "a" * 10_500
+
+        response = client.post("/v1/moderations", json={"input": text})
+
+        assert response.status_code == 200, response.text
+        assert [len(batch) for batch in batches] == [10, 1]
+        assert "".join(segment for batch in batches for segment in batch) == text
+        assert all(
+            len(segment.encode()) <= 1_000 for batch in batches for segment in batch
+        )
+        (result,) = response.json()["results"]
+        assert result["flagged"] is True
+        assert result["categories"]["hate"] is True
+        assert result["category_scores"]["hate"] == 0.7
+
+    @pytest.mark.parametrize("char", ["é", "🎉"])
+    def test_multibyte_characters_stay_whole_at_segment_boundaries(
+        self, char: str
+    ) -> None:
+        """Splitting counts UTF-8 bytes without breaking characters apart."""
+        text = char * (1_200 // len(char.encode()))  # 1200 bytes total
+        segments = openai_moderations._split_toxicity_segments(text)  # noqa: SLF001
+        assert "".join(segments) == text
+        assert [len(segment.encode()) for segment in segments] == [1_000, 200]
+
+    def test_overall_toxicity_score_alone_flags(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A high overall toxicity flags the input even with low label scores."""
+        _stub_toxicity(
+            monkeypatch,
+            [[{"Labels": [{"Name": "INSULT", "Score": 0.2}], "Toxicity": 0.9}]],
+        )
+
+        response = client.post("/v1/moderations", json={"input": "x"})
+
+        assert response.status_code == 200, response.text
+        (result,) = response.json()["results"]
+        assert result["flagged"] is True
+        assert not any(result["categories"].values())
+
+    def test_empty_text_is_clean_without_api_call(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An empty input yields a clean result without calling Comprehend."""
+        batches = _stub_toxicity(monkeypatch, [[_TOXIC_RESULT]])
+
+        response = client.post("/v1/moderations", json={"input": ""})
+
+        assert response.status_code == 200, response.text
+        assert response.json()["results"][0]["flagged"] is False
+        assert batches == []
+
+    def test_image_input_requires_guardrail(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Image moderation is rejected on the Comprehend backend."""
+        _stub_toxicity(monkeypatch, [[_CLEAN_RESULT]])
+        data_uri = f"data:image/png;base64,{b64encode(_PNG).decode()}"
+
+        response = client.post(
+            "/v1/moderations",
+            json={"input": [{"type": "image_url", "image_url": {"url": data_uri}}]},
+        )
+
+        assert response.status_code == 400
+        message = response.json()["error"]["message"]
+        assert "guardrail" in message
+        assert "aws_bedrock_guardrail_identifier" not in message.lower()
 
 
 @pytest.fixture(scope="module")
@@ -339,3 +574,24 @@ class TestModerationsLive:
         assert moderation is not None
         assert moderation.input.flagged is False
         assert moderation.input.model == live_guardrail
+
+
+class TestComprehendModerationsLive:
+    """Live moderation against Amazon Comprehend toxicity detection."""
+
+    def test_comprehend_moderation(
+        self, openai_client: OpenAI, use_official_api: bool
+    ) -> None:
+        """Clean and threatening inputs classify as expected."""
+        if use_official_api:
+            pytest.skip("Amazon Comprehend moderation is gateway-specific")
+        result = openai_client.moderations.create(
+            model="amazon.comprehend-toxicity",
+            input=["The weather is nice today.", "I am going to kill you."],
+        )
+        assert result.model == "amazon.comprehend-toxicity"
+        clean, flagged = result.results
+        assert clean.flagged is False
+        assert flagged.flagged is True
+        assert flagged.categories.violence is True
+        assert flagged.category_scores.violence > 0.5

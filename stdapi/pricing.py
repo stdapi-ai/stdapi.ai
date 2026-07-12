@@ -620,18 +620,13 @@ _UNPRICED_PARTITIONS: Final[frozenset[str]] = frozenset({"aws-us-gov"})
 def pricing_endpoint_region() -> _PricingEndpoint | None:
     """Nearest AWS Price List API endpoint region for this deployment.
 
-    The API exists in three commercial regions serving identical data
-    (verified live), plus one per sovereign partition serving only that
-    partition's rows (e.g. eusc-de-east-1, the only source for EUSC prices
-    -- commercial endpoints publish none, and cross-partition credentials
-    don't work anyway). The endpoint is picked by geography instead of
-    being operator-configured: from the first configured Bedrock region
-    (the operator's stated regional preference), else the home region.
+    Picked by geography from the first configured Bedrock region, else the
+    home region. Sovereign partitions (e.g. EUSC) have their own endpoint
+    serving only that partition's prices; commercial endpoints publish none.
 
     Returns:
         The Price List API endpoint region, or None when the deployment
-        partition has no such endpoint (GovCloud): prices then stay
-        unresolved instead of failing startup on an unreachable call.
+        partition has no such endpoint (GovCloud).
     """
     preferred = next(iter(SETTINGS.aws_bedrock_regions), None) or AWS_REGION or ""
     if partition_of_region(preferred) in _UNPRICED_PARTITIONS:
@@ -803,11 +798,10 @@ def _synthesize_service_model_key(
                 else ""
             )
         case Service.COMPREHEND:
-            return (
-                "amazon.comprehend-language-detection"
-                if attrs.get("operation") == "DetectDominantLanguage"
-                else ""
-            )
+            return {
+                "DetectDominantLanguage": "amazon.comprehend-language-detection",
+                "DetectToxicContent": "amazon.comprehend-toxicity",
+            }.get(attrs.get("operation", ""), "")
         case _:
             return ""
 
@@ -1317,19 +1311,16 @@ def _catalog_regions() -> set[str]:
     """
     # Always include the regional-fallback anchor regions, where most models
     # are available -- keeps this set and _FALLBACK_ANCHOR_REGIONS in sync.
+    service_regions: tuple[str | None, ...] = (
+        SETTINGS.aws_polly_region,
+        SETTINGS.aws_transcribe_region,
+        SETTINGS.aws_translate_region,
+        SETTINGS.aws_comprehend_region,
+    )
     return (
         set(SETTINGS.aws_bedrock_regions)
         | set(_FALLBACK_ANCHOR_REGIONS)
-        | {
-            r
-            for attr in (
-                "aws_polly_region",
-                "aws_transcribe_region",
-                "aws_translate_region",
-                "aws_comprehend_region",
-            )
-            if (r := getattr(SETTINGS, attr, None))
-        }
+        | {r for r in service_regions if r}
         | ({AWS_REGION} if AWS_REGION else set())
     ) or {"us-east-1"}
 
@@ -1520,12 +1511,19 @@ async def _load_price_catalog(diagnostics: list[str]) -> None:
 
     # type-ignore: the RegionName stub Literal lags EUSC/China (works live).
     client = get_client("pricing", endpoint)  # type: ignore[arg-type]
-    fetch_results = await asyncio.gather(
-        *(
-            _fetch_service_pricing(client, service_code, region, diagnostics)
-            for region, service_code in fetch_specs
-        )
-    )
+    # A TaskGroup cancels every sibling fetch as soon as one fails, instead of
+    # letting them run to completion against the low-quota Pricing API.
+    try:
+        async with asyncio.TaskGroup() as task_group:
+            tasks = [
+                task_group.create_task(
+                    _fetch_service_pricing(client, service_code, region, diagnostics)
+                )
+                for region, service_code in fetch_specs
+            ]
+    except* (BotoCoreError, ClientError) as group:
+        raise group.exceptions[0] from None
+    fetch_results = [task.result() for task in tasks]
 
     # Merge in deterministic fetch_specs order (not completion order) via
     # _store_price with one shared claims dict, so cross-fetch PriceKey
@@ -1733,24 +1731,20 @@ def is_model_priced(model_id: str, service: Service = Service.BEDROCK) -> bool:
 
 
 async def refresh_price_catalog_for_new_models(model_ids: Iterable[str]) -> None:
-    """Immediately refresh the price catalog if any of *model_ids* isn't priced yet.
+    """Reload the price catalog immediately if any of *model_ids* isn't priced yet.
 
-    Called by ``initialize_bedrock_models()`` when its own lazy on-demand
-    refresh (never the initial startup call, which already gets a full
-    catalog from :func:`start_price_catalog`) discovers Bedrock models that
-    weren't previously registered. Like the Bedrock model cache's own
-    on-demand refresh, this is a blocking, awaited reload that can add
-    latency to whichever request triggers it, keeping the price catalog
-    self-healing for newly released models without a proactive polling loop.
-
-    The reload is silent: its diagnostics are discarded, and AWS Pricing
-    API errors propagate to the caller.
+    Blocking and awaited: called by ``initialize_bedrock_models()`` when its
+    lazy on-demand refresh discovers unregistered Bedrock models, so the
+    catalog self-heals for newly released models without a polling loop.
+    Diagnostics from the reload are discarded.
 
     Args:
-        model_ids: Bedrock model IDs just discovered by
-            ``initialize_bedrock_models()``. No-op when cost tracking is
-            disabled, or when every given model already has at least one
-            price-catalog entry.
+        model_ids: Bedrock model IDs to check. No-op when cost tracking is
+            disabled or every given model already has a price-catalog entry.
+
+    Raises:
+        BotoCoreError: Propagated from the AWS Pricing API reload.
+        ClientError: Same as above.
     """
     if not SETTINGS.cost_tracking:
         return
@@ -1825,7 +1819,11 @@ async def _load_price_catalog_with_retry() -> None:
         diagnostics: list[str] = []
         start = perf_counter_ns()
         try:
-            await _load_price_catalog(diagnostics)
+            # Serialized with refresh_price_catalog_for_new_models against the
+            # low-quota Pricing API; _load_price_catalog never takes this lock
+            # itself, so no deadlock risk from nesting.
+            async with _state.refresh_lock:
+                await _load_price_catalog(diagnostics)
         except (BotoCoreError, ClientError) as exception:
             diagnostics.append(
                 f"Price catalog load failed ({type(exception).__name__}: "
