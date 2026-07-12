@@ -16,6 +16,7 @@ from botocore.exceptions import ClientError, EndpointConnectionError
 
 import stdapi.models
 from stdapi import region_routing
+from stdapi.config import SETTINGS
 from stdapi.models import (
     ModelDetails,
     _check_candidates,
@@ -30,6 +31,10 @@ if TYPE_CHECKING:
 
     from pydantic import JsonValue
     from types_aiobotocore_bedrock.literals import RegionName
+
+
+#: All tests in this module exercise the local implementation in-process.
+pytestmark = pytest.mark.local
 
 
 def _make_model(
@@ -399,6 +404,9 @@ class TestInitializeBedrockModelsFaultIsolation:
     ) -> None:
         """A lazy refresh surfaces the unreachable region on the request log."""
         self._patch_fetches(monkeypatch)
+        # Pin the price-catalog refresh guard so this unit test never hits
+        # the live AWS Pricing API when cost tracking is enabled.
+        monkeypatch.setattr(SETTINGS, "cost_tracking", False)
         request_log = EventLog(
             type="request",
             level="info",
@@ -414,3 +422,119 @@ class TestInitializeBedrockModelsFaultIsolation:
 
         assert request_log["level"] == "warning"
         assert "us-east-1" in _unreachable_regions(request_log["error_detail"])
+
+
+class _StubModelListClient:
+    """Stub bedrock client returning pre-defined foundation model summaries."""
+
+    def __init__(self, summaries: list[dict[str, Any]]) -> None:
+        self._summaries = summaries
+
+    async def list_foundation_models(self) -> dict[str, Any]:
+        """Return the pre-defined model summaries."""
+        return {"modelSummaries": self._summaries}
+
+
+def _summary(
+    model_id: str,
+    *,
+    status: str = "ACTIVE",
+    legacy_time: datetime | None = None,
+    eol_time: datetime | None = None,
+) -> dict[str, Any]:
+    """Build a minimal foundation model summary with the given lifecycle."""
+    lifecycle: dict[str, Any] = {"status": status}
+    if legacy_time is not None:
+        lifecycle["legacyTime"] = legacy_time
+    if eol_time is not None:
+        lifecycle["endOfLifeTime"] = eol_time
+    return {
+        "modelId": model_id,
+        "modelName": model_id,
+        "providerName": "Vendor",
+        "inputModalities": ["TEXT"],
+        "outputModalities": ["TEXT"],
+        "modelLifecycle": lifecycle,
+        "inferenceTypesSupported": ["ON_DEMAND"],
+    }
+
+
+class TestBedrockModelLifecycleFilter:
+    """_get_bedrock_models_from_region: lifecycle filtering and legacy flag."""
+
+    #: A legacy time already in the past (like Amazon Nova Reel since 2026-03).
+    _PAST = datetime(2020, 1, 1, tzinfo=UTC)
+
+    #: A lifecycle transition far in the future.
+    _FUTURE = datetime(2100, 1, 1, tzinfo=UTC)
+
+    @staticmethod
+    async def _fetch(
+        monkeypatch: pytest.MonkeyPatch,
+        summaries: list[dict[str, Any]],
+        *,
+        legacy: bool,
+    ) -> list[ModelDetails]:
+        """Run the region fetch against stubbed AWS clients."""
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_legacy", legacy)
+        client = _StubModelListClient(summaries)
+        monkeypatch.setattr(
+            stdapi.models, "get_client", lambda _service, _region: client
+        )
+
+        async def _empty_provisioned(_client: object) -> set[str]:
+            return set()
+
+        async def _empty_profiles(_client: object) -> dict[str, str]:
+            return {}
+
+        monkeypatch.setattr(
+            stdapi.models, "_get_provisioned_models", _empty_provisioned
+        )
+        monkeypatch.setattr(stdapi.models, "_get_inference_profiles", _empty_profiles)
+        return await stdapi.models._get_bedrock_models_from_region("us-east-1")  # noqa: SLF001
+
+    async def test_legacy_models_hidden_by_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Without the legacy flag, LEGACY and past-legacy-time models are hidden."""
+        models = await self._fetch(
+            monkeypatch,
+            [
+                _summary("vendor.active"),
+                _summary("vendor.legacy", status="LEGACY", legacy_time=self._PAST),
+                _summary("vendor.future-legacy", legacy_time=self._FUTURE),
+            ],
+            legacy=False,
+        )
+        assert [model.id for model in models] == [
+            "vendor.active",
+            "vendor.future-legacy",
+        ]
+        assert all(model.legacy is None for model in models)
+
+    async def test_legacy_flag_exposes_past_legacy_time_models(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With the legacy flag, models past their legacy time stay usable."""
+        models = await self._fetch(
+            monkeypatch,
+            [
+                _summary("vendor.active"),
+                _summary("vendor.legacy", status="LEGACY", legacy_time=self._PAST),
+            ],
+            legacy=True,
+        )
+        assert [model.id for model in models] == ["vendor.active", "vendor.legacy"]
+        assert models[1].legacy is True
+
+    async def test_end_of_life_models_always_hidden(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Models past their end-of-life time are hidden even with the flag."""
+        models = await self._fetch(
+            monkeypatch,
+            [_summary("vendor.eol", status="LEGACY", eol_time=self._PAST)],
+            legacy=True,
+        )
+        assert models == []

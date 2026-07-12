@@ -1227,7 +1227,11 @@ async def _get_bedrock_models_from_region(region: RegionName) -> list[ModelDetai
             inference_profiles={region: inference_profile}
             if (inference_profile := profiles.get(model["modelId"]))
             else None,
-            legacy=(model["modelLifecycle"]["status"] == "LEGACY") or None,
+            legacy=(
+                model["modelLifecycle"]["status"] == "LEGACY"
+                or (legacy_time is not None and legacy_time <= next_refresh)
+                or None
+            ),
             start_of_life_time=model["modelLifecycle"].get("startOfLifeTime"),
             end_of_life_time=model["modelLifecycle"].get("endOfLifeTime"),
             legacy_time=model["modelLifecycle"].get("legacyTime"),
@@ -1236,17 +1240,19 @@ async def _get_bedrock_models_from_region(region: RegionName) -> list[ModelDetai
             ),
         )
         for model in foundation_models["modelSummaries"]
+        # A legacy time reached before the next refresh counts as legacy.
         if (
+            (legacy_time := model["modelLifecycle"].get("legacyTime")) is None
+            or legacy_time > next_refresh
+            or SETTINGS.aws_bedrock_legacy
+        )
+        and (
             SETTINGS.aws_bedrock_legacy
             or (model["modelLifecycle"]["status"] != "LEGACY")
         )
         and (
             (eol := model["modelLifecycle"].get("endOfLifeTime")) is None
             or eol > next_refresh
-        )
-        and (
-            (legacy := model["modelLifecycle"].get("legacyTime")) is None
-            or legacy > next_refresh
         )
         and (
             (set(model["inferenceTypesSupported"]) & _INFERENCE_TYPES)
