@@ -204,6 +204,7 @@ This section provides a quick reference of all available configuration options. 
 | [`AWS_BEDROCK_GUARDRAIL_VERSION`](#aws-bedrock-guardrail-version)                                 | None    | Bedrock Guardrails version number (required with identifier)                                        |
 | [`AWS_BEDROCK_GUARDRAIL_TRACE`](#aws-bedrock-guardrail-trace)                                     | None    | Guardrails trace level: `disabled`, `enabled`, or `enabled_full`                                    |
 | [`AWS_BEDROCK_ALLOW_GUARDRAIL_OVERRIDE`](#aws-bedrock-allow-guardrail-override)                   | `false` | Allow users to override global guardrail configuration via request headers (security: default off)  |
+| [`AWS_BEDROCK_SESSION_ENCRYPTION_KEY_ARN`](#aws-bedrock-session-encryption-key-arn)               | None    | KMS key ARN encrypting AWS Bedrock session storage (Responses API `store=true`)                     |
 
 ### :material-lock: Authentication
 
@@ -1686,6 +1687,34 @@ Required if you configure Bedrock Guardrails for content filtering, or use the [
     }
     ```
 
+### Bedrock Session Storage (Optional)
+
+**Environment Variables**: none (enabled by the `store=true` request parameter)
+
+Required only if clients use `store=true` on the [Responses](api_openai_responses.md#stored-responses) or [Chat Completions](api_openai_chat_completions.md#stored-chat-completions) APIs, which persist generations in AWS Bedrock sessions.
+
+??? example "Bedrock Session Storage IAM Policy Statement"
+    ```json
+    {
+      "Sid": "BedrockSessionStorage",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:CreateSession",
+        "bedrock:CreateInvocation",
+        "bedrock:PutInvocationStep",
+        "bedrock:ListInvocations",
+        "bedrock:ListInvocationSteps",
+        "bedrock:GetInvocationStep",
+        "bedrock:EndSession",
+        "bedrock:DeleteSession",
+        "bedrock:TagResource"
+      ],
+      "Resource": "arn:aws:bedrock:*:*:session/*"
+    }
+    ```
+
+    Add `kms:Decrypt` and `kms:GenerateDataKey` on the key when [`AWS_BEDROCK_SESSION_ENCRYPTION_KEY_ARN`](#aws-bedrock-session-encryption-key-arn) is configured.
+
 ### S3 File Storage (Optional)
 
 **Environment Variables**: [`AWS_S3_BUCKET`](#aws-s3-bucket), [`AWS_S3_REGIONAL_BUCKETS`](#aws-s3-regional-buckets)
@@ -2065,6 +2094,7 @@ Required if you configure API authentication. See [Authentication](#authenticati
 | **Bedrock Marketplace Auto-Subscribe**          | `aws-marketplace:Subscribe`<br>`aws-marketplace:ViewSubscriptions`                                                                                         | `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE=true` (default)                      |
 | **Bedrock Inference Profiles & Prompt Routers** | `bedrock:GetInferenceProfile`<br>`bedrock:GetPromptRouter`                                                                                                 | `AWS_BEDROCK_ALLOW_*_ARN=true` or `AWS_BEDROCK_MODEL_ARN_MAPPING` configured |
 | **Bedrock Guardrails & Moderations**            | `bedrock:ApplyGuardrail`                                                                                                                                   | `AWS_BEDROCK_GUARDRAIL_IDENTIFIER`                                           |
+| **Stored Responses & Chat Completions**         | Bedrock session permissions (`bedrock:CreateSession`, `bedrock:*Invocation*`, `bedrock:EndSession`, `bedrock:DeleteSession`, `bedrock:TagResource`)        | `store=true` requests                                                        |
 | **File Storage**                                | `s3:PutObject`<br>`s3:PutObjectTagging`<br>`s3:GetObject`<br>`s3:DeleteObject`<br>`s3:CreateMultipartUpload`<br>`s3:UploadPart`<br>`s3:CompleteMultipartUpload`<br>`s3:AbortMultipartUpload`<br>`s3:ListMultipartUploadParts`<br>`s3:ListBucket`<br>`s3:ListBucketMultipartUploads` | `AWS_S3_BUCKET`                                                              |
 | **Video Generation**                            | Bedrock invoke permissions (incl. `bedrock:GetAsyncInvoke`, `bedrock:ListAsyncInvokes`, `bedrock:ListTagsForResource`, `bedrock:TagResource`)<br>File Storage S3 permissions on each regional bucket | `AWS_S3_REGIONAL_BUCKETS`                                                    |
 | **KMS Encrypted S3 Buckets**                    | `kms:Decrypt`<br>`kms:GenerateDataKey`<br>with `kms:ViaService` condition                                                                                  | If S3 buckets use KMS encryption                                             |
@@ -3617,6 +3647,18 @@ export AWS_BEDROCK_GUARDRAIL_TRACE=enabled
 
 ```bash
 export AWS_BEDROCK_ALLOW_GUARDRAIL_OVERRIDE=true
+```
+
+#### `AWS_BEDROCK_SESSION_ENCRYPTION_KEY_ARN` { #aws-bedrock-session-encryption-key-arn }
+
+:octicons-package-24: **Purpose**
+:   KMS key ARN encrypting the AWS Bedrock sessions that back [stored responses](api_openai_responses.md#stored-responses) (`store=true`)
+
+:octicons-gear-24: **Default**
+:   Unset — sessions are encrypted with the AWS-managed key
+
+```bash
+export AWS_BEDROCK_SESSION_ENCRYPTION_KEY_ARN=arn:aws:kms:us-east-1:123456789012:key/abcd-...
 ```
 
 !!! example "Complete Guardrail Configuration"

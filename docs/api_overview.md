@@ -38,6 +38,7 @@ stdapi.ai provides multiple interfaces for exploring and testing the API—choos
 |                   | `POST /v1/responses`              | Stateless conversational AI with tool calling and streaming                 | [Responses →](api_openai_responses.md)                 |
 |                   | `POST /v1/responses/input_tokens` | Count input tokens without generating a response                            | [Responses →](api_openai_responses.md)                 |
 |                   | `POST /v1/responses/compact`      | Compact a conversation into a reusable summary item                         | [Responses →](api_openai_responses.md)                 |
+|                   | `GET/DELETE /v1/responses/{id}`   | Retrieve, continue, or delete stored responses                              | [Responses →](api_openai_responses.md)                 |
 | **🎨 Images**     | `POST /v1/images/generations`     | Text-to-image generation                                                    | [Generations →](api_openai_images_generations.md)      |
 |                   | `POST /v1/images/edits`           | Image editing and transformations                                           | [Edits →](api_openai_images_edits.md)                  |
 |                   | `POST /v1/images/variations`      | Generate image variations                                                   | [Variations →](api_openai_images_variations.md)        |
@@ -90,6 +91,9 @@ When `ENABLE_MCP_STREAMABLE_HTTP=true` or `ENABLE_MCP_SSE=true` is configured, s
 | `openai_response`                | `POST /v1/responses`                        |
 | `openai_response_input_tokens`   | `POST /v1/responses/input_tokens`           |
 | `openai_response_compact`        | `POST /v1/responses/compact`                |
+| `openai_response_get`            | `GET /v1/responses/{response_id}`           |
+| `openai_response_delete`         | `DELETE /v1/responses/{response_id}`        |
+| `openai_response_input_items`    | `GET /v1/responses/{response_id}/input_items` |
 | `openai_image_generation`        | `POST /v1/images/generations`               |
 | `openai_image_edit`              | `POST /v1/images/edits`                     |
 | `openai_image_variation`         | `POST /v1/images/variations`                |

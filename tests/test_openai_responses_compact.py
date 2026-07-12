@@ -104,6 +104,7 @@ def chat_backend(monkeypatch: pytest.MonkeyPatch) -> _StubChatModel:
     return stub
 
 
+@pytest.mark.local
 class TestResponsesCompactRoute:
     """POST /v1/responses/compact: response shape and generation request."""
 
@@ -141,33 +142,78 @@ class TestResponsesCompactRoute:
         assert request.input[0].content == "hello"
         assert "Summarize the conversation" in str(request.input[-1].content)
 
-    def test_previous_response_id_is_rejected(
-        self, client: TestClient, chat_backend: _StubChatModel
+    def test_previous_response_id_compacts_stored_conversation(
+        self,
+        client: TestClient,
+        chat_backend: _StubChatModel,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """previous_response_id is rejected as unsupported."""
+        """A stored conversation is prepended before the compaction directive."""
+
+        async def _load(response_id: str) -> dict:
+            assert response_id == "resp-1"
+            return {"input": [{"role": "user", "content": "first"}], "response": {}}
+
+        monkeypatch.setattr(openai_responses, "load_stored_response", _load)
         response = client.post(
             "/v1/responses/compact",
-            json={"model": "m", "input": "x", "previous_response_id": "resp-1"},
+            json={"model": "m", "input": "second", "previous_response_id": "resp-1"},
         )
-        assert response.status_code == 400
-        assert "previous_response_id" in response.json()["error"]["message"]
+        assert response.status_code == 200, response.text
+        (request,) = chat_backend.requests
+        assert request.previous_response_id is None
+        assert isinstance(request.input, list)
+        assert request.input[0].content == "first"
+        assert request.input[1].content == "second"
+        assert "Summarize the conversation" in str(request.input[-1].content)
+
+    def test_unknown_previous_response_id_is_not_found(
+        self,
+        client: TestClient,
+        chat_backend: _StubChatModel,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An unknown previous_response_id surfaces as 404."""
+
+        async def _load(response_id: str) -> dict:
+            from stdapi.api_errors import ApiError  # noqa: PLC0415
+
+            msg = f"Response with id '{response_id}' not found."
+            raise ApiError(msg, status=404)
+
+        monkeypatch.setattr(openai_responses, "load_stored_response", _load)
+        response = client.post(
+            "/v1/responses/compact",
+            json={"model": "m", "input": "x", "previous_response_id": "resp-zzz"},
+        )
+        assert response.status_code == 404
         assert not chat_backend.requests
 
 
+@pytest.mark.local
 class TestCompactionItemRoundTrip:
     """Compaction items round-trip through the Responses input mapping."""
 
     async def test_compaction_item_maps_to_user_summary_message(self) -> None:
-        """The decoded summary is injected as a user message."""
+        """The decoded summary is injected as a user message.
+
+        The summary's UTF-8 bytes base64-encode to characters that differ
+        between the standard and urlsafe alphabets ('-'/'_' vs '+'/'/'),
+        catching an encode/decode alphabet mismatch.
+        """
+        summary = "Summary: \xff\xff\xff details preserved."
+        encrypted_content = encode_compaction_content(summary)
+        assert "+" not in encrypted_content
+        assert "/" not in encrypted_content
+        assert "-" in encrypted_content or "_" in encrypted_content
         item = CompactionItemParam(
-            encrypted_content=encode_compaction_content("hello world"),
-            type="compaction",
+            encrypted_content=encrypted_content, type="compaction"
         )
         messages, system = await map_input([item], None)
         assert system == []
         (message,) = messages
         assert message["role"] == "user"
-        assert "hello world" in message["content"][0]["text"]
+        assert summary in message["content"][0]["text"]
 
     async def test_invalid_compaction_content_is_rejected(self) -> None:
         """Undecodable compaction content raises a 400 error."""
@@ -180,11 +226,9 @@ class TestResponsesCompactLive:
     """Live conversation compaction and round-trip continuation."""
 
     def test_compact_and_continue(
-        self, openai_client: OpenAI, responses_model: str, use_official_api: bool
+        self, openai_client: OpenAI, responses_model: str
     ) -> None:
         """A compacted conversation carries its facts into the next turn."""
-        if use_official_api:
-            pytest.skip("compaction is model-restricted on the official API")
         compacted = openai_client.responses.compact(
             model=responses_model,
             input=[
@@ -197,8 +241,8 @@ class TestResponsesCompactLive:
         )
         assert compacted.object == "response.compaction"
         assert compacted.usage.total_tokens > 0
-        (item,) = compacted.output
-        assert item.type == "compaction"
+        # The official API may add a message item next to the compaction item.
+        item = next(part for part in compacted.output if part.type == "compaction")
         assert item.encrypted_content
 
         follow = openai_client.responses.create(
@@ -214,5 +258,6 @@ class TestResponsesCompactLive:
                     "content": "What is my favorite color? Reply with one word.",
                 },
             ],
+            store=False,
         )
         assert "teal" in follow.output_text.lower()

@@ -509,6 +509,15 @@ class _Settings(BaseSettings):
         ),
     )
 
+    aws_bedrock_session_encryption_key_arn: str | None = Field(
+        default=None,
+        description=(
+            "KMS key ARN encrypting AWS Bedrock session storage (Responses "
+            "API store=true).\n\n"
+            "Unset (default): sessions are encrypted with the AWS-managed key."
+        ),
+    )
+
     aws_transcribe_region: RegionName | None = Field(
         default=None,
         description=(

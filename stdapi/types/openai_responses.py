@@ -3730,7 +3730,9 @@ class ResponseCreateParams(BaseModelRequest):
     )
     previous_response_id: str | None = Field(
         default=None,
-        description="The unique ID of the previous response. Use to create multi-turn conversations.",
+        description="The unique ID of the previous response. Use to create "
+        "multi-turn conversations; the previous response must have been "
+        "created with `store=true`.",
     )
     prompt: ResponsePrompt | None = Field(
         default=None,
@@ -3754,7 +3756,10 @@ class ResponseCreateParams(BaseModelRequest):
     )
     store: bool | None = Field(
         default=None,
-        description="Store response for later retrieval.\nUNSUPPORTED on this implementation.",
+        description="Persist the response in AWS Bedrock session storage for "
+        "later retrieval and multi-turn continuation. Defaults to false on "
+        "this implementation. Ignored (with a request-log warning) when "
+        "streaming or when session storage is not enabled on the server.",
     )
     stream: bool | None = Field(
         default=None, description="Stream response as it is generated."
@@ -3795,7 +3800,7 @@ class ResponseCreateParams(BaseModelRequest):
     )
 
     _UNSUPPORTED: ClassVar[set[str]] = {
-        # Ignored silently: "background", "store"
+        # Ignored silently: "background"
         "context_management",
         "conversation",
         "max_tool_calls",
@@ -3919,6 +3924,17 @@ class InputTokenCountResponse(BaseModelResponse):
     input_tokens: int = Field(description="Total input token count.")
 
 
+class ResponseDeleted(BaseModelResponse):
+    """Stored response deletion confirmation."""
+
+    id: str = Field(description="Identifier of the deleted response.")
+    object: Literal["response.deleted"] = Field(
+        default="response.deleted",
+        description="The object type, which is always `response.deleted`.",
+    )
+    deleted: bool = Field(default=True, description="Whether the response was deleted.")
+
+
 # Ref: openai.resources.responses.Responses.compact (openai-python SDK)
 class CompactParams(BaseModelRequest):
     """Request body for POST /v1/responses/compact.
@@ -3936,8 +3952,8 @@ class CompactParams(BaseModelRequest):
     )
     previous_response_id: str | None = Field(
         default=None,
-        description="Previous response ID for multi-turn.\n"
-        "UNSUPPORTED on this implementation.",
+        description="ID of a stored response whose conversation is compacted "
+        "along with the new input.",
     )
     prompt_cache_key: str | None = Field(
         default=None, description="Cache key for similar requests."
@@ -3948,20 +3964,6 @@ class CompactParams(BaseModelRequest):
     service_tier: Literal["auto", "default", "flex", "scale", "priority"] | None = (
         Field(default=None, description="Service tier for request.")
     )
-
-    # Extra validations
-    _UNSUPPORTED: ClassVar[set[str]] = {"previous_response_id"}
-
-    @model_validator(mode="after")
-    def _unsupported(self) -> Self:
-        """Validate that unsupported parameters are not used.
-
-        Raises:
-            UnsupportedParameterError: If a parameter marked as unsupported is used.
-        """
-        for key in self._UNSUPPORTED & self.model_fields_set:
-            raise UnsupportedParameterError(key)
-        return self
 
 
 # Ref: openai.types.responses.compacted_response.CompactedResponse

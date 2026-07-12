@@ -8,10 +8,11 @@ The module provides:
     - POST /v1/responses/input_tokens — count input tokens without generating a response
 """
 
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Path, Query
 
+from stdapi.api_errors import ApiError
 from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
 from stdapi.config import SETTINGS
@@ -25,8 +26,17 @@ from stdapi.models.chat._adapters._openai_responses import (
 from stdapi.monitoring import (
     REQUEST_ID,
     REQUEST_TIME,
+    log_error_details,
     log_request_params,
     log_response_params,
+)
+from stdapi.responses_store import (
+    RESPONSE_ID_PATTERN,
+    delete_stored_response,
+    discard_stored_response_session,
+    load_stored_response,
+    save_stored_response,
+    try_create_stored_response_session,
 )
 from stdapi.routes._moderation import (
     apply_request_moderation,
@@ -43,11 +53,14 @@ from stdapi.types.openai_responses import (
     Response,
     ResponseCompactionItem,
     ResponseCreateParams,
+    ResponseDeleted,
     ResponseInputItem,
+    ResponseItemList,
     ResponseOutputMessage,
     ResponseOutputText,
     ResponseUsage,
 )
+from stdapi.utils import validation_error_handler
 
 if TYPE_CHECKING:
     from sse_starlette import EventSourceResponse
@@ -80,6 +93,80 @@ _COMPACTION_PROMPT = (
     "decision, constraint, open task, and tool result needed to continue it. "
     "Reply with the summary only."
 )
+
+#: Reusable path annotation for the ``response_id`` path parameter.
+_ResponseId = Annotated[
+    str, Path(description="The ID of the stored response.", pattern=RESPONSE_ID_PATTERN)
+]
+
+
+async def _merge_previous_response(
+    request: ResponseCreateParams, previous_response_id: str
+) -> ResponseCreateParams:
+    """Prepend a stored response's conversation to the request input.
+
+    Rebuilds the request with the stored input items, the stored output
+    items, and the new input, in that order. Instructions are not carried
+    over, per the OpenAI API.
+
+    Args:
+        request: The incoming request.
+        previous_response_id: ID of the stored response to continue.
+
+    Returns:
+        The rebuilt request without ``previous_response_id``.
+
+    Raises:
+        ApiError: 404 when the stored response does not exist.
+    """
+    stored = await load_stored_response(previous_response_id)
+    data = request.model_dump(mode="json", exclude_unset=True, by_alias=True)
+    data.pop("previous_response_id", None)
+    new_input = data.get("input") or []
+    if isinstance(new_input, str):
+        new_input = [{"role": "user", "content": new_input}]
+    stored_input = stored.get("input") or []
+    if isinstance(stored_input, str):
+        stored_input = [{"role": "user", "content": stored_input}]
+    data["input"] = [
+        *stored_input,
+        *stored.get("response", {}).get("output", []),
+        *new_input,
+    ]
+    with validation_error_handler():
+        return ResponseCreateParams.model_validate(data)
+
+
+def _normalized_input_items(stored_input: Any) -> list[dict[str, Any]]:  # noqa: ANN401
+    """Normalize a stored request input into listable input items.
+
+    Plain strings and string-content messages become ``message`` items with
+    content parts; every item gets an ID for cursor pagination.
+
+    Args:
+        stored_input: The ``input`` value of a stored response document.
+
+    Returns:
+        Input items as JSON objects, in conversation order.
+    """
+    raw = stored_input or []
+    if isinstance(raw, str):
+        raw = [{"role": "user", "content": raw}]
+    items: list[dict[str, Any]] = []
+    for index, entry in enumerate(raw):
+        item = dict(entry)
+        if isinstance(content := item.get("content"), str):
+            if item.get("role") == "assistant":
+                item["content"] = [
+                    {"type": "output_text", "text": content, "annotations": []}
+                ]
+            else:
+                item["content"] = [{"type": "input_text", "text": content}]
+            item.setdefault("type", "message")
+            item.setdefault("status", "completed")
+        item.setdefault("id", f"msg-{index}")
+        items.append(item)
+    return items
 
 
 @router.post(
@@ -129,21 +216,55 @@ async def create_response(
         - EventSourceResponse streaming ResponseStreamEvent events when stream is True.
 
     Raises:
-        ApiError: If model is invalid or does not support text output.
+        ApiError: If the model is invalid or ``previous_response_id`` does
+            not exist (404).
     """
     log_request_params(request, user_id=request.safety_identifier or request.user)
+    store = bool(request.store)
+    if store and request.stream:
+        log_error_details(
+            "'store' is not supported with streaming on this backend: ignored.",
+            level="warning",
+        )
+        store = False
     apply_request_moderation(request.moderation)
-    response_id = f"resp-{REQUEST_ID.get()}"
+    previous_response_id = request.previous_response_id
+    if previous_response_id:
+        request = await _merge_previous_response(request, previous_response_id)
+    model_id = (
+        await validate_model(
+            request.model, input_modality="TEXT", output_modality="TEXT"
+        )
+    ).id
+    session_id = await try_create_stored_response_session() if store else None
+    store = session_id is not None
+    response_id = f"resp-{session_id}" if store else f"resp-{REQUEST_ID.get()}"
     created_at = REQUEST_TIME.get().timestamp()
-    result = await get_chat_model(
-        (
-            await validate_model(
-                request.model, input_modality="TEXT", output_modality="TEXT"
-            )
-        ).id
-    ).create_response(request, response_id, created_at)
+    try:
+        result = await get_chat_model(model_id).create_response(
+            request, response_id, created_at
+        )
+    except BaseException:
+        if store:
+            await discard_stored_response_session(response_id)
+        raise
     if isinstance(result, Response):
         result.moderation = build_response_moderation(request.moderation)
+        if previous_response_id:
+            result.previous_response_id = previous_response_id
+        if store:
+            await save_stored_response(
+                response_id,
+                {
+                    "input": request.model_dump(
+                        mode="json", by_alias=True, include={"input"}
+                    )["input"],
+                    "instructions": request.instructions,
+                    "response": result.model_dump(
+                        mode="json", by_alias=True, exclude_none=True
+                    ),
+                },
+            )
     return result
 
 
@@ -219,8 +340,9 @@ async def count_input_tokens(
         "an opaque `compaction` item. Include that item in the `input` of later "
         "`openai_response` calls to continue the conversation with a reduced "
         "context window.\n\n"
-        "Stateless: the compaction content is self-contained, so no "
-        "conversation state is stored on the server.\n\n"
+        "The compaction content is self-contained, so no conversation state "
+        "is needed on the server; `previous_response_id` may reference a "
+        "stored response to compact its conversation too.\n\n"
         "**Find compatible models:** Call `search_models` with "
         "`mcp_tool=openai_response_compact` to discover model IDs that "
         "support this endpoint."
@@ -250,7 +372,8 @@ async def compact_response(
         CompactedResponse holding the compaction item and token usage.
 
     Raises:
-        ApiError: If the model is invalid or the request is unsupported.
+        ApiError: If the model is invalid or ``previous_response_id`` does
+            not exist (404).
     """
     log_request_params(request)
     model_id = (
@@ -274,6 +397,10 @@ async def compact_response(
         prompt_cache_retention=request.prompt_cache_retention,
         service_tier=request.service_tier,
     )
+    if request.previous_response_id:
+        generation = await _merge_previous_response(
+            generation, request.previous_response_id
+        )
     response = await get_chat_model(model_id).create_response(
         generation, response_id, created_at
     )
@@ -306,5 +433,150 @@ async def compact_response(
                 output_tokens_details=OutputTokensDetails(reasoning_tokens=0),
                 total_tokens=0,
             ),
+        )
+    )
+
+
+@router.get(
+    "/{response_id}",
+    summary="Retrieve a stored model response (OpenAI format)",
+    operation_id="openai_response_get",
+    description=(
+        "Returns a model response previously persisted with `store=true` "
+        "(OpenAI Responses API).\n\n"
+        "Stored responses live in AWS Bedrock session storage; pass their ID "
+        "as `previous_response_id` in `openai_response` to continue the "
+        "conversation."
+    ),
+    response_description="The stored response.",
+    responses={
+        200: {"description": "The stored response."},
+        404: {"description": "Response not found."},
+    },
+    response_model_exclude_none=True,
+)
+async def retrieve_response(
+    response_id: _ResponseId, _: Annotated[None, Depends(authenticate)] = None
+) -> Response:
+    """Retrieve a stored model response.
+
+    Args:
+        response_id: Stored response identifier.
+
+    Returns:
+        The stored response.
+
+    Raises:
+        ApiError: With 404 if the stored response does not exist.
+    """
+    log_request_params({"response_id": response_id})
+    stored = await load_stored_response(response_id)
+    return log_response_params(Response.model_validate(stored["response"]))
+
+
+@router.delete(
+    "/{response_id}",
+    summary="Delete a stored model response (OpenAI format)",
+    operation_id="openai_response_delete",
+    description=(
+        "Deletes a model response previously persisted with `store=true`, "
+        "along with its AWS Bedrock session (OpenAI Responses API)."
+    ),
+    response_description="Deletion confirmation.",
+    responses={
+        200: {"description": "Response deleted."},
+        404: {"description": "Response not found."},
+    },
+    response_model_exclude_none=True,
+)
+async def delete_response(
+    response_id: _ResponseId, _: Annotated[None, Depends(authenticate)] = None
+) -> ResponseDeleted:
+    """Delete a stored model response.
+
+    Args:
+        response_id: Stored response identifier.
+
+    Returns:
+        Deletion confirmation.
+
+    Raises:
+        ApiError: With 404 if the stored response does not exist.
+    """
+    log_request_params({"response_id": response_id})
+    await delete_stored_response(response_id)
+    return log_response_params(ResponseDeleted(id=response_id))
+
+
+@router.get(
+    "/{response_id}/input_items",
+    summary="List the input items of a stored model response (OpenAI format)",
+    operation_id="openai_response_input_items",
+    description=(
+        "Returns the input items that produced a stored model response "
+        "(OpenAI Responses API)."
+    ),
+    response_description="A paginated list of input items.",
+    responses={
+        200: {"description": "The input items."},
+        404: {"description": "Response not found."},
+    },
+    response_model_exclude_none=True,
+)
+async def list_response_input_items(
+    response_id: _ResponseId,
+    after: Annotated[
+        str | None,
+        Query(
+            description=(
+                "Cursor for pagination: the item ID to start after "
+                "(the last ID from a previous page)."
+            )
+        ),
+    ] = None,
+    limit: Annotated[
+        int,
+        Query(ge=1, le=100, description="A limit on the number of objects returned."),
+    ] = 20,
+    order: Annotated[
+        Literal["asc", "desc"],
+        Query(description="Sort order: `asc` is conversation order."),
+    ] = "desc",
+    _: Annotated[None, Depends(authenticate)] = None,
+) -> ResponseItemList:
+    """List the input items of a stored model response.
+
+    Args:
+        response_id: Stored response identifier.
+        after: Item ID cursor; only items strictly after it are returned.
+        limit: Maximum number of items to return.
+        order: Sort order relative to the conversation order.
+
+    Returns:
+        Paginated list of input items.
+
+    Raises:
+        ApiError: With 404 if the stored response does not exist.
+    """
+    log_request_params({"response_id": response_id, "after": after, "limit": limit})
+    stored = await load_stored_response(response_id)
+    items = _normalized_input_items(stored.get("input"))
+    if order == "desc":
+        items.reverse()
+    if after is not None:
+        index = next(
+            (i for i, item in enumerate(items) if item.get("id") == after), None
+        )
+        items = items[index + 1 :] if index is not None else []
+    page, has_more = items[:limit], len(items) > limit
+    return log_response_params(
+        ResponseItemList.model_validate(
+            {
+                "object": "list",
+                "data": page,
+                "first_id": page[0]["id"] if page else "",
+                "last_id": page[-1]["id"] if page else "",
+                "has_more": has_more,
+            }
         )
     )

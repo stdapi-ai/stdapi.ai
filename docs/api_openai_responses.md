@@ -33,6 +33,9 @@ Generate model responses with AWS Bedrock foundation models through an OpenAI Re
 | `/v1/responses`              | `POST` | Create a model response                          | AWS Bedrock Converse API    | `openai_response`              |
 | `/v1/responses/input_tokens` | `POST` | Count input tokens without generating a response | AWS Bedrock CountTokens API | `openai_response_input_tokens` |
 | `/v1/responses/compact`      | `POST` | Compact a conversation into a reusable summary   | AWS Bedrock Converse API    | `openai_response_compact`      |
+| `/v1/responses/{response_id}` | `GET`  | Retrieve a stored response                       | AWS Bedrock Sessions        | `openai_response_get`          |
+| `/v1/responses/{response_id}` | `DELETE` | Delete a stored response                       | AWS Bedrock Sessions        | `openai_response_delete`       |
+| `/v1/responses/{response_id}/input_items` | `GET` | List the input items of a stored response | AWS Bedrock Sessions   | `openai_response_input_items`  |
 
 ## Feature Compatibility
 
@@ -75,7 +78,7 @@ Generate model responses with AWS Bedrock foundation models through an OpenAI Re
 | `truncation`                                                          | :material-close-circle:{ .unsupported } | Returns `400`; Bedrock manages context automatically                         |
 | `max_tool_calls`                                                      | :material-close-circle:{ .unsupported } | Returns `400`; not supported                                                 |
 | `background`                                                          | :material-close-circle:{ .unsupported } | Returns `400`; async background mode not supported                           |
-| `store`                                                               | :material-close-circle:{ .unsupported } | Returns `400`; all responses are stateless                                   |
+| `store`                                                               |   :material-check-circle:{ .success }   | Persists the response in AWS Bedrock session storage (non-streaming)         |
 | `stream_options`                                                      | :material-close-circle:{ .unsupported } | Returns `400`; not supported                                                 |
 | `conversation`                                                        | :material-close-circle:{ .unsupported } | Returns `400`; use `previous_response_id` or `input`                         |
 | `prompt` (template reference)                                         | :material-close-circle:{ .unsupported } | Returns `400`; not supported                                                 |
@@ -86,7 +89,7 @@ Generate model responses with AWS Bedrock foundation models through an OpenAI Re
 | `text.format: "json_object"`                                          |      :material-cog:{ .model-dep }       | JSON object output via Bedrock outputConfig                                  |
 | `text.format: "json_schema"`                                          |      :material-cog:{ .model-dep }       | Structured JSON output with schema validation                                |
 | **Multi-Turn**                                                        |                                         |                                                                              |
-| `previous_response_id`                                                | :material-close-circle:{ .unsupported } | Not supported; pass full conversation history in `input`                     |
+| `previous_response_id`                                                |   :material-check-circle:{ .success }   | Continues a response stored with `store=true`                                |
 | Compaction (`POST /v1/responses/compact`)                             |   :material-check-circle:{ .success }   | Stateless summary item; send it back in `input` to continue                  |
 | **Streaming**                                                         |                                         |                                                                              |
 | `stream: true`                                                        |   :material-check-circle:{ .success }   | SSE stream with full lifecycle events                                        |
@@ -636,6 +639,30 @@ curl -X POST "$BASE/v1/responses/input_tokens" \
 !!! note "Limitations"
     The `previous_response_id`, `conversation`, and `personality` parameters are not supported for token counting.
 
+## Stored Responses
+
+Set `store: true` to persist a response in [AWS Bedrock session storage](https://docs.aws.amazon.com/bedrock/latest/userguide/sessions.html): one AWS-managed session per stored response, encrypted at rest (optionally with [your own KMS key](operations_configuration.md#aws-bedrock-session-encryption-key-arn)), with no state on the server itself.
+
+```bash
+curl -X POST "$BASE/v1/responses" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "amazon.nova-micro-v1:0", "input": "Hello!", "store": true}'
+```
+
+The returned `id` then works with:
+
+- `GET /v1/responses/{response_id}` — retrieve the stored response.
+- `GET /v1/responses/{response_id}/input_items` — list the input items that produced it.
+- `DELETE /v1/responses/{response_id}` — delete it (and its AWS Bedrock session).
+- `previous_response_id` on a new request — continue the conversation: the stored input and output are automatically prepended to the new input (instructions are not carried over, per the OpenAI API).
+
+!!! note "Behavior notes"
+    - `store` defaults to **false** on this implementation (the OpenAI API defaults to true).
+    - `store=true` is ignored with `stream=true` (a warning is recorded in the request log).
+    - Sessions are created in the primary Bedrock region and persist until deleted through the API.
+    - Requires the AWS Bedrock session management IAM permissions (`bedrock:CreateSession`, `bedrock:CreateInvocation`, `bedrock:PutInvocationStep`, `bedrock:GetInvocationStep`, `bedrock:ListInvocationSteps`, `bedrock:ListInvocations`, `bedrock:EndSession`, `bedrock:DeleteSession`, `bedrock:TagResource`). Without them, `store=true` is ignored (with a request-log warning) and the response is not persisted.
+
 ## Conversation Compaction
 
 Compact a long conversation into a single `compaction` item to keep multi-turn sessions within the context window. The model summarises the provided `input`; the summary comes back as an opaque item that you include in the `input` of later requests instead of the full history.
@@ -680,7 +707,7 @@ Continue the conversation by sending the compaction item back, followed by new m
 ```
 
 !!! note "Stateless compaction"
-    The compaction content is fully self-contained (encoded, not encrypted): the server stores no conversation state, and any server instance can expand it. The `previous_response_id` parameter is not supported — always pass the compaction item explicitly.
+    The compaction content is fully self-contained (encoded, not encrypted): no conversation state is needed, and any server instance can expand it. `previous_response_id` may reference a [stored response](#stored-responses) to include its conversation in the compaction.
 
 ---
 
