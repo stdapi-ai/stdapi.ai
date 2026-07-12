@@ -46,12 +46,13 @@ test = [
     "httpx",
     "openai",
     "anthropic[bedrock]",
+    "cohere>=7.0.5",
 ]
 lint = [
     "stdapi[opentelemetry, uvicorn]",
     "mypy",
     "ruff",
-    "types-aiobotocore[bedrock, bedrock-runtime, polly, comprehend, meteringmarketplace, pricing, s3, sts, transcribe, translate]",
+    "types-aiobotocore[bedrock, bedrock-agent-runtime, bedrock-runtime, polly, comprehend, meteringmarketplace, pricing, s3, sts, transcribe, translate]",
     "types-PyYAML",
 ]
 docs = [

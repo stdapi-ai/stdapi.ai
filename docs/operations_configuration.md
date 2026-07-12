@@ -220,6 +220,7 @@ Choose **one** method (mutually exclusive):
 |-------------------------------------------------------|--------------|------------------------------------------------------|
 | [`OPENAI_ROUTES_PREFIX`](#openai-routes-prefix)       |              | Base path prefix for OpenAI-compatible API routes    |
 | [`ANTHROPIC_ROUTES_PREFIX`](#anthropic-routes-prefix) | `/anthropic` | Base path prefix for Anthropic-compatible API routes |
+| [`COHERE_ROUTES_PREFIX`](#cohere-routes-prefix)       | `/cohere`    | Base path prefix for Cohere-compatible API routes    |
 
 ### :material-chart-line: Logging
 
@@ -1553,7 +1554,8 @@ These permissions are mandatory for stdapi.ai to discover and invoke Bedrock mod
         "bedrock:GetAsyncInvoke",
         "bedrock:InvokeModel",
         "bedrock:InvokeModelWithResponseStream",
-        "bedrock:InvokeTool"
+        "bedrock:InvokeTool",
+        "bedrock:Rerank"
       ],
       "Resource": "*"
     },
@@ -1884,7 +1886,8 @@ Required if you configure API authentication. See [Authentication](#authenticati
             "bedrock:GetAsyncInvoke",
             "bedrock:InvokeModel",
             "bedrock:InvokeModelWithResponseStream",
-            "bedrock:InvokeTool"
+            "bedrock:InvokeTool",
+            "bedrock:Rerank"
           ],
           "Resource": "*"
         },
@@ -1936,7 +1939,8 @@ Required if you configure API authentication. See [Authentication](#authenticati
             "bedrock:GetAsyncInvoke",
             "bedrock:InvokeModel",
             "bedrock:InvokeModelWithResponseStream",
-            "bedrock:InvokeTool"
+            "bedrock:InvokeTool",
+            "bedrock:Rerank"
           ],
           "Resource": "*"
         },
@@ -2017,7 +2021,7 @@ Required if you configure API authentication. See [Authentication](#authenticati
 
 | Feature                                         | Required Permissions                                                                                                                                       | Configuration                                                                |
 |-------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------|
-| **Bedrock Models (Invoke)**                     | `bedrock:CountTokens`<br>`bedrock:InvokeModel`<br>`bedrock:InvokeModelWithResponseStream`<br>`bedrock:InvokeTool`<br>`bedrock:TagResource` (on `arn:aws:bedrock:*:*:async-invoke/*`)                                          | Always required                                                              |
+| **Bedrock Models (Invoke)**                     | `bedrock:CountTokens`<br>`bedrock:InvokeModel`<br>`bedrock:InvokeModelWithResponseStream`<br>`bedrock:InvokeTool`<br>`bedrock:Rerank`<br>`bedrock:TagResource` (on `arn:aws:bedrock:*:*:async-invoke/*`)                                          | Always required                                                              |
 | **Bedrock Models (Discovery)**                  | `bedrock:ListFoundationModels`<br>`bedrock:GetFoundationModelAvailability`<br>`bedrock:ListProvisionedModelThroughputs`<br>`bedrock:ListInferenceProfiles` | Always required                                                              |
 | **Bedrock Marketplace Auto-Subscribe**          | `aws-marketplace:Subscribe`<br>`aws-marketplace:ViewSubscriptions`                                                                                         | `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE=true` (default)                      |
 | **Bedrock Inference Profiles & Prompt Routers** | `bedrock:GetInferenceProfile`<br>`bedrock:GetPromptRouter`                                                                                                 | `AWS_BEDROCK_ALLOW_*_ARN=true` or `AWS_BEDROCK_MODEL_ARN_MAPPING` configured |
@@ -2208,6 +2212,26 @@ export ANTHROPIC_ROUTES_PREFIX=/anthropic
     ```
 
     This would mount the Messages API at `/api/anthropic/v1/messages`
+
+#### `COHERE_ROUTES_PREFIX` { #cohere-routes-prefix }
+
+:octicons-package-24: **Purpose**
+:   Base path prefix for Cohere-compatible API routes
+
+:octicons-gear-24: **Default**
+:   `/cohere`
+
+:octicons-workflow-24: **Effect**
+:   All Cohere-compatible endpoints will be mounted under this prefix
+
+```bash
+export COHERE_ROUTES_PREFIX=/cohere
+```
+
+!!! example "Example Endpoints"
+    With the default prefix `/cohere`, endpoints are available at:
+
+    - `/cohere/v2/rerank`
 
 ---
 

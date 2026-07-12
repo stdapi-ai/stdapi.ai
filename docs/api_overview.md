@@ -65,6 +65,12 @@ stdapi.ai provides multiple interfaces for exploring and testing the API—choos
 |                 | `GET /anthropic/v1/models/{model_id}`      | Retrieve model details                                        | [Models →](api_anthropic_models.md)     |
 | **📁 Files**    | `POST/GET/DELETE /anthropic/v1/files`      | Upload, list, retrieve, download, delete files                | [Files →](api_anthropic_files.md)       |
 
+### ![Cohere](styles/logo_cohere.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Cohere-Compatible API
+
+| Category      | Endpoint                 | Capability                                     | Documentation                     |
+|---------------|--------------------------|------------------------------------------------|-----------------------------------|
+| **🔀 Rerank** | `POST /cohere/v2/rerank` | Rank documents by semantic relevance to a query | [Rerank →](api_cohere_rerank.md) |
+
 ## :material-tools: MCP (Model Context Protocol)
 
 When `ENABLE_MCP_STREAMABLE_HTTP=true` or `ENABLE_MCP_SSE=true` is configured, stdapi.ai exposes all its endpoints as MCP tools. The tool names follow the pattern `provider_action`.
@@ -107,6 +113,8 @@ When `ENABLE_MCP_STREAMABLE_HTTP=true` or `ENABLE_MCP_SSE=true` is configured, s
 | `anthropic_files_get`            | `GET /anthropic/v1/files/{file_id}`         |
 | `anthropic_files_delete`         | `DELETE /anthropic/v1/files/{file_id}`      |
 | `anthropic_file_content`         | `GET /anthropic/v1/files/{file_id}/content` |
+| **Cohere Tools**                 |                                             |
+| `cohere_rerank`                  | `POST /cohere/v2/rerank`                    |
 | **Native Extension Tools**       |                                             |
 | `search_models`                  | `GET /search_models`                        |
 | `model_pricing`                  | `GET /model_pricing`                        |
@@ -141,6 +149,16 @@ That's it. Your application continues to work without any code changes—just po
 
 Your Anthropic SDK applications continue to work without any code changes—just point them to stdapi.ai instead of Anthropic.
 
+### ![Cohere](styles/logo_cohere.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Using the Cohere-Compatible API
+
+**To connect your Cohere rerank application:**
+
+1. **Replace the Cohere API URL** (`https://api.cohere.com`) with your stdapi.ai deployment URL + `/cohere` (e.g., `https://your-endpoint.com/cohere`)
+2. **Use the same authentication mechanism** (Bearer token in the `Authorization` header)
+3. **Use AWS Bedrock rerank model IDs** (e.g., `cohere.rerank-v3-5:0`)
+
+Your Cohere rerank integrations continue to work without any code changes—just point them to stdapi.ai instead of Cohere.
+
 ## :material-arrow-right: Next Steps
 
 <div class="grid cards" markdown>
@@ -149,6 +167,7 @@ Your Anthropic SDK applications continue to work without any code changes—just
 - :material-image: [**Images**](api_openai_images_generations.md) — Generation, edits, and variations
 - :material-music: [**Audio**](api_openai_audio_speech.md) — Text-to-speech, transcription, and translation
 - :material-vector-polyline: [**Embeddings**](api_openai_embeddings.md) — Vector embeddings for search and RAG
+- :material-sort: [**Rerank**](api_cohere_rerank.md) — Cohere-compatible document reranking for search and RAG
 - :material-format-list-bulleted: [**Models**](api_openai_models.md) — List and discover available models
 - :material-magnify: [**Search Models**](api_search_models.md) — Filter models by capability, modality, route, or MCP tool
 - :material-currency-usd: [**Model Pricing**](api_model_pricing.md) — Exact AWS unit prices for cost-aware model selection

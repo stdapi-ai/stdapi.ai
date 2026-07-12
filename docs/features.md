@@ -106,6 +106,15 @@ Your existing applications, SDKs, and tools work immediately — no plugins or c
 !!! note "Route prefix"
     Anthropic-compatible routes are prefixed with `/anthropic` by default (e.g., `/anthropic/v1/messages`). The prefix is configurable via `ANTHROPIC_ROUTES_PREFIX`.
 
+**Cohere-Compatible:**
+
+| Endpoint     | Capability                                   | AWS Backend            |
+|--------------|----------------------------------------------|------------------------|
+| `/v2/rerank` | Document reranking by relevance to a query   | AWS Bedrock Rerank API |
+
+!!! note "Route prefix"
+    Cohere-compatible routes are prefixed with `/cohere` by default (e.g., `/cohere/v2/rerank`). The prefix is configurable via `COHERE_ROUTES_PREFIX`.
+
 **stdapi.ai Native:**
 
 | Endpoint                     | Capability                                                                | AWS Backend                          |
@@ -523,7 +532,7 @@ All four solutions below expose an OpenAI-compatible API in front of AWS Bedrock
 | **OpenAI STT (transcription)**              |  :material-check:{ .green-check }   |                    —                    |                    —                    |                    —                    |
 | **OpenAI Files & Uploads API**              |  :material-check:{ .green-check }   |                    —                    |                    —                    |                    —                    |
 | **OpenAI Realtime API**                     |                  —                  |    :material-check:{ .green-check }     |                    —                    |                    —                    |
-| **Cohere Rerank API**                       |                  —                  |    :material-check:{ .green-check }     |                    —                    |                    —                    |
+| **Cohere Rerank API**                       |  :material-check:{ .green-check }   |    :material-check:{ .green-check }     |                    —                    |                    —                    |
 | **Integrated MCP server**                   |  :material-check:{ .green-check }   |                    —                    |                    —                    |                    —                    |
 | **Bedrock Full model catalog**              |  :material-check:{ .green-check }   | :material-check:{ .yellow-check } [^1]  | :material-check:{ .yellow-check } [^10] | :material-check:{ .yellow-check } [^2]  |
 | **Multimodal inputs**                       | text · image · audio · video · docs |           text · image · docs           |              text · image               |              text · image               |

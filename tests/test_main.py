@@ -2,9 +2,26 @@
 
 from __future__ import annotations
 
-import pytest
+from typing import TYPE_CHECKING
 
-from stdapi.main import _upstream_service_name
+import pytest
+from botocore.exceptions import ClientError
+from starlette.requests import Request
+
+from stdapi.main import _upstream_service_name, handle_exception_group
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+
+@pytest.fixture(autouse=True)
+def _request_log_context() -> Iterator[None]:
+    """Provide the request-log context that logging outside request scope needs."""
+    from stdapi.monitoring import REQUEST_LOG  # noqa: PLC0415
+
+    token = REQUEST_LOG.set({"level": "info"})  # type: ignore[typeddict-item]
+    yield
+    REQUEST_LOG.reset(token)
 
 
 class _FakeConnectionError:
@@ -38,6 +55,41 @@ def test_upstream_service_name_hides_unknown_endpoint() -> None:
 def test_upstream_service_name_handles_missing_endpoint() -> None:
     """An error without an endpoint URL yields the generic name."""
     assert _upstream_service_name(_FakeConnectionError("")) == "The upstream service"  # type: ignore[arg-type]
+
+
+def _request() -> Request:
+    """Return a minimal HTTP request for exception handlers.
+
+    Returns:
+        Starlette request with an empty GET scope.
+    """
+    return Request(
+        {"type": "http", "method": "GET", "path": "/v1/models", "headers": []}
+    )
+
+
+class _ValidationException(ClientError):  # noqa: N818 - mirrors the AWS exception name
+    """Modeled botocore subclass, as raised by aiobotocore service clients."""
+
+
+class TestHandleExceptionGroup:
+    """Handler resolution for TaskGroup-wrapped exceptions."""
+
+    async def test_client_error_subclass_resolves_to_botocore_handler(self) -> None:
+        """A ClientError subclass inside an ExceptionGroup must not 500."""
+        error = _ValidationException(
+            {"Error": {"Code": "ValidationException", "Message": "bad input"}},
+            "Converse",
+        )
+        group = ExceptionGroup("task group", [error])
+        response = await handle_exception_group(_request(), group)
+        assert response.status_code == 400
+
+    async def test_unhandled_exception_reraises_the_group(self) -> None:
+        """Groups holding unhandled exception types propagate unchanged."""
+        group = ExceptionGroup("task group", [RuntimeError("boom")])
+        with pytest.raises(ExceptionGroup):
+            await handle_exception_group(_request(), group)
 
 
 class TestBotocoreConnectionErrorHandler:

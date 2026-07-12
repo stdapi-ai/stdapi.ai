@@ -30,6 +30,7 @@ from stdapi.auth import initialize_authentication
 from stdapi.aws import (
     AWSConnectionManager,
     initialize_aws_account_info,
+    raise_first_exception,
     service_regions,
 )
 from stdapi.aws_bedrock import (
@@ -106,15 +107,24 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                     ("bedrock-runtime", region)
                     for region in SETTINGS.aws_bedrock_regions
                 ),
+                *(
+                    ("bedrock-agent-runtime", region)
+                    for region in SETTINGS.aws_bedrock_regions
+                ),
                 *(("transcribe", region) for region in transcribe_regions),
                 *(
                     ("translate", region)
                     for region in service_regions(SETTINGS.aws_translate_region)
                 ),
+                # Only warmed when cost tracking is enabled: its sole
+                # consumer (the price catalog loader) otherwise no-ops.
                 # None (GovCloud, no Price List endpoint) warms the default
                 # client, which the never-loading catalog then never uses.
-                # type-ignore: the RegionName stub Literal lags EUSC (works live).
-                ("pricing", pricing_endpoint_region()),  # type: ignore[arg-type]
+                *(
+                    (("pricing", pricing_endpoint_region()),)
+                    if SETTINGS.cost_tracking
+                    else ()
+                ),
                 *(("s3", region) for region in transcribe_regions),
                 ("s3", SETTINGS.aws_bedrock_regions[0]),
                 ("s3.accelerate", SETTINGS.aws_bedrock_regions[0]),
@@ -137,13 +147,16 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                         server_id=server.SERVER_NAME,
                         server_version=SERVER_FULL_VERSION,
                     )
-                    await gather(
-                        initialize_authentication(start_event),
-                        initialize_bedrock_models(start_event),
-                        initialize_polly_models(start_event),
-                        initialize_transcribe_models(),
-                        register(start_event),
-                        initialize_aws_account_info(),
+                    raise_first_exception(
+                        await gather(
+                            initialize_authentication(start_event),
+                            initialize_bedrock_models(start_event),
+                            initialize_polly_models(start_event),
+                            initialize_transcribe_models(),
+                            register(start_event),
+                            initialize_aws_account_info(),
+                            return_exceptions=True,
+                        )
                     )
                     update_unified_models_collections()
                 if region_latencies:
@@ -157,8 +170,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                 if deprecated := SETTINGS.deprecated():
                     add_server_warning(
                         start_event,
-                        f"Deprecated settings ignored (token estimation removed): "
-                        f"{', '.join(deprecated)}",
+                        f"Ignored deprecated settings: {', '.join(deprecated)}",
                     )
                 start_event["server_start_time_ms"] = (time_ns() - start) // 1000000
                 write_log_event(start_event)
@@ -490,5 +502,13 @@ async def handle_exception_group(request: Request, exc: ExceptionGroup) -> JSONR
         first = handled_exceptions.exceptions[0]
         while isinstance(first, BaseExceptionGroup):
             first = first.exceptions[0]
-        return await _EXCEPTION_HANDLERS[first.__class__](request, first)
+        # First matching handler wins: exc.split() matches subclasses too
+        # (e.g. botocore's ClientError subclasses), so an exact-class lookup
+        # would miss them.
+        handler = next(
+            handler
+            for cls, handler in _EXCEPTION_HANDLERS.items()
+            if isinstance(first, cls)
+        )
+        return await handler(request, first)
     raise exc

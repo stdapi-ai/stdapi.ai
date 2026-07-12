@@ -578,6 +578,10 @@ class _Settings(BaseSettings):
         default="/anthropic", description="Anthropic API compatible routes prefix"
     )
 
+    cohere_routes_prefix: str = Field(
+        default="/cohere", description="Cohere API compatible routes prefix"
+    )
+
     api_key: SecretStr | None = Field(
         default=None,
         description=(

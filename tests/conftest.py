@@ -11,6 +11,7 @@ from pathlib import Path
 from secrets import token_hex
 from typing import TYPE_CHECKING
 
+import cohere
 import pytest
 from aiobotocore.session import get_session
 from anthropic import Anthropic, AnthropicBedrock, BadRequestError, NotFoundError
@@ -840,6 +841,70 @@ def is_bedrock_direct(anthropic_client: Anthropic) -> bool:
     and does not support ``code_execution`` or ``web_fetch`` tool types.
     """
     return isinstance(anthropic_client, AnthropicBedrock)
+
+
+# ---------------------------------------------------------------------------
+# Cohere API fixtures (shared across Cohere test modules)
+# ---------------------------------------------------------------------------
+
+#: Model mappings for Cohere-compatible route tests.
+COHERE_MODEL_MAPPINGS: dict[str, dict[str, str]] = {
+    "local": {
+        "embed_multilingual": "cohere.embed-multilingual-v3",
+        "embed_v4": "cohere.embed-v4:0",
+        "rerank": "cohere.rerank-v3-5:0",
+    },
+    "cohere": {
+        "embed_multilingual": "embed-multilingual-v3.0",
+        "embed_v4": "embed-v4.0",
+        "rerank": "rerank-v3.5",
+    },
+}
+
+
+@pytest.fixture(scope="session")
+def cohere_models(use_official_api: bool) -> dict[str, str]:
+    """Get Cohere model mappings based on test target."""
+    return COHERE_MODEL_MAPPINGS["cohere" if use_official_api else "local"]
+
+
+@pytest.fixture(scope="session")
+def cohere_embed_multilingual_model(cohere_models: dict[str, str]) -> str:
+    """Provide the appropriate multilingual Cohere embed model."""
+    return cohere_models["embed_multilingual"]
+
+
+@pytest.fixture(scope="session")
+def cohere_embed_v4_model(cohere_models: dict[str, str]) -> str:
+    """Provide the appropriate Cohere embed v4 model (images, output_dimension)."""
+    return cohere_models["embed_v4"]
+
+
+@pytest.fixture(scope="session")
+def cohere_rerank_model(cohere_models: dict[str, str]) -> str:
+    """Provide the appropriate Cohere rerank model."""
+    return cohere_models["rerank"]
+
+
+@pytest.fixture(scope="session")
+def cohere_client(
+    request: pytest.FixtureRequest, test_client: TestClient | None, api_key: str
+) -> cohere.ClientV2:
+    """Create a Cohere client for either local or official API testing."""
+    if test_client:
+        return cohere.ClientV2(
+            api_key=api_key,
+            base_url="http://testserver/cohere",
+            httpx_client=test_client,
+        )
+    if request.config.getoption("--use-official-api"):
+        if not getenv("CO_API_KEY"):
+            pytest.skip("CO_API_KEY is required to test the official Cohere API")
+        return cohere.ClientV2()
+    return cohere.ClientV2(
+        api_key=getenv("OPENAI_API_KEY", ""),
+        base_url=f"{request.config.getoption('--server-url').rstrip('/')}/cohere",
+    )
 
 
 @pytest.hookimpl(hookwrapper=True)

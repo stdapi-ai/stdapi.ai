@@ -72,6 +72,8 @@ nav:
             - Messages: api_anthropic_messages.md
             - Files: api_anthropic_files.md
             - Models: api_anthropic_models.md
+          - Cohere Compatible:
+            - Rerank: api_cohere_rerank.md
           - Native Extensions:
             - Search Models: api_search_models.md
             - Model Pricing: api_model_pricing.md

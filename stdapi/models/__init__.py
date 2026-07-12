@@ -129,6 +129,9 @@ _GLOBAL_INFERENCE_PROFILE_PREFIX: Final = "global."
 #: Built-in Bedrock tool names billed per invocation (counted from toolUse blocks).
 _BILLED_GROUNDING_TOOLS: Final[frozenset[str]] = frozenset({"nova_grounding"})
 
+#: Output modality advertised by rerank models (relevance rankings, not text).
+RERANKING_MODALITY: str = "RERANKING"
+
 # Keep stdapi.pricing model-agnostic: its model-key table is owned here.
 register_model_key_overrides(MODEL_KEY_OVERRIDES)
 register_default_prices(DEFAULT_MODEL_PRICES, DEFAULT_MODEL_PRICE_REGIONS)
@@ -363,9 +366,6 @@ class ModelBase[RequestT, ResponseT]:
 
     #: Whether the model supports ``s3Location`` for document content blocks in the Bedrock Converse API.
     S3_LOCATION_DOCUMENT_SUPPORTED: ClassVar[bool] = True
-
-    #: Route operation IDs this class cannot serve despite matching modalities.
-    UNSUPPORTED_OPERATIONS: ClassVar[frozenset[str]] = frozenset()
 
     @classmethod
     def get_supported_operations(cls) -> Capability:
@@ -989,6 +989,30 @@ def _find_model_class(model_id: str) -> type[ModelBase[Any, Any]] | None:
     return best
 
 
+def _advertised_output_modalities(
+    model_id: str, output_modalities: list[str]
+) -> list[str]:
+    """Return the output modalities to advertise for a Bedrock model.
+
+    Bedrock lists rerank models with a TEXT output modality; they are
+    advertised with the dedicated RERANKING modality instead, since they only
+    produce relevance rankings.
+
+    Args:
+        model_id: Bedrock model identifier.
+        output_modalities: Output modalities from the Bedrock listing.
+
+    Returns:
+        Output modalities to advertise.
+    """
+    model_class = _find_model_class(model_id)
+    if model_class is not None and (
+        Capability.RERANK & model_class.get_supported_operations()
+    ):
+        return [RERANKING_MODALITY]
+    return output_modalities
+
+
 def _compute_model_capabilities(
     model_id: str, model: ModelDetails
 ) -> tuple[list[str], list[str]]:
@@ -1007,16 +1031,11 @@ def _compute_model_capabilities(
         if model_class is not None
         else Capability(0)
     )
-    unsupported = (
-        model_class.UNSUPPORTED_OPERATIONS if model_class is not None else frozenset()
-    )
     input_mods = model.input_modalities
     output_mods = model.output_modalities
     routes: list[str] = []
     tools: list[str] = []
     for op_id, cap in ROUTE_CAPABILITIES.items():
-        if op_id in unsupported:
-            continue
         if cap.required_input_modality not in input_mods:
             continue
         if cap.required_output_modality not in output_mods:
@@ -1200,7 +1219,10 @@ async def _get_bedrock_models_from_region(region: RegionName) -> list[ModelDetai
             provider=model["providerName"],
             regions=[region],
             input_modalities=model["inputModalities"],  # type: ignore[arg-type]
-            output_modalities=model["outputModalities"],  # type: ignore[arg-type]
+            output_modalities=_advertised_output_modalities(
+                model["modelId"],
+                model["outputModalities"],  # type: ignore[arg-type]
+            ),
             response_streaming=model.get("responseStreamingSupported"),
             inference_profiles={region: inference_profile}
             if (inference_profile := profiles.get(model["modelId"]))
