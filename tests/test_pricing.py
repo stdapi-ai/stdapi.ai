@@ -3400,3 +3400,144 @@ async def _unclaimed_bedrock_price_list_models(
         for name in model_names
         if (key := normalize_model_key(name)) not in claimed_keys
     )
+
+
+class TestModelPrices:
+    """model_prices(): filtered, sorted read of one model's price rows."""
+
+    @staticmethod
+    def _seed(monkeypatch: pytest.MonkeyPatch) -> dict[PriceKey, Price]:
+        """Seed a small multi-axis card for one model plus a decoy model."""
+        rows = {
+            PriceKey(
+                Service.BEDROCK,
+                "cardmodel",
+                "us-east-1",
+                Dimension.INPUT_TOKENS,
+                "standard",
+            ): Price(Decimal("0.000003"), "USD"),
+            PriceKey(
+                Service.BEDROCK,
+                "cardmodel",
+                "us-east-1",
+                Dimension.INPUT_TOKENS,
+                "flex",
+            ): Price(Decimal("0.0000015"), "USD"),
+            PriceKey(
+                Service.BEDROCK,
+                "cardmodel",
+                "us-east-1",
+                Dimension.INPUT_TOKENS,
+                "standard",
+                "",
+                "",
+                "",
+                "long",
+            ): Price(Decimal("0.000006"), "USD"),
+            PriceKey(
+                Service.BEDROCK,
+                "cardmodel",
+                "us-east-1",
+                Dimension.CACHE_WRITE_TOKENS,
+                "standard",
+                "5m",
+            ): Price(Decimal("0.00000375"), "USD"),
+            PriceKey(
+                Service.BEDROCK,
+                "cardmodel",
+                "us-east-1",
+                Dimension.OUTPUT_TOKENS,
+                "standard",
+                "",
+                "global",
+            ): Price(Decimal("0.000015"), "USD"),
+            PriceKey(
+                Service.BEDROCK,
+                "cardmodel",
+                "eu-west-1",
+                Dimension.INPUT_TOKENS,
+                "standard",
+            ): Price(Decimal("0.0000033"), "USD"),
+            PriceKey(
+                Service.BEDROCK,
+                "cardmodel",
+                "us-east-1",
+                Dimension.OUTPUT_IMAGES,
+                "standard",
+                "",
+                "",
+                "1024:standard",
+            ): Price(Decimal("0.04"), "USD"),
+            PriceKey(
+                Service.BEDROCK,
+                "othermodel",
+                "us-east-1",
+                Dimension.INPUT_TOKENS,
+                "standard",
+            ): Price(Decimal("0.5"), "USD"),
+        }
+        for key, price in rows.items():
+            monkeypatch.setitem(pricing._state.price_index, key, price)  # noqa: SLF001
+        return rows
+
+    def test_returns_only_the_requested_model_sorted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only the model's rows are returned, region-major sorted."""
+        self._seed(monkeypatch)
+        rows = pricing.model_prices("amazon.cardmodel-v1:0")
+        assert len(rows) == 7
+        assert all(key.model == "cardmodel" for key, _ in rows)
+        assert [key.region for key, _ in rows] == ["eu-west-1"] + ["us-east-1"] * 6
+
+    def test_axis_filters_combine_with_and(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Region, tier, and dimension filters intersect."""
+        self._seed(monkeypatch)
+        rows = pricing.model_prices(
+            "amazon.cardmodel-v1:0",
+            region="us-east-1",
+            tier="standard",
+            dimensions={Dimension.INPUT_TOKENS},
+        )
+        assert [(key.dimension, key.context) for key, _ in rows] == [
+            (Dimension.INPUT_TOKENS, ""),
+            (Dimension.INPUT_TOKENS, "long"),
+        ]
+
+    def test_variants_false_keeps_only_base_rows_and_specs(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The base card drops tier/TTL/routing/context variants, keeps specs."""
+        self._seed(monkeypatch)
+        rows = pricing.model_prices("amazon.cardmodel-v1:0", variants=False)
+        assert {(key.dimension, key.spec, key.region) for key, _ in rows} == {
+            (Dimension.INPUT_TOKENS, "", "us-east-1"),
+            (Dimension.INPUT_TOKENS, "", "eu-west-1"),
+            (Dimension.OUTPUT_IMAGES, "1024:standard", "us-east-1"),
+        }
+
+    def test_routing_and_context_filters(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Routing and context filters match their exact rows."""
+        self._seed(monkeypatch)
+        (global_row,) = pricing.model_prices("amazon.cardmodel-v1:0", routing="global")
+        assert global_row[0].dimension is Dimension.OUTPUT_TOKENS
+        (long_row,) = pricing.model_prices("amazon.cardmodel-v1:0", context="long")
+        assert long_row[1].amount == Decimal("0.000006")
+
+    def test_model_key_overrides_are_resolved(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An aliased/overridden model ID reads the same rows."""
+        self._seed(monkeypatch)
+        pricing.register_model_key_overrides({"vendor.other-alias-v9:9": "cardmodel"})
+        try:
+            assert len(pricing.model_prices("vendor.other-alias-v9:9")) == 7
+        finally:
+            pricing._MODEL_KEY_OVERRIDES.pop("vendor.other-alias-v9:9", None)  # noqa: SLF001
+
+    def test_unknown_model_returns_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A model with no indexed rows yields an empty list, not an error."""
+        self._seed(monkeypatch)
+        assert pricing.model_prices("vendor.unknown-v1:0") == []

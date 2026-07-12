@@ -235,6 +235,8 @@ When `COST_TRACKING=true` is enabled, stdapi.ai computes real-time costs from li
 
 ### How It Works
 
+The loaded catalog is also queryable through the [Model Pricing API](api_model_pricing.md) (`GET /model_pricing`) for cost-aware model selection.
+
 1. **Price Catalog**: At startup, stdapi.ai fetches the AWS Price List API for all configured regions and services, then caches in memory
 2. **On-Demand Refresh**: The catalog is refreshed whenever a newly available Bedrock model is discovered with no catalog entry yet — not on a proactive schedule
 3. **Per-Request Computation**: For each request, costs are computed by multiplying billed quantities by the resolved unit price

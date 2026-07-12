@@ -30,7 +30,7 @@ import asyncio
 import json
 import math
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Final, Literal
@@ -40,6 +40,7 @@ from stdapi.config import AWS_REGION, SETTINGS
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
+    from collections.abc import Set as AbstractSet
 
     from types_aiobotocore_pricing.client import PricingClient
 
@@ -1562,6 +1563,151 @@ def _all_models_priced(
     """
     priced_keys = {key.model for key in _state.price_index if key.service == service}
     return all(resolve_model_key(model_id) in priced_keys for model_id in model_ids)
+
+
+def price_catalog_ready() -> bool:
+    """Whether the price catalog has completed its initial load.
+
+    Returns:
+        True when the in-memory price index holds at least one entry.
+    """
+    return bool(_state.price_index)
+
+
+def model_prices(
+    model_id: str,
+    *,
+    region: str | None = None,
+    tier: str | None = None,
+    dimensions: AbstractSet[Dimension] | None = None,
+    currency: str | None = None,
+    routing: Routing | None = None,
+    context: ContextLength | None = None,
+    variants: bool = True,
+) -> list[tuple[PriceKey, Price]]:
+    """List the indexed price rows for one model, filtered and sorted.
+
+    A pure in-memory read of the current price catalog (no AWS call), for
+    the pricing API. Filters combine with AND; None means "no filter".
+
+    Args:
+        model_id: The model ID or alias, resolved via :func:`resolve_model_key`.
+        region: Only rows for this AWS region.
+        tier: Only rows for this service tier.
+        dimensions: Only rows for these billed dimensions.
+        currency: Only rows in this currency.
+        routing: Only rows for this serving profile.
+        context: Only rows for this context-length bucket.
+        variants: When False, keep only base rows (standard tier, no cache
+            TTL, routing, or long-context variant); spec rows are kept
+            because media buckets are distinct products, not variants.
+
+    Returns:
+        Matching (key, price) pairs, sorted by region then remaining axes.
+    """
+    model_key = resolve_model_key(model_id)
+    rows = [
+        (key, price)
+        for key, price in _state.price_index.items()
+        if key.model == model_key
+        and (region is None or key.region == region)
+        and (tier is None or key.tier == tier)
+        and (dimensions is None or key.dimension in dimensions)
+        and (currency is None or price.currency == currency)
+        and (routing is None or key.routing == routing)
+        and (context is None or key.context == context)
+        and (
+            variants
+            or (
+                key.tier == "standard"
+                and not key.cache_ttl
+                and not key.routing
+                and not key.context
+            )
+        )
+    ]
+    rows.sort(key=_row_sort_key)
+    return rows
+
+
+def _row_sort_key(row: tuple[PriceKey, Price]) -> tuple[str, ...]:
+    """Sort key for price rows: region first, then the remaining axes.
+
+    Args:
+        row: One (key, price) pair.
+
+    Returns:
+        The sortable axis tuple.
+    """
+    key = row[0]
+    return (
+        key.region,
+        key.dimension,
+        key.tier,
+        key.context,
+        key.routing,
+        key.cache_ttl,
+        key.spec,
+    )
+
+
+def _select_axis(
+    rows: list[tuple[PriceKey, Price]], axis: str, preferred: str, fallback: str
+) -> list[tuple[PriceKey, Price]]:
+    """Keep one row per otherwise-identical axes: *preferred*, else *fallback*.
+
+    Args:
+        rows: (key, price) pairs to reduce.
+        axis: The :class:`PriceKey` field to select on.
+        preferred: The axis value to keep when published.
+        fallback: The axis value to fall back to otherwise.
+
+    Returns:
+        The reduced (key, price) pairs.
+    """
+    if preferred == fallback:
+        return [row for row in rows if getattr(row[0], axis) == fallback]
+    normalized_axis: dict[str, Any] = {axis: fallback}
+    groups: dict[PriceKey, dict[str, tuple[PriceKey, Price]]] = {}
+    for key, price in rows:
+        group = groups.setdefault(replace(key, **normalized_axis), {})
+        group[getattr(key, axis)] = (key, price)
+    return [
+        group[preferred if preferred in group else fallback]
+        for group in groups.values()
+        if preferred in group or fallback in group
+    ]
+
+
+def select_effective_rows(
+    rows: list[tuple[PriceKey, Price]],
+    *,
+    regions: AbstractSet[str] | None = None,
+    tier: str | None = None,
+    routing: Routing | None = None,
+) -> list[tuple[PriceKey, Price]]:
+    """Reduce full price rows to a deployment's effective configuration.
+
+    Mirrors the :func:`resolve_price` fallbacks: when no distinct rate is
+    published for *tier* or *routing*, the standard-tier or plain row is kept
+    instead, exactly like cost tracking bills.
+
+    Args:
+        rows: (key, price) pairs from :func:`model_prices`.
+        regions: Only rows for these AWS regions, or None for all.
+        tier: The effective service tier, or None to keep every tier.
+        routing: The effective serving profile, or None to keep every profile.
+
+    Returns:
+        The reduced (key, price) pairs, sorted like :func:`model_prices`.
+    """
+    if regions is not None:
+        rows = [row for row in rows if row[0].region in regions]
+    if tier is not None:
+        rows = _select_axis(rows, "tier", tier, "standard")
+    if routing is not None:
+        rows = _select_axis(rows, "routing", routing, "")
+    return sorted(rows, key=_row_sort_key)
 
 
 def is_model_priced(model_id: str, service: Service = Service.BEDROCK) -> bool:

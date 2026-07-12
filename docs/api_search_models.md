@@ -18,7 +18,7 @@ Discover available models by capability — filter by modality, route, region, s
 
 All query parameters are optional. Parameters combine with **AND** logic — only models matching every supplied filter are returned. Results are sorted by model ID. With no filters, all available models are returned.
 
-**Agent workflow:** call `search_models` first to obtain the correct model ID, then pass it to the target endpoint.
+**Agent workflow:** call `search_models` first to obtain the correct model ID, then pass it to the target endpoint. To compare costs before picking, pass the shortlisted IDs to the [Model Pricing API](api_model_pricing.md).
 
 ## Query Parameters
 

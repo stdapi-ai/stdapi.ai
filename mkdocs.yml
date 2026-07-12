@@ -74,6 +74,7 @@ nav:
             - Models: api_anthropic_models.md
           - Native Extensions:
             - Search Models: api_search_models.md
+            - Model Pricing: api_model_pricing.md
       - Operations:
           - Deploy on AWS: operations_getting_started.md
           - Run Locally with Docker: operations_getting_started_local.md

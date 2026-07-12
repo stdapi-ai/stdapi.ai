@@ -53,6 +53,7 @@ stdapi.ai provides multiple interfaces for exploring and testing the API—choos
 | Category | Endpoint | Capability | Documentation |
 |----------|----------|------------|---------------|
 | **🔍 Models** | `GET /search_models` | Search models by capability: modality, route, MCP tool, region, streaming, legacy status | [Search Models →](api_search_models.md) |
+| **💰 Pricing** | `GET /model_pricing` | Exact AWS unit prices per model: tokens, tiers, cache TTLs, routing, media specs | [Model Pricing →](api_model_pricing.md) |
 
 ### ![Anthropic](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Anthropic-Compatible API
 
@@ -108,6 +109,7 @@ When `ENABLE_MCP_STREAMABLE_HTTP=true` or `ENABLE_MCP_SSE=true` is configured, s
 | `anthropic_file_content`         | `GET /anthropic/v1/files/{file_id}/content` |
 | **Native Extension Tools**       |                                             |
 | `search_models`                  | `GET /search_models`                        |
+| `model_pricing`                  | `GET /model_pricing`                        |
 
 !!! tip "Filtering MCP Tools"
     Use `MCP_INCLUDE_TOOLS` or `MCP_EXCLUDE_TOOLS` environment variables to control which tools are exposed. Always include `search_models` so agents can discover the right model ID dynamically. See [Operations Configuration →](operations_configuration.md#mcp-model-context-protocol) for details.
@@ -149,6 +151,7 @@ Your Anthropic SDK applications continue to work without any code changes—just
 - :material-vector-polyline: [**Embeddings**](api_openai_embeddings.md) — Vector embeddings for search and RAG
 - :material-format-list-bulleted: [**Models**](api_openai_models.md) — List and discover available models
 - :material-magnify: [**Search Models**](api_search_models.md) — Filter models by capability, modality, route, or MCP tool
+- :material-currency-usd: [**Model Pricing**](api_model_pricing.md) — Exact AWS unit prices for cost-aware model selection
 - :material-message: [**Messages**](api_anthropic_messages.md) — Anthropic-compatible conversational AI with tool calling
 - :material-check-all: [**Features**](features.md) — Full capabilities and AWS integrations
 - :material-rocket-launch: [**Getting Started**](operations_getting_started.md) — Deploy to AWS with Terraform

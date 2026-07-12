@@ -111,6 +111,7 @@ Your existing applications, SDKs, and tools work immediately — no plugins or c
 | Endpoint                     | Capability                                                                | AWS Backend                          |
 |------------------------------|---------------------------------------------------------------------------|--------------------------------------|
 | `/search_models`             | Search models by capability: modality, route, MCP tool, region, streaming | Internal                             |
+| `/model_pricing`             | Exact AWS unit prices per model: tokens, tiers, cache TTLs, routing, specs | AWS Price List                       |
 
 ### Parameter Coverage
 
@@ -458,14 +459,16 @@ export MCP_EXCLUDE_TOOLS="openai_files_delete,anthropic_files_delete"
 
 ### Cost Tracking
 
-- **Real AWS-billed usage** — Token, character, and image counts sourced directly from AWS responses, not estimated
-- **Real-time pricing** — Costs computed from AWS's own published Price List, refreshed automatically; no manual price list to maintain
-- **Per-request and aggregate cost** — When a price resolves, its request log entry includes cost and currency, attributed to the AWS region that served it
+- **Real AWS-billed usage** — Token, character, second, and image counts sourced directly from AWS responses, never estimated; recorded per request across chat, embeddings, images, audio, and built-in tools
+- **Real-time pricing** — Costs computed from AWS's own published Price List, refreshed automatically; no manual price list to maintain (operator overrides available for gaps)
+- **Exact billing attribution** — Each call is priced with everything AWS prices differently: serving region, service tier (standard/flex/priority/batch, using the tier that *actually served* the call), prompt-cache TTLs, cross-region and latency-optimized routing, long-context rates, and image resolution/quality
+- **Per-request and aggregate cost** — Request log entries carry cost and currency as exact decimal strings, with a per-request total rollup
 - **Multi-currency aware** — Detects your AWS partition's currency (USD, EUR, CNY) and never sums costs across currencies
-- **Optional CloudWatch cost metrics** — Track spend alongside your other operational metrics
+- **Model Pricing API** — Query the loaded catalog through [`GET /model_pricing`](api_model_pricing.md) for cost-aware model selection, also exposed as an MCP tool
+- **Optional CloudWatch cost metrics** — Track spend alongside your other operational metrics via EMF
 
-!!! note "Estimate, not a bill"
-    Costs are a best-effort approximation for cost visibility and alerting, not a substitute for your AWS invoice. A few usage types aren't priced yet (reranking, speech/video generation, and some large asynchronously-processed embeddings) — see [Cost Tracking](operations_logging_monitoring.md#cost-tracking-real-time-aws-pricing) for full details and current coverage.
+!!! note "Opt-in, and an estimate — not a bill"
+    Cost tracking is disabled by default (it needs the `pricing:GetProducts` IAM permission); enable it with `COST_TRACKING=true`. Costs are a best-effort approximation for visibility and alerting, not a substitute for your AWS invoice — see [Cost Tracking](operations_logging_monitoring.md#cost-tracking-real-time-aws-pricing) for accuracy details and known limitations.
 
 ### Developer Tools
 

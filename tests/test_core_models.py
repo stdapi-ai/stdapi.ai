@@ -4,17 +4,25 @@ Uses unittest.mock to inject deterministic test data so these tests are fast
 and do not require live AWS credentials.
 """
 
+from decimal import Decimal
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from stdapi import pricing
+from stdapi.config import SETTINGS
 from stdapi.models import ModelDetails
+from stdapi.pricing import Dimension, Price, PriceKey, Service
+from stdapi.routes import core_models
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
     from starlette.testclient import TestClient
+
+#: All tests in this module exercise the local implementation in-process.
+pytestmark = pytest.mark.local
 
 # ---------------------------------------------------------------------------
 # Fake model catalogue used across all tests
@@ -362,15 +370,39 @@ class TestFilterByStreaming:
         assert "vendor.speech-v1" in ids
         assert "vendor.text-chat-v1" not in ids
 
-    def test_streaming_excludes_none_models(
+    def test_streaming_excludes_models_with_unset_streaming_support(
         self, client: TestClient, fake_models: dict[str, str]
     ) -> None:
-        """streaming=true excludes models where response_streaming is None."""
-        # All fake models have an explicit streaming value, so this verifies
-        # that only exact True matches are returned for streaming=true.
-        ids = set(_get_ids(client, {"streaming": "true"}, fake_models))
-        for model_id in ids:
-            assert _FAKE_MODELS[model_id].response_streaming is True
+        """A model with response_streaming=None matches neither streaming=true nor =false.
+
+        The route filter is an identity check (``m.response_streaming is
+        streaming``), so an unset value is excluded from both results.
+        """
+        unset_model = ModelDetails(
+            id="vendor.unset-streaming-v1",
+            name="Unset Streaming",
+            provider="Vendor",
+            input_modalities=["TEXT"],
+            output_modalities=["TEXT"],
+            response_streaming=None,
+            regions=["us-east-1"],
+        )
+        models = {**_FAKE_MODELS, unset_model.id: unset_model}
+
+        async def _fake_get_all() -> tuple[
+            dict[str, ModelDetails], dict[str, set[str]], dict[str, set[str]]
+        ]:
+            return models, _FAKE_OUTPUT_MODS, _FAKE_INPUT_MODS
+
+        with patch(
+            "stdapi.routes.core_models.get_all_models_details_and_modalities",
+            new=AsyncMock(side_effect=_fake_get_all),
+        ):
+            true_ids = set(_get_ids(client, {"streaming": "true"}, fake_models))
+            false_ids = set(_get_ids(client, {"streaming": "false"}, fake_models))
+
+        assert unset_model.id not in true_ids
+        assert unset_model.id not in false_ids
 
 
 class TestFilterByLegacy:
@@ -444,3 +476,390 @@ class TestCombinedFilters:
         )
         assert response.status_code == 200
         assert response.json() == []
+
+
+# ---------------------------------------------------------------------------
+# GET /model_pricing
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def priced_catalog(api_key: str, monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    """Enable cost tracking, seed a small price card, and return auth headers."""
+    monkeypatch.setattr(SETTINGS, "cost_tracking", True)
+    monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", ["us-east-1"])
+    rows = {
+        PriceKey(
+            Service.BEDROCK,
+            "pricedmodel",
+            "us-east-1",
+            Dimension.INPUT_TOKENS,
+            "standard",
+        ): Price(Decimal("0.000003"), "USD"),
+        PriceKey(
+            Service.BEDROCK,
+            "pricedmodel",
+            "us-east-1",
+            Dimension.OUTPUT_TOKENS,
+            "standard",
+        ): Price(Decimal("0.000015"), "USD"),
+        PriceKey(
+            Service.BEDROCK, "pricedmodel", "us-east-1", Dimension.INPUT_TOKENS, "flex"
+        ): Price(Decimal("0.0000015"), "USD"),
+        PriceKey(
+            Service.BEDROCK,
+            "pricedmodel",
+            "us-east-1",
+            Dimension.CACHE_WRITE_TOKENS,
+            "standard",
+            "5m",
+        ): Price(Decimal("0.00000375"), "USD"),
+    }
+    for key, price in rows.items():
+        monkeypatch.setitem(pricing._state.price_index, key, price)  # noqa: SLF001
+    return {"Authorization": f"Bearer {api_key}"}
+
+
+class TestModelPricingEndpoint:
+    """GET /model_pricing behavior against a seeded in-memory catalog."""
+
+    def test_missing_api_key_returns_401(self, client: TestClient) -> None:
+        """Requests without credentials are rejected."""
+        response = client.get("/model_pricing", params={"model": "x"})
+        assert response.status_code == 401
+
+    def test_cost_tracking_disabled_hides_settings(
+        self, client: TestClient, api_key: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With cost tracking disabled, the 503 does not expose settings."""
+        monkeypatch.setattr(SETTINGS, "cost_tracking", False)
+        response = client.get(
+            "/model_pricing",
+            params={"model": "x"},
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+        assert response.status_code == 503
+        message = response.json()["error"]
+        assert "administrator" in message
+        assert "cost_tracking" not in message.lower()
+
+    def test_catalog_not_loaded_returns_retry_later(
+        self, client: TestClient, api_key: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With the catalog still loading, the endpoint asks to retry later."""
+        monkeypatch.setattr(SETTINGS, "cost_tracking", True)
+        monkeypatch.setattr(pricing._state, "price_index", {})  # noqa: SLF001
+        response = client.get(
+            "/model_pricing",
+            params={"model": "x"},
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+        assert response.status_code == 503
+        assert "later" in response.json()["error"]
+
+    def test_default_card_reflects_server_configuration(
+        self, client: TestClient, priced_catalog: dict[str, str]
+    ) -> None:
+        """The default card keeps only the configured tier, region, and routing."""
+        response = client.get(
+            "/model_pricing",
+            params={"model": "amazon.pricedmodel-v1:0"},
+            headers=priced_catalog,
+        )
+        assert response.status_code == 200
+        (card,) = response.json()
+        assert card["id"] == "amazon.pricedmodel-v1:0"
+        assert card["service"] == "bedrock-runtime"
+        assert card["default_tier"] == "standard"
+        assert card["default_routings"] == ["us-east-1"]
+        assert len(card["prices"]) == 3
+        assert all(row["tier"] == "standard" for row in card["prices"])
+        base_input = next(
+            row for row in card["prices"] if row["dimension"] == "input_tokens"
+        )
+        assert base_input == {
+            "region": "us-east-1",
+            "dimension": "input_tokens",
+            "tier": "standard",
+            "routing": "us-east-1",
+            "unit_price": "0.000003",
+            "currency": "USD",
+        }
+        cache_row = next(
+            row for row in card["prices"] if row["dimension"] == "cache_write_tokens"
+        )
+        assert cache_row["cache_ttl"] == "5m"
+
+    def test_all_prices_returns_full_table(
+        self, client: TestClient, priced_catalog: dict[str, str]
+    ) -> None:
+        """all_prices=true returns every published row with exact prices."""
+        response = client.get(
+            "/model_pricing",
+            params={"model": "amazon.pricedmodel-v1:0", "all_prices": "true"},
+            headers=priced_catalog,
+        )
+        assert response.status_code == 200
+        (card,) = response.json()
+        assert len(card["prices"]) == 4
+        flex_input = next(row for row in card["prices"] if row["tier"] == "flex")
+        assert flex_input["unit_price"] == "0.0000015"
+        assert all(row["routing"] == "us-east-1" for row in card["prices"])
+
+    def test_no_model_filter_prices_every_available_model(
+        self,
+        client: TestClient,
+        priced_catalog: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Omitting `model` returns one card per available model, sorted by ID."""
+
+        async def _models() -> dict[str, ModelDetails]:
+            return {
+                model_id: ModelDetails(
+                    id=model_id,
+                    name=model_id,
+                    provider="Amazon",
+                    input_modalities=["TEXT"],
+                    output_modalities=["TEXT"],
+                    regions=["us-east-1"],
+                )
+                for model_id in ("amazon.pricedmodel-v1:0", "amazon.freemodel-v1:0")
+            }
+
+        monkeypatch.setattr(core_models, "get_all_models_details", _models)
+        response = client.get("/model_pricing", headers=priced_catalog)
+        assert response.status_code == 200
+        cards = response.json()
+        assert [card["id"] for card in cards] == [
+            "amazon.freemodel-v1:0",
+            "amazon.pricedmodel-v1:0",
+        ]
+        assert cards[0]["prices"] == []
+        assert len(cards[1]["prices"]) == 3
+
+    def test_default_tier_from_settings_with_fallback(
+        self,
+        client: TestClient,
+        priced_catalog: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A configured default tier is shown, falling back where unpublished."""
+        monkeypatch.setattr(
+            SETTINGS, "default_model_service_tiers", {"amazon.pricedmodel-v1:0": "flex"}
+        )
+        response = client.get(
+            "/model_pricing",
+            params={"model": "amazon.pricedmodel-v1:0"},
+            headers=priced_catalog,
+        )
+        (card,) = response.json()
+        assert card["default_tier"] == "flex"
+        rows_by_dimension = {row["dimension"]: row for row in card["prices"]}
+        assert rows_by_dimension["input_tokens"]["tier"] == "flex"
+        assert rows_by_dimension["input_tokens"]["unit_price"] == "0.0000015"
+        assert rows_by_dimension["output_tokens"]["tier"] == "standard"
+
+    def test_default_card_excludes_unconfigured_regions(
+        self,
+        client: TestClient,
+        priced_catalog: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Rows outside the configured Bedrock regions only show on demand."""
+        key = PriceKey(
+            Service.BEDROCK,
+            "pricedmodel",
+            "eu-west-1",
+            Dimension.INPUT_TOKENS,
+            "standard",
+        )
+        monkeypatch.setitem(
+            pricing._state.price_index,  # noqa: SLF001
+            key,
+            Price(Decimal("0.0000045"), "USD"),
+        )
+        default = client.get(
+            "/model_pricing",
+            params={"model": "amazon.pricedmodel-v1:0"},
+            headers=priced_catalog,
+        )
+        (card,) = default.json()
+        assert {row["region"] for row in card["prices"]} == {"us-east-1"}
+        explicit = client.get(
+            "/model_pricing",
+            params={"model": "amazon.pricedmodel-v1:0", "region": "eu-west-1"},
+            headers=priced_catalog,
+        )
+        (card,) = explicit.json()
+        assert {row["region"] for row in card["prices"]} == {"eu-west-1"}
+
+    def test_routing_from_inference_profile(
+        self,
+        client: TestClient,
+        priced_catalog: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Rows show the geography prefix of the model's inference profile."""
+        details = ModelDetails(
+            id="amazon.pricedmodel-v1:0",
+            name="Priced",
+            provider="Amazon",
+            input_modalities=["TEXT"],
+            output_modalities=["TEXT"],
+            regions=["us-east-1"],
+            inference_profiles={"us-east-1": "us.amazon.pricedmodel-v1:0"},
+        )
+
+        async def _models() -> dict[str, ModelDetails]:
+            return {details.id: details}
+
+        monkeypatch.setattr(core_models, "get_all_models_details", _models)
+        response = client.get(
+            "/model_pricing",
+            params={"model": "amazon.pricedmodel-v1:0"},
+            headers=priced_catalog,
+        )
+        (card,) = response.json()
+        assert card["default_routings"] == ["us"]
+        assert all(row["routing"] == "us" for row in card["prices"])
+
+    def test_default_routings_lists_each_configured_geography(
+        self,
+        client: TestClient,
+        priced_catalog: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Multi-geography deployments list one routing per distinct profile."""
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", ["eu-west-3", "us-east-1"])
+        details = ModelDetails(
+            id="amazon.pricedmodel-v1:0",
+            name="Priced",
+            provider="Amazon",
+            input_modalities=["TEXT"],
+            output_modalities=["TEXT"],
+            regions=["eu-west-3", "us-east-1"],
+            inference_profiles={
+                "eu-west-3": "eu.amazon.pricedmodel-v1:0",
+                "us-east-1": "us.amazon.pricedmodel-v1:0",
+            },
+        )
+
+        async def _models() -> dict[str, ModelDetails]:
+            return {details.id: details}
+
+        monkeypatch.setattr(core_models, "get_all_models_details", _models)
+        response = client.get(
+            "/model_pricing",
+            params={"model": "amazon.pricedmodel-v1:0"},
+            headers=priced_catalog,
+        )
+        (card,) = response.json()
+        assert card["default_routings"] == ["eu", "us"]
+
+    def test_global_routing_preferred_with_fallback(
+        self,
+        client: TestClient,
+        priced_catalog: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A global profile prefers global rows and falls back to plain ones."""
+        key = PriceKey(
+            Service.BEDROCK,
+            "pricedmodel",
+            "us-east-1",
+            Dimension.INPUT_TOKENS,
+            "standard",
+            "",
+            "global",
+        )
+        monkeypatch.setitem(
+            pricing._state.price_index,  # noqa: SLF001
+            key,
+            Price(Decimal("0.0000028"), "USD"),
+        )
+        details = ModelDetails(
+            id="amazon.pricedmodel-v1:0",
+            name="Priced",
+            provider="Amazon",
+            input_modalities=["TEXT"],
+            output_modalities=["TEXT"],
+            regions=["us-east-1"],
+            inference_profiles={"us-east-1": "global.amazon.pricedmodel-v1:0"},
+        )
+
+        async def _models() -> dict[str, ModelDetails]:
+            return {details.id: details}
+
+        monkeypatch.setattr(core_models, "get_all_models_details", _models)
+        response = client.get(
+            "/model_pricing",
+            params={"model": "amazon.pricedmodel-v1:0"},
+            headers=priced_catalog,
+        )
+        (card,) = response.json()
+        assert card["default_routings"] == ["global"]
+        rows_by_dimension = {row["dimension"]: row for row in card["prices"]}
+        global_input = rows_by_dimension["input_tokens"]
+        assert global_input["routing"] == "global"
+        assert global_input["unit_price"] == "0.0000028"
+        assert rows_by_dimension["output_tokens"]["routing"] == "us-east-1"
+
+    def test_variants_false_with_dimension_filter(
+        self, client: TestClient, priced_catalog: dict[str, str]
+    ) -> None:
+        """The base card composed with a dimension filter trims to one row."""
+        response = client.get(
+            "/model_pricing",
+            params={
+                "model": "amazon.pricedmodel-v1:0",
+                "variants": "false",
+                "dimension": "input_tokens",
+            },
+            headers=priced_catalog,
+        )
+        (card,) = response.json()
+        assert [row["unit_price"] for row in card["prices"]] == ["0.000003"]
+
+    def test_multi_model_order_dedupe_and_unknown_model(
+        self, client: TestClient, priced_catalog: dict[str, str]
+    ) -> None:
+        """Cards come back in request order, deduplicated; unknown models are empty."""
+        response = client.get(
+            "/model_pricing",
+            params={
+                "model": [
+                    "vendor.unknown-v1:0",
+                    "amazon.pricedmodel-v1:0",
+                    "vendor.unknown-v1:0",
+                ]
+            },
+            headers=priced_catalog,
+        )
+        cards = response.json()
+        assert [card["id"] for card in cards] == [
+            "vendor.unknown-v1:0",
+            "amazon.pricedmodel-v1:0",
+        ]
+        assert cards[0]["prices"] == []
+
+    @pytest.mark.parametrize(
+        ("param", "value"),
+        [
+            ("tier", "cheap"),
+            ("dimension", "tokens"),
+            ("routing", "fast"),
+            ("context", "l"),
+        ],
+    )
+    def test_invalid_enumerated_filter_returns_400(
+        self, client: TestClient, priced_catalog: dict[str, str], param: str, value: str
+    ) -> None:
+        """Unknown enumerated filter values are rejected with valid values listed."""
+        response = client.get(
+            "/model_pricing",
+            params={"model": "amazon.pricedmodel-v1:0", param: value},
+            headers=priced_catalog,
+        )
+        assert response.status_code == 400
+        assert "Valid values" in str(response.json())
