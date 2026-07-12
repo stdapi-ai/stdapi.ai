@@ -1,7 +1,7 @@
 """Tests for stored chat completions routes (unit)."""
 
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 import pytest
@@ -48,6 +48,10 @@ class _StubChatBackend:
         return _canned_completion(completion_id, request.model)
 
 
+#: Stored object kind declared by each document ``response.object`` field.
+_KIND_BY_OBJECT = {"response": "response", "chat.completion": "chat_completion"}
+
+
 class _StubStore:
     """Stub persistence layer recording store operations."""
 
@@ -60,6 +64,8 @@ class _StubStore:
         #: Canned ``(session_id, created_at)`` pairs returned by ``list_sessions``.
         self.sessions: list[tuple[str, datetime]] = []
         self.list_sessions_kinds: list[str] = []
+        #: Errors to raise from ``load`` for specific completion IDs.
+        self.load_errors: dict[str, Exception] = {}
 
     async def create_session(self, kind: str) -> str:
         self.created_kinds.append(kind)
@@ -68,19 +74,28 @@ class _StubStore:
     async def save(self, completion_id: str, document: dict[str, Any]) -> None:
         self.saved.append((completion_id, document))
 
-    async def load(self, completion_id: str) -> dict[str, Any]:
-        if completion_id not in self.documents:
+    def _document_or_not_found(self, completion_id: str, kind: str) -> dict[str, Any]:
+        """Return the stored document, 404ing when absent or of a different kind."""
+        if completion_id in self.load_errors:
+            raise self.load_errors[completion_id]
+        document = self.documents.get(completion_id)
+        declared = document and _KIND_BY_OBJECT.get(
+            document.get("response", {}).get("object")
+        )
+        if document is None or (declared is not None and declared != kind):
             msg = f"Chat completion with id '{completion_id}' not found."
             raise ApiError(msg, status=404)
-        return self.documents[completion_id]
+        return document
 
-    async def delete(self, completion_id: str) -> None:
-        if completion_id not in self.documents:
-            msg = f"Chat completion with id '{completion_id}' not found."
-            raise ApiError(msg, status=404)
+    async def load(self, completion_id: str, kind: str) -> dict[str, Any]:
+        return self._document_or_not_found(completion_id, kind)
+
+    async def delete(self, completion_id: str, kind: str) -> None:
+        self._document_or_not_found(completion_id, kind)
         self.deleted.append(completion_id)
 
-    async def discard(self, completion_id: str) -> None:
+    async def discard(self, completion_id: str, kind: str) -> None:
+        del kind
         self.discarded.append(completion_id)
 
     async def list_sessions(self, kind: str) -> list[tuple[str, datetime]]:
@@ -258,7 +273,32 @@ class TestStoreOnChatCreate:
             msg = "backend failure"
             raise ApiError(msg, status=502)
 
-        backend.create_completion = _raise  # type: ignore[method-assign]
+        backend.create_completion = _raise  # type: ignore[method-assign, assignment]
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "amazon.nova-micro-v1:0",
+                "messages": [{"role": "user", "content": "hello"}],
+                "store": True,
+            },
+        )
+        assert response.status_code == 502
+        assert store.discarded == ["chatcmpl-sess-1"]
+
+    def test_save_failure_discards_pending_session(
+        self,
+        client: TestClient,
+        backend: _StubChatBackend,
+        store: _StubStore,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A failed save after a successful generation discards the pending session."""
+
+        async def _raise(_completion_id: str, _document: dict[str, Any]) -> None:
+            msg = "save failure"
+            raise ApiError(msg, status=502)
+
+        monkeypatch.setattr(openai_chat_completions, "save_stored_response", _raise)
         response = client.post(
             "/v1/chat/completions",
             json={
@@ -313,6 +353,29 @@ class TestStoredChatCompletionRoutes:
         }
         assert store.deleted == ["chatcmpl-sess-1"]
 
+    def test_retrieve_response_kind_session_is_not_found(
+        self, client: TestClient, store: _StubStore
+    ) -> None:
+        """Retrieving a response-kind session as a chat completion 404s."""
+        store.documents["chatcmpl-sess-1"] = {
+            "input": [],
+            "response": {"object": "response"},
+        }
+        response = client.get("/v1/chat/completions/chatcmpl-sess-1")
+        assert response.status_code == 404
+
+    def test_delete_response_kind_session_is_not_found_and_not_deleted(
+        self, client: TestClient, store: _StubStore
+    ) -> None:
+        """Deleting a response-kind session as a chat completion 404s without deleting."""
+        store.documents["chatcmpl-sess-1"] = {
+            "input": [],
+            "response": {"object": "response"},
+        }
+        response = client.delete("/v1/chat/completions/chatcmpl-sess-1")
+        assert response.status_code == 404
+        assert not store.deleted
+
     def test_messages_listing_with_cursor(
         self, client: TestClient, store: _StubStore
     ) -> None:
@@ -337,6 +400,54 @@ class TestStoredChatCompletionRoutes:
         )
         body = response.json()
         assert [message["id"] for message in body["data"]] == ["msg-1"]
+
+    def test_messages_listing_splits_array_content(
+        self, client: TestClient, store: _StubStore
+    ) -> None:
+        """Array content is split into concatenated text `content` and `content_parts`."""
+        store.documents["chatcmpl-sess-1"] = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "look at "},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "https://x/img.png"},
+                        },
+                        {"type": "text", "text": "this"},
+                    ],
+                },
+                {"role": "system", "content": "sys"},
+            ],
+            "response": {},
+        }
+        response = client.get("/v1/chat/completions/chatcmpl-sess-1/messages")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        array_message, string_message = body["data"]
+        assert array_message["content"] == "look at this"
+        assert array_message["content_parts"] == [
+            {"type": "text", "text": "look at "},
+            {"type": "image_url", "image_url": {"url": "https://x/img.png"}},
+            {"type": "text", "text": "this"},
+        ]
+        assert string_message["content"] == "sys"
+        assert "content_parts" not in string_message
+
+    def test_messages_listing_unknown_after_cursor_is_not_found(
+        self, client: TestClient, store: _StubStore
+    ) -> None:
+        """An `after` cursor matching no message 404s instead of an empty page."""
+        store.documents["chatcmpl-sess-1"] = {
+            "messages": [{"role": "user", "content": "hello"}],
+            "response": {},
+        }
+        response = client.get(
+            "/v1/chat/completions/chatcmpl-sess-1/messages?after=msg-99"
+        )
+        assert response.status_code == 404
+        assert "msg-99" in response.json()["error"]["message"]
 
     def test_messages_listing_order_desc(
         self, client: TestClient, store: _StubStore
@@ -417,8 +528,9 @@ class TestListChatCompletions:
         assert response.status_code == 200, response.text
         body = response.json()
         assert body["data"] == []
-        assert body["first_id"] == ""
-        assert body["last_id"] == ""
+        # response_model_exclude_none drops null first_id/last_id from the wire payload.
+        assert body.get("first_id") is None
+        assert body.get("last_id") is None
 
     def test_limit_reports_has_more(
         self, client: TestClient, store: _StubStore
@@ -483,6 +595,30 @@ class TestListChatCompletions:
         response = client.get("/v1/chat/completions")
         assert response.status_code == 200, response.text
         assert store.list_sessions_kinds == ["chat_completion"]
+
+    def test_non_404_load_error_propagates(
+        self, client: TestClient, store: _StubStore
+    ) -> None:
+        """A non-404 ApiError while loading a candidate session is not swallowed."""
+        store.sessions = [("s1", datetime(2024, 1, 1, tzinfo=UTC))]
+        store.load_errors["chatcmpl-s1"] = ApiError("throttled", status=429)
+        response = client.get("/v1/chat/completions")
+        assert response.status_code == 429
+
+    def test_corrupt_stored_completion_is_skipped(
+        self, client: TestClient, store: _StubStore
+    ) -> None:
+        """A corrupt stored session is skipped instead of failing the whole list."""
+        store.sessions = [
+            ("s1", datetime(2024, 1, 1, tzinfo=UTC)),
+            ("s2", datetime(2024, 1, 2, tzinfo=UTC)),
+        ]
+        store.load_errors["chatcmpl-s1"] = ValueError("invalid JSON")
+        _store_completion(store, "s2")
+        response = client.get("/v1/chat/completions")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert [item["id"] for item in body["data"]] == ["chatcmpl-s2"]
 
 
 @pytest.mark.local
@@ -560,6 +696,7 @@ class TestStoredChatCompletionsLive:
             )
             messages = list(openai_client.chat.completions.messages.list(created.id))
             assert messages
+            assert messages[0].content is not None
             assert "banana" in messages[0].content
 
             page = openai_client.chat.completions.list(
@@ -570,9 +707,15 @@ class TestStoredChatCompletionsLive:
             updated = openai_client.chat.completions.update(
                 created.id, metadata={"test-marker": marker, "stage": "updated"}
             )
-            assert updated.metadata == {"test-marker": marker, "stage": "updated"}
+            assert cast("Any", updated).metadata == {
+                "test-marker": marker,
+                "stage": "updated",
+            }
             reretrieved = openai_client.chat.completions.retrieve(created.id)
-            assert reretrieved.metadata == {"test-marker": marker, "stage": "updated"}
+            assert cast("Any", reretrieved).metadata == {
+                "test-marker": marker,
+                "stage": "updated",
+            }
         finally:
             deleted = openai_client.chat.completions.delete(created.id)
             assert deleted.deleted is True

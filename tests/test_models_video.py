@@ -402,6 +402,49 @@ class TestStartVideoGeneration:
         records = list(USAGE.get().values())
         assert records[0].quantities == {Dimension.OUTPUT_SECONDS: 5}
 
+    async def test_luma_hd_size_records_the_hd_spec_bucket(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A 720p Luma job bills output_seconds under the "hd" spec bucket."""
+        client = _StubRuntimeClient()
+        self._patch_infra(monkeypatch, client)
+
+        await get_video_model("luma.ray-v2:0").start_video_generation(
+            "a cat", seconds=5, size="1280x720", reference_image=None, extra_params={}
+        )
+
+        record = next(iter(USAGE.get().values()))
+        assert record.output_seconds_by_spec == {"hd": 5}
+
+    async def test_luma_540p_size_records_no_spec_bucket(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A 540p Luma job bills output_seconds at the flat (undifferentiated) bucket."""
+        client = _StubRuntimeClient()
+        self._patch_infra(monkeypatch, client)
+
+        await get_video_model("luma.ray-v2:0").start_video_generation(
+            "a cat", seconds=5, size="960x540", reference_image=None, extra_params={}
+        )
+
+        record = next(iter(USAGE.get().values()))
+        assert record.output_seconds_by_spec == {}
+        assert record.quantities[Dimension.OUTPUT_SECONDS] == 5
+
+    async def test_nova_reel_records_no_spec_bucket(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Nova Reel's fixed size bills output_seconds at the flat (undifferentiated) bucket."""
+        client = _StubRuntimeClient()
+        self._patch_infra(monkeypatch, client)
+
+        await get_video_model("amazon.nova-reel-v1:0").start_video_generation(
+            "a cat", seconds=None, size=None, reference_image=None, extra_params={}
+        )
+
+        record = next(iter(USAGE.get().values()))
+        assert record.output_seconds_by_spec == {}
+
 
 class TestVideoJobAccess:
     """ARN-addressed job retrieval, content access, and output deletion."""
@@ -903,4 +946,28 @@ class TestListVideoJobs:
         listings, has_more = await video.list_video_jobs()
 
         assert listings == []
+        assert not has_more
+
+    async def test_unknown_model_jobs_do_not_truncate_the_page(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Unknown-model jobs interleaved in the scan must not shrink a full page.
+
+        Regression: has_more was computed before dropping unknown-model jobs,
+        so a page filled with unknown-model jobs returned empty with
+        has_more=True -- SDK pagers stop on an empty page, stranding every
+        job after it.
+        """
+        summaries = [
+            _summary("aaa", 100, model="foo.bar-v9:0"),
+            _summary("bbb", 90, model="foo.bar-v9:0"),
+            _summary("ccc", 80),
+        ]
+        self._patch_client(
+            monkeypatch, _StubListClient([{"asyncInvokeSummaries": summaries}])
+        )
+
+        listings, has_more = await video.list_video_jobs(limit=2)
+
+        assert [listing.job.invocation_arn for listing in listings] == [_arn("ccc")]
         assert not has_more

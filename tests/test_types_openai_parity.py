@@ -1,11 +1,13 @@
 """Tests for OpenAI SDK schema-parity fields (unit)."""
 
 import pytest
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from stdapi.api_errors import UnsupportedParameterError
+from stdapi.types.openai_chat_completions import CompletionCreateParams
 from stdapi.types.openai_responses import (
     AdditionalTools,
+    CompactParams,
     InputTokenCountParams,
     Reasoning,
     ResponseCreateParams,
@@ -20,17 +22,23 @@ pytestmark = pytest.mark.local
 class TestInputTokenCountParity:
     """personality and reasoning.context on POST /v1/responses/input_tokens."""
 
-    def test_personality_is_rejected(self) -> None:
-        """The personality parameter is rejected as unsupported."""
-        with pytest.raises(UnsupportedParameterError, match="personality"):
-            InputTokenCountParams(model="m", input="x", personality="friendly")
+    def test_personality_is_accepted_and_ignored(self) -> None:
+        """The personality parameter is accepted for compatibility."""
+        params = InputTokenCountParams(model="m", input="x", personality="friendly")
+        assert params.personality == "friendly"
 
-    def test_reasoning_context_is_rejected(self) -> None:
-        """reasoning.context is rejected as unsupported."""
-        with pytest.raises(UnsupportedParameterError, match=r"reasoning\.context"):
-            InputTokenCountParams(
-                model="m", input="x", reasoning=Reasoning(context="auto")
-            )
+    def test_reasoning_context_is_accepted_and_ignored(self) -> None:
+        """reasoning.context is accepted for compatibility."""
+        params = InputTokenCountParams(
+            model="m", input="x", reasoning=Reasoning(context="auto")
+        )
+        assert params.reasoning is not None
+        assert params.reasoning.context == "auto"
+
+    def test_unsupported_parameter_still_rejected(self) -> None:
+        """Parameters that would change the count remain rejected."""
+        with pytest.raises(UnsupportedParameterError, match="conversation"):
+            InputTokenCountParams(model="m", input="x", conversation="conv_1")
 
     def test_reasoning_effort_still_accepted(self) -> None:
         """reasoning.effort remains accepted."""
@@ -44,12 +52,13 @@ class TestInputTokenCountParity:
 class TestResponseCreateParity:
     """reasoning.context on POST /v1/responses."""
 
-    def test_reasoning_context_is_rejected(self) -> None:
-        """reasoning.context is rejected as unsupported."""
-        with pytest.raises(UnsupportedParameterError, match=r"reasoning\.context"):
-            ResponseCreateParams(
-                model="m", input="x", reasoning=Reasoning(context="all_turns")
-            )
+    def test_reasoning_context_is_accepted_and_ignored(self) -> None:
+        """reasoning.context is accepted for compatibility."""
+        params = ResponseCreateParams(
+            model="m", input="x", reasoning=Reasoning(context="all_turns")
+        )
+        assert params.reasoning is not None
+        assert params.reasoning.context == "all_turns"
 
 
 class TestAdditionalToolsItem:
@@ -74,6 +83,25 @@ class TestAdditionalToolsItem:
         )
         assert isinstance(item, AdditionalTools)
         assert item.tools[0].name == "get_weather"  # type: ignore[union-attr]
+
+
+class TestPromptCacheRetentionParity:
+    """prompt_cache_retention uses the OpenAI SDK literal `in_memory`."""
+
+    @pytest.mark.parametrize(
+        "params_type", [ResponseCreateParams, CompactParams, CompletionCreateParams]
+    )
+    def test_sdk_literal_accepted(self, params_type: type) -> None:
+        """The SDK value `in_memory` is accepted; the hyphen form is not."""
+        extra = (
+            {"messages": [{"role": "user", "content": "x"}]}
+            if params_type is CompletionCreateParams
+            else {"input": "x"}
+        )
+        params = params_type(model="m", prompt_cache_retention="in_memory", **extra)
+        assert params.prompt_cache_retention == "in_memory"
+        with pytest.raises(ValidationError, match="prompt_cache_retention"):
+            params_type(model="m", prompt_cache_retention="in-memory", **extra)
 
 
 class TestVideoParity:

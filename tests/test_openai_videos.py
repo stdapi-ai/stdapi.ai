@@ -1,6 +1,7 @@
 """Tests for the OpenAI-compatible /v1/videos routes (unit and live)."""
 
 import time
+from base64 import b64encode
 from contextlib import suppress
 from io import BytesIO
 from os import getenv
@@ -193,6 +194,26 @@ class TestOpenAIVideoRoutes:
         assert call["reference_image"] is not None
         assert call["extra_params"] == {"loop": True}
 
+    def test_create_multipart_with_flattened_input_reference(
+        self, client: TestClient, video_backend: _StubVideoModel
+    ) -> None:
+        """The SDK's flattened `input_reference[image_url]` form key maps to the reference image."""
+        data_uri = (
+            "data:image/png;base64," + b64encode(_reference_frame("64x64")).decode()
+        )
+        response = client.post(
+            "/v1/videos",
+            data={
+                "model": "luma.ray-v2:0",
+                "prompt": "a cat",
+                "input_reference[image_url]": data_uri,
+            },
+        )
+        assert response.status_code == 200, response.text
+        (call,) = video_backend.calls
+        assert call["reference_image"] is not None
+        assert "input_reference[image_url]" not in call["extra_params"]
+
     def test_create_without_prompt_is_rejected(
         self, client: TestClient, video_backend: _StubVideoModel
     ) -> None:
@@ -216,6 +237,28 @@ class TestOpenAIVideoRoutes:
         )
         assert response.status_code == 400
         assert "seconds" in response.json()["error"]["message"]
+        assert not video_backend.calls
+
+    def test_create_with_zero_size_is_rejected(
+        self, client: TestClient, video_backend: _StubVideoModel
+    ) -> None:
+        """A "0x0" size fails the size pattern validation instead of reaching gcd(0, 0)."""
+        response = client.post(
+            "/v1/videos",
+            json={"model": "amazon.nova-reel-v1:0", "prompt": "a cat", "size": "0x0"},
+        )
+        assert response.status_code == 400
+        assert "size" in response.json()["error"]["message"]
+        assert not video_backend.calls
+
+    def test_create_with_malformed_json_body_is_rejected(
+        self, client: TestClient, video_backend: _StubVideoModel
+    ) -> None:
+        """A malformed JSON body is rejected with 400, not a 500."""
+        response = client.post(
+            "/v1/videos", content=b"{", headers={"content-type": "application/json"}
+        )
+        assert response.status_code == 400, response.text
         assert not video_backend.calls
 
     def test_retrieve_completed(
@@ -273,7 +316,7 @@ class TestOpenAIVideoRoutes:
 
         async def _list_video_jobs(**kwargs: Any) -> tuple[list[VideoListing], bool]:  # noqa: ANN401
             calls.append(kwargs)
-            return [VideoListing(_job("completed"), "6", "1280x720")], True
+            return [VideoListing(_job("completed"), 6, "1280x720")], True
 
         monkeypatch.setattr(openai_videos, "list_video_jobs", _list_video_jobs)
         after = openai_videos._encode_video_id(_ARN, 6, "1280x720")  # noqa: SLF001

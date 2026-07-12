@@ -71,10 +71,10 @@ Generate model responses with AWS Bedrock foundation models through an OpenAI Re
 | `top_p`                                                               |      :material-cog:{ .model-dep }       | 0–1 range; nucleus sampling                                                  |
 | `top_logprobs`                                                        |      :material-cog:{ .model-dep }       | 0–20 range; token log-probability output                                     |
 | `reasoning` (effort)                                                  |      :material-cog:{ .model-dep }       | Configures reasoning on models that support it                               |
-| `reasoning.context`                                                   | :material-close-circle:{ .unsupported } | Returns `400`; not supported                                                 |
+| `reasoning.context`                                                   | :material-close-circle:{ .unsupported } | Accepted but ignored — context scoping is not applied                        |
 | `metadata`                                                            |   :material-check-circle:{ .success }   | Forwarded to Bedrock `requestMetadata`                                       |
 | `prompt_cache_key`                                                    |      :material-cog:{ .model-dep }       | Cache prompts to reduce costs and latency                                    |
-| `prompt_cache_retention`                                              |      :material-cog:{ .model-dep }       | Cache TTL: `in-memory`, `24h`, `1h`, or `5m`                                 |
+| `prompt_cache_retention`                                              |      :material-cog:{ .model-dep }       | Cache TTL: `in_memory`, `24h`, `1h`, or `5m`                                 |
 | `service_tier`                                                        |   :material-check-circle:{ .success }   | Maps to Bedrock service tier header                                          |
 | `truncation`                                                          | :material-close-circle:{ .unsupported } | Returns `400`; Bedrock manages context automatically                         |
 | `max_tool_calls`                                                      | :material-close-circle:{ .unsupported } | Returns `400`; not supported                                                 |
@@ -346,7 +346,7 @@ curl -X POST "$BASE/v1/responses" \
   }'
 ```
 
-Valid values: `in-memory` (default), `24h`, `1h`, or `5m`. The `1h` and `5m` values are AWS Bedrock-specific. On AWS Bedrock, `in-memory` maps to 5 minutes and `24h` maps to 1 hour.
+Valid values: `in_memory` (default), `24h`, `1h`, or `5m`. The `1h` and `5m` values are AWS Bedrock-specific. On AWS Bedrock, `in_memory` maps to 5 minutes and `24h` maps to 1 hour.
 
 !!! note "Model Support"
     Cache retention configuration is only available on select models. See [AWS Bedrock Prompt Caching - Supported Models](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html#prompt-caching-models) for details on which models support configurable TTL.
@@ -638,7 +638,7 @@ curl -X POST "$BASE/v1/responses/input_tokens" \
 ```
 
 !!! note "Limitations"
-    The `previous_response_id`, `conversation`, and `personality` parameters are not supported for token counting.
+    The `previous_response_id` and `conversation` parameters are not supported for token counting (they would change the count); `personality` and `reasoning.context` are accepted and ignored.
 
 ## Stored Responses
 

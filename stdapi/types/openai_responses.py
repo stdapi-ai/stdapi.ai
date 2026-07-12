@@ -42,7 +42,7 @@ ServiceTiers = Literal["auto", "default", "flex", "scale", "priority"]
 
 #: Prompt cache retention options.
 PromptCacheRetention = Literal[
-    "in-memory",
+    "in_memory",
     "24h",
     # Extra bedrock specific values
     "1h",
@@ -854,7 +854,8 @@ class Reasoning(BaseModelRequest):
     )
     context: Literal["auto", "current_turn", "all_turns"] | None = Field(
         default=None,
-        description="Reasoning context scope.\nUNSUPPORTED on this implementation.",
+        description="Reasoning context scope. Accepted for compatibility and "
+        "ignored on this implementation.",
     )
 
 
@@ -3838,9 +3839,6 @@ class ResponseCreateParams(BaseModelRequest):
             )
             msg = f"Unsupported tool type(s): {tool_names}."
             raise ValueError(msg)
-        if self.reasoning is not None and self.reasoning.context is not None:
-            parameter = "reasoning.context"
-            raise UnsupportedParameterError(parameter)
         for key in self._UNSUPPORTED & self.model_fields_set:
             raise UnsupportedParameterError(key)
         return self
@@ -3888,8 +3886,8 @@ class InputTokenCountParams(BaseModelRequest):
     )
     personality: str | None = Field(
         default=None,
-        description="Personality preset applied to the model.\n"
-        "UNSUPPORTED on this implementation.",
+        description="Personality preset applied to the model. Accepted for "
+        "compatibility and ignored on this implementation.",
     )
 
     # Extra validations
@@ -3898,7 +3896,6 @@ class InputTokenCountParams(BaseModelRequest):
         "truncation",
         "previous_response_id",
         "conversation",
-        "personality",
     }
 
     @model_validator(mode="after")
@@ -3908,9 +3905,6 @@ class InputTokenCountParams(BaseModelRequest):
         Raises:
             UnsupportedParameterError: If a parameter marked as unsupported is used.
         """
-        if self.reasoning is not None and self.reasoning.context is not None:
-            parameter = "reasoning.context"
-            raise UnsupportedParameterError(parameter)
         for key in self._UNSUPPORTED & self.model_fields_set:
             raise UnsupportedParameterError(key)
         return self
@@ -3958,11 +3952,29 @@ class CompactParams(BaseModelRequest):
     prompt_cache_key: str | None = Field(
         default=None, description="Cache key for similar requests."
     )
-    prompt_cache_retention: Literal["in-memory", "24h", "1h", "5m"] | None = Field(
+    prompt_cache_retention: Literal["in_memory", "24h", "1h", "5m"] | None = Field(
         default=None, description="Cache retention policy."
     )
     service_tier: Literal["auto", "default", "flex", "scale", "priority"] | None = (
         Field(default=None, description="Service tier for request.")
+    )
+
+
+class CompactionUserMessage(BaseModelResponse):
+    """A user message echoed in the compacted output."""
+
+    id: str = Field(description="Unique identifier of the echoed message.")
+    type: Literal["message"] = Field(
+        default="message", description="The item type, which is always `message`."
+    )
+    status: Literal["completed"] = Field(
+        default="completed", description="The item status, which is always `completed`."
+    )
+    role: Literal["user"] = Field(
+        default="user", description="The message role, which is always `user`."
+    )
+    content: list[JsonMapping] = Field(
+        description="The message content parts (e.g. `input_text`)."
     )
 
 
@@ -3978,7 +3990,7 @@ class CompactedResponse(BaseModelResponse):
         default="response.compaction",
         description="The object type, which is always `response.compaction`.",
     )
-    output: list[ResponseCompactionItem] = Field(
-        description="Output items holding the compaction item."
+    output: list[CompactionUserMessage | ResponseCompactionItem] = Field(
+        description="The conversation's user messages followed by the compaction item."
     )
     usage: ResponseUsage = Field(description="Token usage of the compaction request.")

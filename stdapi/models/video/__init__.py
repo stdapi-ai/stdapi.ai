@@ -175,6 +175,21 @@ class VideoModelBase(ModelBase[Any, Any]):
             ApiError: When a parameter is not supported by the model.
         """
 
+    def output_seconds_spec(self, _size: str) -> str:
+        """Return this model's pricing spec bucket for a video size.
+
+        Overridden by models whose AWS pricing distinguishes resolutions
+        (e.g. a "hd" bucket); the default is the undifferentiated bucket.
+
+        Args:
+            _size: Effective video size as "<width>x<height>".
+
+        Returns:
+            The spec bucket AWS prices this size under, or "" when this
+            model's pricing has no resolution-differentiated bucket.
+        """
+        return ""
+
     async def start_video_generation(
         self,
         prompt: str,
@@ -220,7 +235,12 @@ class VideoModelBase(ModelBase[Any, Any]):
         )
         # Billed at submission, not completion: job state is not tracked here, so
         # a later failure is never reconciled against this recorded usage.
-        record_bedrock_usage(self._model_id, region=region, output_seconds=seconds)
+        record_bedrock_usage(
+            self._model_id,
+            region=region,
+            output_seconds=seconds,
+            output_seconds_spec=self.output_seconds_spec(size),
+        )
         return VideoGenerationStart(
             invocation_arn=invocation_arn, seconds=seconds, size=size
         )
@@ -493,9 +513,40 @@ async def list_video_jobs(
             (i for i, job in enumerate(jobs) if job.invocation_arn == after_arn), None
         )
         jobs = jobs[index + 1 :] if index is not None else []
-    has_more = len(jobs) > limit
-    listings = await gather(*map(_listing_details, jobs[:limit]))
-    return [listing for listing in listings if listing is not None], has_more
+    return await _resolve_listing_page(jobs, limit)
+
+
+async def _resolve_listing_page(
+    jobs: list[VideoJob], limit: int
+) -> tuple[list[VideoListing], bool]:
+    """Resolve listing details for a page, skipping unknown-model jobs.
+
+    Keeps resolving scanned jobs (in order) until ``limit`` resolvable
+    listings are collected or ``jobs`` is exhausted, so unknown-model jobs
+    dropped by :func:`_listing_details` never shrink the page below its
+    limit while more resolvable jobs remain -- doing this after truncating
+    to ``jobs[:limit]`` could yield a short or empty page with
+    ``has_more=True``, stalling SDK pagers that stop on an empty page.
+
+    Args:
+        jobs: Scanned jobs, already ordered and cursor-filtered.
+        limit: Maximum number of listings to return.
+
+    Returns:
+        Tuple of (page of listings, whether more resolvable jobs remain).
+    """
+    listings: list[VideoListing] = []
+    index = 0
+    while index < len(jobs) and len(listings) < limit:
+        batch = jobs[index : index + (limit - len(listings))]
+        index += len(batch)
+        listings.extend(
+            listing
+            for listing in await gather(*map(_listing_details, batch))
+            if listing is not None
+        )
+    has_more = index < len(jobs)
+    return listings, has_more
 
 
 def video_expires_at(job: VideoJob) -> int | None:

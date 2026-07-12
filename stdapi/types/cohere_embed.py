@@ -18,7 +18,7 @@ class _EmbedRequestBase(BaseModelRequestWithExtra):
     """Shared request fields and validation for the v1 and v2 Embed APIs."""
 
     model: str = Field(
-        ..., description="ID of the model to use.", min_length=1, max_length=255
+        description="ID of the model to use.", min_length=1, max_length=255
     )
     texts: list[str] | None = Field(
         default=None,
@@ -54,9 +54,12 @@ class _EmbedRequestBase(BaseModelRequestWithExtra):
         Raises:
             ValueError: When no input is provided or an unsupported option is requested.
         """
-        if (self.model_extra or {}).get("inputs") is not None:
-            msg = "Fused multimodal `inputs` are not supported. Use `texts` or `images` instead."
-            raise ValueError(msg)
+        if "inputs" in (self.model_extra or {}):
+            if self.model_extra["inputs"] is not None:  # type: ignore[index]
+                msg = "Fused multimodal `inputs` are not supported. Use `texts` or `images` instead."
+                raise ValueError(msg)
+            # An explicit null is treated as absent, not forwarded to the model.
+            self.model_extra.pop("inputs")  # type: ignore[union-attr]
         if not self.texts and not self.images:
             msg = "Provide at least one of `texts` or `images`."
             raise ValueError(msg)

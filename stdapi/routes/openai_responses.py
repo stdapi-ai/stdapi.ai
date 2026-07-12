@@ -44,6 +44,7 @@ from stdapi.routes._moderation import (
 )
 from stdapi.types.openai_responses import (
     CompactedResponse,
+    CompactionUserMessage,
     CompactParams,
     EasyInputMessage,
     InputTokenCountParams,
@@ -63,6 +64,8 @@ from stdapi.types.openai_responses import (
 from stdapi.utils import validation_error_handler
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from sse_starlette import EventSourceResponse
 
 register_route_capability(
@@ -167,6 +170,38 @@ def _normalized_input_items(stored_input: Any) -> list[dict[str, Any]]:  # noqa:
         item.setdefault("id", f"msg-{index}")
         items.append(item)
     return items
+
+
+def _compaction_user_messages(items: Sequence[Any]) -> list[CompactionUserMessage]:
+    """Echo the conversation's user messages for the compacted output.
+
+    Args:
+        items: Validated input items of the compaction generation request.
+
+    Returns:
+        The user messages as output items, in conversation order.
+    """
+    messages: list[CompactionUserMessage] = []
+    for item in items:
+        if getattr(item, "role", None) != "user":
+            continue
+        content = item.content
+        parts: list[Any] = (
+            [{"type": "input_text", "text": content}]
+            if isinstance(content, str)
+            else [
+                part
+                if isinstance(part, dict)
+                else part.model_dump(mode="json", by_alias=True, exclude_none=True)
+                for part in content or ()
+            ]
+        )
+        messages.append(
+            CompactionUserMessage(
+                id=f"msg-{REQUEST_ID.get()}-{len(messages)}", content=parts
+            )
+        )
+    return messages
 
 
 @router.post(
@@ -401,6 +436,8 @@ async def compact_response(
         generation = await _merge_previous_response(
             generation, request.previous_response_id
         )
+    # The compaction prompt is always the last input item; don't echo it.
+    user_messages = _compaction_user_messages(list(generation.input or ())[:-1])
     response = await get_chat_model(model_id).create_response(
         generation, response_id, created_at
     )
@@ -419,11 +456,12 @@ async def compact_response(
             id=response_id,
             created_at=int(created_at),
             output=[
+                *user_messages,
                 ResponseCompactionItem(
                     id=f"ci-{REQUEST_ID.get()}",
                     encrypted_content=encode_compaction_content(summary),
                     type="compaction",
-                )
+                ),
             ],
             usage=response.usage
             or ResponseUsage(

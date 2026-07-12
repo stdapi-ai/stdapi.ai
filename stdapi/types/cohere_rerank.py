@@ -10,13 +10,11 @@ class RerankRequest(BaseModelRequestWithExtra):
     """Request body for reranking documents against a query."""
 
     model: str = Field(
-        ..., description="ID of the model to use.", min_length=1, max_length=255
+        description="ID of the model to use.", min_length=1, max_length=255
     )
-    query: str = Field(..., description="The search query.", min_length=1)
+    query: str = Field(description="The search query.", min_length=1)
     documents: list[str] = Field(
-        ...,
-        description="A list of texts that will be compared to the query.",
-        min_length=1,
+        description="A list of texts that will be compared to the query.", min_length=1
     )
     top_n: int | None = Field(
         default=None,
@@ -36,11 +34,9 @@ class RerankRequest(BaseModelRequestWithExtra):
     )
     priority: int | None = Field(
         default=None,
-        ge=0,
-        le=999,
         description=(
-            "Accepted for Cohere API compatibility; request scheduling "
-            "priority is not applicable on AWS Bedrock and is ignored."
+            "Accepted for compatibility and ignored. Cohere API request "
+            "scheduling priority is not applicable on AWS Bedrock."
         ),
     )
 

@@ -123,17 +123,18 @@ class TestCohereRerankRoute:
         (call,) = rerank_backend.calls
         assert call["extra_params"]["max_tokens_per_doc"] == 512
 
+    @pytest.mark.parametrize("priority", [5, 1000])
     def test_priority_is_ignored(
-        self, client: TestClient, rerank_backend: _StubRerankModel
+        self, client: TestClient, rerank_backend: _StubRerankModel, priority: int
     ) -> None:
-        """The Cohere priority hint is accepted but not forwarded to AWS."""
+        """The Cohere priority hint is accepted (no upper bound) but not forwarded to AWS."""
         response = client.post(
             "/cohere/v2/rerank",
             json={
                 "model": "cohere.rerank-v3-5:0",
                 "query": "q",
                 "documents": ["a"],
-                "priority": 5,
+                "priority": priority,
             },
         )
         assert response.status_code == 200, response.text

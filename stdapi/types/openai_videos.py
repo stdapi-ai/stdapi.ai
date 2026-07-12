@@ -6,6 +6,7 @@ from pydantic import Field
 
 from stdapi.input_file import InputFile
 from stdapi.types import BaseModelRequestWithFormExtra, BaseModelResponse
+from stdapi.types.openai import PaginatedListEnvelope
 
 #: Regex pattern that a valid Videos API video ID must match.
 VIDEO_ID_PATTERN: str = r"^video_[A-Za-z0-9_-]+$"
@@ -33,7 +34,7 @@ class VideoCreateParams(BaseModelRequestWithFormExtra):
         default=None,
         description="Output resolution as `<width>x<height>`. Supported values "
         "depend on the model.",
-        pattern=r"^[0-9]+x[0-9]+$",
+        pattern=r"^[1-9][0-9]*x[1-9][0-9]*$",
     )
 
 
@@ -91,20 +92,13 @@ class Video(BaseModelResponse):
     )
 
 
-class ListVideosResponse(BaseModelResponse):
+class VideoList(PaginatedListEnvelope):
     """Paginated list of video jobs returned by GET /v1/videos."""
 
     object: Literal["list"] = Field(
         default="list", description="The object type, which is always `list`."
     )
     data: list[Video] = Field(description="List of Video objects.")
-    has_more: bool = Field(description="Whether more results exist after this page.")
-    first_id: str = Field(
-        description="ID of the first video in the list, or '' when empty."
-    )
-    last_id: str = Field(
-        description="ID of the last video in the list, or '' when empty."
-    )
 
 
 class VideoDeleted(BaseModelResponse):

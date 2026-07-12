@@ -30,7 +30,7 @@ _SERVICES_TIERS: dict[ServiceTiers, ServiceTierTypeType] = {
 
 #: OpenAI to Bedrock prompt cache retention mapping
 CACHE_TTL: dict[PromptCacheRetention | None, CacheTTLType | None] = {
-    "in-memory": None,
+    "in_memory": None,
     "24h": "1h",  # max current value
     "1h": "1h",
     "5m": "5m",

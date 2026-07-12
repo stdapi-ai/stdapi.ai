@@ -21,6 +21,7 @@ from stdapi.types.openai import (
     FunctionLiteral,
     LegacyFunction,
     Metadata,
+    PaginatedListEnvelope,
     RequestModeration,
     ResponseFormatJSONObject,
     ResponseFormatJSONSchema,
@@ -49,7 +50,7 @@ ServiceTiers = Literal[
 
 #: Prompt cache retention
 PromptCacheRetention = Literal[
-    "in-memory",
+    "in_memory",
     "24h",
     # Extra bedrock specific values
     "1h",
@@ -1116,7 +1117,7 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
     )
     prompt_cache_retention: PromptCacheRetention | None = Field(
         default=None,
-        description="Cache retention: `in-memory` -> 5m, `24h` -> 1h (AWS Bedrock mapping).",
+        description="Cache retention: `in_memory` -> 5m, `24h` -> 1h (AWS Bedrock mapping).",
     )
     reasoning_effort: ReasoningEffort | None = Field(
         default=None,
@@ -1366,23 +1367,16 @@ class ChatCompletionUpdateParams(BaseModelRequest):
     )
 
 
-class ChatCompletionList(BaseModelResponse):
+class ChatCompletionList(PaginatedListEnvelope):
     """Paginated list of stored chat completions."""
 
     object: Literal["list"] = Field(
         default="list", description="The object type, which is always `list`."
     )
     data: list[ChatCompletion] = Field(description="Stored chat completions.")
-    has_more: bool = Field(description="Whether more results exist after this page.")
-    first_id: str = Field(
-        description="ID of the first chat completion in the list, or '' when empty."
-    )
-    last_id: str = Field(
-        description="ID of the last chat completion in the list, or '' when empty."
-    )
 
 
-class ChatCompletionStoreMessageList(BaseModelResponse):
+class ChatCompletionStoreMessageList(PaginatedListEnvelope):
     """Paginated list of the input messages of a stored chat completion."""
 
     object: Literal["list"] = Field(
@@ -1390,11 +1384,4 @@ class ChatCompletionStoreMessageList(BaseModelResponse):
     )
     data: list[JsonMapping] = Field(
         description="Input messages of the stored chat completion."
-    )
-    has_more: bool = Field(description="Whether more results exist after this page.")
-    first_id: str = Field(
-        description="ID of the first message in the list, or '' when empty."
-    )
-    last_id: str = Field(
-        description="ID of the last message in the list, or '' when empty."
     )

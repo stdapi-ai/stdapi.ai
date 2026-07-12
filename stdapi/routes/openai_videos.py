@@ -43,12 +43,12 @@ from stdapi.models.video import (
 from stdapi.monitoring import REQUEST_TIME, log_request_params, log_response_params
 from stdapi.types.openai_videos import (
     VIDEO_ID_PATTERN,
-    ListVideosResponse,
     Video,
     VideoCreateJsonBody,
     VideoCreateParams,
     VideoDeleted,
     VideoError,
+    VideoList,
 )
 from stdapi.utils import validation_error_handler
 
@@ -72,8 +72,14 @@ _VideoId = Annotated[
     str, Path(description="The identifier of the video job.", pattern=VIDEO_ID_PATTERN)
 ]
 
+#: Flattened form keys of the OpenAI SDK's object-form `input_reference`.
+_REFERENCE_FORM_KEYS = ("input_reference[image_url]", "input_reference[file_id]")
+
 #: Model fields and file parameters handled separately in the create route.
-_KNOWN_PARAMS = set(VideoCreateParams.model_fields) | {"input_reference"}
+_KNOWN_PARAMS = set(VideoCreateParams.model_fields) | {
+    "input_reference",
+    *_REFERENCE_FORM_KEYS,
+}
 
 
 def _decode_form_extras(form_data: FormData) -> dict[str, Any]:
@@ -287,6 +293,12 @@ async def create_video(
                 **_decode_form_extras(form_data),
             )
         reference = InputFile(input_reference) if input_reference else None
+        if reference is None:
+            # The SDK flattens {"file_id"|"image_url": ...} into bracketed keys.
+            for key in _REFERENCE_FORM_KEYS:
+                if isinstance(value := form_data.get(key), str) and value:
+                    reference = InputFile(value)
+                    break
 
     log_request_params(request)
     model_id = (
@@ -353,7 +365,7 @@ async def list_videos(
         Query(description="Sort order by the `created_at` timestamp of the objects."),
     ] = "desc",
     _: Annotated[None, Depends(authenticate)] = None,
-) -> ListVideosResponse:
+) -> VideoList:
     """List video generation jobs across all configured regions.
 
     Args:
@@ -374,21 +386,19 @@ async def list_videos(
     )
     videos = [
         _to_video(
-            _encode_video_id(
-                listing.job.invocation_arn, int(listing.seconds), listing.size
-            ),
+            _encode_video_id(listing.job.invocation_arn, listing.seconds, listing.size),
             listing.job,
-            listing.seconds,
+            str(listing.seconds),
             listing.size,
         )
         for listing in listings
     ]
     return log_response_params(
-        ListVideosResponse(
+        VideoList(
             data=videos,
             has_more=has_more,
-            first_id=videos[0].id if videos else "",
-            last_id=videos[-1].id if videos else "",
+            first_id=videos[0].id if videos else None,
+            last_id=videos[-1].id if videos else None,
         )
     )
 

@@ -9,18 +9,16 @@ import base64
 import io
 import time
 from contextlib import suppress
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from unittest.mock import patch
 
 import pytest
 from openai import BadRequestError, OpenAI
 from openai import NotFoundError as OpenAINotFoundError
 from openai.types import FileObject
+from starlette.testclient import TestClient
 
 from stdapi.files import _multipart
-
-if TYPE_CHECKING:
-    from starlette.testclient import TestClient
 
 #: Minimal valid PDF bytes for testing document endpoints.
 _MINIMAL_PDF: bytes = (
@@ -486,6 +484,25 @@ class TestCreateMultipartSessionUnit:
         await _multipart.create_multipart_session("f.bin", "a/b", "assistants", 1)
         assert stub_s3.create_kwargs["Metadata"]["expires-at"] == ""
         assert "stdapi-ai.expires" not in stub_s3.create_kwargs["Tagging"]
+
+
+@pytest.mark.local
+class TestOpenAIFilesMalformedJsonBody:
+    """POST /v1/files with a malformed JSON body (unit, no AWS)."""
+
+    @pytest.fixture
+    def client(self, api_key: str) -> TestClient:
+        """Test client without lifespan (no AWS startup), pre-authenticated."""
+        from stdapi.main import app  # noqa: PLC0415
+
+        return TestClient(app, headers={"Authorization": f"Bearer {api_key}"})
+
+    def test_malformed_json_body_is_rejected(self, client: TestClient) -> None:
+        """A malformed JSON body is rejected with 400, not a 500."""
+        response = client.post(
+            "/v1/files", content=b"{", headers={"content-type": "application/json"}
+        )
+        assert response.status_code == 400, response.text
 
 
 class TestOpenAIUploads:

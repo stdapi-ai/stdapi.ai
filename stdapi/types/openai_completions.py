@@ -139,7 +139,7 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
     prompt_cache_retention: PromptCacheRetention | None = Field(
         default=None,
         description="The retention policy for the prompt cache. "
-        "OpenAI values are mapped to Bedrock: in-memory -> 5m, 24h -> 1h.",
+        "OpenAI values are mapped to Bedrock: in_memory -> 5m, 24h -> 1h.",
     )
     best_of: int | None = Field(
         default=None,

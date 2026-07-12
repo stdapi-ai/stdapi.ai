@@ -93,13 +93,18 @@ def now_utc_timestamp() -> int:
 
 @contextmanager
 def validation_error_handler() -> Generator[None]:
-    """Context manager to convert Pydantic ValidationError to FastAPI RequestValidationError.
+    """Context manager to convert body-parsing errors to FastAPI RequestValidationError.
+
+    Converts a Pydantic ``ValidationError`` or a ``JSONDecodeError`` (raised by
+    ``Request.json()`` on a malformed body) into a ``RequestValidationError``,
+    matching how FastAPI itself reports an invalid request body.
 
     Yields:
         None
 
     Raises:
-        RequestValidationError: Converted from ValidationError with error details preserved.
+        RequestValidationError: Converted from ValidationError or JSONDecodeError,
+            with error details preserved.
 
     Usage:
         with validation_error_handler():
@@ -109,6 +114,18 @@ def validation_error_handler() -> Generator[None]:
         yield
     except ValidationError as error:
         raise RequestValidationError(error.errors()) from error
+    except JSONDecodeError as error:
+        raise RequestValidationError(
+            [
+                {
+                    "type": "json_invalid",
+                    "loc": ("body", error.pos),
+                    "msg": "JSON decode error",
+                    "input": {},
+                    "ctx": {"error": error.msg},
+                }
+            ]
+        ) from error
 
 
 def missing_file_error() -> Never:

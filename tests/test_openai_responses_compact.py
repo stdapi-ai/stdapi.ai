@@ -1,7 +1,7 @@
 """Tests for the OpenAI-compatible POST /v1/responses/compact route (unit)."""
 
 from base64 import urlsafe_b64decode
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from starlette.testclient import TestClient
@@ -18,6 +18,8 @@ from stdapi.models.chat._adapters._openai_responses import (
 from stdapi.routes import openai_responses
 from stdapi.types.openai_responses import (
     CompactionItemParam,
+    EasyInputMessage,
+    InputMessage,
     InputTokensDetails,
     OutputTokensDetails,
     Response,
@@ -111,7 +113,7 @@ class TestResponsesCompactRoute:
     def test_compact_returns_compaction_item(
         self, client: TestClient, chat_backend: _StubChatModel
     ) -> None:
-        """The summary is wrapped in an opaque compaction item with usage."""
+        """String input yields a user message echo followed by the compaction item."""
         response = client.post(
             "/v1/responses/compact",
             json={"model": "amazon.nova-pro-v1:0", "input": "a long conversation"},
@@ -119,10 +121,57 @@ class TestResponsesCompactRoute:
         assert response.status_code == 200, response.text
         body = response.json()
         assert body["object"] == "response.compaction"
-        (item,) = body["output"]
+        echo, item = body["output"]
+        assert echo["type"] == "message"
+        assert echo["status"] == "completed"
+        assert echo["role"] == "user"
+        assert echo["content"] == [
+            {"type": "input_text", "text": "a long conversation"}
+        ]
         assert item["type"] == "compaction"
         assert urlsafe_b64decode(item["encrypted_content"]) == b"THE SUMMARY"
         assert body["usage"]["total_tokens"] == 18
+
+    def test_compact_echoes_only_user_messages_in_order(
+        self, client: TestClient, chat_backend: _StubChatModel
+    ) -> None:
+        """Assistant messages are dropped; user echoes stay ordered before the compaction item."""
+        response = client.post(
+            "/v1/responses/compact",
+            json={
+                "model": "amazon.nova-pro-v1:0",
+                "input": [
+                    {"role": "user", "content": "first"},
+                    {"role": "assistant", "content": "reply"},
+                    {"role": "user", "content": "second"},
+                ],
+            },
+        )
+        assert response.status_code == 200, response.text
+        *echoes, item = response.json()["output"]
+        assert [echo["content"][0]["text"] for echo in echoes] == ["first", "second"]
+        assert all(echo["role"] == "user" for echo in echoes)
+        assert item["type"] == "compaction"
+
+    def test_compact_echoes_part_list_content_as_dicts(
+        self, client: TestClient, chat_backend: _StubChatModel
+    ) -> None:
+        """List-based user content parts are echoed back as dicts."""
+        parts = [
+            {"type": "input_text", "text": "look at this"},
+            {"type": "input_image", "image_url": "https://example.com/img.png"},
+        ]
+        response = client.post(
+            "/v1/responses/compact",
+            json={
+                "model": "amazon.nova-pro-v1:0",
+                "input": [{"role": "user", "content": parts}],
+            },
+        )
+        assert response.status_code == 200, response.text
+        echo, item = response.json()["output"]
+        assert echo["content"] == parts
+        assert item["type"] == "compaction"
 
     def test_compact_appends_summarization_directive(
         self, client: TestClient, chat_backend: _StubChatModel
@@ -139,8 +188,12 @@ class TestResponsesCompactRoute:
         (request,) = chat_backend.requests
         assert request.instructions == "be nice"
         assert isinstance(request.input, list)
-        assert request.input[0].content == "hello"
-        assert "Summarize the conversation" in str(request.input[-1].content)
+        first = request.input[0]
+        assert isinstance(first, EasyInputMessage | InputMessage)
+        assert first.content == "hello"
+        last = request.input[-1]
+        assert isinstance(last, EasyInputMessage | InputMessage)
+        assert "Summarize the conversation" in str(last.content)
 
     def test_previous_response_id_compacts_stored_conversation(
         self,
@@ -150,8 +203,9 @@ class TestResponsesCompactRoute:
     ) -> None:
         """A stored conversation is prepended before the compaction directive."""
 
-        async def _load(response_id: str) -> dict:
+        async def _load(response_id: str, kind: str) -> dict[str, Any]:
             assert response_id == "resp-1"
+            assert kind == "response"
             return {"input": [{"role": "user", "content": "first"}], "response": {}}
 
         monkeypatch.setattr(openai_responses, "load_stored_response", _load)
@@ -163,9 +217,18 @@ class TestResponsesCompactRoute:
         (request,) = chat_backend.requests
         assert request.previous_response_id is None
         assert isinstance(request.input, list)
-        assert request.input[0].content == "first"
-        assert request.input[1].content == "second"
-        assert "Summarize the conversation" in str(request.input[-1].content)
+        first = request.input[0]
+        assert isinstance(first, EasyInputMessage | InputMessage)
+        assert first.content == "first"
+        second = request.input[1]
+        assert isinstance(second, EasyInputMessage | InputMessage)
+        assert second.content == "second"
+        last = request.input[-1]
+        assert isinstance(last, EasyInputMessage | InputMessage)
+        assert "Summarize the conversation" in str(last.content)
+        *echoes, item = response.json()["output"]
+        assert [echo["content"][0]["text"] for echo in echoes] == ["first", "second"]
+        assert item["type"] == "compaction"
 
     def test_unknown_previous_response_id_is_not_found(
         self,
@@ -175,7 +238,7 @@ class TestResponsesCompactRoute:
     ) -> None:
         """An unknown previous_response_id surfaces as 404."""
 
-        async def _load(response_id: str) -> dict:
+        async def _load(response_id: str, kind: str) -> dict[str, Any]:  # noqa: ARG001
             from stdapi.api_errors import ApiError  # noqa: PLC0415
 
             msg = f"Response with id '{response_id}' not found."

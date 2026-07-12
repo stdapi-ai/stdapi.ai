@@ -34,6 +34,18 @@ class VideoModel(VideoModelBase):
     DEFAULT_SECONDS = 5
     DEFAULT_SIZE = "1280x720"
 
+    def output_seconds_spec(self, size: str) -> str:
+        """Return "hd" for 720p video, matching AWS's HD-resolution pricing row.
+
+        Args:
+            size: Effective video size as "<width>x<height>".
+
+        Returns:
+            "hd" for 720p, "" for 540p or an unrecognized size.
+        """
+        width, height = map(int, size.split("x"))
+        return "hd" if _RESOLUTIONS.get(min(width, height)) == "720p" else ""
+
     def build_generation_input(
         self,
         prompt: str,

@@ -240,14 +240,14 @@ curl -X POST "$BASE/v1/chat/completions" \
 
 **Available Retention Values:**
 
-- `"in-memory"` - Short-term caching (mapped to 5 minutes on AWS Bedrock)
+- `"in_memory"` - Short-term caching (mapped to 5 minutes on AWS Bedrock)
 - `"24h"` - Long-term caching (mapped to 1 hour on AWS Bedrock)
 - Additional AWS Bedrock values: `"1h"`, `"5m"` (provider-specific)
 
 !!! note "OpenAI to AWS Bedrock Mapping"
     OpenAI retention values are mapped to AWS Bedrock equivalents for compatibility:
 
-    - `"in-memory"` → 5 minutes
+    - `"in_memory"` → 5 minutes
     - `"24h"` → 1 hour
 
 **Usage Tracking:**

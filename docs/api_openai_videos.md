@@ -115,7 +115,7 @@ When `seconds` or `size` is omitted, the model's shortest duration and default r
 
 The optional `input_reference` image is used as the video's first frame:
 
-- **`multipart/form-data`** — upload the image file directly (this is what the OpenAI SDKs send).
+- **`multipart/form-data`** — upload the image file directly (this is what the OpenAI SDKs send). The SDK object form (`input_reference={"image_url": ...}` or `{"file_id": ...}`) is also accepted.
 - **`application/json`** — pass a base64 string, data URI, HTTPS URL, S3 URI, or [Files API](api_openai_files.md) ID.
 
 Amazon Nova Reel requires a PNG or JPEG matching the video resolution (1280x720) and only supports reference images for 6-second videos.
@@ -128,6 +128,7 @@ Amazon Nova Reel requires a PNG or JPEG matching the video resolution (1280x720)
 |-----------------------------|:----------------------------------------:|------------------------------------------------------------------------|
 | **Creation**                |                                          |                                                                        |
 | `prompt`                    |   :material-check-circle:{ .success }    | Full support                                                           |
+| `model`                     |   :material-minus-circle:{ .partial }    | Required — this gateway has no implicit default video model            |
 | `seconds` / `size`          |       :material-cog:{ .model-dep }       | Supported values depend on the model (see table above)                 |
 | `input_reference`           |   :material-check-circle:{ .success }    | First-frame image; also accepts URLs/S3/Files API IDs in JSON requests |
 | Extra model-specific params | :material-plus-circle:{ .extra-feature } | Extra fields are forwarded to the model (e.g. `seed`, `loop`)          |
@@ -138,6 +139,7 @@ Amazon Nova Reel requires a PNG or JPEG matching the video resolution (1280x720)
 | `variant=thumbnail/spritesheet` | :material-close-circle:{ .unsupported } | AWS Bedrock generates only the video asset                         |
 | List videos (`GET /v1/videos`) | :material-check-circle:{ .success }   | Merged across regions; listed while AWS retains the job record        |
 | Remix video                 | :material-close-circle:{ .unsupported }  | Not available on AWS Bedrock                                           |
+| Edits / extensions / characters | :material-close-circle:{ .unsupported } | `/v1/videos/edits`, `/videos/extensions`, and `/videos/characters` are not available on AWS Bedrock |
 | `expires_at`                |       :material-cog:{ .model-dep }       | Reported when a [retention period](operations_configuration.md#aws-s3-videos-expires-after) is configured |
 
 </div>
@@ -148,6 +150,7 @@ Amazon Nova Reel requires a PNG or JPEG matching the video resolution (1280x720)
 
 * :material-check-circle:{ .success } **Supported** — Fully compatible with the OpenAI API
 * :material-cog:{ .model-dep } **Available on Select Models** — Check your model's capabilities
+* :material-minus-circle:{ .partial } **Partial** — Supported with limitations
 * :material-close-circle:{ .unsupported } **Unsupported** — Not available in this implementation
 * :material-plus-circle:{ .extra-feature } **Extra Feature** — Enhanced capability beyond the OpenAI API
 

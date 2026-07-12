@@ -71,7 +71,10 @@ curl -X POST "$BASE/v2/embed" \
 | `output_dimension`            |       :material-cog:{ .model-dep }       | Some models support dimension reduction                            |
 | `truncate`, `max_tokens`      |       :material-cog:{ .model-dep }       | Cohere models only                                                 |
 | `embedding_types`             | :material-close-circle:{ .unsupported }  | Only `float` embeddings are returned                               |
+| `priority`                    | :material-close-circle:{ .unsupported }  | Accepted but ignored — not applicable on AWS Bedrock               |
 | Extra model-specific params   | :material-plus-circle:{ .extra-feature } | Extra fields are forwarded as additional model request parameters  |
+| **Output**                    |                                          |                                                                    |
+| `images` metadata array       | :material-close-circle:{ .unsupported }  | Image dimensions are not echoed in the response                    |
 | **Usage tracking**            |                                          |                                                                    |
 | `billed_units.input_tokens`   |       :material-cog:{ .model-dep }       | Estimated on some models                                           |
 
