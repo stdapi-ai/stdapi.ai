@@ -9,13 +9,15 @@ import base64
 import io
 import time
 from contextlib import suppress
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
 
 import pytest
 from openai import BadRequestError, OpenAI
 from openai import NotFoundError as OpenAINotFoundError
 from openai.types import FileObject
+
+from stdapi.files import _multipart
 
 if TYPE_CHECKING:
     from starlette.testclient import TestClient
@@ -440,6 +442,52 @@ class TestOpenAIFiles:
             openai_client.files.delete(uploaded.id)
 
 
+class _StubMultipartS3Client:
+    """Stub S3 client capturing create_multipart_upload/put_object kwargs."""
+
+    def __init__(self) -> None:
+        self.create_kwargs: dict[str, Any] = {}
+
+    async def create_multipart_upload(self, **kwargs: object) -> dict[str, Any]:
+        self.create_kwargs = kwargs
+        return {"UploadId": "s3-upload-id"}
+
+    async def put_object(self, **kwargs: object) -> dict[str, Any]:
+        return {}
+
+
+@pytest.mark.local
+class TestCreateMultipartSessionUnit:
+    """Unit tests for expiry stamping in create_multipart_session (stubbed S3)."""
+
+    @pytest.fixture
+    def stub_s3(self, monkeypatch: pytest.MonkeyPatch) -> _StubMultipartS3Client:
+        """Patch the S3 client and bucket resolution with stubs."""
+        stub = _StubMultipartS3Client()
+        monkeypatch.setattr(_multipart, "get_client", lambda *_: stub)
+        monkeypatch.setattr(_multipart, "_require_bucket", lambda: "bucket")
+        return stub
+
+    async def test_expires_after_stamps_metadata_and_tag(
+        self, stub_s3: _StubMultipartS3Client
+    ) -> None:
+        """expires_after sets the expires-at metadata and the Lifecycle expiry tag."""
+        session = await _multipart.create_multipart_session(
+            "f.bin", "a/b", "assistants", 1, 3600
+        )
+        metadata = stub_s3.create_kwargs["Metadata"]
+        assert metadata["expires-at"] == str(session.created_at + 3600)
+        assert "stdapi-ai.expires=true" in stub_s3.create_kwargs["Tagging"]
+
+    async def test_no_expiry_leaves_metadata_empty(
+        self, stub_s3: _StubMultipartS3Client
+    ) -> None:
+        """Without expires_after the metadata stays empty and no expiry tag is set."""
+        await _multipart.create_multipart_session("f.bin", "a/b", "assistants", 1)
+        assert stub_s3.create_kwargs["Metadata"]["expires-at"] == ""
+        assert "stdapi-ai.expires" not in stub_s3.create_kwargs["Tagging"]
+
+
 class TestOpenAIUploads:
     """Test suite for the OpenAI-compatible /v1/uploads endpoints."""
 
@@ -464,6 +512,70 @@ class TestOpenAIUploads:
             assert upload.expires_at > upload.created_at
         finally:
             openai_client.uploads.cancel(upload.id)
+
+    def test_create_with_expires_after_file_expires(
+        self, openai_client: OpenAI
+    ) -> None:
+        """The file assembled from an upload with expires_after carries expires_at."""
+        upload = openai_client.uploads.create(
+            bytes=len(_PART_A),
+            filename="expire_upload.bin",
+            mime_type="application/octet-stream",
+            purpose="assistants",
+            expires_after={"anchor": "created_at", "seconds": 3600},
+        )
+        part = openai_client.uploads.parts.create(
+            upload_id=upload.id, data=io.BytesIO(_PART_A)
+        )
+        completed = openai_client.uploads.complete(
+            upload_id=upload.id, part_ids=[part.id]
+        )
+        try:
+            assert completed.file is not None
+            assert completed.file.expires_at is not None
+            assert completed.file.expires_at > int(time.time())
+        finally:
+            assert completed.file is not None
+            openai_client.files.delete(completed.file.id)
+
+    def test_create_expires_after_out_of_range_rejected(
+        self, openai_client: OpenAI
+    ) -> None:
+        """expires_after.seconds below 1 hour is rejected with a validation error."""
+        with pytest.raises(BadRequestError, match="seconds"):
+            openai_client.uploads.create(
+                bytes=1024,
+                filename="bad_expiry.bin",
+                mime_type="application/octet-stream",
+                purpose="assistants",
+                expires_after={"anchor": "created_at", "seconds": 60},
+            )
+
+    def test_create_expires_after_above_maximum_rejected(
+        self, openai_client: OpenAI
+    ) -> None:
+        """expires_after.seconds above 30 days is rejected with a validation error."""
+        with pytest.raises(BadRequestError, match="seconds"):
+            openai_client.uploads.create(
+                bytes=1024,
+                filename="bad_expiry_max.bin",
+                mime_type="application/octet-stream",
+                purpose="assistants",
+                expires_after={"anchor": "created_at", "seconds": 2_592_001},
+            )
+
+    def test_create_expires_after_unsupported_anchor_rejected(
+        self, openai_client: OpenAI
+    ) -> None:
+        """expires_after.anchor other than 'created_at' is rejected with a validation error."""
+        with pytest.raises(BadRequestError, match="anchor"):
+            openai_client.uploads.create(
+                bytes=1024,
+                filename="bad_anchor.bin",
+                mime_type="application/octet-stream",
+                purpose="assistants",
+                expires_after={"anchor": "updated_at", "seconds": 3600},  # type: ignore[arg-type]
+            )
 
     # --- Add parts ---
 

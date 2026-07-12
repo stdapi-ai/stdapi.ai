@@ -88,12 +88,17 @@ async def create_upload_endpoint(
             "filename": body.filename,
             "mime_type": body.mime_type,
             "purpose": body.purpose,
+            "expires_after": body.expires_after,
         }
     )
     return log_response_params(
         _to_upload(
             await create_multipart_session(
-                body.filename, body.mime_type, body.purpose, body.bytes
+                body.filename,
+                body.mime_type,
+                body.purpose,
+                body.bytes,
+                body.expires_after.seconds if body.expires_after else None,
             ),
             "pending",
         )

@@ -219,6 +219,8 @@ Upload IDs use the same base32-encoded payload as file IDs. The prefix is swappe
 
 ### Create an Upload Session
 
+Set the optional `expires_after` object to give the resulting file a TTL (same behavior as `expires_after` on `/v1/files`, 1 hour to 30 days).
+
 ```bash
 curl -X POST "$BASE/v1/uploads" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
@@ -227,7 +229,8 @@ curl -X POST "$BASE/v1/uploads" \
     "bytes": 6291456,
     "filename": "large_dataset.bin",
     "mime_type": "application/octet-stream",
-    "purpose": "assistants"
+    "purpose": "assistants",
+    "expires_after": {"anchor": "created_at", "seconds": 86400}
   }'
 ```
 

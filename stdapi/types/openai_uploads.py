@@ -17,6 +17,21 @@ from stdapi.types.openai_files import FileObject, FilePurpose
 UploadStatus = Literal["pending", "completed", "cancelled", "expired"]
 
 
+class UploadExpiresAfter(BaseModelRequest):
+    """Expiration policy applied to the file created by an upload."""
+
+    anchor: Literal["created_at"] = Field(
+        description="Anchor timestamp after which the expiration policy "
+        "applies. Supported anchors: `created_at`."
+    )
+    seconds: int = Field(
+        ge=3600,
+        le=2592000,
+        description="Seconds after the anchor time until the file expires "
+        "(1 hour to 30 days).",
+    )
+
+
 class CreateUploadBody(BaseModelRequest):
     """Request body for ``POST /v1/uploads``."""
 
@@ -29,6 +44,11 @@ class CreateUploadBody(BaseModelRequest):
     mime_type: str = Field(description="The MIME type of the file.")
     purpose: FilePurpose = Field(
         description="The intended purpose of the uploaded file."
+    )
+    expires_after: UploadExpiresAfter | None = Field(
+        default=None,
+        description="Expiration policy for the resulting file. By default the "
+        "file persists until manually deleted.",
     )
 
 

@@ -52,6 +52,9 @@ if TYPE_CHECKING:
 #: TTL in seconds for a pending multipart session (1 day, matching the S3 lifecycle cleanup window).
 _MULTIPART_EXPIRY_SECONDS: int = 86400
 
+#: S3 tagging query string marking an object for Lifecycle expiry cleanup.
+_EXPIRING_S3_TAGGING: str = f"{S3_TAGGING}&stdapi-ai.expires=true"
+
 #: Per-process cache: upload_id → (s3_upload_id, part_count, expires_monotonic).
 _cache: dict[str, tuple[str, int, float]] = {}
 
@@ -306,15 +309,24 @@ async def _list_all_parts(
 
 
 async def create_multipart_session(
-    filename: str, mime_type: str, purpose: str, total_bytes: int
+    filename: str,
+    mime_type: str,
+    purpose: str,
+    total_bytes: int,
+    expires_after: int | None = None,
 ) -> MultipartSession:
     """Create an S3 native multipart upload and write a metadata marker in parallel.
+
+    The final file's expiry is stamped on the S3 multipart upload itself
+    (metadata and Lifecycle tag), so the assembled object inherits it without
+    any extra call at completion.
 
     Args:
         filename: Original filename for the final file.
         mime_type: MIME type declared for the final file.
         purpose: OpenAI purpose string.
         total_bytes: Declared total size in bytes (validated at completion).
+        expires_after: Seconds from creation until the final file expires, or ``None``.
 
     Raises:
         ApiError: ``aws_s3_bucket`` not configured (503) or invalid filename.
@@ -325,6 +337,7 @@ async def create_multipart_session(
     s3_key = file_id_s3_key(file_id)
     s3: S3Client = get_client("s3", BUCKET_TO_REGION.get(bucket))
     created_at = _created_at_from_upload_id(upload_id)
+    file_expires_at = created_at + expires_after if expires_after is not None else None
 
     multipart_resp, _ = await gather(
         s3.create_multipart_upload(
@@ -332,8 +345,13 @@ async def create_multipart_session(
             Key=s3_key,
             ContentType=mime_type,
             ContentDisposition=f'attachment; filename="{filename}"',
-            Metadata={"purpose": purpose, "expires-at": ""},
-            Tagging=S3_TAGGING,
+            Metadata={
+                "purpose": purpose,
+                "expires-at": str(file_expires_at)
+                if file_expires_at is not None
+                else "",
+            },
+            Tagging=_EXPIRING_S3_TAGGING if file_expires_at is not None else S3_TAGGING,
         ),
         s3.put_object(
             Bucket=bucket,
