@@ -1,7 +1,7 @@
 ---
-title: stdapi.ai - OpenAI & Anthropic Compatible AI Gateway for AWS Bedrock
-description: Run your favorite OpenAI and Anthropic-compatible apps on AWS Bedrock. Access 80+ models including Claude, Kimi, MiniMax with enterprise compliance and pay-per-use pricing. 14-day free trial on AWS Marketplace.
-keywords: OpenAI API gateway, Anthropic API gateway, AWS Bedrock API, OpenAI compatible API, Anthropic compatible API, AWS AI gateway, OpenAI AWS integration, Anthropic AWS integration, enterprise AI API, AWS Bedrock integration, OpenAI alternative, Anthropic alternative, private AI deployment, HIPAA compliant AI
+title: stdapi.ai - OpenAI, Anthropic & Cohere Compatible AI Gateway for AWS Bedrock
+description: Run your favorite OpenAI, Anthropic, and Cohere-compatible apps on AWS Bedrock. Access 80+ models including Claude, OpenAI GPT, Kimi, MiniMax for chat, video generation, and content moderation, with stored conversations, enterprise compliance, and pay-per-use pricing. 14-day free trial on AWS Marketplace.
+keywords: OpenAI API gateway, Anthropic API gateway, Cohere API gateway, AWS Bedrock API, OpenAI compatible API, Anthropic compatible API, Cohere compatible API, AWS AI gateway, OpenAI AWS integration, Anthropic AWS integration, enterprise AI API, AWS Bedrock integration, OpenAI alternative, Anthropic alternative, video generation API, content moderation API, private AI deployment, HIPAA compliant AI
 hide:
   - toc
   - navigation
@@ -10,9 +10,9 @@ hide:
 </style>
 
 <div class="hero hero--home" markdown>
-# Run OpenAI & Anthropic Apps on AWS Bedrock
+# Run OpenAI, Anthropic & Cohere Apps on AWS Bedrock
 
-Drop-in API gateway for AWS Bedrock and AI services. Build private AI products on AWS — without exposing your data to third-party AI providers, without subscriptions, and without rewriting your applications. Your existing OpenAI and Anthropic applications work immediately — just change the base URL. Access 80+ models with enterprise privacy, compliance controls, and pay-per-use AWS pricing.
+Drop-in API gateway for AWS Bedrock and AI services. Build private AI products on AWS — without exposing your data to third-party AI providers, without subscriptions, and without rewriting your applications. Your existing OpenAI, Anthropic, and Cohere applications work immediately — just change the base URL. Access 80+ models with enterprise privacy, compliance controls, and pay-per-use AWS pricing.
 
 **Two ways to try it:** 14-day free trial on AWS Marketplace for production, or free for local development.
 
@@ -25,7 +25,7 @@ Drop-in API gateway for AWS Bedrock and AI services. Build private AI products o
 <div class="grid cards" markdown>
 
 - :material-swap-horizontal: __Change one line, access 80+ models__
-  <br>Drop-in replacement for OpenAI and Anthropic SDKs. Works with Open WebUI, n8n, OpenClaw, Claude Code, LangChain, Continue.dev, and 1000+ tools—no code changes beyond the base URL.
+  <br>Drop-in replacement for OpenAI, Anthropic, and Cohere SDKs. Works with Open WebUI, n8n, OpenClaw, Claude Code, LangChain, Continue.dev, and 1000+ tools—no code changes beyond the base URL.
 
 - :material-shield-lock: __Your data stays in your AWS account__
   <br>All inference runs in your account. Data is never shared with model providers or used for training. Configure allowed regions for GDPR, HIPAA, and FedRAMP compliance.
@@ -36,8 +36,8 @@ Drop-in API gateway for AWS Bedrock and AI services. Build private AI products o
 - :material-aws: __Purpose-built for AWS Bedrock__
   <br>Deep integration with prompt caching, reasoning modes, guardrails, service tiers, inference profiles, and prompt routers. Not a generic proxy—built to leverage every Bedrock feature.
 
-- :material-brain: __Claude, Kimi, MiniMax, and 80+ more__
-  <br>Claude (reasoning), Kimi, MiniMax, Qwen, Llama, GLM, Nova, Stability AI, and more. Switch models instantly—no vendor lock-in.
+- :material-brain: __Claude, GPT, Kimi, and 80+ more__
+  <br>Claude (reasoning), OpenAI GPT, xAI Grok, Kimi, MiniMax, Qwen, Llama, GLM, Nova, Stability AI, and more. Switch models instantly—no vendor lock-in.
 
 - :material-rocket-launch: __Deploy in 5 minutes__
   <br>3 lines of Terraform for production on AWS. Or run Docker locally for development. Production-ready infrastructure with HTTPS, WAF, auto-scaling, and monitoring included.
@@ -82,6 +82,10 @@ Drop-in API gateway for AWS Bedrock and AI services. Build private AI products o
     <a class="logo-item" href="https://openai.com" target="_blank" rel="noopener" title="OpenAI" aria-label="OpenAI">
       <img src="styles/logo_openai.svg" alt="OpenAI logo" />
       <span>OpenAI</span>
+    </a>
+    <a class="logo-item" href="https://x.ai" target="_blank" rel="noopener" title="xAI Grok" aria-label="xAI Grok">
+      <img src="styles/logo_xai.svg" alt="xAI logo" />
+      <span>xAI Grok</span>
     </a>
     <a class="logo-item" href="https://www.moonshot.ai/" target="_blank" rel="noopener" title="Moonshot AI" aria-label="Moonshot AI">
       <img src="styles/logo_moonshot.svg" alt="Moonshot AI logo" />
@@ -190,13 +194,13 @@ flowchart LR
 
     [:octicons-arrow-right-24: Deploy on AWS](operations_getting_started.md)
 
-**Then point your application to stdapi.ai** — just change the base URL in your existing OpenAI or Anthropic SDK code. Use Claude, Kimi, MiniMax, or any Bedrock model. Switch between models, regions, and providers without changing application code.
+**Then point your application to stdapi.ai** — just change the base URL in your existing OpenAI, Anthropic, or Cohere SDK code. Use Claude, OpenAI GPT, Kimi, MiniMax, or any Bedrock model. Switch between models, regions, and providers without changing application code.
 
 !!! tip "Prefer a hands-off AWS setup?"
 
     A [managed deployment service](https://aws.amazon.com/marketplace/pp/prodview-xknxzjgl7zi5s) can deploy stdapi.ai into your AWS account — no Terraform required.
 
-**Zero lock-in:** Standard OpenAI and Anthropic APIs mean you can switch back or to another provider anytime.
+**Zero lock-in:** Standard OpenAI, Anthropic, and Cohere APIs mean you can switch back or to another provider anytime.
 
 </div>
 
@@ -209,10 +213,10 @@ flowchart LR
   <br>[:octicons-arrow-right-24: Resilience & Failover](operations_resilience.md)
 
 - :material-star-settings: __Advanced Bedrock capabilities__
-  <br>Reasoning modes (Claude, Nova), prompt caching, guardrails, service tiers, application inference profiles, and prompt routers—all through standard OpenAI API parameters.
+  <br>Reasoning modes (Claude, Nova), prompt caching, guardrails, service tiers, application inference profiles, prompt routers, and stored conversations—all through standard OpenAI API parameters.
 
 - :material-api: __Complete multi-modal API__
-  <br>Chat completions, embeddings, image generation/editing/variations, audio speech/transcription/translation. Every route maps OpenAI parameters to Bedrock equivalents.
+  <br>Chat completions, embeddings, image generation/editing/variations, video generation, audio speech/transcription/translation, and content moderation. Every route maps OpenAI parameters to Bedrock equivalents.
 
 - :material-aws: __Native AWS AI services__
   <br>Amazon Polly (text-to-speech), Transcribe (speech-to-text with speaker diarization), Translate—all unified under OpenAI-compatible endpoints.
