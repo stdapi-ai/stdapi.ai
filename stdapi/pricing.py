@@ -1782,9 +1782,7 @@ def start_price_catalog() -> None:
     """
     if not SETTINGS.cost_tracking:
         return
-    _state.load_task = asyncio.get_running_loop().create_task(
-        _load_price_catalog_with_retry()
-    )
+    _state.load_task = asyncio.create_task(_load_price_catalog_with_retry())
 
 
 async def stop_price_catalog() -> None:
@@ -1874,5 +1872,6 @@ def _log_price_catalog_event(
         execution_time_ms=(perf_counter_ns() - start_ns) // 1000000,
     )
     if diagnostics:
+        # list() copy: mypy needs a fresh list[JsonValue] (list is invariant).
         event["error_detail"] = list(diagnostics)
     write_log_event(event)

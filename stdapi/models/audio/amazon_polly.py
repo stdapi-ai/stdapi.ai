@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from botocore.exceptions import BotoCoreError, ClientError
 
 from stdapi.api_errors import ApiError, UnsupportedModelError
-from stdapi.aws import get_client
+from stdapi.aws import call_with_region_failover, get_client, service_regions
 from stdapi.config import SETTINGS
 from stdapi.media import encode_audio_stream, stream_body
 from stdapi.models import (
@@ -24,9 +24,13 @@ from stdapi.usage import record_comprehend_usage, record_polly_usage
 from stdapi.utils import format_language_code, validation_error_handler
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Awaitable, Generator
 
+    from types_aiobotocore_bedrock.literals import RegionName
     from types_aiobotocore_comprehend.client import ComprehendClient
+    from types_aiobotocore_comprehend.type_defs import (
+        DetectDominantLanguageResponseTypeDef,
+    )
     from types_aiobotocore_polly.client import PollyClient
     from types_aiobotocore_polly.literals import (
         EngineType,
@@ -39,6 +43,7 @@ if TYPE_CHECKING:
     from types_aiobotocore_polly.type_defs import (
         DescribeVoicesInputTypeDef,
         SynthesizeSpeechInputTypeDef,
+        SynthesizeSpeechOutputTypeDef,
     )
 
     from stdapi.types.openai_audio import AudioFileFormat
@@ -84,6 +89,9 @@ _VOICES_BY_LANGUAGE: dict[LanguageCodeType, set[VoiceIdType]] = {}
 _VOICES_BY_ENGINE: dict[EngineType, set[VoiceIdType]] = {}
 _VOICES_BY_NAME_LOWER: dict[str, VoiceIdType] = {}
 
+#: Voices per engine and region, in candidate priority order (non-empty only).
+_VOICES_BY_ENGINE_REGION: dict[EngineType, dict[RegionName, set[VoiceIdType]]] = {}
+
 
 class _PollyExtraParams(BaseModelResponse):
     """Supported extra parameters for Polly."""
@@ -107,15 +115,25 @@ def _engine_from_model(model: str) -> EngineType:
     return model.removeprefix(_PREFIX)  # type: ignore[return-value]
 
 
-async def _get_voices_per_engine(engine: EngineType) -> None:
-    """Retrieve voices from Polly.
+async def _get_voices_per_engine(
+    engine: EngineType, region: RegionName
+) -> set[VoiceIdType]:
+    """Retrieve one region's voices for an engine from Polly.
+
+    Also merges the voices' metadata (description, gender, language, name)
+    into the region-independent lookup tables.
 
     Args:
         engine: The engine to filter voices for.
+        region: The region to query.
+
+    Returns:
+        Voice IDs the engine supports in the region; empty when the engine
+        is not available there (Polly then returns no voices, not an error).
     """
     next_token = None
-    polly: PollyClient = get_client("polly")
-    engine_voices = _VOICES_BY_ENGINE[engine] = set()
+    polly: PollyClient = get_client("polly", region)
+    engine_voices: set[VoiceIdType] = set()
     params: DescribeVoicesInputTypeDef = {"Engine": engine}
     while True:
         if next_token:
@@ -132,57 +150,89 @@ async def _get_voices_per_engine(engine: EngineType) -> None:
         next_token = response.get("NextToken")
         if not next_token:
             break
+    return engine_voices
 
 
 async def initialize_polly_models(start_event: EventLog | None = None) -> None:
-    """Initialize voices for all models.
+    """Initialize voices for all models across every candidate region.
 
-    An engine whose voice retrieval fails with an AWS error is disabled
-    (warned about on *start_event*) instead of failing startup; text-to-
-    speech keeps working for the other engines.
+    Engine availability is discovered per region (Polly engines are not
+    offered everywhere): an engine is registered as a model when at least
+    one candidate region has voices for it, and synthesis later routes to
+    those regions only. A (engine, region) pair whose voice retrieval fails
+    with an AWS error is skipped (warned about on *start_event*) instead of
+    failing startup.
 
     Args:
         start_event: Optional startup event log to record warnings on for
-            engines whose voices could not be retrieved.
+            engine/region pairs whose voices could not be retrieved.
     """
     _VOICES_DESCRIPTIONS.clear()
     _VOICES_BY_GENDERS.clear()
     _VOICES_BY_LANGUAGE.clear()
     _VOICES_BY_ENGINE.clear()
     _VOICES_BY_NAME_LOWER.clear()
-    engines = [_engine_from_model(model) for model in _SUPPORTED_SPEECH_MODELS]
+    _VOICES_BY_ENGINE_REGION.clear()
+    regions = service_regions(SETTINGS.aws_polly_region)
+    pairs = [
+        (_engine_from_model(model), region)
+        for model in _SUPPORTED_SPEECH_MODELS
+        for region in regions
+    ]
     results = await gather(
-        *(_get_voices_per_engine(engine) for engine in engines), return_exceptions=True
+        *(_get_voices_per_engine(engine, region) for engine, region in pairs),
+        return_exceptions=True,
     )
     failed: dict[str, str] = {}
-    for engine, result in zip(engines, results, strict=True):
+    for (engine, region), result in zip(pairs, results, strict=True):
         if isinstance(result, BaseException):
             if not isinstance(result, (BotoCoreError, ClientError)):
                 raise result
-            failed[engine] = f"{type(result).__name__}: {result}"
-            # Drop any partially paginated voice set for the failed engine.
-            _VOICES_BY_ENGINE.pop(engine, None)
+            failed[f"{engine}@{region}"] = f"{type(result).__name__}: {result}"
+        elif result:
+            _VOICES_BY_ENGINE_REGION.setdefault(engine, {})[region] = result
     if failed and start_event is not None:
         add_server_warning(
             start_event,
             {"unavailable_polly_engines": failed},  # type: ignore[dict-item]
         )
-    polly: PollyClient = get_client("polly")
-    for engine, voices in _VOICES_BY_ENGINE.items():
-        if voices:
-            model_id = f"amazon.polly-{engine}"
-            EXTRA_MODELS_INPUT_MODALITY.setdefault("TEXT", set()).add(model_id)
-            EXTRA_MODELS_OUTPUT_MODALITY.setdefault("SPEECH", set()).add(model_id)
-            EXTRA_MODELS[model_id] = ModelDetails(
-                id=model_id,
-                name=f"Polly {engine.capitalize()}",
-                provider="Amazon",
-                regions=[polly.meta.region_name],  # type: ignore[list-item]
-                service="AWS Polly",
-                input_modalities=["TEXT"],
-                output_modalities=["SPEECH"],
-                response_streaming=True,
-            )
+    # Intentionally lenient: if every region failed, this registers zero models
+    # instead of raising, since Polly is an optional service.
+    for engine, voices_by_region in _VOICES_BY_ENGINE_REGION.items():
+        _VOICES_BY_ENGINE[engine] = set().union(*voices_by_region.values())
+        model_id = f"amazon.polly-{engine}"
+        EXTRA_MODELS_INPUT_MODALITY.setdefault("TEXT", set()).add(model_id)
+        EXTRA_MODELS_OUTPUT_MODALITY.setdefault("SPEECH", set()).add(model_id)
+        EXTRA_MODELS[model_id] = ModelDetails(
+            id=model_id,
+            name=f"Polly {engine.capitalize()}",
+            provider="Amazon",
+            regions=[*voices_by_region],
+            service="AWS Polly",
+            input_modalities=["TEXT"],
+            output_modalities=["SPEECH"],
+            response_streaming=True,
+        )
+
+
+def _engine_voice_regions(engine: EngineType, voice_id: str) -> list[RegionName]:
+    """Return the candidate regions able to synthesize a voice with an engine.
+
+    Args:
+        engine: Polly engine.
+        voice_id: Selected voice ID (possibly a raw, undiscovered name).
+
+    Returns:
+        Regions offering the engine with this voice, falling back to all
+        regions offering the engine, then to every candidate region (the
+        voice/engine is then left to Polly to accept or reject).
+    """
+    voices_by_region = _VOICES_BY_ENGINE_REGION.get(engine, {})
+    if regions := [
+        region for region, voices in voices_by_region.items() if voice_id in voices
+    ]:
+        return regions
+    return [*voices_by_region] or service_regions(SETTINGS.aws_polly_region)
 
 
 async def _select_voice(
@@ -230,7 +280,6 @@ async def _detect_language(text: str) -> LanguageCodeType:
         Language code.
     """
     if SETTINGS.default_tts_language is None:
-        comprehend: ComprehendClient = get_client("comprehend")
         sample_text = (
             text
             if len(text) <= _LANG_DETECT_SAMPLE_SIZE
@@ -242,8 +291,19 @@ async def _detect_language(text: str) -> LanguageCodeType:
                 )
             ]
         )
-        response = await comprehend.detect_dominant_language(Text=sample_text)
-        record_comprehend_usage(len(sample_text), "language-detection")
+
+        def _detect(
+            comprehend: ComprehendClient, _region: RegionName
+        ) -> Awaitable[DetectDominantLanguageResponseTypeDef]:
+            """Start the language detection call on one region's client."""
+            return comprehend.detect_dominant_language(Text=sample_text)
+
+        response, used_region = await call_with_region_failover(
+            "comprehend", service_regions(SETTINGS.aws_comprehend_region), _detect
+        )
+        record_comprehend_usage(
+            len(sample_text), "language-detection", region=used_region
+        )
         if response.get("Languages"):
             language = format_language_code(
                 max(response["Languages"], key=lambda x: x["Score"])["LanguageCode"]
@@ -394,11 +454,20 @@ class AudioModel(AudioModelBase[None, None]):
                     # Use lossless PCM if supported instead of a lossy Vorbis
                     output_format = request["OutputFormat"] = "pcm"
 
-        polly: PollyClient = get_client("polly")
-        with _handle_polly_error(self.model.id, voice_id, engine):
-            response = await polly.synthesize_speech(**request)
+        def _synthesize(
+            polly: PollyClient, _region: RegionName
+        ) -> Awaitable[SynthesizeSpeechOutputTypeDef]:
+            """Start the speech synthesis call on one region's client."""
+            return polly.synthesize_speech(**request)
 
-        input_tokens = record_polly_usage((int(response["RequestCharacters"])), engine)
+        with _handle_polly_error(self.model.id, voice_id, engine):
+            response, used_region = await call_with_region_failover(
+                "polly", _engine_voice_regions(engine, voice_id), _synthesize
+            )
+
+        input_tokens = record_polly_usage(
+            int(response["RequestCharacters"]), engine, region=used_region
+        )
 
         body = stream_body(response["AudioStream"])
         if encoding:

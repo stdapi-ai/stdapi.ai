@@ -229,11 +229,22 @@ class _Settings(BaseSettings):
     )
 
     aws_polly_region: RegionName | None = Field(
-        default=None, description="AWS region for Polly text-to-speech service"
+        default=None,
+        description=(
+            "AWS region for Polly text-to-speech service. When unset, every "
+            "aws_bedrock_regions entry is a candidate: engine availability is "
+            "discovered per region, and synthesis fails over across the "
+            "regions offering the requested engine and voice."
+        ),
     )
 
     aws_comprehend_region: RegionName | None = Field(
-        default=None, description="AWS region for Comprehend language detection service"
+        default=None,
+        description=(
+            "AWS region for Comprehend language detection service. When unset, "
+            "every aws_bedrock_regions entry is a candidate, tried in order "
+            "with automatic failover on region-level errors."
+        ),
     )
 
     aws_bedrock_regions: Annotated[list[RegionName], NoDecode] = Field(
@@ -499,7 +510,14 @@ class _Settings(BaseSettings):
     )
 
     aws_transcribe_region: RegionName | None = Field(
-        default=None, description="AWS region for Transcribe speech-to-text service"
+        default=None,
+        description=(
+            "AWS region for Transcribe speech-to-text service. When unset, "
+            "every aws_bedrock_regions entry with a co-located S3 bucket "
+            "(aws_transcribe_s3_bucket/aws_s3_bucket for the primary region, "
+            "aws_s3_regional_buckets for the others) is a candidate, tried "
+            "in order with automatic failover on region-level errors."
+        ),
     )
 
     aws_transcribe_s3_bucket: str | None = Field(
@@ -540,7 +558,12 @@ class _Settings(BaseSettings):
     )
 
     aws_translate_region: RegionName | None = Field(
-        default=None, description="AWS region for Translate text translation service"
+        default=None,
+        description=(
+            "AWS region for Translate text translation service. When unset, "
+            "every aws_bedrock_regions entry is a candidate, tried in order "
+            "with automatic failover on region-level errors."
+        ),
     )
 
     timezone: ZoneInfo = Field(

@@ -1287,7 +1287,7 @@ async def _collect_region_candidates(
             continue
         for model in result:
             candidates.setdefault(model.id, []).append(model)
-    if errors and len(errors) == len(regions):
+    if len(errors) == len(regions):
         raise errors[0]
     return candidates
 
@@ -1329,12 +1329,11 @@ async def _check_candidates(
                     _merge_candidate(model, later)
                 all_models[model_id] = model
                 continue
-            region = model.regions[0] if model.regions else None
-            if region is not None and issues != ["unavailable"]:
+            if issues != ["unavailable"]:
                 # "unavailable" alone is an AWS catalog inconsistency (listed
                 # but region-unavailable, e.g. amazon.titan-embed-g1-text-02):
                 # not operator-actionable, skip silently.
-                unavailable_models.setdefault(model_id, {})[region] = issues
+                unavailable_models.setdefault(model_id, {})[model.regions[0]] = issues
             if index + 1 < len(candidates[model_id]):
                 pending[model_id] = index + 1
     return all_models
@@ -1590,8 +1589,8 @@ def _merge_candidate(existing: ModelDetails, candidate: ModelDetails) -> None:
         existing: Model already confirmed available in an earlier region.
         candidate: The same model as listed by another region.
     """
-    region = candidate.regions[0] if candidate.regions else None
-    if region is not None and region not in existing.regions:
+    region = candidate.regions[0]
+    if region not in existing.regions:
         existing.regions.append(region)
         if profile := (candidate.inference_profiles or {}).get(region):
             existing.set_inference_profile(region, profile)
@@ -1608,9 +1607,7 @@ async def _check_model_availability(model: ModelDetails) -> list[str]:
         during the check is reported as an issue, not raised, so one degraded
         region cannot fail a whole refresh.
     """
-    bedrock_client: BedrockClient = get_client(
-        "bedrock", model.regions[0] if model.regions else None
-    )
+    bedrock_client: BedrockClient = get_client("bedrock", model.regions[0])
     try:
         availability = await bedrock_client.get_foundation_model_availability(
             modelId=model.id

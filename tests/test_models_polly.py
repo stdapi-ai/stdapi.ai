@@ -1,4 +1,4 @@
-"""Unit tests for Polly voice initialization fault isolation."""
+"""Unit tests for Polly multi-region voice initialization and failover routing."""
 
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -6,65 +6,61 @@ from typing import TYPE_CHECKING
 import pytest
 from botocore.exceptions import ClientError
 
+import stdapi.aws
+from stdapi import usage
+from stdapi.config import SETTINGS
 from stdapi.models import EXTRA_MODELS
 from stdapi.models.audio import amazon_polly
-from stdapi.models.audio.amazon_polly import initialize_polly_models
+from stdapi.models.audio.amazon_polly import (
+    _engine_voice_regions,
+    initialize_polly_models,
+)
 from stdapi.monitoring import EventLog
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Generator, Mapping
 
-    from types_aiobotocore_polly.literals import EngineType
+    from types_aiobotocore_bedrock.literals import RegionName
+    from types_aiobotocore_polly.literals import EngineType, VoiceIdType
 
-#: Voice dictionaries cleared/rebuilt by initialize_polly_models.
-_VOICE_DICTS = (
+
+#: All tests in this module exercise the local implementation in-process.
+pytestmark = pytest.mark.local
+
+
+#: Module dictionaries mutated by initialize_polly_models.
+_STATE_DICTS = (
     "_VOICES_DESCRIPTIONS",
     "_VOICES_BY_GENDERS",
     "_VOICES_BY_LANGUAGE",
     "_VOICES_BY_ENGINE",
     "_VOICES_BY_NAME_LOWER",
-)
-
-#: Model dictionaries in stdapi.models that Polly initialization mutates.
-_MODEL_DICTS = (
+    "_VOICES_BY_ENGINE_REGION",
     "EXTRA_MODELS",
     "EXTRA_MODELS_INPUT_MODALITY",
     "EXTRA_MODELS_OUTPUT_MODALITY",
 )
 
 
-class _StubPollyMeta:
-    """Minimal client meta carrying only a region name."""
-
-    region_name = "eu-west-3"
-
-
-class _StubPollyClient:
-    """Stub Polly client exposing only .meta.region_name."""
-
-    meta = _StubPollyMeta()
-
-
-def _snapshot(source: dict[str, object]) -> dict[str, object]:
-    """Copy a module dict, deep-copying set values (mutated in place by init)."""
-    return {
-        key: set(value) if isinstance(value, set) else value
-        for key, value in source.items()
-    }
+def _copy(value: object) -> object:
+    """Deep-copy the set/dict-of-set values mutated in place by init."""
+    if isinstance(value, set):
+        return set(value)
+    if isinstance(value, dict):
+        return {key: _copy(inner) for key, inner in value.items()}
+    return value
 
 
 @pytest.fixture(autouse=True)
 def _isolated_polly_state(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
-    """Stub the Polly client, purge session Polly models, restore state after.
+    """Pin candidate regions, purge session Polly models, restore state after.
 
     The session app may already have registered real ``amazon.polly-*``
     entries; they are removed so each test observes a from-scratch init.
     """
-    monkeypatch.setattr(amazon_polly, "get_client", lambda _service: _StubPollyClient())
-    saved = {
-        name: _snapshot(getattr(amazon_polly, name))
-        for name in _VOICE_DICTS + _MODEL_DICTS
-    }
+    monkeypatch.setattr(SETTINGS, "aws_polly_region", None)
+    monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", ["us-east-1", "eu-west-1"])
+    saved = {name: _copy(getattr(amazon_polly, name)) for name in _STATE_DICTS}
     for model_id in [m for m in EXTRA_MODELS if m.startswith("amazon.polly-")]:
         del EXTRA_MODELS[model_id]
         for name in ("EXTRA_MODELS_INPUT_MODALITY", "EXTRA_MODELS_OUTPUT_MODALITY"):
@@ -78,16 +74,16 @@ def _isolated_polly_state(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
 
 
 def _patch_voices(
-    monkeypatch: pytest.MonkeyPatch, failing_engines: dict[str, Exception]
+    monkeypatch: pytest.MonkeyPatch,
+    outcomes: dict[tuple[str, str], set[str] | Exception],
 ) -> None:
-    """Fake per-engine voice retrieval, raising for the given engines."""
+    """Fake per-(engine, region) voice retrieval; unlisted pairs are empty."""
 
-    async def _fake(engine: EngineType) -> None:
-        # Mimic the real function: register the dict entry before failing so
-        # partial pagination cleanup is exercised.
-        amazon_polly._VOICES_BY_ENGINE[engine] = {"Lea"}  # noqa: SLF001
-        if (error := failing_engines.get(engine)) is not None:
-            raise error
+    async def _fake(engine: EngineType, region: RegionName) -> set[VoiceIdType]:
+        outcome = outcomes.get((engine, region), set())
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome  # type: ignore[return-value]
 
     monkeypatch.setattr(amazon_polly, "_get_voices_per_engine", _fake)
 
@@ -109,62 +105,181 @@ def _aws_error() -> ClientError:
     )
 
 
-class TestInitializePollyModelsFaultIsolation:
-    """initialize_polly_models: a failing engine must not fail startup."""
+def _engines_warning(start_event: EventLog) -> Mapping[str, object]:
+    (warning,) = start_event["server_warnings"]
+    assert isinstance(warning, dict)
+    failed = warning["unavailable_polly_engines"]
+    assert isinstance(failed, dict)
+    return failed
 
-    async def test_failed_engine_is_disabled_and_warned(
+
+class TestInitializePollyModels:
+    """initialize_polly_models: per-region engine discovery and registration."""
+
+    async def test_engine_regions_follow_candidate_priority_order(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A failing engine is dropped with a warning; the others register."""
-        _patch_voices(monkeypatch, {"neural": _aws_error()})
-        start_event = _start_event()
-
-        await initialize_polly_models(start_event)
-
-        assert "amazon.polly-neural" not in EXTRA_MODELS
-        assert "amazon.polly-standard" in EXTRA_MODELS
-        (warning,) = start_event["server_warnings"]
-        assert isinstance(warning, dict)
-        engines = warning["unavailable_polly_engines"]
-        assert isinstance(engines, dict)
-        assert list(engines) == ["neural"]
-        # The partially retrieved voice set was dropped, not half-kept.
-        assert "neural" not in amazon_polly._VOICES_BY_ENGINE  # noqa: SLF001
-
-    async def test_all_engines_failing_still_completes(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Even with every engine failing, initialization completes with warnings."""
-        engines = ("standard", "neural", "long-form", "generative")
-        _patch_voices(monkeypatch, dict.fromkeys(engines, _aws_error()))
-        start_event = _start_event()
-
-        await initialize_polly_models(start_event)
-
-        assert not any(
-            model_id.startswith("amazon.polly-") for model_id in EXTRA_MODELS
+        """An engine found in both regions lists them in candidate order."""
+        _patch_voices(
+            monkeypatch,
+            {
+                ("standard", "us-east-1"): {"Joanna"},
+                ("standard", "eu-west-1"): {"Joanna", "Lea"},
+            },
         )
-        (warning,) = start_event["server_warnings"]
-        assert isinstance(warning, dict)
-        failed = warning["unavailable_polly_engines"]
-        assert isinstance(failed, dict)
-        assert sorted(failed) == sorted(engines)
+        await initialize_polly_models()
+
+        model = EXTRA_MODELS["amazon.polly-standard"]
+        assert model.regions == ["us-east-1", "eu-west-1"]
+        assert amazon_polly._VOICES_BY_ENGINE["standard"] == {  # noqa: SLF001
+            "Joanna",
+            "Lea",
+        }
+
+    async def test_engine_available_in_one_region_only(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An engine with voices in a single region is scoped to it."""
+        _patch_voices(monkeypatch, {("generative", "eu-west-1"): {"Lea"}})
+        await initialize_polly_models()
+
+        assert EXTRA_MODELS["amazon.polly-generative"].regions == ["eu-west-1"]
+        assert "amazon.polly-standard" not in EXTRA_MODELS
+
+    async def test_engine_with_no_voices_anywhere_is_not_registered(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Empty voice lists everywhere (unsupported engine): no model, no warning."""
+        _patch_voices(monkeypatch, {})
+        start_event = _start_event()
+
+        await initialize_polly_models(start_event)
+
+        assert not any(m.startswith("amazon.polly-") for m in EXTRA_MODELS)
+        assert "server_warnings" not in start_event
+
+    async def test_failed_region_is_warned_and_the_other_still_serves(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One region failing keeps the engine served from the other region."""
+        _patch_voices(
+            monkeypatch,
+            {("neural", "us-east-1"): _aws_error(), ("neural", "eu-west-1"): {"Lea"}},
+        )
+        start_event = _start_event()
+
+        await initialize_polly_models(start_event)
+
+        assert EXTRA_MODELS["amazon.polly-neural"].regions == ["eu-west-1"]
+        assert list(_engines_warning(start_event)) == ["neural@us-east-1"]
+
+    async def test_all_pairs_failing_still_completes(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Every (engine, region) failing yields warnings, never a crash."""
+        engines = ("standard", "neural", "long-form", "generative")
+        _patch_voices(
+            monkeypatch,
+            {
+                (engine, region): _aws_error()
+                for engine in engines
+                for region in ("us-east-1", "eu-west-1")
+            },
+        )
+        start_event = _start_event()
+
+        await initialize_polly_models(start_event)
+
+        assert not any(m.startswith("amazon.polly-") for m in EXTRA_MODELS)
+        assert len(_engines_warning(start_event)) == 8
 
     async def test_non_aws_errors_propagate(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Programming errors are never swallowed as an engine failure."""
-        _patch_voices(monkeypatch, {"neural": ValueError("bug")})
+        """Programming errors are never swallowed as a region failure."""
+        _patch_voices(monkeypatch, {("neural", "us-east-1"): ValueError("bug")})
 
         with pytest.raises(ValueError, match="bug"):
             await initialize_polly_models(_start_event())
 
-    async def test_no_start_event_stays_silent_but_tolerant(
+
+class TestEngineVoiceRegions:
+    """_engine_voice_regions: synthesis routes to regions offering the voice."""
+
+    @pytest.fixture(autouse=True)
+    def _seed_engine_regions(self) -> None:
+        """Replace any session-discovered voice data with a fixed matrix."""
+        amazon_polly._VOICES_BY_ENGINE_REGION.clear()  # noqa: SLF001
+        amazon_polly._VOICES_BY_ENGINE_REGION["neural"] = {  # noqa: SLF001
+            "us-east-1": {"Joanna"},
+            "eu-west-1": {"Joanna", "Lea"},
+        }
+
+    def test_voice_present_in_both_regions_keeps_priority_order(self) -> None:
+        """A voice available everywhere routes to all regions, in order."""
+        assert _engine_voice_regions("neural", "Joanna") == ["us-east-1", "eu-west-1"]
+
+    def test_voice_present_in_one_region_routes_there_only(self) -> None:
+        """A region-specific voice routes only to its region."""
+        assert _engine_voice_regions("neural", "Lea") == ["eu-west-1"]
+
+    def test_unknown_voice_falls_back_to_engine_regions(self) -> None:
+        """An undiscovered voice name tries every region offering the engine."""
+        assert _engine_voice_regions("neural", "Ghost") == ["us-east-1", "eu-west-1"]
+
+    def test_unknown_engine_falls_back_to_all_candidate_regions(self) -> None:
+        """An engine with no discovered region uses the full candidate list."""
+        assert _engine_voice_regions("standard", "Joanna") == ["us-east-1", "eu-west-1"]
+
+
+class _StubComprehendClient:
+    """Stub Comprehend client with a fixed per-region behavior."""
+
+    def __init__(self, outcome: dict[str, object] | Exception) -> None:
+        self._outcome = outcome
+
+    async def detect_dominant_language(self, Text: str) -> dict[str, object]:  # noqa: N803
+        """Return the fixed payload or raise the configured error."""
+        if isinstance(self._outcome, Exception):
+            raise self._outcome
+        return self._outcome
+
+
+class TestDetectLanguageFailover:
+    """_detect_language: Comprehend fails over across candidate regions."""
+
+    async def test_failover_serves_and_records_the_second_region(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Without a start event the failure is still tolerated (no crash)."""
-        _patch_voices(monkeypatch, {"neural": _aws_error()})
+        """A throttled first region falls over; usage records the second."""
+        monkeypatch.setattr(SETTINGS, "default_tts_language", None)
+        monkeypatch.setattr(SETTINGS, "aws_comprehend_region", None)
+        clients: dict[str, _StubComprehendClient] = {
+            "us-east-1": _StubComprehendClient(
+                ClientError(
+                    {"Error": {"Code": "ThrottlingException", "Message": "x"}},
+                    "DetectDominantLanguage",
+                )
+            ),
+            "eu-west-1": _StubComprehendClient(
+                {"Languages": [{"LanguageCode": "fr", "Score": 0.99}]}
+            ),
+        }
+        monkeypatch.setattr(
+            stdapi.aws, "get_client", lambda _service, region=None: clients[region]
+        )
+        monkeypatch.setitem(
+            amazon_polly._VOICES_BY_LANGUAGE,  # noqa: SLF001
+            "fr-FR",
+            {"Lea"},
+        )
+        usage_token = usage.init_usage()
+        try:
+            language = await amazon_polly._detect_language("bonjour")  # noqa: SLF001
+            records = usage.USAGE.get()
+        finally:
+            usage.USAGE.reset(usage_token)
 
-        await initialize_polly_models()
-
-        assert "amazon.polly-standard" in EXTRA_MODELS
+        assert language == "fr-FR"
+        (key,) = records
+        assert key.region == "eu-west-1"

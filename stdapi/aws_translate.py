@@ -8,12 +8,17 @@ from typing import TYPE_CHECKING
 from botocore.exceptions import ClientError
 
 from stdapi.api_errors import ApiError
-from stdapi.aws import get_client
+from stdapi.aws import call_with_region_failover, service_regions
+from stdapi.config import SETTINGS
 from stdapi.usage import record_translate_usage
 from stdapi.utils import language_code_to_name
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable
+
+    from types_aiobotocore_bedrock.literals import RegionName
     from types_aiobotocore_translate import TranslateClient
+    from types_aiobotocore_translate.type_defs import TranslateTextResponseTypeDef
 
 
 class TranslationError(Exception):
@@ -40,14 +45,21 @@ async def translate(
     if not text.strip() or source_language_code == "en":
         return text
 
-    try:
-        translate_client: TranslateClient = get_client("translate")
-        result = await translate_client.translate_text(
+    def _translate(
+        client: TranslateClient, _region: RegionName
+    ) -> Awaitable[TranslateTextResponseTypeDef]:
+        """Start the translation call on one region's client."""
+        return client.translate_text(
             Text=text,
             SourceLanguageCode=source_language_code,
             TargetLanguageCode=target_language_code,
         )
-        record_translate_usage(len(text))
+
+    try:
+        result, used_region = await call_with_region_failover(
+            "translate", service_regions(SETTINGS.aws_translate_region), _translate
+        )
+        record_translate_usage(len(text), region=used_region)
         return result["TranslatedText"]
 
     except ClientError as error:

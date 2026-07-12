@@ -167,10 +167,10 @@ This section provides a quick reference of all available configuration options. 
 
 | Variable                                          | Default                     | Description                                                 |
 |---------------------------------------------------|-----------------------------|-------------------------------------------------------------|
-| [`AWS_POLLY_REGION`](#aws-polly-region)           | First `AWS_BEDROCK_REGIONS` | AWS region for Amazon Polly text-to-speech service          |
-| [`AWS_COMPREHEND_REGION`](#aws-comprehend-region) | First `AWS_BEDROCK_REGIONS` | AWS region for Amazon Comprehend language detection service |
-| [`AWS_TRANSCRIBE_REGION`](#aws-transcribe-region) | First `AWS_BEDROCK_REGIONS` | AWS region for Amazon Transcribe speech-to-text service     |
-| [`AWS_TRANSLATE_REGION`](#aws-translate-region)   | First `AWS_BEDROCK_REGIONS` | AWS region for Amazon Translate text translation service    |
+| [`AWS_POLLY_REGION`](#aws-polly-region)           | All `AWS_BEDROCK_REGIONS`   | Region for Amazon Polly; unset = per-engine regional discovery with automatic failover |
+| [`AWS_COMPREHEND_REGION`](#aws-comprehend-region) | All `AWS_BEDROCK_REGIONS`   | Region for Amazon Comprehend language detection; unset = automatic failover across all Bedrock regions |
+| [`AWS_TRANSCRIBE_REGION`](#aws-transcribe-region) | All `AWS_BEDROCK_REGIONS`   | Region for Amazon Transcribe; unset = failover across Bedrock regions with a co-located bucket |
+| [`AWS_TRANSLATE_REGION`](#aws-translate-region)   | All `AWS_BEDROCK_REGIONS`   | Region for Amazon Translate; unset = automatic failover across all Bedrock regions |
 
 ### :material-directions-fork: Resilience & Failover
 
@@ -570,7 +570,7 @@ export AWS_S3_FILES_PREFIX=
 :   Falls back to `AWS_S3_BUCKET` if not specified
 
 :octicons-alert-24: **Requirement**
-:   Must be in the same region as `AWS_TRANSCRIBE_REGION`
+:   Must be in the same region as `AWS_TRANSCRIBE_REGION` when that is set; with the default multi-region behavior it serves the primary Bedrock region, and [`AWS_S3_REGIONAL_BUCKETS`](#aws-s3-regional-buckets) entries serve the other candidate regions
 
 ```bash
 # If AWS_TRANSCRIBE_REGION is us-east-1
@@ -1357,14 +1357,17 @@ export AWS_BEDROCK_MODEL_ARN_MAPPING='{
 :   Region for Amazon Polly text-to-speech service
 
 :octicons-gear-24: **Default**
-:   First region in `AWS_BEDROCK_REGIONS`
+:   All regions in `AWS_BEDROCK_REGIONS`, with per-engine regional discovery and automatic failover
+
+:octicons-workflow-24: **Behavior**
+:   When unset, voice availability is discovered per engine in every `AWS_BEDROCK_REGIONS` entry at startup: an engine (Standard, Neural, Long-form, Generative) is exposed as a model when at least one candidate region offers it, and each synthesis call routes to the regions offering the requested engine and voice, failing over on region-level errors. Setting an explicit region pins Polly to that single region — engines it does not offer are then disabled.
 
 ```bash
 export AWS_POLLY_REGION=us-east-1
 ```
 
 !!! warning "Amazon Polly Engine Availability"
-    Not all Polly engines (Standard, Neural, Long-form, Generative) are available in all AWS regions. Verify engine and voice availability in your target region. See [Amazon Polly feature and region compatibility](https://docs.aws.amazon.com/polly/latest/dg/limits.html#limits-regions) for detailed information.
+    Not all Polly engines (Standard, Neural, Long-form, Generative) are available in all AWS regions. With the default multi-region behavior, an engine missing from one region is simply served from another candidate region that offers it. See [Amazon Polly feature and region compatibility](https://docs.aws.amazon.com/polly/latest/dg/limits.html#limits-regions) for detailed information.
 
 #### `AWS_COMPREHEND_REGION` { #aws-comprehend-region }
 
@@ -1372,14 +1375,17 @@ export AWS_POLLY_REGION=us-east-1
 :   Region for Amazon Comprehend language detection service
 
 :octicons-gear-24: **Default**
-:   First region in `AWS_BEDROCK_REGIONS`
+:   All regions in `AWS_BEDROCK_REGIONS`, tried in order with automatic failover
+
+:octicons-workflow-24: **Behavior**
+:   When unset, language-detection calls try each `AWS_BEDROCK_REGIONS` entry in order and fail over to the next region on region-level errors (throttling, service unavailability, network issues). Setting an explicit region pins Comprehend to that single region with no failover.
 
 ```bash
 export AWS_COMPREHEND_REGION=us-east-1
 ```
 
 !!! warning "Amazon Comprehend Regional Availability"
-    Amazon Comprehend is not available in all AWS regions. stdapi.ai uses the `detect_dominant_language` feature for language detection. Verify service and feature availability in your target region. See [Amazon Comprehend supported regions](https://docs.aws.amazon.com/comprehend/latest/dg/guidelines-and-limits.html#limits-regions) for regional availability.
+    Amazon Comprehend is not available in all AWS regions. stdapi.ai uses the `detect_dominant_language` feature for language detection. Verify service and feature availability in your target region (with the default multi-region behavior, a region without Comprehend simply fails over to the next one). See [Amazon Comprehend supported regions](https://docs.aws.amazon.com/comprehend/latest/dg/guidelines-and-limits.html#limits-regions) for regional availability.
 
 #### `AWS_TRANSCRIBE_REGION` { #aws-transcribe-region }
 
@@ -1387,7 +1393,10 @@ export AWS_COMPREHEND_REGION=us-east-1
 :   Region for Amazon Transcribe speech-to-text service
 
 :octicons-gear-24: **Default**
-:   First region in `AWS_BEDROCK_REGIONS`
+:   All regions in `AWS_BEDROCK_REGIONS` that have a co-located S3 bucket, tried in order with automatic failover
+
+:octicons-workflow-24: **Behavior**
+:   Transcription jobs need an S3 bucket in the job's region. When unset, every `AWS_BEDROCK_REGIONS` entry with a usable bucket is a candidate — the primary region is served by [`AWS_TRANSCRIBE_S3_BUCKET`](#aws-transcribe-s3-bucket) (or `AWS_S3_BUCKET`), the others by their [`AWS_S3_REGIONAL_BUCKETS`](#aws-s3-regional-buckets) entry. On a region-level error while starting a job, the audio is server-side copied to the next candidate's bucket and the job restarts there. Setting an explicit region pins Transcribe to that single region with no failover.
 
 ```bash
 export AWS_TRANSCRIBE_REGION=us-east-1
@@ -1399,7 +1408,10 @@ export AWS_TRANSCRIBE_REGION=us-east-1
 :   Region for Amazon Translate text translation service
 
 :octicons-gear-24: **Default**
-:   First region in `AWS_BEDROCK_REGIONS`
+:   All regions in `AWS_BEDROCK_REGIONS`, tried in order with automatic failover
+
+:octicons-workflow-24: **Behavior**
+:   When unset, translation calls try each `AWS_BEDROCK_REGIONS` entry in order and fail over to the next region on region-level errors (throttling, service unavailability, network issues). Setting an explicit region pins Translate to that single region with no failover.
 
 ```bash
 export AWS_TRANSLATE_REGION=us-east-1

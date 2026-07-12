@@ -27,7 +27,11 @@ from stdapi.api_providers import (
     set_response_headers,
 )
 from stdapi.auth import initialize_authentication
-from stdapi.aws import AWSConnectionManager, initialize_aws_account_info
+from stdapi.aws import (
+    AWSConnectionManager,
+    initialize_aws_account_info,
+    service_regions,
+)
 from stdapi.aws_bedrock import (
     AWS_ERROR_MAP,
     set_guardrail_configuration,
@@ -39,7 +43,10 @@ from stdapi.exceptions import ServerError
 from stdapi.metering import EDITION_TITLE, LICENCE_INFO, SERVER_FULL_VERSION, register
 from stdapi.models import initialize_bedrock_models, update_unified_models_collections
 from stdapi.models.audio.amazon_polly import initialize_polly_models
-from stdapi.models.audio.amazon_transcribe import initialize_transcribe_models
+from stdapi.models.audio.amazon_transcribe import (
+    initialize_transcribe_models,
+    transcribe_job_candidates,
+)
 from stdapi.monitoring import (
     LOGGING_PATHS_IGNORE,
     EventLog,
@@ -63,6 +70,8 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable
     from typing import Any
 
+    from types_aiobotocore_bedrock.literals import RegionName
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
@@ -75,24 +84,38 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
         None once startup is complete; shutdown runs after the yield.
     """
     start = time_ns()
+    # Fall back to the configured/default region so a bucket-less deployment
+    # still warms one Transcribe client (requests then 404 as before).
+    transcribe_regions: list[RegionName | None] = [
+        region for region, _ in transcribe_job_candidates()
+    ] or [SETTINGS.aws_transcribe_region]
     try:
         # Prepare AWS clients list
         async with AWSConnectionManager(
             *(
-                ("polly", SETTINGS.aws_polly_region),
-                ("comprehend", SETTINGS.aws_comprehend_region),
+                *(
+                    ("polly", region)
+                    for region in service_regions(SETTINGS.aws_polly_region)
+                ),
+                *(
+                    ("comprehend", region)
+                    for region in service_regions(SETTINGS.aws_comprehend_region)
+                ),
                 *(("bedrock", region) for region in SETTINGS.aws_bedrock_regions),
                 *(
                     ("bedrock-runtime", region)
                     for region in SETTINGS.aws_bedrock_regions
                 ),
-                ("transcribe", SETTINGS.aws_transcribe_region),
-                ("translate", SETTINGS.aws_translate_region),
+                *(("transcribe", region) for region in transcribe_regions),
+                *(
+                    ("translate", region)
+                    for region in service_regions(SETTINGS.aws_translate_region)
+                ),
                 # None (GovCloud, no Price List endpoint) warms the default
                 # client, which the never-loading catalog then never uses.
                 # type-ignore: the RegionName stub Literal lags EUSC (works live).
                 ("pricing", pricing_endpoint_region()),  # type: ignore[arg-type]
-                ("s3", SETTINGS.aws_transcribe_region),
+                *(("s3", region) for region in transcribe_regions),
                 ("s3", SETTINGS.aws_bedrock_regions[0]),
                 ("s3.accelerate", SETTINGS.aws_bedrock_regions[0]),
                 *(("s3", region) for region in SETTINGS.aws_s3_regional_buckets),

@@ -2,6 +2,7 @@
 
 from asyncio import gather, sleep
 from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, NotRequired
 
 from botocore.exceptions import ClientError
@@ -9,8 +10,8 @@ from pydantic_core import from_json
 from typing_extensions import TypedDict
 
 from stdapi.api_errors import ApiError, InvalidLanguageFormatError
-from stdapi.aws import get_client
-from stdapi.aws_s3 import get_text_from_s3, track_temporary_s3_objects
+from stdapi.aws import call_with_region_failover, get_client, service_regions
+from stdapi.aws_s3 import copy_s3_object, get_text_from_s3, track_temporary_s3_objects
 from stdapi.aws_translate import translate, translate_subtitle
 from stdapi.cleanup import schedule_cleanup
 from stdapi.config import SETTINGS
@@ -52,6 +53,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator
 
     from fastapi import Response
+    from types_aiobotocore_bedrock.literals import RegionName
     from types_aiobotocore_transcribe.client import TranscribeServiceClient
     from types_aiobotocore_transcribe.type_defs import (
         StartTranscriptionJobRequestTypeDef,
@@ -118,20 +120,109 @@ class TranscribeJobData(TypedDict, total=False):
     subtitle_content: NotRequired[str]
 
 
+#: Region that served the current request's transcription job.
+_SERVED_REGION: ContextVar[str] = ContextVar("transcribe_served_region", default="")
+
+
+def transcribe_job_candidates() -> list[tuple[RegionName, str]]:
+    """Return the candidate (region, S3 bucket) pairs for transcription jobs.
+
+    Transcribe reads and writes through an S3 bucket co-located with the
+    job's region: the primary region is served by ``aws_transcribe_s3_bucket``
+    (itself defaulting to ``aws_s3_bucket``), the other candidates by their
+    ``aws_s3_regional_buckets`` entry.
+
+    Returns:
+        (region, bucket) pairs in priority order; empty when no candidate
+        region has a usable bucket.
+    """
+    if region := SETTINGS.aws_transcribe_region:
+        bucket = (
+            SETTINGS.aws_transcribe_s3_bucket
+            or SETTINGS.aws_s3_regional_buckets.get(region)
+        )
+        return [(region, bucket)] if bucket else []
+    primary = SETTINGS.aws_bedrock_regions[0]
+    candidates: list[tuple[RegionName, str]] = []
+    for candidate in SETTINGS.aws_bedrock_regions:
+        bucket = SETTINGS.aws_s3_regional_buckets.get(candidate)
+        if candidate == primary:
+            bucket = SETTINGS.aws_transcribe_s3_bucket or bucket
+        if bucket:
+            candidates.append((candidate, bucket))
+    return candidates
+
+
 async def initialize_transcribe_models() -> None:
     """Initialize extra models."""
-    transcribe: TranscribeServiceClient = get_client("transcribe")
+    regions = [region for region, _ in transcribe_job_candidates()]
     EXTRA_MODELS_INPUT_MODALITY.setdefault("SPEECH", set()).add(AWS_TRANSCRIBE_MODEL_ID)
     EXTRA_MODELS_OUTPUT_MODALITY.setdefault("TEXT", set()).add(AWS_TRANSCRIBE_MODEL_ID)
     EXTRA_MODELS[AWS_TRANSCRIBE_MODEL_ID] = ModelDetails(
         id=AWS_TRANSCRIBE_MODEL_ID,
         name="Transcribe",
         provider="Amazon",
-        regions=[transcribe.meta.region_name],  # type: ignore[list-item]
+        regions=regions or service_regions(SETTINGS.aws_transcribe_region),
         service="AWS Transcribe",
         input_modalities=["SPEECH"],
         output_modalities=["TEXT"],
     )
+
+
+async def _start_transcription_with_failover(
+    candidates: list[tuple[RegionName, str]],
+    job_id: str,
+    language: str | None,
+    response_format: str,
+) -> tuple[RegionName, str]:
+    """Start the transcription job, failing over across candidate regions.
+
+    The audio must already be uploaded to the first candidate's bucket;
+    later attempts server-side copy it into their own region's bucket
+    (Transcribe requires the media bucket in the job's region).
+
+    Args:
+        candidates: (region, bucket) pairs in priority order (at least one).
+        job_id: Transcription job name (also the input key's directory).
+        language: Optional language code, for caller-error translation.
+        response_format: Requested response format.
+
+    Returns:
+        The (region, bucket) pair that accepted the job.
+
+    Raises:
+        ApiError: For caller errors (unsupported language, bad file).
+        BotoCoreError: When every candidate region fails (last error).
+        ClientError: Same as above.
+    """
+    input_key = f"{SETTINGS.aws_s3_tmp_prefix}{job_id}/input"
+    buckets = dict(candidates)
+    first_bucket = candidates[0][1]
+
+    async def _attempt(transcribe: TranscribeServiceClient, region: RegionName) -> str:
+        """Run one region's transcription job against its co-located bucket."""
+        bucket = buckets[region]
+        if bucket != first_bucket:
+            await copy_s3_object(
+                first_bucket,
+                input_key,
+                dest_bucket=bucket,
+                dest_key=input_key,
+                dest_region=region,
+                temporary=True,
+            )
+        with _handle_transcription_error(language):
+            await transcribe.start_transcription_job(
+                **_build_transcription_job_params(
+                    job_id, bucket, language, response_format
+                )
+            )
+        return bucket
+
+    bucket, region = await call_with_region_failover(
+        "transcribe", [region for region, _ in candidates], _attempt
+    )
+    return region, bucket
 
 
 def _get_transcript_text(transcript_data: TranscribeJobData) -> str:
@@ -483,11 +574,12 @@ class AudioModel(AudioModelBase[None, None]):
         self._validate_no_temperature(temperature)
         self._validate_no_logprobs(logprobs)
 
-        s3_bucket = SETTINGS.aws_transcribe_s3_bucket
-        if not s3_bucket:
+        candidates = transcribe_job_candidates()
+        if not candidates:
             log_error_details(
-                "No S3 bucket configured for AWS Transcribe. "
-                "AWS_S3_BUCKET and AWS_TRANSCRIBE_S3_BUCKET environment variable are not set."
+                "No S3 bucket configured for AWS Transcribe: set AWS_S3_BUCKET, "
+                "AWS_TRANSCRIBE_S3_BUCKET, or an AWS_S3_REGIONAL_BUCKETS entry "
+                "for a candidate region."
             )
             msg = (
                 "This model is not available on the current server. "
@@ -495,30 +587,26 @@ class AudioModel(AudioModelBase[None, None]):
             )
             raise ApiError(msg, status=404)
 
-        transcribe: TranscribeServiceClient = get_client("transcribe")
-        to_cleanup_job_id: str | None = None
+        to_cleanup: tuple[TranscribeServiceClient, str] | None = None
         request_id = REQUEST_ID.get()
+        s3_prefix = SETTINGS.aws_s3_tmp_prefix
 
         try:
-            # Upload audio to S3
-            s3_prefix = SETTINGS.aws_s3_tmp_prefix
-            s3_input_key = f"{s3_prefix}{request_id}/input"
+            # Upload audio once, to the first candidate's bucket (the source
+            # is consumed); failover attempts server-side copy it from there.
             await audio_content.to_s3(
-                transcribe.meta.region_name,  # type: ignore[arg-type]
-                bucket=s3_bucket,
-                key=s3_input_key,
+                candidates[0][0],
+                bucket=candidates[0][1],
+                key=f"{s3_prefix}{request_id}/input",
             )
-
-            # Build job parameters and start transcription
-            job_params = _build_transcription_job_params(
-                request_id, s3_bucket, language, response_format
+            region, s3_bucket = await _start_transcription_with_failover(
+                candidates, request_id, language, response_format
             )
-
-            with _handle_transcription_error(language):
-                await transcribe.start_transcription_job(**job_params)
+            _SERVED_REGION.set(region)
+            transcribe: TranscribeServiceClient = get_client("transcribe", region)
 
             # Track resources for cleanup
-            to_cleanup_job_id = request_id
+            to_cleanup = (transcribe, request_id)
             track_temporary_s3_objects(
                 s3_bucket,
                 f"{s3_prefix}{request_id}/output.json",
@@ -536,10 +624,8 @@ class AudioModel(AudioModelBase[None, None]):
             )
 
         finally:
-            if to_cleanup_job_id:
-                schedule_cleanup(
-                    _delete_transcription_job(transcribe, to_cleanup_job_id)
-                )
+            if to_cleanup:
+                schedule_cleanup(_delete_transcription_job(*to_cleanup))
 
     @classmethod
     async def _format_transcription_response(
@@ -547,6 +633,7 @@ class AudioModel(AudioModelBase[None, None]):
         transcript_data: TranscribeJobData,
         response_format: AudioResponseFormat,
         billed_seconds: int,
+        duration: float,
         timestamp_granularities: list[AudioTimestampGranularities] | None = None,
         filename: str | None = None,
     ) -> str | TranscriptionCreateResponse | TranscriptionDiarized | Response:
@@ -556,6 +643,7 @@ class AudioModel(AudioModelBase[None, None]):
             transcript_data: AWS Transcribe job data
             response_format: Requested response format
             billed_seconds: Pre-computed billed seconds.
+            duration: Pre-computed audio duration in seconds.
             timestamp_granularities: Optional timestamp granularities for verbose_json
             filename: Original filename of the audio file
 
@@ -572,7 +660,6 @@ class AudioModel(AudioModelBase[None, None]):
         if response_format == "text":
             return text
 
-        duration = _get_audio_duration(transcript_data)
         usage_duration = UsageDuration(type="duration", seconds=billed_seconds)
 
         if response_format == "verbose_json":
@@ -679,10 +766,12 @@ class AudioModel(AudioModelBase[None, None]):
             temperature,
             logprobs=logprobs,
         )
+        duration = _get_audio_duration(transcript_data)
         return await self._format_transcription_response(
             transcript_data,
             response_format,
-            record_transcribe_usage(_get_audio_duration(transcript_data)),
+            record_transcribe_usage(duration, region=_SERVED_REGION.get()),
+            duration,
             timestamp_granularities,
             await audio_content.get_filename(),
         )
@@ -716,7 +805,9 @@ class AudioModel(AudioModelBase[None, None]):
         transcript_data = await self._transcribe(
             audio_content, response_format, language, prompt, temperature
         )
-        record_transcribe_usage(_get_audio_duration(transcript_data))
+        record_transcribe_usage(
+            _get_audio_duration(transcript_data), region=_SERVED_REGION.get()
+        )
         full_text_parts: list[str] = []
         for transcript in transcript_data["transcripts"]:
             text = transcript["transcript"]
@@ -755,7 +846,9 @@ class AudioModel(AudioModelBase[None, None]):
         transcript_data = await self._transcribe(
             audio_content, response_format, prompt=prompt, temperature=temperature
         )
-        record_transcribe_usage(_get_audio_duration(transcript_data))
+        record_transcribe_usage(
+            _get_audio_duration(transcript_data), region=_SERVED_REGION.get()
+        )
         language = transcript_data["language_code"]
         if "subtitle_content" in transcript_data:
             translated_content = await translate_subtitle(

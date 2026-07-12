@@ -307,6 +307,22 @@ The built-in deprecation registry covers all models listed in the [AWS Bedrock m
 
 ---
 
+### :material-account-voice: Other AWS Services Failover
+
+Amazon Polly, Transcribe, Translate, and Comprehend follow the same regional-failover pattern as Bedrock. Each service has its own region setting — [`AWS_POLLY_REGION`](operations_configuration.md#aws-polly-region), [`AWS_TRANSCRIBE_REGION`](operations_configuration.md#aws-transcribe-region), [`AWS_TRANSLATE_REGION`](operations_configuration.md#aws-translate-region), [`AWS_COMPREHEND_REGION`](operations_configuration.md#aws-comprehend-region) — and when left unset, every region in `AWS_BEDROCK_REGIONS` becomes a candidate, tried in order with automatic failover on region-level errors:
+
+- **Polly** — voice availability is discovered per engine (Standard, Neural, Long-form, Generative) across all candidate regions at startup; each synthesis call routes to a region offering the requested engine and voice.
+- **Transcribe** — candidate regions are restricted to those with a co-located S3 bucket ([`AWS_TRANSCRIBE_S3_BUCKET`](operations_configuration.md#aws-transcribe-s3-bucket) or a regional bucket in [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets)); on a region-level error the audio is copied to the next candidate's bucket and the job restarts there.
+- **Translate** and **Comprehend** — calls try each candidate region in order and fail over on throttling, service unavailability, or network errors.
+
+Setting an explicit region for any of these services pins it to that single region, disabling failover.
+
+### :material-rocket-launch-outline: Fault-Tolerant Startup
+
+A Bedrock region that cannot be reached at startup (invalid region for the account, network issue, throttling) does not block the server from starting: it is skipped with an `unreachable_bedrock_regions` warning, its models are served from the remaining regions, and the region is retried automatically on the next model list refresh ([`MODEL_CACHE_SECONDS`](operations_configuration.md#model-cache-seconds)). Startup only fails when **every** configured region is unreachable — see [Unreachable Region Tolerance](operations_configuration.md#aws-bedrock-regions).
+
+---
+
 ## :material-server-network: Infrastructure Resilience
 
 The Terraform module deploys stdapi.ai following AWS best practices for high availability and fault tolerance. Every component is designed to handle failures transparently — no additional configuration required.

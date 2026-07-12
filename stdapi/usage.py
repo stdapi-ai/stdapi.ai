@@ -541,13 +541,14 @@ def _add_dimension_cost(
 
 
 def record_comprehend_usage(
-    text_length: int, feature: Literal["language-detection"]
+    text_length: int, feature: Literal["language-detection"], *, region: str = ""
 ) -> int:
     """Record AWS Comprehend usage.
 
     Args:
         text_length: Length of the text analyzed.
         feature: Comprehend feature.
+        region: Region that served the call; configured default when empty.
 
     Returns:
         Billed units (100-character units, minimum 3).
@@ -556,20 +557,24 @@ def record_comprehend_usage(
     _record_usage(
         Service.COMPREHEND,
         f"amazon.comprehend-{feature}",
-        _default_region(Service.COMPREHEND),
+        region or _default_region(Service.COMPREHEND),
         quantities={Dimension.COMPREHEND_UNITS: billed_units},
     )
     return billed_units
 
 
 def record_polly_usage(
-    characters: int, engine: Literal["standard", "neural", "long-form", "generative"]
+    characters: int,
+    engine: Literal["standard", "neural", "long-form", "generative"],
+    *,
+    region: str = "",
 ) -> int:
     """Record AWS Polly usage.
 
     Args:
         characters: Number of characters in the input text.
         engine: Polly engine used for synthesis.
+        region: Region that served the call; configured default when empty.
 
     Returns:
         Billed characters.
@@ -577,17 +582,18 @@ def record_polly_usage(
     _record_usage(
         Service.POLLY,
         f"amazon.polly-{engine}",
-        _default_region(Service.POLLY),
+        region or _default_region(Service.POLLY),
         quantities={Dimension.INPUT_CHARACTERS: characters},
     )
     return characters
 
 
-def record_translate_usage(characters: int) -> int:
+def record_translate_usage(characters: int, *, region: str = "") -> int:
     """Record AWS Translate usage.
 
     Args:
         characters: Number of characters in the input text.
+        region: Region that served the call; configured default when empty.
 
     Returns:
         Billed characters.
@@ -595,17 +601,18 @@ def record_translate_usage(characters: int) -> int:
     _record_usage(
         Service.TRANSLATE,
         "amazon.translate",
-        _default_region(Service.TRANSLATE),
+        region or _default_region(Service.TRANSLATE),
         quantities={Dimension.INPUT_CHARACTERS: characters},
     )
     return characters
 
 
-def record_transcribe_usage(audio_duration: float) -> int:
+def record_transcribe_usage(audio_duration: float, *, region: str = "") -> int:
     """Record AWS Transcribe usage.
 
     Args:
         audio_duration: Actual audio duration in seconds.
+        region: Region that served the job; configured default when empty.
 
     Returns:
         Billed seconds (minimum 15).
@@ -614,7 +621,7 @@ def record_transcribe_usage(audio_duration: float) -> int:
     _record_usage(
         Service.TRANSCRIBE,
         "amazon.transcribe",
-        _default_region(Service.TRANSCRIBE),
+        region or _default_region(Service.TRANSCRIBE),
         quantities={Dimension.INPUT_SECONDS: billed_seconds},
     )
     return billed_seconds
