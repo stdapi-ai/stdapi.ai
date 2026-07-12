@@ -3706,7 +3706,9 @@ class ResponseCreateParams(BaseModelRequest):
     )
     include: list[ResponseIncludable] | None = Field(
         default=None,
-        description="Specify additional output data to include in the model response.",
+        description="Specify additional output data to include in the model response. "
+        "`reasoning.encrypted_content` is honored (reasoning items carry a "
+        "self-contained round-trip envelope); other values are accepted and ignored.",
     )
     instructions: str | None = Field(
         default=None,

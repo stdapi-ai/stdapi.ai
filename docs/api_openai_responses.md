@@ -70,8 +70,9 @@ Generate model responses with AWS Bedrock foundation models through an OpenAI Re
 | `temperature`                                                         |      :material-cog:{ .model-dep }       | 0–2 range; mapped to Bedrock inference config                                |
 | `top_p`                                                               |      :material-cog:{ .model-dep }       | 0–1 range; nucleus sampling                                                  |
 | `top_logprobs`                                                        |      :material-cog:{ .model-dep }       | 0–20 range; token log-probability output                                     |
-| `reasoning` (effort)                                                  |      :material-cog:{ .model-dep }       | Configures reasoning on models that support it                               |
+| `reasoning` (effort)                                                  |      :material-cog:{ .model-dep }       | Configures reasoning; chain of thought returned as `reasoning` output items  |
 | `reasoning.context`                                                   | :material-close-circle:{ .unsupported } | Accepted but ignored — context scoping is not applied                        |
+| `include`                                                             |   :material-check-circle:{ .success }   | `reasoning.encrypted_content` is honored; other values are ignored           |
 | `metadata`                                                            |   :material-check-circle:{ .success }   | Forwarded to Bedrock `requestMetadata`                                       |
 | `prompt_cache_key`                                                    |      :material-cog:{ .model-dep }       | Cache prompts to reduce costs and latency                                    |
 | `prompt_cache_retention`                                              |      :material-cog:{ .model-dep }       | Cache TTL: `in_memory`, `24h`, `1h`, or `5m`                                 |
@@ -100,6 +101,7 @@ Generate model responses with AWS Bedrock foundation models through an OpenAI Re
 | `response.output_text.done`                                           |   :material-check-circle:{ .success }   | Final text for each content part                                             |
 | `response.function_call_arguments.delta`                              |   :material-check-circle:{ .success }   | Tool call argument deltas                                                    |
 | `response.function_call_arguments.done`                               |   :material-check-circle:{ .success }   | Finalized tool call arguments                                                |
+| `response.reasoning_text.delta` / `.done`                             |      :material-cog:{ .model-dep }       | Reasoning text deltas on reasoning models                                    |
 | `response.completed`                                                  |   :material-check-circle:{ .success }   | Final complete response at stream end                                        |
 
 </div>
@@ -273,6 +275,10 @@ curl -X POST "$BASE/v1/responses" \
     "max_output_tokens": 4096
   }'
 ```
+
+The chain of thought is returned as a `reasoning` output item preceding the assistant message, with the text in `content` parts of type `reasoning_text`. When streaming, the item is delivered through `response.output_item.added`, `response.reasoning_text.delta` / `.done`, and `response.output_item.done` events before the message events.
+
+Add `"include": ["reasoning.encrypted_content"]` to attach an `encrypted_content` envelope to each reasoning item. Echo the item back in the `input` of the next request to carry the model's reasoning state (including signatures and redacted content) across turns with no server-side storage — reasoning items from the official OpenAI API are accepted too, with their encrypted content safely ignored.
 
 ### Prompt Caching
 

@@ -5,14 +5,14 @@ Bedrock Converse API-native types. Handles tool mapping, input mapping,
 response formatting (both streaming and non-streaming), and streaming events.
 """
 
-from base64 import b64decode, urlsafe_b64encode
+from base64 import b64decode, b64encode, urlsafe_b64encode
 from contextlib import suppress
 from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal
 
-from pydantic_core import to_json
+from pydantic_core import from_json, to_json
 from sse_starlette import JSONServerSentEvent
 
 from stdapi.api_errors import ApiError
@@ -64,6 +64,8 @@ from stdapi.types.openai_responses import (
     ResponseOutputText,
     ResponseOutputTextContent,
     ResponseReasoningItem,
+    ResponseReasoningTextDeltaEvent,
+    ResponseReasoningTextDoneEvent,
     ResponseTextDeltaEvent,
     ResponseTextDoneEvent,
     ResponseUsage,
@@ -106,6 +108,9 @@ if TYPE_CHECKING:
         InferenceConfigurationTypeDef,
         JsonSchemaDefinitionTypeDef,
         MessageTypeDef,
+        ReasoningContentBlockDeltaTypeDef,
+        ReasoningContentBlockOutputTypeDef,
+        ReasoningTextBlockTypeDef,
         SystemContentBlockTypeDef,
         ToolChoiceTypeDef,
         ToolConfigurationTypeDef,
@@ -608,7 +613,7 @@ def extract_reasoning(request: ResponseCreateParams) -> ReasoningParams | None:
     if request.reasoning is None:
         return None
     return {
-        "enabled": request.reasoning.effort not in (None, "none", "disabled"),
+        "enabled": request.reasoning.effort not in (None, "none"),
         "reasoning_effort": request.reasoning.effort,
         "budget_tokens": None,
         "max_tokens": request.max_output_tokens,
@@ -880,29 +885,90 @@ def _map_compaction_item(
     )
 
 
+def encode_reasoning_content(signatures: list[str], redacted: list[bytes]) -> str:
+    """Encode reasoning signatures and redacted payloads as opaque content.
+
+    The content is self-contained so that reasoning round-trips work without
+    any server-side state; it is encoded, not encrypted (mirrors
+    ``encode_compaction_content``).
+
+    Args:
+        signatures: Bedrock ``reasoningText`` signatures, in block order.
+        redacted: Bedrock ``redactedContent`` payloads, in block order.
+
+    Returns:
+        Opaque ``encrypted_content`` value for a reasoning item.
+    """
+    payload = {
+        "signatures": signatures,
+        "redacted": [b64encode(data).decode() for data in redacted],
+    }
+    return urlsafe_b64encode(to_json(payload)).decode()
+
+
+def decode_reasoning_content(
+    encrypted_content: str,
+) -> tuple[list[str], list[bytes]] | None:
+    """Decode an ``encrypted_content`` envelope produced by this gateway.
+
+    Args:
+        encrypted_content: Opaque reasoning content from an echoed item.
+
+    Returns:
+        Tuple of ``(signatures, redacted)``, or ``None`` when the content is
+        not a valid local envelope (e.g. OpenAI-encrypted content).
+    """
+    try:
+        payload = from_json(b64decode(encrypted_content, altchars=b"-_", validate=True))
+        signatures = payload["signatures"]
+        redacted = [b64decode(data, validate=True) for data in payload["redacted"]]
+    except ValueError, TypeError, KeyError:
+        return None
+    if not (
+        isinstance(signatures, list)
+        and all(isinstance(signature, str) for signature in signatures)
+    ):
+        return None
+    return signatures, redacted
+
+
 def _map_reasoning_item(
     item: ResponseReasoningItem, bedrock_messages: list[MessageTypeDef]
 ) -> None:
-    """Map an echoed ``ResponseReasoningItem`` to a Bedrock ``reasoningContent`` block.
+    """Map an echoed ``ResponseReasoningItem`` to Bedrock ``reasoningContent`` blocks.
 
     Clients (e.g. Codex CLI) echo reasoning items back as part of the input
-    history.  Each non-empty ``content`` entry is converted to a Bedrock
-    ``reasoningContent`` block and merged into the current assistant message.
-    Empty items are dropped without logging.
+    history.  Non-empty ``content`` entries (or, failing that, ``summary``
+    entries) are converted to Bedrock ``reasoningText`` blocks and merged into
+    the current assistant message.  A local ``encrypted_content`` envelope
+    re-attaches signatures and appends ``redactedContent`` blocks; foreign
+    envelopes are ignored.  Empty items are dropped without logging.
 
     Args:
         item: The reasoning item to map.
         bedrock_messages: Mutable Bedrock messages list to append to.
     """
-    _append_or_merge(
-        bedrock_messages,
-        "assistant",
-        [
-            {"reasoningContent": {"reasoningText": {"text": part.text}}}
-            for part in item.content or ()
-            if isinstance(part, ReasoningItemContent) and part.text
-        ],
-    )
+    texts = [
+        part.text
+        for part in item.content or ()
+        if isinstance(part, ReasoningItemContent) and part.text
+    ] or [part.text for part in item.summary if part.text]
+
+    signatures: list[str] = []
+    redacted: list[bytes] = []
+    if item.encrypted_content and (
+        decoded := decode_reasoning_content(item.encrypted_content)
+    ):
+        signatures, redacted = decoded
+
+    blocks: list[ContentBlockTypeDef] = []
+    for index, text in enumerate(texts):
+        reasoning_text: ReasoningTextBlockTypeDef = {"text": text}
+        if index < len(signatures):
+            reasoning_text["signature"] = signatures[index]
+        blocks.append({"reasoningContent": {"reasoningText": reasoning_text}})
+    blocks.extend({"reasoningContent": {"redactedContent": data}} for data in redacted)
+    _append_or_merge(bedrock_messages, "assistant", blocks)
 
 
 def _extract_web_search_sources(
@@ -930,17 +996,79 @@ def _extract_web_search_sources(
     ] or None
 
 
+def _build_reasoning_item(
+    item_id: str,
+    text: str,
+    signatures: list[str],
+    redacted: list[bytes],
+    *,
+    include_encrypted_reasoning: bool,
+) -> ResponseReasoningItem:
+    """Build a completed ``reasoning`` output item from accumulated block data.
+
+    Args:
+        item_id: Identifier for the reasoning item.
+        text: Concatenated reasoning text (may be empty for redacted-only).
+        signatures: Bedrock ``reasoningText`` signatures, in block order.
+        redacted: Bedrock ``redactedContent`` payloads, in block order.
+        include_encrypted_reasoning: Whether to attach the round-trip envelope.
+
+    Returns:
+        Completed reasoning item with an empty ``summary``.
+    """
+    return ResponseReasoningItem(
+        id=item_id,
+        summary=[],
+        type="reasoning",
+        content=(
+            [ReasoningItemContent(text=text, type="reasoning_text")] if text else []
+        ),
+        encrypted_content=(
+            encode_reasoning_content(signatures, redacted)
+            if include_encrypted_reasoning and (signatures or redacted)
+            else None
+        ),
+        status="completed",
+    )
+
+
+def _accumulate_reasoning_block(
+    reasoning_content: ReasoningContentBlockOutputTypeDef,
+    texts: list[str],
+    signatures: list[str],
+    redacted: list[bytes],
+) -> None:
+    """Accumulate one Bedrock ``reasoningContent`` block into run buffers.
+
+    Args:
+        reasoning_content: The ``reasoningContent`` payload of a block.
+        texts: Mutable list receiving ``reasoningText`` texts.
+        signatures: Mutable list receiving ``reasoningText`` signatures.
+        redacted: Mutable list receiving ``redactedContent`` payloads.
+    """
+    if reasoning_text := reasoning_content.get("reasoningText"):
+        texts.append(reasoning_text["text"])
+        if signature := reasoning_text.get("signature"):
+            signatures.append(signature)
+    if (data := reasoning_content.get("redactedContent")) is not None:
+        redacted.append(data)
+
+
 def _extract_output_items(
     contents: list[ContentBlockOutputTypeDef],
     response_id: str,
     suppress_tool_names: frozenset[str] | None,
     web_search_tool_names: frozenset[str] | None = None,
+    *,
+    include_encrypted_reasoning: bool = False,
 ) -> list[ResponseOutputItem]:
     """Extract ResponseOutputItem objects from Bedrock response content.
 
     Processes content blocks in their original Bedrock order so that
-    ``web_search_call`` items appear before the assistant message, matching
-    the official OpenAI API output ordering.
+    ``reasoning`` and ``web_search_call`` items appear before the assistant
+    message, matching the official OpenAI API output ordering.  Each
+    contiguous run of ``reasoningContent`` blocks is aggregated into a single
+    ``reasoning`` item.
 
     Args:
         contents: Bedrock response content blocks.
@@ -951,11 +1079,15 @@ def _extract_output_items(
             ``web_search_call`` output items instead of being suppressed
             (e.g. ``{"nova_grounding"}``).  Sources are populated from
             ``citationsContent`` blocks in the response.
+        include_encrypted_reasoning: Whether the request's ``include`` asked
+            for ``reasoning.encrypted_content`` (adds the round-trip envelope
+            to reasoning items).
 
     Returns:
-        List of output items. ``web_search_call`` and ``function_call`` items
-        keep their original Bedrock block position; the assembled ``message``
-        item (if any text blocks were present) is appended last.
+        List of output items. ``reasoning``, ``web_search_call`` and
+        ``function_call`` items keep their original Bedrock block position;
+        the assembled ``message`` item (if any text blocks were present) is
+        appended last.
     """
     sources: list[WebSearchActionSource] | None = (
         _extract_web_search_sources(contents) if web_search_tool_names else None
@@ -963,8 +1095,40 @@ def _extract_output_items(
 
     text_parts: list[str] = []
     output_items: list[ResponseOutputItem] = []
+    reasoning_texts: list[str] = []
+    reasoning_signatures: list[str] = []
+    reasoning_redacted: list[bytes] = []
+    reasoning_runs = 0
+
+    def _flush_reasoning() -> None:
+        """Append a reasoning item for the pending contiguous block run."""
+        nonlocal reasoning_runs
+        if not (reasoning_texts or reasoning_signatures or reasoning_redacted):
+            return
+        output_items.append(
+            _build_reasoning_item(
+                f"{response_id}-rs-{reasoning_runs}",
+                "\n".join(reasoning_texts),
+                reasoning_signatures,
+                reasoning_redacted,
+                include_encrypted_reasoning=include_encrypted_reasoning,
+            )
+        )
+        reasoning_runs += 1
+        reasoning_texts.clear()
+        reasoning_signatures.clear()
+        reasoning_redacted.clear()
 
     for block in contents:
+        if reasoning_content := block.get("reasoningContent"):
+            _accumulate_reasoning_block(
+                reasoning_content,
+                reasoning_texts,
+                reasoning_signatures,
+                reasoning_redacted,
+            )
+            continue
+        _flush_reasoning()
         if tool_use := block.get("toolUse"):
             name: str = tool_use["name"]
             if web_search_tool_names and name in web_search_tool_names:
@@ -999,6 +1163,7 @@ def _extract_output_items(
         elif text := block.get("text"):
             text_parts.append(text)
 
+    _flush_reasoning()
     if text_parts:
         output_items.append(
             ResponseOutputMessage(
@@ -1093,11 +1258,24 @@ def _build_response_object(
         metadata=request.metadata,
         max_output_tokens=request.max_output_tokens,
         previous_response_id=request.previous_response_id,
+        reasoning=request.reasoning,
         text=request.text,
         top_logprobs=request.top_logprobs,
         usage=usage,
         user=request.user,
     )
+
+
+def _includes_encrypted_reasoning(request: ResponseCreateParams) -> bool:
+    """Whether the request's ``include`` asks for ``reasoning.encrypted_content``.
+
+    Args:
+        request: The original Responses API creation request.
+
+    Returns:
+        True when reasoning items must carry the round-trip envelope.
+    """
+    return bool(request.include and "reasoning.encrypted_content" in request.include)
 
 
 async def format_response(
@@ -1138,7 +1316,11 @@ async def format_response(
             created_at,
             model_id,
             _extract_output_items(
-                contents, response_id, suppress_tool_names, web_search_tool_names
+                contents,
+                response_id,
+                suppress_tool_names,
+                web_search_tool_names,
+                include_encrypted_reasoning=_includes_encrypted_reasoning(request),
             ),
             *_map_stop_reason(bedrock_response.get("stopReason")),
             ResponseUsage(
@@ -1168,6 +1350,7 @@ class _BlockKind(Enum):
     TOOL = "tool"
     SUPPRESSED = "suppressed"
     WEB_SEARCH = "web_search"
+    REASONING = "reasoning"
 
 
 @dataclass(slots=True)
@@ -1197,6 +1380,12 @@ class _StreamState:
     input_tokens: int = 0
     output_tokens: int = 0
     cached_tokens: int = 0
+    #: Whether ``include`` requested ``reasoning.encrypted_content``.
+    include_encrypted_reasoning: bool = False
+    #: Signatures from reasoning deltas of the current block.
+    reasoning_signatures: list[str] = field(default_factory=list)
+    #: Redacted reasoning payloads from the current block.
+    reasoning_redacted: list[bytes] = field(default_factory=list)
     #: Completed suppressed tool calls as ``(tool_id, tool_name, args_json)``.
     suppressed_tool_calls: list[tuple[str, str, str]] = field(default_factory=list)
     #: Web-search sources keyed by ``item_id`` (see class docstring).
@@ -1221,6 +1410,8 @@ class _StreamState:
         self.current_tool_id = None
         self.current_text = ""
         self.current_args = ""
+        self.reasoning_signatures = []
+        self.reasoning_redacted = []
 
 
 def _handle_block_start(
@@ -1248,6 +1439,7 @@ def _handle_block_start(
     Yields:
         ``JSONServerSentEvent`` objects for the block start.
     """
+    yield from _close_reasoning_block(state)
     start = start_block["start"]
     state.current_text = ""
     state.current_args = ""
@@ -1369,6 +1561,7 @@ def _emit_text_delta(
     Yields:
         SSE events (optional block-start followed by the text delta).
     """
+    yield from _close_reasoning_block(state)
     if state.block_kind is _BlockKind.NONE:
         # Synthesise a text block start if contentBlockStart was never received.
         state.current_text = ""
@@ -1392,14 +1585,117 @@ def _emit_text_delta(
     )
 
 
+def _handle_reasoning_delta(
+    state: _StreamState, reasoning_delta: ReasoningContentBlockDeltaTypeDef
+) -> Generator[JSONServerSentEvent]:
+    """Emit reasoning SSE events for a Bedrock ``reasoningContent`` delta.
+
+    The first delta of a reasoning block opens a ``reasoning`` output item
+    (``response.output_item.added`` with empty content).  Text deltas emit
+    ``response.reasoning_text.delta``; signature and redacted deltas are
+    accumulated silently for the ``encrypted_content`` envelope.
+
+    Args:
+        state: Mutable stream state.
+        reasoning_delta: The ``reasoningContent`` delta payload from Bedrock.
+
+    Yields:
+        ``JSONServerSentEvent`` objects for the reasoning delta.
+    """
+    if state.block_kind is not _BlockKind.REASONING:
+        state.current_text = ""
+        state.current_item_id = f"{state.response_id}-rs-{state.output_index}"
+        state.block_kind = _BlockKind.REASONING
+        yield json_sse(
+            "response.output_item.added",
+            ResponseOutputItemAddedEvent(
+                item=ResponseReasoningItem(
+                    id=state.current_item_id,
+                    summary=[],
+                    type="reasoning",
+                    content=[],
+                    status="in_progress",
+                ),
+                output_index=state.output_index,
+                sequence_number=state.next_seq(),
+                type="response.output_item.added",
+            ),
+        )
+    if signature := reasoning_delta.get("signature"):
+        state.reasoning_signatures.append(signature)
+    if (data := reasoning_delta.get("redactedContent")) is not None:
+        state.reasoning_redacted.append(data)
+    if (text_delta := reasoning_delta.get("text")) and state.current_item_id:
+        state.current_text += text_delta
+        yield json_sse(
+            "response.reasoning_text.delta",
+            ResponseReasoningTextDeltaEvent(
+                item_id=state.current_item_id,
+                output_index=state.output_index,
+                content_index=0,
+                delta=text_delta,
+                sequence_number=state.next_seq(),
+                type="response.reasoning_text.delta",
+            ),
+        )
+
+
+def _close_reasoning_block(state: _StreamState) -> Generator[JSONServerSentEvent]:
+    """Close an open reasoning block, if any.
+
+    Emits ``response.reasoning_text.done`` (when text was streamed) followed by
+    ``response.output_item.done`` with the completed reasoning item, records the
+    item, and resets the per-block state.  No-op outside a reasoning block.
+
+    Args:
+        state: Mutable stream state.
+
+    Yields:
+        ``JSONServerSentEvent`` objects closing the reasoning block.
+    """
+    if state.block_kind is not _BlockKind.REASONING or state.current_item_id is None:
+        return
+    if state.current_text:
+        yield json_sse(
+            "response.reasoning_text.done",
+            ResponseReasoningTextDoneEvent(
+                item_id=state.current_item_id,
+                output_index=state.output_index,
+                content_index=0,
+                text=state.current_text,
+                sequence_number=state.next_seq(),
+                type="response.reasoning_text.done",
+            ),
+        )
+    done_item = _build_reasoning_item(
+        state.current_item_id,
+        state.current_text,
+        state.reasoning_signatures,
+        state.reasoning_redacted,
+        include_encrypted_reasoning=state.include_encrypted_reasoning,
+    )
+    yield json_sse(
+        "response.output_item.done",
+        ResponseOutputItemDoneEvent(
+            item=done_item,
+            output_index=state.output_index,
+            sequence_number=state.next_seq(),
+            type="response.output_item.done",
+        ),
+    )
+    state.output_items.append(done_item)
+    state.output_index += 1
+    state.reset_block()
+
+
 def _handle_block_delta(
     state: _StreamState, delta_block: ContentBlockDeltaEventTypeDef
 ) -> Generator[JSONServerSentEvent]:
     """Emit SSE delta events for a Bedrock ``contentBlockDelta`` event.
 
-    Handles text, tool-use argument, and citation deltas.  Synthesises a
-    text block start when a text delta arrives without a prior block start.
-    Reasoning deltas have no Responses API surface and are ignored.
+    Handles text, tool-use argument, reasoning, and citation deltas.
+    Synthesises a text block start when a text delta arrives without a prior
+    block start; reasoning deltas open and feed a ``reasoning`` output item.
 
     Args:
         state: Mutable stream state.
@@ -1415,7 +1711,9 @@ def _handle_block_delta(
             state.current_args += tool_delta["input"]
         return
 
-    if text_delta := delta.get("text"):
+    if reasoning_delta := delta.get("reasoningContent"):
+        yield from _handle_reasoning_delta(state, reasoning_delta)
+    elif text_delta := delta.get("text"):
         yield from _emit_text_delta(state, text_delta)
     elif (
         (tool_delta := delta.get("toolUse"))
@@ -1434,7 +1732,6 @@ def _handle_block_delta(
                 type="response.function_call_arguments.delta",
             ),
         )
-    # Reasoning deltas have no Responses API surface and match no branch here.
     elif citation_delta := delta.get("citation"):
         _record_citation(state, citation_delta)
 
@@ -1523,6 +1820,7 @@ def _handle_block_stop(state: _StreamState) -> Generator[JSONServerSentEvent]:
     """Emit finalisation events for a Bedrock ``contentBlockStop``.
 
     Text blocks emit ``output_text.done`` + ``content_part.done`` +
+    ``output_item.done``; reasoning blocks emit ``reasoning_text.done`` +
     ``output_item.done``; non-suppressed tool blocks emit
     ``function_call_arguments.done`` + ``output_item.done``; web-search blocks
     emit ``web_search_call.completed`` + ``output_item.done``; suppressed tool
@@ -1534,7 +1832,9 @@ def _handle_block_stop(state: _StreamState) -> Generator[JSONServerSentEvent]:
     Yields:
         ``JSONServerSentEvent`` objects for the block stop.
     """
-    if state.block_kind is _BlockKind.TEXT and state.current_item_id:
+    if state.block_kind is _BlockKind.REASONING:
+        yield from _close_reasoning_block(state)
+    elif state.block_kind is _BlockKind.TEXT and state.current_item_id:
         text_part = ResponseOutputText(
             annotations=[], text=state.current_text, type="output_text"
         )
@@ -1709,7 +2009,9 @@ async def format_stream(
     Yields:
         ``JSONServerSentEvent`` for each Responses API stream event.
     """
-    state = _StreamState(response_id)
+    state = _StreamState(
+        response_id, include_encrypted_reasoning=_includes_encrypted_reasoning(request)
+    )
     initial_response = _build_response_object(
         response_id, created_at, model_id, [], "in_progress", None, None, request
     )
@@ -1736,6 +2038,10 @@ async def format_stream(
             state, event, suppress_tool_names, web_search_tool_names
         ):
             yield sse  # `yield from` is not permitted inside async generators.
+
+    # Defensive: close a reasoning block left open by a stream without contentBlockStop.
+    for sse in _close_reasoning_block(state):
+        yield sse
 
     if post_suppress_handler:
         async for sse in post_suppress_handler(state):
