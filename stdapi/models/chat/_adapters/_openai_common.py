@@ -107,13 +107,18 @@ def extract_stream_usage(
     if "metadata" not in stream_event:
         return None
     usage = stream_event["metadata"]["usage"]
+    # OpenAI semantics: prompt_tokens covers the full prompt, cache buckets included.
+    cache_read = usage.get("cacheReadInputTokens")
+    prompt_tokens = (
+        usage["inputTokens"] + (cache_read or 0) + usage.get("cacheWriteInputTokens", 0)
+    )
     completion_usage = CompletionUsage(
         completion_tokens=usage["outputTokens"],
-        prompt_tokens=usage["inputTokens"],
-        total_tokens=usage["totalTokens"],
+        prompt_tokens=prompt_tokens,
+        total_tokens=prompt_tokens + usage["outputTokens"],
     )
-    if (cached := usage.get("cacheReadInputTokens")) is not None:
+    if cache_read:
         completion_usage.prompt_tokens_details = PromptTokensDetails(
-            cached_tokens=cached
+            cached_tokens=cache_read
         )
     return completion_usage

@@ -6,18 +6,22 @@ response formatting (both streaming and non-streaming), and streaming events.
 """
 
 from base64 import b64decode, b64encode, urlsafe_b64encode
-from contextlib import suppress
 from dataclasses import dataclass, field
 from enum import Enum
+from time import time
+from traceback import format_exception
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 
+from botocore.exceptions import ClientError, HTTPClientError
+from botocore.exceptions import ConnectionError as BotocoreConnectionError
 from pydantic_core import from_json, to_json
-from sse_starlette import JSONServerSentEvent
 
 from stdapi.api_errors import ApiError
 from stdapi.aws import get_client
 from stdapi.aws_bedrock import (
+    AWS_ERROR_MAP,
+    PromptCaching,
     build_system_blocks,
     handle_bedrock_client_error,
     set_inference_configuration,
@@ -26,17 +30,25 @@ from stdapi.input_file import FileIdInputFile, InputFile
 from stdapi.models import validate_model
 from stdapi.models.chat._adapters import _openai_common
 from stdapi.models.image import get_image_model
-from stdapi.monitoring import log_error_details, log_response_params
+from stdapi.monitoring import (
+    SseHandledStreamError,
+    log_error_details,
+    log_response_params,
+)
 from stdapi.types.openai import ResponseFormatJSONObject, ResponseFormatText
 from stdapi.types.openai_responses import (
+    AnnotationURLCitation,
     CodeInterpreter,
     CompactionItemParam,
+    CustomToolCallInput,
+    CustomToolCallOutput,
     EasyInputMessage,
     FunctionCallInput,
     FunctionCallOutput,
     FunctionTool,
     ImageGeneration,
     ImageGenerationCall,
+    ImageGenerationCallInput,
     IncompleteDetails,
     InputMessage,
     InputTokenCountParams,
@@ -49,11 +61,18 @@ from stdapi.types.openai_responses import (
     ResponseContentPartDoneEvent,
     ResponseCreatedEvent,
     ResponseCreateParams,
+    ResponseError,
+    ResponseErrorEvent,
+    ResponseFailedEvent,
     ResponseFormatTextJSONSchemaConfig,
     ResponseFunctionCallArgumentsDeltaEvent,
     ResponseFunctionCallArgumentsDoneEvent,
     ResponseFunctionToolCall,
     ResponseFunctionWebSearch,
+    ResponseImageGenCallCompletedEvent,
+    ResponseImageGenCallGeneratingEvent,
+    ResponseImageGenCallInProgressEvent,
+    ResponseIncompleteEvent,
     ResponseInProgressEvent,
     ResponseInputFile,
     ResponseInputImage,
@@ -62,6 +81,7 @@ from stdapi.types.openai_responses import (
     ResponseOutputItemDoneEvent,
     ResponseOutputMessage,
     ResponseOutputText,
+    ResponseOutputTextAnnotationAddedEvent,
     ResponseOutputTextContent,
     ResponseReasoningItem,
     ResponseReasoningTextDeltaEvent,
@@ -72,13 +92,14 @@ from stdapi.types.openai_responses import (
     ResponseWebSearchCallCompletedEvent,
     ResponseWebSearchCallInProgressEvent,
     Tool,
+    ToolChoiceAllowed,
     ToolChoiceFunction,
     WebSearchActionSearch,
     WebSearchActionSource,
     WebSearchPreviewTool,
     WebSearchTool,
 )
-from stdapi.utils import json_sse, try_parse_json
+from stdapi.utils import hide_security_details, json_sse, try_parse_json
 
 if TYPE_CHECKING:
     from collections.abc import (
@@ -86,15 +107,19 @@ if TYPE_CHECKING:
         AsyncIterator,
         Callable,
         Generator,
+        Iterable,
         Mapping,
     )
 
+    from sse_starlette import JSONServerSentEvent
     from types_aiobotocore_bedrock.literals import RegionName
     from types_aiobotocore_bedrock_runtime.literals import (
         CacheTTLType,
+        ImageFormatType,
         ServiceTierTypeType,
     )
     from types_aiobotocore_bedrock_runtime.type_defs import (
+        CitationOutputTypeDef,
         CitationsDeltaTypeDef,
         CitationTypeDef,
         ContentBlockDeltaEventTypeDef,
@@ -116,13 +141,17 @@ if TYPE_CHECKING:
         ToolConfigurationTypeDef,
         ToolResultContentBlockUnionTypeDef,
         ToolTypeDef,
+        ToolUseBlockOutputTypeDef,
         ToolUseBlockTypeDef,
     )
 
+    from stdapi.config import LogLevel
     from stdapi.models.chat import ReasoningParams
     from stdapi.types import JsonMapping
     from stdapi.types.anthropic_messages import ServerTools
+    from stdapi.types.openai import ResponseModeration
     from stdapi.types.openai_responses import (
+        Annotation,
         ResponseInputContent,
         ResponseInputItem,
         ResponseOutputItem,
@@ -136,8 +165,11 @@ _EMPTY_TOOL: dict[str, str] = {"type": "object"}
 #: Role names that map to Bedrock system blocks.
 _SYSTEM_ROLES: frozenset[str] = frozenset({"system", "developer"})
 
-#: PEP 695 alias for the prompt-caching scope set passed through the pipeline.
-type PromptCachingScopes = frozenset[Literal["system", "messages", "tools"]]
+#: Prompt-caching scopes enabled for this request.
+type PromptCachingScopes = frozenset[PromptCaching]
+
+#: Status values produced for a generated ``ImageGenerationCall`` item.
+type _ImageStatus = Literal["completed", "failed"]
 
 
 #: Mapping from OpenAI integrated tool classes to canonical server tool names (translated to Bedrock names via tool_name_map in ``_build_tool_config``).
@@ -171,6 +203,14 @@ _IMAGE_GENERATION_SCHEMA: JsonMapping = {
     },
 }
 
+#: Magic-byte prefixes used to sniff the format of echoed generated images.
+_IMAGE_MAGIC_FORMATS: tuple[tuple[bytes, ImageFormatType], ...] = (
+    (b"\x89PNG\r\n\x1a\n", "png"),
+    (b"\xff\xd8\xff", "jpeg"),
+    (b"GIF8", "gif"),
+    (b"RIFF", "webp"),
+)
+
 
 def _map_tool_choice(tool_choice: ToolChoice | None) -> ToolChoiceTypeDef | None:
     """Convert a Responses API tool_choice to a Bedrock ToolChoiceTypeDef.
@@ -182,7 +222,10 @@ def _map_tool_choice(tool_choice: ToolChoice | None) -> ToolChoiceTypeDef | None
         Bedrock toolChoice, or ``None`` when no constraint applies (``"none"`` is
         handled upstream by omitting the tool configuration altogether; built-in
         ``ToolChoiceTypes`` variants like ``file_search`` are not natively
-        supported by Bedrock and are therefore ignored).
+        supported by Bedrock and are therefore ignored).  ``allowed_tools`` is
+        approximated: ``required`` with exactly one allowed function tool forces
+        that tool, ``required`` with several forces any tool, ``auto`` maps to
+        Bedrock auto.
 
     Raises:
         ApiError: If ``tool_choice`` is an unknown string literal.
@@ -190,7 +233,15 @@ def _map_tool_choice(tool_choice: ToolChoice | None) -> ToolChoiceTypeDef | None
     match tool_choice:
         case None:
             return None
-        case "auto" | "none":
+        case ToolChoiceAllowed(mode="required", tools=tools):
+            names = [
+                name
+                for tool in tools
+                if tool.get("type") == "function"
+                and isinstance(name := tool.get("name"), str)
+            ]
+            return {"tool": {"name": names[0]}} if len(names) == 1 else {"any": {}}
+        case "auto" | "none" | ToolChoiceAllowed():
             return {"auto": {}}
         case "required":
             return {"any": {}}
@@ -231,22 +282,40 @@ def _resolve_integrated_tool_name(
     return tool_name_map[canonical_name]  # type: ignore[index]
 
 
+def _function_tool_spec(tool: FunctionTool) -> ToolTypeDef:
+    """Build a Bedrock ``toolSpec`` dict from an OpenAI ``FunctionTool``.
+
+    Args:
+        tool: The function tool definition.
+
+    Returns:
+        Bedrock ``ToolTypeDef`` with name, description, and input schema.
+    """
+    return {
+        "toolSpec": {
+            "name": tool.name,
+            "description": tool.description or "function",
+            "inputSchema": {"json": tool.parameters or _EMPTY_TOOL},
+        }
+    }
+
+
 def _build_tool_config(
-    request: ResponseCreateParams,
+    request: ResponseCreateParams | InputTokenCountParams,
     tool_name_map: Mapping[ServerTools, str] | None = None,
 ) -> ToolConfigurationTypeDef | None:
     """Build a Bedrock tool configuration from a Responses API request.
 
     Maps ``FunctionTool`` entries to Bedrock toolSpec and OpenAI integrated
     tool types (code_interpreter, web_search, image_generation) to their
-    Bedrock equivalents.  Unsupported tool types are rejected at the Pydantic
-    validation layer before this function is reached.
+    Bedrock equivalents.  Tool types without a backend equivalent are
+    accepted for compatibility and dropped.
 
     When ``tool_choice="none"``, no tool config is returned so that the model
     cannot call any tools.
 
     Args:
-        request: Responses API creation request.
+        request: Responses API creation or input-token count request.
         tool_name_map: Optional mapping from canonical server tool name to
             Bedrock system tool name.  When provided, integrated tool types are
             translated to Bedrock names; if a canonical name is absent, an
@@ -268,15 +337,7 @@ def _build_tool_config(
 
     for tool in request.tools:
         if isinstance(tool, FunctionTool):
-            tools.append(
-                {
-                    "toolSpec": {
-                        "name": tool.name,
-                        "description": tool.description or "function",
-                        "inputSchema": {"json": tool.parameters or _EMPTY_TOOL},
-                    }
-                }
-            )
+            tools.append(_function_tool_spec(tool))
         elif isinstance(tool, ImageGeneration):
             # Gateway handles ImageGeneration; expose a synthetic function tool so the LLM can request it.
             if not has_image_gen:
@@ -295,7 +356,7 @@ def _build_tool_config(
                 {
                     "toolSpec": {
                         "name": bedrock_name,
-                        "inputSchema": {"json": dict(_EMPTY_TOOL)},
+                        "inputSchema": {"json": _EMPTY_TOOL},
                     }
                 }
             )
@@ -312,9 +373,8 @@ def _build_tool_config(
 def get_image_generation_tool(request: ResponseCreateParams) -> ImageGeneration | None:
     """Return the ImageGeneration tool from request.tools, if present.
 
-    Part of this module's cross-module public surface: consumed by
-    :mod:`stdapi.models.chat._default` to decide whether to intercept
-    ``image_generation`` tool calls before/after the Bedrock Converse round-trip.
+    Used by :mod:`stdapi.models.chat._default` to intercept ``image_generation``
+    tool calls.
 
     Args:
         request: Responses API creation request.
@@ -325,10 +385,6 @@ def get_image_generation_tool(request: ResponseCreateParams) -> ImageGeneration 
     return next(
         (t for t in request.tools or () if isinstance(t, ImageGeneration)), None
     )
-
-
-#: Status values for ``ImageGenerationCall.status``.
-_ImageStatus = Literal["in_progress", "completed", "generating", "failed"]
 
 
 def _str_args(text: str) -> dict[str, str]:
@@ -374,7 +430,10 @@ async def _generate_image_b64(
         model_id, input_modality="TEXT", output_modality="IMAGE", error_status=400
     )
     size = args.get("size") or tool.size or "1024x1024"
-    width, height = map(int, ("1024x1024" if size == "auto" else size).split("x"))
+    try:
+        width, height = map(int, ("1024x1024" if size == "auto" else size).split("x"))
+    except ValueError:
+        width, height = 1024, 1024
     job = get_image_model(validated.id).get_image_generation_job(
         prompt=args.get("prompt") or "",
         count=1,
@@ -390,6 +449,26 @@ async def _generate_image_b64(
     return images[0].image if images else None
 
 
+async def _try_generate_image_b64(
+    args: dict[str, str], tool: ImageGeneration, fallback_model: str | None
+) -> str | None:
+    """Run image generation, logging any failure instead of raising.
+
+    Args:
+        args: String-valued tool-call arguments.
+        tool: The ``ImageGeneration`` tool definition from the request.
+        fallback_model: Operator-configured default image model ID, or ``None``.
+
+    Returns:
+        Base64-encoded image on success, ``None`` when generation failed.
+    """
+    try:
+        return await _generate_image_b64(args, tool, fallback_model)
+    except Exception as exc:  # noqa: BLE001
+        log_error_details(f"image_generation tool call failed: {exc}", level="warning")
+        return None
+
+
 async def execute_image_generation_calls(
     output_items: list[ResponseOutputItem],
     image_gen_tool: ImageGeneration,
@@ -398,7 +477,9 @@ async def execute_image_generation_calls(
 ) -> list[ResponseOutputItem]:
     """Replace ``image_generation`` function-call items with ``ImageGenerationCall``.
 
-    All other items pass through unchanged. Executes synchronously; errors propagate.
+    All other items pass through unchanged. Executes synchronously; generation
+    errors are caught and produce a ``status="failed"`` item instead of aborting
+    the request.
 
     Args:
         output_items: Output items from the Bedrock response.
@@ -408,9 +489,6 @@ async def execute_image_generation_calls(
 
     Returns:
         New output list with image-generation calls materialised.
-
-    Raises:
-        ApiError: If no image model is configured and none was specified.
     """
     result: list[ResponseOutputItem] = []
     counter = 0
@@ -422,7 +500,7 @@ async def execute_image_generation_calls(
             result.append(item)
             continue
         counter += 1
-        b64 = await _generate_image_b64(
+        b64 = await _try_generate_image_b64(
             _str_args(item.arguments), image_gen_tool, fallback_model
         )
         result.append(
@@ -445,10 +523,14 @@ async def image_generation_stream_handler(
     """Emit SSE events for suppressed ``image_generation`` tool calls post-stream.
 
     Invoked after the main Bedrock stream completes. For each suppressed call,
-    runs generation, appends the resulting ``ImageGenerationCall`` to
-    ``state.output_items``, and yields ``response.output_item.added`` +
-    ``response.output_item.done`` events. Exceptions are suppressed so a single
-    failed image does not abort the stream.
+    yields ``response.output_item.added`` +
+    ``response.image_generation_call.in_progress`` +
+    ``response.image_generation_call.generating``, runs generation, appends the
+    resulting ``ImageGenerationCall`` to ``state.output_items``, and yields
+    ``response.image_generation_call.completed`` (successful generations only)
+    + ``response.output_item.done``. Generation failures are logged and produce
+    a ``status="failed"`` item so a single failed image does not abort the
+    stream.
 
     Args:
         state: Mutable stream state from ``format_stream``.
@@ -464,35 +546,67 @@ async def image_generation_stream_handler(
         if tool_name != "image_generation":
             continue
 
-        b64: str | None = None
-        status: _ImageStatus = "failed"
-        with suppress(Exception):
-            b64 = await _generate_image_b64(
-                _str_args(args_json), image_gen_tool, fallback_model
-            )
-            status = "completed" if b64 else "failed"
-
         counter += 1
+        item_id = f"{response_id}-img-{counter}"
+        yield json_sse(
+            "response.output_item.added",
+            ResponseOutputItemAddedEvent(
+                item=ImageGenerationCall(
+                    id=item_id,
+                    status="in_progress",
+                    type="image_generation_call",
+                    result=None,
+                ),
+                output_index=state.output_index,
+                sequence_number=state.next_seq(),
+                type="response.output_item.added",
+            ),
+        )
+        yield json_sse(
+            "response.image_generation_call.in_progress",
+            ResponseImageGenCallInProgressEvent(
+                item_id=item_id,
+                output_index=state.output_index,
+                sequence_number=state.next_seq(),
+                type="response.image_generation_call.in_progress",
+            ),
+        )
+        yield json_sse(
+            "response.image_generation_call.generating",
+            ResponseImageGenCallGeneratingEvent(
+                item_id=item_id,
+                output_index=state.output_index,
+                sequence_number=state.next_seq(),
+                type="response.image_generation_call.generating",
+            ),
+        )
+        b64 = await _try_generate_image_b64(
+            _str_args(args_json), image_gen_tool, fallback_model
+        )
+        status: _ImageStatus = "completed" if b64 else "failed"
         image_call = ImageGenerationCall(
-            id=f"{response_id}-img-{counter}",
-            status=status,
-            type="image_generation_call",
-            result=b64,
+            id=item_id, status=status, type="image_generation_call", result=b64
         )
         state.output_items.append(image_call)
-        for event_type, event_cls in (
-            ("response.output_item.added", ResponseOutputItemAddedEvent),
-            ("response.output_item.done", ResponseOutputItemDoneEvent),
-        ):
-            yield JSONServerSentEvent(
-                event=event_type,
-                data=event_cls(
-                    item=image_call,
+        if status == "completed":
+            yield json_sse(
+                "response.image_generation_call.completed",
+                ResponseImageGenCallCompletedEvent(
+                    item_id=item_id,
                     output_index=state.output_index,
                     sequence_number=state.next_seq(),
-                    type=event_type,  # type: ignore[arg-type]
-                ).model_dump(mode="json", exclude_none=True),
+                    type="response.image_generation_call.completed",
+                ),
             )
+        yield json_sse(
+            "response.output_item.done",
+            ResponseOutputItemDoneEvent(
+                item=image_call,
+                output_index=state.output_index,
+                sequence_number=state.next_seq(),
+                type="response.output_item.done",
+            ),
+        )
         state.output_index += 1
 
 
@@ -501,13 +615,8 @@ def _build_output_config(
 ) -> JsonSchemaDefinitionTypeDef | None:
     """Convert a Responses API ``text.format`` to a Bedrock ``outputConfig`` schema.
 
-    Uses Bedrock's native structured output (``outputConfig.textFormat``)
-    instead of injecting JSON instructions into the system prompt: this is
-    enforced at the decoding layer, does not pollute the model's context,
-    and keeps behaviour consistent with the Chat Completions adapter. Models
-    that do not support ``outputConfig`` will surface a Bedrock-side error,
-    which is the correct signal rather than a silent fallback to best-effort
-    prompting.
+    Uses Bedrock's native structured output (``outputConfig.textFormat``); models
+    that do not support it surface a Bedrock-side error.
 
     Args:
         text: Text configuration specifying the desired output format.
@@ -549,7 +658,7 @@ def translate_request(
     ToolConfigurationTypeDef | None,
     JsonSchemaDefinitionTypeDef | None,
     ServiceTierTypeType | None,
-    PromptCachingScopes | None,
+    PromptCachingScopes,
     CacheTTLType | None,
     dict[str, str] | None,
 ]:
@@ -586,11 +695,7 @@ def translate_request(
         _build_tool_config(request, tool_name_map),
         _build_output_config(request.text),
         _openai_common.map_service_tier(request.service_tier)[0],
-        (
-            frozenset(_openai_common.parse_prompt_cache_key(request.prompt_cache_key))
-            if request.prompt_cache_key
-            else None
-        ),
+        frozenset(_openai_common.parse_prompt_cache_key(request.prompt_cache_key)),
         (
             _openai_common.CACHE_TTL.get(request.prompt_cache_retention)
             if request.prompt_cache_retention
@@ -608,13 +713,16 @@ def extract_reasoning(request: ResponseCreateParams) -> ReasoningParams | None:
 
     Returns:
         Reasoning parameters to configure, or None if the request has no
-        ``reasoning`` field set.
+        ``reasoning`` field set.  A ``reasoning`` object without ``effort``
+        enables reasoning at the upstream default ``medium`` effort; only
+        ``effort="none"`` disables it.
     """
     if request.reasoning is None:
         return None
+    effort = request.reasoning.effort or "medium"
     return {
-        "enabled": request.reasoning.effort not in (None, "none"),
-        "reasoning_effort": request.reasoning.effort,
+        "enabled": effort != "none",
+        "reasoning_effort": effort,
         "budget_tokens": None,
         "max_tokens": request.max_output_tokens,
     }
@@ -693,7 +801,11 @@ async def _map_message_item(
         text = (
             content
             if isinstance(content, str)
-            else " ".join(p.text for p in content if isinstance(p, ResponseInputText))
+            else " ".join(
+                p.text
+                for p in content
+                if isinstance(p, (ResponseInputText, ResponseOutputTextContent))
+            )
         )
         if text:
             system_blocks.extend(build_system_blocks(text))
@@ -710,15 +822,16 @@ async def _map_message_item(
     _append_or_merge(bedrock_messages, bedrock_role, blocks)
 
 
-async def _map_output_message(
+def _map_output_message(
     item: ResponseOutputMessage, bedrock_messages: list[MessageTypeDef]
 ) -> None:
     """Map a ResponseOutputMessage (echoed assistant output) as a Bedrock assistant message.
 
     When a client echoes back the full previous API response in the input array
     (as done by Codex CLI), assistant messages arrive as ``ResponseOutputMessage``
-    items with ``role="assistant"`` and content blocks of type ``output_text``.
-    These are mapped to plain Bedrock text blocks.
+    items with ``role="assistant"`` and content blocks of type ``output_text`` or
+    ``refusal``.  Both are mapped to plain Bedrock text blocks so that a refusal
+    turn is not lost from the conversation history.
 
     Args:
         item: The output message to map.
@@ -728,14 +841,31 @@ async def _map_output_message(
         bedrock_messages,
         "assistant",
         [
-            {"text": part.text}
+            {
+                "text": part.text
+                if isinstance(part, ResponseOutputText)
+                else part.refusal
+            }
             for part in item.content
-            if isinstance(part, ResponseOutputText)
         ],
     )
 
 
-async def _map_function_call(
+def _tool_use_input(arguments: str) -> JsonMapping:
+    """Parse raw tool-call arguments into the JSON object Bedrock expects.
+
+    Args:
+        arguments: Raw arguments string (JSON or freeform text).
+
+    Returns:
+        The parsed JSON object, or ``{"input": arguments}`` when the string is
+        not a JSON object.
+    """
+    parsed = try_parse_json(arguments)
+    return parsed if isinstance(parsed, dict) else {"input": arguments}
+
+
+def _map_function_call(
     item: FunctionCallInput, bedrock_messages: list[MessageTypeDef]
 ) -> None:
     """Map a function_call input item as a Bedrock toolUse assistant message.
@@ -751,7 +881,7 @@ async def _map_function_call(
     tool_input: ToolUseBlockTypeDef = {
         "toolUseId": item.call_id,
         "name": item.name,
-        "input": try_parse_json(item.arguments) if item.arguments else {},  # type: ignore[typeddict-item]
+        "input": _tool_use_input(item.arguments) if item.arguments else {},
     }
     _append_or_merge(bedrock_messages, "assistant", [{"toolUse": tool_input}])
 
@@ -761,26 +891,146 @@ async def _map_function_call_output(
 ) -> None:
     """Map a function_call_output item as a Bedrock toolResult user message.
 
-    Merges with the previous user message when possible.
+    String outputs become text/json blocks; content-part lists map text parts to
+    text/json blocks and image/file parts to Bedrock toolResult image, document,
+    or video blocks (resolved through the input-file machinery).  Merges with
+    the previous user message when possible.
 
     Args:
         item: The function call output item.
         bedrock_messages: Mutable Bedrock messages list to append to.
+
+    Raises:
+        ApiError: If a content part cannot be converted to a Bedrock block.
+    """
+    output = item.output
+    if isinstance(output, str):
+        tool_content: list[ToolResultContentBlockUnionTypeDef] = [
+            _openai_common.parse_tool_content(output)
+        ]
+    else:
+        tool_content = []
+        for part in output:
+            if isinstance(part, (ResponseInputText, ResponseOutputTextContent)):
+                tool_content.append(_openai_common.parse_tool_content(part.text))
+            else:
+                # Image/document/video blocks share their shape with toolResult
+                # content blocks.
+                tool_content.append(
+                    cast(
+                        "ToolResultContentBlockUnionTypeDef",
+                        await _convert_input_content(part),
+                    )
+                )
+    _append_or_merge(
+        bedrock_messages,
+        "user",
+        [{"toolResult": {"toolUseId": item.call_id, "content": tool_content}}],
+    )
+
+
+def _map_custom_tool_call(
+    item: CustomToolCallInput, bedrock_messages: list[MessageTypeDef]
+) -> None:
+    """Map a custom_tool_call input item as a Bedrock toolUse assistant message.
+
+    The freeform ``input`` string is parsed as a JSON object when possible and
+    wrapped as ``{"input": <raw>}`` otherwise, since Bedrock requires a JSON
+    object for ``toolUse.input``.
+
+    Args:
+        item: The custom tool call input item.
+        bedrock_messages: Mutable Bedrock messages list to append to.
+    """
+    tool_use: ToolUseBlockTypeDef = {
+        "toolUseId": item.call_id,
+        "name": item.name,
+        "input": _tool_use_input(item.input) if item.input else {},
+    }
+    _append_or_merge(bedrock_messages, "assistant", [{"toolUse": tool_use}])
+
+
+def _map_custom_tool_call_output(
+    item: CustomToolCallOutput, bedrock_messages: list[MessageTypeDef]
+) -> None:
+    """Map a custom_tool_call_output item as a Bedrock toolResult user message.
+
+    Custom tool outputs are freeform text, so string outputs become a single
+    text block and content-part lists keep their text parts as text blocks.
+
+    Args:
+        item: The custom tool call output item.
+        bedrock_messages: Mutable Bedrock messages list to append to.
     """
     output = item.output
     tool_content: list[ToolResultContentBlockUnionTypeDef] = (
-        [_openai_common.parse_tool_content(output)]
+        [{"text": output}]
         if isinstance(output, str)
         else [
-            _openai_common.parse_tool_content(part.text)
+            {"text": part.text}
             for part in output
-            if isinstance(part, ResponseInputText)
+            if isinstance(part, (ResponseInputText, ResponseOutputTextContent))
         ]
     )
     _append_or_merge(
         bedrock_messages,
         "user",
         [{"toolResult": {"toolUseId": item.call_id, "content": tool_content}}],
+    )
+
+
+def _sniff_image_format(data: bytes) -> ImageFormatType:
+    """Detect a Bedrock image format from magic bytes.
+
+    Args:
+        data: Raw image bytes.
+
+    Returns:
+        Detected Bedrock image format, defaulting to ``png``.
+    """
+    for magic, image_format in _IMAGE_MAGIC_FORMATS:
+        if data.startswith(magic):
+            return image_format
+    return "png"
+
+
+def _map_image_generation_call(
+    item: ImageGenerationCallInput, bedrock_messages: list[MessageTypeDef]
+) -> None:
+    """Map an echoed image_generation_call item back into the conversation.
+
+    The gateway emits ``image_generation_call`` output items for the synthetic
+    ``image_generation`` tool; when echoed back the call is replayed as an
+    assistant ``toolUse`` followed by a user ``toolResult`` carrying the
+    generated image.  Items without a result are dropped.
+
+    Args:
+        item: The image generation call input item.
+        bedrock_messages: Mutable Bedrock messages list to append to.
+
+    Raises:
+        ApiError: If the result is not valid base64 content.
+    """
+    if not item.result:
+        return
+    try:
+        image = b64decode(item.result, validate=True)
+    except ValueError as exc:
+        msg = "Invalid image_generation_call result content."
+        raise ApiError(msg) from exc
+    tool_use: ToolUseBlockTypeDef = {
+        "toolUseId": item.id,
+        "name": "image_generation",
+        "input": {},
+    }
+    _append_or_merge(bedrock_messages, "assistant", [{"toolUse": tool_use}])
+    tool_content: list[ToolResultContentBlockUnionTypeDef] = [
+        {"image": {"format": _sniff_image_format(image), "source": {"bytes": image}}}
+    ]
+    _append_or_merge(
+        bedrock_messages,
+        "user",
+        [{"toolResult": {"toolUseId": item.id, "content": tool_content}}],
     )
 
 
@@ -822,7 +1072,8 @@ async def _map_input_item(
 ) -> None:
     """Map a single Responses input item to Bedrock messages or system blocks.
 
-    Unsupported item types are ignored.
+    Unsupported item types (e.g. hosted-tool calls such as ``web_search_call``
+    or ``item_reference`` entries) are accepted and silently dropped.
 
     Args:
         item: The input item to map.
@@ -833,11 +1084,17 @@ async def _map_input_item(
         case EasyInputMessage() | InputMessage():
             await _map_message_item(item, bedrock_messages, system_blocks)
         case ResponseOutputMessage():
-            await _map_output_message(item, bedrock_messages)
+            _map_output_message(item, bedrock_messages)
         case FunctionCallInput():
-            await _map_function_call(item, bedrock_messages)
+            _map_function_call(item, bedrock_messages)
         case FunctionCallOutput():
             await _map_function_call_output(item, bedrock_messages)
+        case CustomToolCallInput():
+            _map_custom_tool_call(item, bedrock_messages)
+        case CustomToolCallOutput():
+            _map_custom_tool_call_output(item, bedrock_messages)
+        case ImageGenerationCallInput():
+            _map_image_generation_call(item, bedrock_messages)
         case ResponseReasoningItem():
             _map_reasoning_item(item, bedrock_messages)
         case CompactionItemParam():
@@ -942,7 +1199,9 @@ def _map_reasoning_item(
     entries) are converted to Bedrock ``reasoningText`` blocks and merged into
     the current assistant message.  A local ``encrypted_content`` envelope
     re-attaches signatures and appends ``redactedContent`` blocks; foreign
-    envelopes are ignored.  Empty items are dropped without logging.
+    envelopes are ignored.  Signatures are computed over ``content`` blocks, so
+    they are never attached to summary fallback texts.  Empty items are dropped
+    without logging.
 
     Args:
         item: The reasoning item to map.
@@ -952,7 +1211,10 @@ def _map_reasoning_item(
         part.text
         for part in item.content or ()
         if isinstance(part, ReasoningItemContent) and part.text
-    ] or [part.text for part in item.summary if part.text]
+    ]
+    from_summary = not texts
+    if from_summary:
+        texts = [part.text for part in item.summary if part.text]
 
     signatures: list[str] = []
     redacted: list[bytes] = []
@@ -960,6 +1222,8 @@ def _map_reasoning_item(
         decoded := decode_reasoning_content(item.encrypted_content)
     ):
         signatures, redacted = decoded
+    if from_summary:
+        signatures = []
 
     blocks: list[ContentBlockTypeDef] = []
     for index, text in enumerate(texts):
@@ -971,29 +1235,25 @@ def _map_reasoning_item(
     _append_or_merge(bedrock_messages, "assistant", blocks)
 
 
-def _extract_web_search_sources(
-    contents: list[ContentBlockOutputTypeDef],
-) -> list[WebSearchActionSource] | None:
-    """Extract web search source URLs from Bedrock citationsContent blocks.
+def _citation_sources(
+    citations: Iterable[CitationOutputTypeDef],
+) -> Generator[WebSearchActionSource]:
+    """Build web-search sources from Bedrock citations.
 
     When ``nova_grounding`` is used, Bedrock embeds citation URLs in
-    ``citationsContent`` within text blocks.  This helper collects those URLs
-    as ``WebSearchActionSource`` objects suitable for populating the
+    ``citationsContent`` blocks.  The URLs are collected as
+    ``WebSearchActionSource`` objects suitable for populating the
     ``action.sources`` field of a ``ResponseFunctionWebSearch`` item.
 
     Args:
-        contents: Bedrock response content blocks.
+        citations: Bedrock citation objects.
 
-    Returns:
-        List of source objects, or ``None`` if no citations were found.
+    Yields:
+        One source object per citation carrying a web URL.
     """
-    return [
-        WebSearchActionSource(type="url", url=web["url"])
-        for block in contents
-        if (citations_block := block.get("citationsContent"))
-        for citation in citations_block.get("citations", ())
-        if (web := citation.get("location", {}).get("web")) and web.get("url")
-    ] or None
+    for citation in citations:
+        if (web := citation.get("location", {}).get("web")) and (url := web.get("url")):
+            yield WebSearchActionSource(type="url", url=url)
 
 
 def _build_reasoning_item(
@@ -1054,6 +1314,235 @@ def _accumulate_reasoning_block(
         redacted.append(data)
 
 
+def _citation_annotations(
+    citations: Iterable[CitationOutputTypeDef], offset: int
+) -> Generator[AnnotationURLCitation]:
+    """Build ``url_citation`` annotations from Bedrock citations.
+
+    Args:
+        citations: Bedrock citation objects.
+        offset: Character index anchoring the citations (start and end index).
+
+    Yields:
+        One ``AnnotationURLCitation`` per citation carrying a web URL.
+    """
+    for citation in citations:
+        if (web := citation.get("location", {}).get("web")) and (url := web.get("url")):
+            yield AnnotationURLCitation(
+                start_index=offset,
+                end_index=offset,
+                title=citation.get("title") or url,
+                type="url_citation",
+                url=url,
+            )
+
+
+def _tool_use_output_item(
+    tool_use: ToolUseBlockOutputTypeDef,
+    response_id: str,
+    suppress_tool_names: frozenset[str] | None,
+    web_search_tool_names: frozenset[str] | None,
+) -> ResponseOutputItem | None:
+    """Map a Bedrock ``toolUse`` block to an output item.
+
+    Args:
+        tool_use: The Bedrock ``toolUse`` block.
+        response_id: The response identifier for generating item IDs.
+        suppress_tool_names: Tool names whose items should be filtered out.
+        web_search_tool_names: Tool names emitted as ``web_search_call`` items.
+
+    Returns:
+        ``web_search_call`` or ``function_call`` item, or ``None`` when the
+        tool is suppressed.  Web-search sources are attributed afterwards by
+        ``_attach_web_search_sources``.
+    """
+    name: str = tool_use["name"]
+    if web_search_tool_names and name in web_search_tool_names:
+        input_data = tool_use["input"]
+        query = input_data.get("query", "") if isinstance(input_data, dict) else ""
+        return ResponseFunctionWebSearch(
+            id=f"{response_id}-ws-{tool_use['toolUseId']}",
+            type="web_search_call",
+            status="completed",
+            action=WebSearchActionSearch(
+                type="search",
+                query=query,
+                queries=[query] if query else None,
+                sources=None,
+            ),
+        )
+    if suppress_tool_names is None or name not in suppress_tool_names:
+        return ResponseFunctionToolCall(
+            arguments=to_json(tool_use["input"]).decode(),
+            call_id=tool_use["toolUseId"],
+            name=name,
+            type="function_call",
+            id=f"{response_id}-fc-{tool_use['toolUseId']}",
+            status="completed",
+        )
+    return None
+
+
+def _reasoning_block_item(
+    reasoning_content: ReasoningContentBlockOutputTypeDef,
+    item_id: str,
+    *,
+    include_encrypted_reasoning: bool,
+) -> ResponseReasoningItem | None:
+    """Build a ``reasoning`` item from a single Bedrock ``reasoningContent`` block.
+
+    Args:
+        reasoning_content: The ``reasoningContent`` payload of a block.
+        item_id: Identifier for the reasoning item.
+        include_encrypted_reasoning: Whether to attach the round-trip envelope.
+
+    Returns:
+        Completed reasoning item, or ``None`` when the block is empty.
+    """
+    texts: list[str] = []
+    signatures: list[str] = []
+    redacted: list[bytes] = []
+    _accumulate_reasoning_block(reasoning_content, texts, signatures, redacted)
+    if not (texts or signatures or redacted):
+        return None
+    return _build_reasoning_item(
+        item_id,
+        "\n".join(texts),
+        signatures,
+        redacted,
+        include_encrypted_reasoning=include_encrypted_reasoning,
+    )
+
+
+def _attach_web_search_sources(
+    output_items: list[ResponseOutputItem],
+    ws_sources: dict[str | None, list[WebSearchActionSource]],
+) -> None:
+    """Attach collected web-search sources to their ``web_search_call`` items.
+
+    Args:
+        output_items: Mutable output items list to patch in place.
+        ws_sources: Sources keyed by ``web_search_call`` item id; the ``None``
+            key holds sources seen before any call, attributed to the first one.
+    """
+    first_ws_id = next(
+        (
+            item.id
+            for item in output_items
+            if isinstance(item, ResponseFunctionWebSearch)
+        ),
+        None,
+    )
+    if (deferred := ws_sources.pop(None, None)) and first_ws_id is not None:
+        ws_sources[first_ws_id] = [*deferred, *ws_sources.get(first_ws_id, [])]
+    for idx, item in enumerate(output_items):
+        if isinstance(item, ResponseFunctionWebSearch) and (
+            sources := ws_sources.get(item.id)
+        ):
+            output_items[idx] = item.model_copy(
+                update={"action": item.action.model_copy(update={"sources": sources})}
+            )
+
+
+def _flush_message_item(
+    output_items: list[ResponseOutputItem],
+    text_parts: list[str],
+    annotations: list[Annotation],
+    response_id: str,
+) -> None:
+    """Append a message item for a pending contiguous text run, if any.
+
+    Consumes *text_parts* and *annotations* (both are cleared); the message id
+    is derived from the item's output index, matching the streaming path.
+
+    Args:
+        output_items: Mutable output items list to append to.
+        text_parts: Text blocks of the run, joined with newlines.
+        annotations: ``url_citation`` annotations collected for the run.
+        response_id: The response identifier for generating item IDs.
+    """
+    if not text_parts:
+        return
+    output_items.append(
+        ResponseOutputMessage(
+            id=f"{response_id}-msg-{len(output_items)}",
+            content=[
+                ResponseOutputText(
+                    annotations=list(annotations),
+                    text="\n".join(text_parts),
+                    type="output_text",
+                )
+            ],
+            role="assistant",
+            status="completed",
+            type="message",
+        )
+    )
+    text_parts.clear()
+    annotations.clear()
+
+
+def _record_block_citations(
+    citations: Iterable[CitationOutputTypeDef],
+    text_parts: list[str],
+    annotations: list[Annotation],
+    pending_annotations: list[Annotation],
+    ws_sources: dict[str | None, list[WebSearchActionSource]],
+    last_ws_id: str | None,
+    *,
+    collect_sources: bool,
+) -> None:
+    """Record one ``citationsContent`` block's annotations and sources.
+
+    Annotations attach to the open text run (or stay pending when none is
+    open); sources are attributed to the nearest preceding ``web_search_call``
+    (``None`` key when none precedes).
+
+    Args:
+        citations: Bedrock citation objects of the block.
+        text_parts: Text blocks of the currently open run.
+        annotations: Mutable annotation list of the open run.
+        pending_annotations: Mutable list for annotations outside a run.
+        ws_sources: Mutable web-search source accumulator.
+        last_ws_id: Id of the nearest preceding ``web_search_call`` item.
+        collect_sources: Whether web-search sources should be collected.
+    """
+    citations = list(citations)
+    # Approximation: Bedrock gives no character indices, so anchor the
+    # citation at the end of the text accumulated so far.
+    new_annotations = _citation_annotations(citations, len("\n".join(text_parts)))
+    (annotations if text_parts else pending_annotations).extend(new_annotations)
+    if collect_sources and (sources := list(_citation_sources(citations))):
+        ws_sources.setdefault(last_ws_id, []).extend(sources)
+
+
+def _patch_message_annotations(
+    output_items: list[ResponseOutputItem], pending_annotations: list[Annotation]
+) -> None:
+    """Fold annotations recorded outside a text run into the last message item.
+
+    Args:
+        output_items: Mutable output items list to patch in place.
+        pending_annotations: Annotations to append to the last message.
+    """
+    if not pending_annotations:
+        return
+    for idx in range(len(output_items) - 1, -1, -1):
+        item = output_items[idx]
+        if (
+            isinstance(item, ResponseOutputMessage)
+            and item.content
+            and isinstance(part := item.content[0], ResponseOutputText)
+        ):
+            new_part = part.model_copy(
+                update={"annotations": [*part.annotations, *pending_annotations]}
+            )
+            output_items[idx] = item.model_copy(
+                update={"content": [new_part, *item.content[1:]]}
+            )
+            return
+
+
 def _extract_output_items(
     contents: list[ContentBlockOutputTypeDef],
     response_id: str,
@@ -1064,11 +1553,11 @@ def _extract_output_items(
 ) -> list[ResponseOutputItem]:
     """Extract ResponseOutputItem objects from Bedrock response content.
 
-    Processes content blocks in their original Bedrock order so that
-    ``reasoning`` and ``web_search_call`` items appear before the assistant
-    message, matching the official OpenAI API output ordering.  Each
-    contiguous run of ``reasoningContent`` blocks is aggregated into a single
-    ``reasoning`` item.
+    Processes content blocks in their original Bedrock order, mirroring the
+    streaming path: each ``reasoningContent`` block becomes its own
+    ``reasoning`` item, each contiguous run of text blocks becomes a
+    ``message`` item at its block position, and ``toolUse`` blocks become
+    ``web_search_call`` or ``function_call`` items.
 
     Args:
         contents: Bedrock response content blocks.
@@ -1084,101 +1573,56 @@ def _extract_output_items(
             to reasoning items).
 
     Returns:
-        List of output items. ``reasoning``, ``web_search_call`` and
-        ``function_call`` items keep their original Bedrock block position;
-        the assembled ``message`` item (if any text blocks were present) is
-        appended last.
+        List of output items in Bedrock block order.  ``message`` items carry
+        ``url_citation`` annotations from the ``citationsContent`` blocks of
+        their text run (indices approximated to the accumulated text length at
+        citation position); web-search sources are attributed to the nearest
+        preceding ``web_search_call`` item (the first one when none precedes),
+        matching the streaming path.
     """
-    sources: list[WebSearchActionSource] | None = (
-        _extract_web_search_sources(contents) if web_search_tool_names else None
-    )
-
-    text_parts: list[str] = []
     output_items: list[ResponseOutputItem] = []
-    reasoning_texts: list[str] = []
-    reasoning_signatures: list[str] = []
-    reasoning_redacted: list[bytes] = []
-    reasoning_runs = 0
-
-    def _flush_reasoning() -> None:
-        """Append a reasoning item for the pending contiguous block run."""
-        nonlocal reasoning_runs
-        if not (reasoning_texts or reasoning_signatures or reasoning_redacted):
-            return
-        output_items.append(
-            _build_reasoning_item(
-                f"{response_id}-rs-{reasoning_runs}",
-                "\n".join(reasoning_texts),
-                reasoning_signatures,
-                reasoning_redacted,
-                include_encrypted_reasoning=include_encrypted_reasoning,
-            )
-        )
-        reasoning_runs += 1
-        reasoning_texts.clear()
-        reasoning_signatures.clear()
-        reasoning_redacted.clear()
+    text_parts: list[str] = []
+    annotations: list[Annotation] = []
+    pending_annotations: list[Annotation] = []
+    reasoning_count = 0
+    last_ws_id: str | None = None
+    ws_sources: dict[str | None, list[WebSearchActionSource]] = {}
 
     for block in contents:
         if reasoning_content := block.get("reasoningContent"):
-            _accumulate_reasoning_block(
+            _flush_message_item(output_items, text_parts, annotations, response_id)
+            if reasoning_item := _reasoning_block_item(
                 reasoning_content,
-                reasoning_texts,
-                reasoning_signatures,
-                reasoning_redacted,
-            )
-            continue
-        _flush_reasoning()
-        if tool_use := block.get("toolUse"):
-            name: str = tool_use["name"]
-            if web_search_tool_names and name in web_search_tool_names:
-                input_data = tool_use["input"]
-                query = (
-                    input_data.get("query", "") if isinstance(input_data, dict) else ""
-                )
-                output_items.append(
-                    ResponseFunctionWebSearch(
-                        id=f"{response_id}-ws-{tool_use['toolUseId']}",
-                        type="web_search_call",
-                        status="completed",
-                        action=WebSearchActionSearch(
-                            type="search",
-                            query=query,
-                            queries=[query] if query else None,
-                            sources=sources,
-                        ),
-                    )
-                )
-            elif suppress_tool_names is None or name not in suppress_tool_names:
-                output_items.append(
-                    ResponseFunctionToolCall(
-                        arguments=to_json(tool_use["input"]).decode(),
-                        call_id=tool_use["toolUseId"],
-                        name=name,
-                        type="function_call",
-                        id=f"{response_id}-fc-{tool_use['toolUseId']}",
-                        status="completed",
-                    )
-                )
+                f"{response_id}-rs-{reasoning_count}",
+                include_encrypted_reasoning=include_encrypted_reasoning,
+            ):
+                output_items.append(reasoning_item)
+                reasoning_count += 1
+        elif tool_use := block.get("toolUse"):
+            _flush_message_item(output_items, text_parts, annotations, response_id)
+            if tool_item := _tool_use_output_item(
+                tool_use, response_id, suppress_tool_names, web_search_tool_names
+            ):
+                output_items.append(tool_item)
+                if isinstance(tool_item, ResponseFunctionWebSearch):
+                    last_ws_id = tool_item.id
         elif text := block.get("text"):
             text_parts.append(text)
-
-    _flush_reasoning()
-    if text_parts:
-        output_items.append(
-            ResponseOutputMessage(
-                id=f"{response_id}-msg-0",
-                content=[
-                    ResponseOutputText(
-                        annotations=[], text="\n".join(text_parts), type="output_text"
-                    )
-                ],
-                role="assistant",
-                status="completed",
-                type="message",
+        elif citations_block := block.get("citationsContent"):
+            _record_block_citations(
+                citations_block.get("citations", ()),
+                text_parts,
+                annotations,
+                pending_annotations,
+                ws_sources,
+                last_ws_id,
+                collect_sources=bool(web_search_tool_names),
             )
-        )
 
+    _flush_message_item(output_items, text_parts, annotations, response_id)
+    _patch_message_annotations(output_items, pending_annotations)
+    if ws_sources:
+        _attach_web_search_sources(output_items, ws_sources)
     return output_items
 
 
@@ -1191,29 +1635,46 @@ _INCOMPLETE_REASONS: dict[str, Literal["max_output_tokens", "content_filter"]] =
 
 def _map_stop_reason(
     stop_reason: str | None,
-) -> tuple[Literal["completed", "incomplete", "failed"], IncompleteDetails | None]:
-    """Map a Bedrock stop reason to a Responses API status and incomplete details.
+) -> tuple[
+    Literal["completed", "incomplete", "failed"],
+    IncompleteDetails | None,
+    ResponseError | None,
+]:
+    """Map a Bedrock stop reason to a Responses API status and error details.
 
     Args:
         stop_reason: Bedrock stop reason value.
 
     Returns:
-        Tuple of ``(status, incomplete_details)`` where ``status`` is one of
-        ``"completed"``, ``"incomplete"``, or ``"failed"`` and ``incomplete_details``
-        is populated when the response was cut short.
+        Tuple of ``(status, incomplete_details, error)`` where ``status`` is one
+        of ``"completed"``, ``"incomplete"``, or ``"failed"``,
+        ``incomplete_details`` is populated when the response was cut short, and
+        ``error`` is populated when the response failed.
     """
     match stop_reason:
         case "malformed_model_output" | "malformed_tool_use":
-            return "failed", None
+            return (
+                "failed",
+                None,
+                ResponseError(
+                    code="server_error",
+                    message="The model failed to generate a valid response "
+                    f"(Bedrock stop reason: {stop_reason}).",
+                ),
+            )
         case "end_turn" | "stop_sequence" | "tool_use" | None:
-            return "completed", None
+            return "completed", None, None
         case _:
             if stop_reason not in _INCOMPLETE_REASONS:
                 log_error_details(
                     f"Unknown Bedrock stopReason: {stop_reason!r}", level="warning"
                 )
-            return "incomplete", IncompleteDetails(
-                reason=_INCOMPLETE_REASONS.get(stop_reason, "max_output_tokens")
+            return (
+                "incomplete",
+                IncompleteDetails(
+                    reason=_INCOMPLETE_REASONS.get(stop_reason, "max_output_tokens")
+                ),
+                None,
             )
 
 
@@ -1224,6 +1685,7 @@ def _build_response_object(
     output_items: list[ResponseOutputItem],
     status: Literal["completed", "incomplete", "failed", "in_progress"],
     incomplete_details: IncompleteDetails | None,
+    error: ResponseError | None,
     usage: ResponseUsage | None,
     request: ResponseCreateParams,
 ) -> Response:
@@ -1236,6 +1698,7 @@ def _build_response_object(
         output_items: Accumulated output items (messages and function calls).
         status: Response completion status (``"in_progress"`` for lifecycle events).
         incomplete_details: Details explaining why the response is incomplete, or ``None``.
+        error: Error details when the response failed, or ``None``.
         usage: Token usage statistics, or ``None`` for in-progress responses.
         request: The original Responses API creation request.
 
@@ -1244,7 +1707,7 @@ def _build_response_object(
     """
     return Response(
         id=response_id,
-        created_at=created_at,
+        created_at=int(created_at),
         model=model_id,
         object="response",
         output=output_items,
@@ -1255,10 +1718,16 @@ def _build_response_object(
         top_p=request.top_p,
         status=status,
         incomplete_details=incomplete_details,
+        error=error,
+        completed_at=int(time()) if status == "completed" else None,
+        instructions=request.instructions,
         metadata=request.metadata,
         max_output_tokens=request.max_output_tokens,
         previous_response_id=request.previous_response_id,
+        prompt_cache_key=request.prompt_cache_key,
+        prompt_cache_retention=request.prompt_cache_retention,
         reasoning=request.reasoning,
+        service_tier=request.service_tier,
         text=request.text,
         top_logprobs=request.top_logprobs,
         usage=usage,
@@ -1307,7 +1776,10 @@ async def format_response(
     ]
     usage_raw = bedrock_response["usage"]
 
-    input_tokens = usage_raw["inputTokens"]
+    # OpenAI semantics: input_tokens covers the full prompt, cache buckets included.
+    cache_read = usage_raw.get("cacheReadInputTokens", 0)
+    cache_write = usage_raw.get("cacheWriteInputTokens", 0)
+    input_tokens = usage_raw["inputTokens"] + cache_read + cache_write
     output_tokens = usage_raw["outputTokens"]
 
     return log_response_params(
@@ -1325,9 +1797,7 @@ async def format_response(
             *_map_stop_reason(bedrock_response.get("stopReason")),
             ResponseUsage(
                 input_tokens=input_tokens,
-                input_tokens_details=InputTokensDetails(
-                    cached_tokens=usage_raw.get("cacheReadInputTokens", 0)
-                ),
+                input_tokens_details=InputTokensDetails(cached_tokens=cache_read),
                 output_tokens=output_tokens,
                 output_tokens_details=OutputTokensDetails(),
                 total_tokens=input_tokens + output_tokens,
@@ -1338,12 +1808,7 @@ async def format_response(
 
 
 class _BlockKind(Enum):
-    """Kind of content block currently being streamed.
-
-    Replaces the mutually-exclusive boolean flags (``is_text_block``,
-    ``is_tool_block``, ``suppress_block``, ``is_web_search_block``) with a
-    single tagged value so that invalid combinations cannot be represented.
-    """
+    """Kind of the content block currently being streamed."""
 
     NONE = "none"
     TEXT = "text"
@@ -1356,9 +1821,6 @@ class _BlockKind(Enum):
 @dataclass(slots=True)
 class _StreamState:
     """Mutable state accumulated during a Bedrock ConverseStream response.
-
-    Centralises all per-stream variables so the block-handler generators can
-    receive a single argument instead of a sprawling set of nonlocal bindings.
 
     ``pending_web_search_sources`` is populated from post-stop
     ``citationsContent`` blocks and folded back into the corresponding
@@ -1373,13 +1835,19 @@ class _StreamState:
     current_item_id: str | None = None
     current_tool_name: str | None = None
     current_tool_id: str | None = None
-    current_text: str = ""
-    current_args: str = ""
+    #: Text (or reasoning-text) delta chunks of the current block, joined at close.
+    current_text_parts: list[str] = field(default_factory=list)
+    #: Tool-argument delta chunks of the current block, joined at close.
+    current_args_parts: list[str] = field(default_factory=list)
+    #: Running length of the current text block, for annotation offsets.
+    current_text_len: int = 0
     block_kind: _BlockKind = _BlockKind.NONE
     stop_reason: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
     cached_tokens: int = 0
+    #: Tokens written to the prompt cache (separate Bedrock usage bucket).
+    cache_write_tokens: int = 0
     #: Whether ``include`` requested ``reasoning.encrypted_content``.
     include_encrypted_reasoning: bool = False
     #: Signatures from reasoning deltas of the current block.
@@ -1392,6 +1860,10 @@ class _StreamState:
     pending_web_search_sources: dict[str, list[WebSearchActionSource]] = field(
         default_factory=dict
     )
+    #: ``url_citation`` annotations accumulated for the open text block.
+    current_annotations: list[Annotation] = field(default_factory=list)
+    #: Annotations recorded outside a text block, patched into the last message.
+    pending_annotations: list[Annotation] = field(default_factory=list)
 
     def next_seq(self) -> int:
         """Return the current sequence number and advance the counter.
@@ -1408,10 +1880,12 @@ class _StreamState:
         self.current_item_id = None
         self.current_tool_name = None
         self.current_tool_id = None
-        self.current_text = ""
-        self.current_args = ""
+        self.current_text_parts = []
+        self.current_args_parts = []
+        self.current_text_len = 0
         self.reasoning_signatures = []
         self.reasoning_redacted = []
+        self.current_annotations = []
 
 
 def _handle_block_start(
@@ -1441,8 +1915,9 @@ def _handle_block_start(
     """
     yield from _close_reasoning_block(state)
     start = start_block["start"]
-    state.current_text = ""
-    state.current_args = ""
+    state.current_text_parts = []
+    state.current_args_parts = []
+    state.current_text_len = 0
 
     if tool_use := start.get("toolUse"):
         state.current_tool_name = tool_use["name"]
@@ -1564,13 +2039,15 @@ def _emit_text_delta(
     yield from _close_reasoning_block(state)
     if state.block_kind is _BlockKind.NONE:
         # Synthesise a text block start if contentBlockStart was never received.
-        state.current_text = ""
+        state.current_text_parts = []
+        state.current_text_len = 0
         state.current_item_id = f"{state.response_id}-msg-{state.output_index}"
         state.block_kind = _BlockKind.TEXT
         yield from _emit_text_block_start(state)
     if state.block_kind is not _BlockKind.TEXT or not state.current_item_id:
         return  # pragma: no cover
-    state.current_text += text_delta
+    state.current_text_parts.append(text_delta)
+    state.current_text_len += len(text_delta)
     yield json_sse(
         "response.output_text.delta",
         ResponseTextDeltaEvent(
@@ -1603,7 +2080,7 @@ def _handle_reasoning_delta(
         ``JSONServerSentEvent`` objects for the reasoning delta.
     """
     if state.block_kind is not _BlockKind.REASONING:
-        state.current_text = ""
+        state.current_text_parts = []
         state.current_item_id = f"{state.response_id}-rs-{state.output_index}"
         state.block_kind = _BlockKind.REASONING
         yield json_sse(
@@ -1626,7 +2103,7 @@ def _handle_reasoning_delta(
     if (data := reasoning_delta.get("redactedContent")) is not None:
         state.reasoning_redacted.append(data)
     if (text_delta := reasoning_delta.get("text")) and state.current_item_id:
-        state.current_text += text_delta
+        state.current_text_parts.append(text_delta)
         yield json_sse(
             "response.reasoning_text.delta",
             ResponseReasoningTextDeltaEvent(
@@ -1655,21 +2132,21 @@ def _close_reasoning_block(state: _StreamState) -> Generator[JSONServerSentEvent
     """
     if state.block_kind is not _BlockKind.REASONING or state.current_item_id is None:
         return
-    if state.current_text:
+    if reasoning_text := "".join(state.current_text_parts):
         yield json_sse(
             "response.reasoning_text.done",
             ResponseReasoningTextDoneEvent(
                 item_id=state.current_item_id,
                 output_index=state.output_index,
                 content_index=0,
-                text=state.current_text,
+                text=reasoning_text,
                 sequence_number=state.next_seq(),
                 type="response.reasoning_text.done",
             ),
         )
     done_item = _build_reasoning_item(
         state.current_item_id,
-        state.current_text,
+        reasoning_text,
         state.reasoning_signatures,
         state.reasoning_redacted,
         include_encrypted_reasoning=state.include_encrypted_reasoning,
@@ -1708,7 +2185,7 @@ def _handle_block_delta(
 
     if state.block_kind in (_BlockKind.SUPPRESSED, _BlockKind.WEB_SEARCH):
         if tool_delta := delta.get("toolUse"):
-            state.current_args += tool_delta["input"]
+            state.current_args_parts.append(tool_delta["input"])
         return
 
     if reasoning_delta := delta.get("reasoningContent"):
@@ -1721,7 +2198,7 @@ def _handle_block_delta(
         and state.current_item_id
     ):
         args_delta = tool_delta["input"]
-        state.current_args += args_delta
+        state.current_args_parts.append(args_delta)
         yield json_sse(
             "response.function_call_arguments.delta",
             ResponseFunctionCallArgumentsDeltaEvent(
@@ -1733,26 +2210,37 @@ def _handle_block_delta(
             ),
         )
     elif citation_delta := delta.get("citation"):
-        _record_citation(state, citation_delta)
+        yield from _record_citation(state, citation_delta)
 
 
 def _record_citation(
     state: _StreamState, citation: CitationsDeltaTypeDef | CitationTypeDef
-) -> None:
-    """Accumulate a single web citation against the latest web-search item.
+) -> Generator[JSONServerSentEvent]:
+    """Record a single web citation as sources and ``url_citation`` annotation.
 
     Bedrock streams ``citationsContent`` after the ``web_search`` tool block has
     already closed, so the citation cannot be forwarded as a delta of the now
     completed ``response.output_item.done`` event.  Instead we collect them in
     ``state.pending_web_search_sources`` keyed by the target ``item_id`` and
     patch the stored ``ResponseFunctionWebSearch`` in
-    ``state.output_items`` before ``response.completed`` is emitted.
+    ``state.output_items`` before the terminal event is emitted.
+
+    The citation is also recorded as a ``url_citation`` annotation: when a text
+    block is open, it is attached to it and a
+    ``response.output_text.annotation.added`` event is emitted (indices
+    approximated to the streamed text length); otherwise it is kept pending and
+    patched into the last message before the terminal event.
 
     Args:
         state: Mutable stream state.
         citation: A Bedrock citation delta or completed citation.
+
+    Yields:
+        ``response.output_text.annotation.added`` events, when applicable.
     """
     url = ((citation.get("location") or {}).get("web") or {}).get("url")
+    if not url:
+        return
     target_id = next(
         (
             item.id
@@ -1761,10 +2249,32 @@ def _record_citation(
         ),
         None,
     )
-    if not url or target_id is None:
+    if target_id is not None:
+        state.pending_web_search_sources.setdefault(target_id, []).append(
+            WebSearchActionSource(type="url", url=url)
+        )
+    annotation = AnnotationURLCitation(
+        start_index=state.current_text_len,
+        end_index=state.current_text_len,
+        title=citation.get("title") or url,
+        type="url_citation",
+        url=url,
+    )
+    if state.block_kind is not _BlockKind.TEXT or state.current_item_id is None:
+        state.pending_annotations.append(annotation)
         return
-    state.pending_web_search_sources.setdefault(target_id, []).append(
-        WebSearchActionSource(type="url", url=url)
+    state.current_annotations.append(annotation)
+    yield json_sse(
+        "response.output_text.annotation.added",
+        ResponseOutputTextAnnotationAddedEvent(
+            item_id=state.current_item_id,
+            output_index=state.output_index,
+            content_index=0,
+            annotation=annotation,
+            annotation_index=len(state.current_annotations) - 1,
+            sequence_number=state.next_seq(),
+            type="response.output_text.annotation.added",
+        ),
     )
 
 
@@ -1784,19 +2294,21 @@ def _emit_tool_done(state: _StreamState) -> Generator[JSONServerSentEvent]:
         or state.current_tool_id is None
     ):  # pragma: no cover — caller guarantees these are set for TOOL blocks
         return
+    # Match non-streaming output: no argument deltas means an empty JSON object.
+    arguments = "".join(state.current_args_parts) or "{}"
     yield json_sse(
         "response.function_call_arguments.done",
         ResponseFunctionCallArgumentsDoneEvent(
             item_id=state.current_item_id,
             output_index=state.output_index,
-            arguments=state.current_args,
+            arguments=arguments,
             name=state.current_tool_name,
             sequence_number=state.next_seq(),
             type="response.function_call_arguments.done",
         ),
     )
     done_tool_item = ResponseFunctionToolCall(
-        arguments=state.current_args,
+        arguments=arguments,
         call_id=state.current_tool_id,
         name=state.current_tool_name,
         type="function_call",
@@ -1832,11 +2344,11 @@ def _handle_block_stop(state: _StreamState) -> Generator[JSONServerSentEvent]:
     Yields:
         ``JSONServerSentEvent`` objects for the block stop.
     """
-    if state.block_kind is _BlockKind.REASONING:
-        yield from _close_reasoning_block(state)
-    elif state.block_kind is _BlockKind.TEXT and state.current_item_id:
+    yield from _close_reasoning_block(state)
+    if state.block_kind is _BlockKind.TEXT and state.current_item_id:
+        text = "".join(state.current_text_parts)
         text_part = ResponseOutputText(
-            annotations=[], text=state.current_text, type="output_text"
+            annotations=list(state.current_annotations), text=text, type="output_text"
         )
         yield json_sse(
             "response.output_text.done",
@@ -1845,7 +2357,7 @@ def _handle_block_stop(state: _StreamState) -> Generator[JSONServerSentEvent]:
                 output_index=state.output_index,
                 content_index=0,
                 logprobs=[],
-                text=state.current_text,
+                text=text,
                 sequence_number=state.next_seq(),
                 type="response.output_text.done",
             ),
@@ -1879,8 +2391,6 @@ def _handle_block_stop(state: _StreamState) -> Generator[JSONServerSentEvent]:
         )
         state.output_items.append(done_text_item)
         state.output_index += 1
-        state.reset_block()
-
     elif (
         state.block_kind
         in (_BlockKind.TOOL, _BlockKind.WEB_SEARCH, _BlockKind.SUPPRESSED)
@@ -1889,7 +2399,8 @@ def _handle_block_stop(state: _StreamState) -> Generator[JSONServerSentEvent]:
         and state.current_tool_id
     ):
         if state.block_kind is _BlockKind.WEB_SEARCH:
-            parsed = try_parse_json(state.current_args) if state.current_args else None
+            args = "".join(state.current_args_parts)
+            parsed = try_parse_json(args) if args else None
             query = (
                 q
                 if isinstance(parsed, dict)
@@ -1930,7 +2441,11 @@ def _handle_block_stop(state: _StreamState) -> Generator[JSONServerSentEvent]:
             state.output_index += 1
         elif state.block_kind is _BlockKind.SUPPRESSED:
             state.suppressed_tool_calls.append(
-                (state.current_tool_id, state.current_tool_name, state.current_args)
+                (
+                    state.current_tool_id,
+                    state.current_tool_name,
+                    "".join(state.current_args_parts),
+                )
             )
         else:
             yield from _emit_tool_done(state)
@@ -1973,6 +2488,126 @@ def _process_stream_event(
             state.input_tokens = usage["inputTokens"]
             state.output_tokens = usage["outputTokens"]
             state.cached_tokens = usage.get("cacheReadInputTokens", 0)
+            state.cache_write_tokens = usage.get("cacheWriteInputTokens", 0)
+
+
+def _classify_stream_error(
+    exc: Exception,
+) -> tuple[int, str, str | None, str | None, str, LogLevel | None]:
+    """Classify a mid-stream exception for spec error events and logging.
+
+    Mirrors the branches of ``log_request_sse_stream_event`` so Responses
+    streams report the same status, sanitized message, and log detail as the
+    legacy REST-envelope error path.
+
+    Args:
+        exc: The exception raised while streaming.
+
+    Returns:
+        Tuple of ``(status, client_message, param, code, log_message, log_level)``.
+    """
+    if isinstance(exc, ApiError):
+        return (
+            exc.status,
+            hide_security_details(exc.status, exc.args[0]),
+            exc.param,
+            exc.code,
+            exc.args[0],
+            None,
+        )
+    if isinstance(exc, ClientError):
+        error = exc.response["Error"]
+        status = AWS_ERROR_MAP.get(error["Code"], (502, "server_error"))[0]
+        message = error["Message"]
+    elif isinstance(exc, HTTPClientError | BotocoreConnectionError):
+        status = AWS_ERROR_MAP.get(exc.__class__.__name__, (503, "server_error"))[0]
+        message = str(exc)
+    else:
+        return (
+            500,
+            "Internal Server Error",
+            None,
+            "server_error",
+            "\n".join(format_exception(exc)),
+            "critical",
+        )
+    return (
+        status,
+        hide_security_details(status, message),
+        None,
+        "server_error",
+        message,
+        None,
+    )
+
+
+def _finalize_output_items(state: _StreamState) -> None:
+    """Patch pending citation sources and annotations into stored output items.
+
+    Applied just before the terminal event so it reflects data (web-search
+    sources, ``url_citation`` annotations) that arrived after the related
+    output items were already closed.
+
+    Args:
+        state: Mutable stream state.
+    """
+    if state.pending_web_search_sources:
+        for idx, item in enumerate(state.output_items):
+            if isinstance(item, ResponseFunctionWebSearch) and (
+                sources := state.pending_web_search_sources.get(item.id)
+            ):
+                state.output_items[idx] = item.model_copy(
+                    update={
+                        "action": item.action.model_copy(update={"sources": sources})
+                    }
+                )
+    _patch_message_annotations(state.output_items, state.pending_annotations)
+
+
+def _terminal_event(
+    status: Literal["completed", "incomplete", "failed"],
+    final_response: Response,
+    state: _StreamState,
+) -> JSONServerSentEvent:
+    """Build the terminal stream event matching the final response status.
+
+    Args:
+        status: Final response status.
+        final_response: Fully-built terminal response snapshot.
+        state: Mutable stream state (provides the sequence number).
+
+    Returns:
+        ``response.completed``, ``response.incomplete``, or ``response.failed``
+        SSE event.
+    """
+    match status:
+        case "incomplete":
+            return json_sse(
+                "response.incomplete",
+                ResponseIncompleteEvent(
+                    response=final_response,
+                    sequence_number=state.next_seq(),
+                    type="response.incomplete",
+                ),
+            )
+        case "failed":
+            return json_sse(
+                "response.failed",
+                ResponseFailedEvent(
+                    response=final_response,
+                    sequence_number=state.next_seq(),
+                    type="response.failed",
+                ),
+            )
+        case "completed":
+            return json_sse(
+                "response.completed",
+                ResponseCompletedEvent(
+                    response=final_response,
+                    sequence_number=state.next_seq(),
+                    type="response.completed",
+                ),
+            )
 
 
 async def format_stream(
@@ -1985,12 +2620,17 @@ async def format_stream(
     post_suppress_handler: Callable[[_StreamState], AsyncGenerator[JSONServerSentEvent]]
     | None = None,
     web_search_tool_names: frozenset[str] | None = None,
+    moderation_builder: Callable[[], ResponseModeration | None] | None = None,
 ) -> AsyncGenerator[JSONServerSentEvent]:
     """Stream Bedrock Converse events as OpenAI Responses API SSE events.
 
     Emits the full lifecycle event sequence: ``response.created`` →
     ``response.in_progress`` → per-block events → optional post-suppress items →
-    ``response.completed``.
+    a terminal ``response.completed``, ``response.incomplete``, or
+    ``response.failed`` event matching the Bedrock stop reason.  Mid-stream
+    exceptions emit a spec ``error`` event followed by a ``response.failed``
+    snapshot, then re-raise as :class:`SseHandledStreamError` so the monitoring
+    wrapper logs the error without emitting the legacy REST-envelope event.
 
     Args:
         response_id: Unique identifier for this response.
@@ -2000,91 +2640,140 @@ async def format_stream(
         request: The original Responses API creation request.
         suppress_tool_names: Tool names whose output items should be filtered.
         post_suppress_handler: Optional async generator called after the main stream
-            but before ``response.completed``.  Receives the stream state and may
+            but before the terminal event.  Receives the stream state and may
             append items to ``state.output_items`` and yield additional SSE events
             (e.g. for server-side image generation results).
         web_search_tool_names: Tool names to emit as ``web_search_call`` output
             items with query and completion events.
+        moderation_builder: Optional callable building the response ``moderation``
+            field from the guardrail trace, invoked at stream end so the
+            terminal event carries the complete trace.
 
     Yields:
         ``JSONServerSentEvent`` for each Responses API stream event.
+
+    Raises:
+        SseHandledStreamError: When a mid-stream exception was already reported
+            to the client via spec error events.
     """
     state = _StreamState(
         response_id, include_encrypted_reasoning=_includes_encrypted_reasoning(request)
     )
-    initial_response = _build_response_object(
-        response_id, created_at, model_id, [], "in_progress", None, None, request
-    )
+    try:
+        initial_response = _build_response_object(
+            response_id,
+            created_at,
+            model_id,
+            [],
+            "in_progress",
+            None,
+            None,
+            None,
+            request,
+        )
 
-    yield json_sse(
-        "response.created",
-        ResponseCreatedEvent(
-            response=initial_response,
-            sequence_number=state.next_seq(),
-            type="response.created",
-        ),
-    )
-    yield json_sse(
-        "response.in_progress",
-        ResponseInProgressEvent(
-            response=initial_response,
-            sequence_number=state.next_seq(),
-            type="response.in_progress",
-        ),
-    )
+        yield json_sse(
+            "response.created",
+            ResponseCreatedEvent(
+                response=initial_response,
+                sequence_number=state.next_seq(),
+                type="response.created",
+            ),
+        )
+        yield json_sse(
+            "response.in_progress",
+            ResponseInProgressEvent(
+                response=initial_response,
+                sequence_number=state.next_seq(),
+                type="response.in_progress",
+            ),
+        )
 
-    async for event in stream:
-        for sse in _process_stream_event(
-            state, event, suppress_tool_names, web_search_tool_names
-        ):
-            yield sse  # `yield from` is not permitted inside async generators.
+        async for event in stream:
+            for sse in _process_stream_event(
+                state, event, suppress_tool_names, web_search_tool_names
+            ):
+                yield sse  # `yield from` is not permitted inside async generators.
 
-    # Defensive: close a reasoning block left open by a stream without contentBlockStop.
-    for sse in _close_reasoning_block(state):
-        yield sse
-
-    if post_suppress_handler:
-        async for sse in post_suppress_handler(state):
+        # Defensive: close a reasoning block left open by a stream without contentBlockStop.
+        for sse in _close_reasoning_block(state):
             yield sse
 
-    # Patch accumulated citation sources into the stored output items so ``response.completed`` includes them.
-    if state.pending_web_search_sources:
-        for idx, item in enumerate(state.output_items):
-            if isinstance(item, ResponseFunctionWebSearch) and (
-                sources := state.pending_web_search_sources.get(item.id)
-            ):
-                state.output_items[idx] = item.model_copy(
-                    update={
-                        "action": item.action.model_copy(update={"sources": sources})
-                    }
-                )
+        if post_suppress_handler:
+            async for sse in post_suppress_handler(state):
+                yield sse
 
-    yield json_sse(
-        "response.completed",
-        ResponseCompletedEvent(
-            response=log_response_params(
-                _build_response_object(
+        _finalize_output_items(state)
+
+        status, incomplete_details, error = _map_stop_reason(state.stop_reason)
+        input_tokens = (
+            state.input_tokens + state.cached_tokens + state.cache_write_tokens
+        )
+        final_response = _build_response_object(
+            response_id,
+            created_at,
+            model_id,
+            state.output_items,
+            status,
+            incomplete_details,
+            error,
+            ResponseUsage(
+                input_tokens=input_tokens,
+                input_tokens_details=InputTokensDetails(
+                    cached_tokens=state.cached_tokens
+                ),
+                output_tokens=state.output_tokens,
+                output_tokens_details=OutputTokensDetails(),
+                total_tokens=input_tokens + state.output_tokens,
+            ),
+            request,
+        )
+        if moderation_builder is not None:
+            final_response.moderation = moderation_builder()
+        log_response_params(final_response)
+        yield _terminal_event(status, final_response, state)
+    except Exception as exc:
+        status_code, message, param, code, log_message, log_level = (
+            _classify_stream_error(exc)
+        )
+        yield json_sse(
+            "error",
+            ResponseErrorEvent(
+                message=message,
+                code=code,
+                param=param,
+                sequence_number=state.next_seq(),
+                type="error",
+            ),
+        )
+        yield json_sse(
+            "response.failed",
+            ResponseFailedEvent(
+                response=_build_response_object(
                     response_id,
                     created_at,
                     model_id,
                     state.output_items,
-                    *_map_stop_reason(state.stop_reason),
-                    ResponseUsage(
-                        input_tokens=state.input_tokens,
-                        input_tokens_details=InputTokensDetails(
-                            cached_tokens=state.cached_tokens
+                    "failed",
+                    None,
+                    ResponseError(
+                        code=(
+                            "rate_limit_exceeded"
+                            if status_code == 429
+                            else "server_error"
                         ),
-                        output_tokens=state.output_tokens,
-                        output_tokens_details=OutputTokensDetails(),
-                        total_tokens=state.input_tokens + state.output_tokens,
+                        message=message,
                     ),
+                    None,
                     request,
-                )
+                ),
+                sequence_number=state.next_seq(),
+                type="response.failed",
             ),
-            sequence_number=state.next_seq(),
-            type="response.completed",
-        ),
-    )
+        )
+        raise SseHandledStreamError(
+            log_message, status=status_code, level=log_level
+        ) from exc
 
 
 async def count_input_tokens_via_bedrock(
@@ -2114,23 +2803,9 @@ async def count_input_tokens_via_bedrock(
     if system_blocks:
         req["system"] = system_blocks
 
-    if request.tools and request.tool_choice != "none":
-        tool_specs: list[ToolTypeDef] = [
-            {
-                "toolSpec": {
-                    "name": tool.name,
-                    "description": tool.description or "function",
-                    "inputSchema": {"json": tool.parameters or _EMPTY_TOOL},
-                }
-            }
-            for tool in request.tools
-            if isinstance(tool, FunctionTool)
-        ]
-        if tool_specs:
-            tool_config: ToolConfigurationTypeDef = {"tools": tool_specs}
-            if bedrock_choice := _map_tool_choice(request.tool_choice):
-                tool_config["toolChoice"] = bedrock_choice
-            req["toolConfig"] = tool_config
+    # Reuse the converse tool mapping so synthetic and integrated tools count too.
+    if tool_config := _build_tool_config(request):
+        req["toolConfig"] = tool_config
 
     with handle_bedrock_client_error():
         resp: CountTokensResponseTypeDef = await get_client(

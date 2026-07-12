@@ -26,7 +26,7 @@ Generate model responses with AWS Bedrock foundation models through an OpenAI Re
 
 </div>
 
-## Quick Start: Available Endpoint
+## Quick Start: Available Endpoints
 
 | Endpoint                     | Method | What It Does                                     | Powered By                  | MCP Tool                       |
 |------------------------------|--------|--------------------------------------------------|-----------------------------|--------------------------------|
@@ -35,7 +35,7 @@ Generate model responses with AWS Bedrock foundation models through an OpenAI Re
 | `/v1/responses/compact`      | `POST` | Compact a conversation into a reusable summary   | AWS Bedrock Converse API    | `openai_response_compact`      |
 | `/v1/responses/{response_id}` | `GET`  | Retrieve a stored response                       | AWS Bedrock Sessions        | `openai_response_get`          |
 | `/v1/responses/{response_id}` | `DELETE` | Delete a stored response                       | AWS Bedrock Sessions        | `openai_response_delete`       |
-| `/v1/responses/{response_id}/cancel` | `POST` | Cancel a background response (always fails: no background support) | AWS Bedrock Sessions | `openai_response_cancel` |
+| `/v1/responses/{response_id}/cancel` | `POST` | Cancel a background response — see [Stored Responses](#stored-responses) | AWS Bedrock Sessions | `openai_response_cancel` |
 | `/v1/responses/{response_id}/input_items` | `GET` | List the input items of a stored response | AWS Bedrock Sessions   | `openai_response_input_items`  |
 
 ## Feature Compatibility
@@ -51,27 +51,34 @@ Generate model responses with AWS Bedrock foundation models through an OpenAI Re
 | `system` / `developer` role                                           |   :material-check-circle:{ .success }   | Treated as a system instruction                                              |
 | Image input (`input_image`)                                           |      :material-cog:{ .model-dep }       | HTTP URLs and base64 data URIs supported                                     |
 | File input (`input_file`)                                             |      :material-cog:{ .model-dep }       | File URLs and base64 data supported                                          |
-| `function_call_output`                                                |   :material-check-circle:{ .success }   | Submit tool results as input for round-trip tool calling                     |
+| `function_call_output`                                                |   :material-check-circle:{ .success }   | Submit tool results as input; supports text, image, and file parts           |
+| Echoed output items (message, reasoning, refusal)                     |   :material-check-circle:{ .success }   | Replayed to the model; refusal parts preserved; unknown upstream fields tolerated |
+| Echoed `custom_tool_call` / `image_generation_call`                   |   :material-check-circle:{ .success }   | Replayed as tool calls (freeform input wrapped as `{"input": ...}`; image results attached) |
+| Hosted-tool call items (`web_search_call`, `file_search_call`, `code_interpreter_call`, `computer_call`, `tool_search_call`, shell/apply-patch/MCP items, `compaction_trigger`) | :material-check-circle:{ .success } | Accepted and dropped on replay (no Bedrock equivalent) |
+| `item_reference`                                                      |   :material-check-circle:{ .success }   | Accepted and dropped on replay                                               |
 | **Tool Calling**                                                      |                                         |                                                                              |
 | Function tools (`type: "function"`)                                   |   :material-check-circle:{ .success }   | Full schema mapping to Bedrock toolSpec                                      |
 | `tool_choice: "auto"`                                                 |   :material-check-circle:{ .success }   | Model selects among available tools                                          |
 | `tool_choice: "required"`                                             |   :material-check-circle:{ .success }   | Model must call at least one tool                                            |
 | `tool_choice: "none"`                                                 |   :material-check-circle:{ .success }   | Prevents tool calls                                                          |
 | Named `tool_choice` (force)                                           |   :material-check-circle:{ .success }   | Force a specific function to be called                                       |
+| `tool_choice: allowed_tools`                                          |   :material-check-circle:{ .success }   | Approximated: `required` + 1 function → forced tool; `required` + many → any tool; `auto` → auto; type-variants add no constraint |
 | `parallel_tool_calls`                                                 |   :material-check-circle:{ .success }   | Echoed in response; not transmitted to Bedrock                               |
 | Built-in tools (`code_interpreter`, `web_search`, `image_generation`) |      :material-cog:{ .model-dep }       | See [OpenAI Integrated Tools](#openai-integrated-tools)                      |
-| `file_search` tool                                                    | :material-close-circle:{ .unsupported } | Returns `400`; no Bedrock equivalent                                         |
-| `computer` / `computer_use_preview` tools                             | :material-close-circle:{ .unsupported } | Returns `400`; see [Computer Use Not Supported](#computer-use-not-supported) |
-| `mcp` tool                                                            | :material-close-circle:{ .unsupported } | Returns `400`; MCP not supported                                             |
-| `local_shell` / `shell` tools                                         | :material-close-circle:{ .unsupported } | Returns `400`; local shell not supported                                     |
-| `custom` / `namespace` / `tool_search` / `apply_patch` tools          | :material-close-circle:{ .unsupported } | Returns `400`; not supported                                                 |
+| `file_search` tool                                                    | :material-close-circle:{ .unsupported } | Accepted and dropped; no Bedrock equivalent                                  |
+| `computer` / `computer_use_preview` tools                             | :material-close-circle:{ .unsupported } | Accepted and dropped; see [Computer Use Not Supported](#computer-use-not-supported) |
+| `mcp` tool                                                            | :material-close-circle:{ .unsupported } | Accepted and dropped; MCP not supported                                      |
+| `local_shell` / `shell` tools                                         | :material-close-circle:{ .unsupported } | Accepted and dropped; no Bedrock equivalent                                  |
+| `custom` / `namespace` / `tool_search` / `apply_patch` tools          | :material-close-circle:{ .unsupported } | Accepted and dropped; no Bedrock equivalent                                  |
 | **Generation Control**                                                |                                         |                                                                              |
 | `max_output_tokens`                                                   |   :material-check-circle:{ .success }   | Maps to Bedrock `maxTokens`                                                  |
 | `temperature`                                                         |      :material-cog:{ .model-dep }       | 0–2 range; mapped to Bedrock inference config                                |
 | `top_p`                                                               |      :material-cog:{ .model-dep }       | 0–1 range; nucleus sampling                                                  |
-| `top_logprobs`                                                        |      :material-cog:{ .model-dep }       | 0–20 range; token log-probability output                                     |
-| `reasoning` (effort)                                                  |      :material-cog:{ .model-dep }       | Configures reasoning; chain of thought returned as `reasoning` output items  |
+| `top_logprobs`                                                        | :material-close-circle:{ .unsupported } | 0–20 range accepted and echoed; token log probabilities are never returned   |
+| `reasoning` (effort)                                                  |      :material-cog:{ .model-dep }       | Configures reasoning; without `effort` defaults to `medium`; `effort: "none"` disables; chain of thought returned as `reasoning` output items |
+| `reasoning.summary` / `generate_summary`                              | :material-close-circle:{ .unsupported } | Accepted but ignored — no summary is generated                               |
 | `reasoning.context`                                                   | :material-close-circle:{ .unsupported } | Accepted but ignored — context scoping is not applied                        |
+| `text.verbosity`                                                      | :material-close-circle:{ .unsupported } | Accepted but ignored                                                         |
 | `include`                                                             |   :material-check-circle:{ .success }   | `reasoning.encrypted_content` is honored; other values are ignored           |
 | `metadata`                                                            |   :material-check-circle:{ .success }   | Forwarded to Bedrock `requestMetadata`                                       |
 | `prompt_cache_key`                                                    |      :material-cog:{ .model-dep }       | Cache prompts to reduce costs and latency                                    |
@@ -79,13 +86,15 @@ Generate model responses with AWS Bedrock foundation models through an OpenAI Re
 | `service_tier`                                                        |   :material-check-circle:{ .success }   | Maps to Bedrock service tier header                                          |
 | `truncation`                                                          | :material-close-circle:{ .unsupported } | Returns `400`; Bedrock manages context automatically                         |
 | `max_tool_calls`                                                      | :material-close-circle:{ .unsupported } | Returns `400`; not supported                                                 |
-| `background`                                                          | :material-close-circle:{ .unsupported } | Returns `400`; async background mode not supported                           |
+| `context_management`                                                  | :material-close-circle:{ .unsupported } | Returns `400`; not supported                                                 |
+| `background`                                                          | :material-close-circle:{ .unsupported } | Accepted but ignored — execution is always synchronous; see [Stored Responses](#stored-responses) for the `cancel` endpoint caveat |
 | `store`                                                               |   :material-check-circle:{ .success }   | Persists the response in AWS Bedrock session storage (non-streaming)         |
-| `stream_options`                                                      | :material-close-circle:{ .unsupported } | Returns `400`; not supported                                                 |
+| `stream_options`                                                      | :material-close-circle:{ .unsupported } | Accepted but ignored                                                         |
 | `conversation`                                                        | :material-close-circle:{ .unsupported } | Returns `400`; use `previous_response_id` or `input`                         |
 | `prompt` (template reference)                                         | :material-close-circle:{ .unsupported } | Returns `400`; not supported                                                 |
-| `safety_identifier`                                                   | :material-close-circle:{ .unsupported } | Returns `400`; not supported                                                 |
-| `moderation`                                                          |   :material-check-circle:{ .success }   | Applies an AWS Bedrock guardrail; results in the response (non-streaming)   |
+| `safety_identifier`                                                   | :material-close-circle:{ .unsupported } | Accepted but ignored by generation; recorded in request logs                 |
+| `client_metadata`                                                     | :material-close-circle:{ .unsupported } | Accepted but ignored (sent by newer OpenAI clients such as Codex)            |
+| `moderation`                                                          |   :material-check-circle:{ .success }   | Applies an AWS Bedrock guardrail; results in the response `moderation` field (on the terminal event when streaming) |
 | **Output Format**                                                     |                                         |                                                                              |
 | `text.format: "text"`                                                 |   :material-check-circle:{ .success }   | Plain text output                                                            |
 | `text.format: "json_object"`                                          |      :material-cog:{ .model-dep }       | JSON object output via Bedrock outputConfig                                  |
@@ -102,7 +111,11 @@ Generate model responses with AWS Bedrock foundation models through an OpenAI Re
 | `response.function_call_arguments.delta`                              |   :material-check-circle:{ .success }   | Tool call argument deltas                                                    |
 | `response.function_call_arguments.done`                               |   :material-check-circle:{ .success }   | Finalized tool call arguments                                                |
 | `response.reasoning_text.delta` / `.done`                             |      :material-cog:{ .model-dep }       | Reasoning text deltas on reasoning models                                    |
-| `response.completed`                                                  |   :material-check-circle:{ .success }   | Final complete response at stream end                                        |
+| `response.output_text.annotation.added`                               |      :material-cog:{ .model-dep }       | `url_citation` annotations as web-search citations arrive                    |
+| `response.completed`                                                  |   :material-check-circle:{ .success }   | Final event when generation finishes normally                                |
+| `response.incomplete`                                                 |   :material-check-circle:{ .success }   | Final event when output is truncated or filtered (no `response.completed`)   |
+| `response.failed`                                                     |   :material-check-circle:{ .success }   | Final event when generation fails; the response carries `error`              |
+| `error`                                                               |   :material-check-circle:{ .success }   | Spec error event on mid-stream failures, followed by `response.failed`       |
 
 </div>
 
@@ -138,12 +151,13 @@ curl -X POST "$BASE/v1/responses" \
 Define function tools and submit results in a round-trip conversation.
 
 !!! note "Multi-Turn Conversations"
-    All responses are stateless. Response IDs are generated for compatibility but `previous_response_id` is not supported. For multi-turn conversations, pass the full message history in the `input` array.
+    For multi-turn conversations, pass the full message history in the `input` array, or store a response with `store=true` and continue it via `previous_response_id` (see [Stored Responses](#stored-responses)).
 
 !!! warning "Unsupported Built-In Tools"
     `file_search`, `computer`, `computer_use_preview`, `mcp`, `local_shell`, `shell`,
-    `custom`, `namespace`, `tool_search`, and `apply_patch` tools are **not supported**.
-    Requests that include any of these tools will receive a `400` error.
+    `custom`, `namespace`, `tool_search`, and `apply_patch` tools have no backend
+    equivalent: they are **accepted for compatibility and dropped** from the tool
+    configuration, so the model cannot call them.
 
 **Step 1 — Request a tool call:**
 
@@ -215,7 +229,15 @@ curl -N -X POST "$BASE/v1/responses" \
   }'
 ```
 
-The stream emits events in order: `response.created` → `response.in_progress` → `response.output_text.delta` (repeated) → `response.output_text.done` → `response.completed`.
+The stream emits events in order: `response.created` → `response.in_progress` → `response.output_text.delta` (repeated) → `response.output_text.done` → a terminal event.
+
+The terminal event matches the outcome, exactly like the OpenAI API:
+
+- `response.completed` — generation finished normally.
+- `response.incomplete` — output was cut short (e.g. `max_output_tokens` reached or content filtered); `response.completed` is **not** emitted, and the SDK's `get_final_response()` raises accordingly.
+- `response.failed` — generation failed; the embedded response carries an `error` object.
+
+If an error occurs mid-stream, a spec `error` event (with `code`, `message`, `param`, and `sequence_number`) is emitted, followed by a terminal `response.failed` snapshot.
 
 ### Structured JSON Output
 
@@ -372,7 +394,7 @@ Cached token usage is reported in the response:
 }
 ```
 
-In this example, 1,200 tokens were retrieved from cache, with only 300 tokens requiring processing.
+Following OpenAI semantics, `input_tokens` covers the **full** prompt: tokens read from and written to the cache are included, and `cached_tokens` (the tokens read from cache) is a subset of `input_tokens`. In this example, 1,200 of the 1,500 input tokens were retrieved from cache.
 
 ### OpenAI Integrated Tools
 
@@ -408,10 +430,19 @@ curl -X POST "$BASE/v1/responses" \
   }'
 ```
 
-!!! warning "Streaming sources"
-    `action.sources` (citation URLs) is only populated in non-streaming responses.
-    In streaming mode the field is `null`, though all lifecycle events
-    (`web_search_call.in_progress`, `web_search_call.completed`) are still emitted.
+!!! note "Citations: sources and annotations"
+    Web-search citations surface in two places:
+
+    - `action.sources` on the `web_search_call` item (in streaming mode it is
+      `null` on intermediate events and populated on the terminal event, since
+      citations arrive after the tool call closes).
+    - `url_citation` annotations on the assistant message's `output_text`
+      content. When streaming, each citation also emits a
+      `response.output_text.annotation.added` event as it arrives.
+
+    AWS Bedrock does not report character positions, so `start_index` and
+    `end_index` are approximated to the length of the generated text at the
+    time the citation arrived.
 
 !!! warning "Region Compatibility"
     `web_search` is only available on Nova Premier in US regions. Not available on EU inference profiles.
@@ -465,8 +496,8 @@ You can also specify image parameters in the tool definition:
 
 #### Computer Use Not Supported
 
-!!! failure "Computer Use Not Supported"
-    The `computer` and `computer_use_preview` integrated tools are **not supported**. Requests that include these tools will receive a `400` error.
+!!! warning "Computer Use Not Supported"
+    The `computer` and `computer_use_preview` integrated tools are **not supported**: requests succeed, but the tools are accepted and dropped from the tool configuration, so the model can never call them.
 
 ## Available Request Headers
 

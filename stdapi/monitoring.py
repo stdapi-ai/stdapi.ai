@@ -2,7 +2,6 @@
 
 from contextlib import contextmanager, suppress
 from contextvars import ContextVar
-from decimal import Decimal
 from re import compile as re_compile
 from time import perf_counter_ns
 from traceback import format_exception
@@ -31,6 +30,7 @@ from stdapi.usage import (
     format_cost,
     init_model_state,
     init_usage,
+    total_costs_by_currency,
     usage_log_entries,
 )
 from stdapi.utils import hide_security_details, stdout_write, webuuid
@@ -184,10 +184,12 @@ def _add_warnings(
         warnings: Messages or structured details to append.
         level: Severity to raise the log's level to (never lowered).
     """
-    for warning in warnings:
-        log.setdefault("error_detail", []).append(warning)
-        if _SORTED_LOG_LEVELS.index(level) > _SORTED_LOG_LEVELS.index(log["level"]):
-            log["level"] = level
+    warnings = list(warnings)
+    if not warnings:
+        return
+    log.setdefault("error_detail", []).extend(warnings)
+    if _SORTED_LOG_LEVELS.index(level) > _SORTED_LOG_LEVELS.index(log["level"]):
+        log["level"] = level
 
 
 def _finalize_usage(log: EventLog) -> None:
@@ -204,27 +206,10 @@ def _finalize_usage(log: EventLog) -> None:
             _add_warnings(log, compute_costs())
         if entries := usage_log_entries():
             log["usage"] = entries
-            if SETTINGS.cost_tracking:
-                # Entry costs are exact plain-decimal strings; summing in
-                # Decimal keeps the rollup exact too.
-                cost_by_currency: dict[str, Decimal] = {}
-                for entry in entries:
-                    if (cost := entry.get("cost")) and (
-                        currency := entry.get("currency")
-                    ):
-                        pairs: Iterable[tuple[str, str]] = ((currency, cost),)
-                    elif costs := entry.get("costs"):
-                        pairs = costs.items()
-                    else:
-                        continue
-                    for currency, cost in pairs:
-                        cost_by_currency[currency] = cost_by_currency.get(
-                            currency, Decimal(0)
-                        ) + Decimal(cost)
-                if cost_by_currency:
-                    log["cost"] = {
-                        c: format_cost(s) for c, s in cost_by_currency.items()
-                    }
+            if SETTINGS.cost_tracking and (
+                cost_by_currency := total_costs_by_currency(entries)
+            ):
+                log["cost"] = {c: format_cost(s) for c, s in cost_by_currency.items()}
         emit_usage_metrics()
     finally:
         # Drain synchronously (atomic on the event loop), even on failure so
@@ -441,6 +426,20 @@ def log_response_params[ParamsT: "BaseModel | dict[str, Any] | list[Any] | None"
     return response
 
 
+def _error_level(level: LogLevel | None, status: int | None) -> LogLevel:
+    """Resolve an error's severity: an explicit *level* wins over *status*.
+
+    Args:
+        level: Explicit level override, if any.
+        status: HTTP status code associated with the error, if any.
+
+    Returns:
+        *level* if given, else "warning" for status < 500, "error" for
+        status >= 500, or "critical" when neither is given.
+    """
+    return level or (("warning" if status < 500 else "error") if status else "critical")
+
+
 def log_error_details(
     *error_detail: JsonValue, level: LogLevel | None = None, status: int | None = None
 ) -> None:
@@ -452,10 +451,7 @@ def log_error_details(
         level: Optional. Logging level to specify the severity of the error.
         status: Optional. HTTP status code associated with the error.
     """
-    level = level or (
-        ("warning" if status < 500 else "error") if status else "critical"
-    )
-    _add_warnings(REQUEST_LOG.get(), error_detail, level=level)
+    _add_warnings(REQUEST_LOG.get(), error_detail, level=_error_level(level, status))
 
 
 def _format_params(
@@ -524,6 +520,54 @@ def log_background_event(event: str, request_id: str) -> Generator[EventLog]:
         write_log_event(log)
 
 
+class SseHandledStreamError(Exception):
+    """Mid-stream error already reported to the client as spec SSE events.
+
+    Raised by SSE adapters (e.g. the Responses ``format_stream``) after they
+    emitted their own protocol-compliant error events.
+    :func:`log_request_sse_stream_event` records it in the request log but
+    does not emit the legacy REST-envelope ``error`` event.
+    """
+
+    def __init__(
+        self, message: str, *, status: int | None = None, level: LogLevel | None = None
+    ) -> None:
+        """Initialize the marker exception.
+
+        Args:
+            message: Error detail to record in the request log.
+            status: HTTP status code associated with the error, if any.
+            level: Log level override; defaults to "warning" for 4xx statuses
+                and "error" otherwise (never "critical": already handled).
+        """
+        super().__init__(message)
+        self.status = status
+        self.level: LogLevel = level or (
+            "warning" if status and status < 500 else "error"
+        )
+
+
+def _stream_exception_detail(
+    exc: ApiError | ClientError | SseHandledStreamError,
+) -> tuple[JsonValue, LogLevel]:
+    """Extract the log message and severity for a mid-stream error.
+
+    Args:
+        exc: The mid-stream exception caught by :func:`_rebuild_and_log_stream`.
+
+    Returns:
+        A ``(message, level)`` pair, using the same level logic as
+        :func:`log_error_details`/:class:`SseHandledStreamError`.
+    """
+    if isinstance(exc, SseHandledStreamError):
+        return exc.args[0], exc.level
+    if isinstance(exc, ApiError):
+        return exc.args[0], _error_level(None, exc.status)
+    error = exc.response["Error"]
+    status = AWS_ERROR_MAP.get(error["Code"], (502, "server_error"))[0]
+    return error["Message"], _error_level(None, status)
+
+
 async def _rebuild_and_log_stream[T](
     first_chunk: T, stream: AsyncGenerator[T]
 ) -> AsyncGenerator[T]:
@@ -566,7 +610,9 @@ async def _rebuild_and_log_stream[T](
                 async for chunk in stream:
                     yield chunk
 
-        except ApiError, ClientError:
+        except (ApiError, ClientError, SseHandledStreamError) as exc:
+            message, level = _stream_exception_detail(exc)
+            _add_warnings(log, [message], level=level)
             raise
         except Exception as exc:
             log["level"] = "critical"
@@ -619,6 +665,9 @@ async def log_request_sse_stream_event(
     try:
         async for chunk in _rebuild_and_log_stream(await stream.__anext__(), stream):
             yield chunk
+    except SseHandledStreamError as exc:
+        # The adapter already emitted spec-compliant error events; log only.
+        log_error_details(exc.args[0], status=exc.status, level=exc.level)
     except ApiError as exc:
         status = exc.status
         log_error_details(exc.args[0], status=status)

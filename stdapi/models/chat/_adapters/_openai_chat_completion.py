@@ -914,10 +914,14 @@ async def format_response(
     cached_tokens = 0
     legacy_function = _LEGACY_FUNCTION.get()
     for index, response in enumerate(responses):
-        usage.prompt_tokens += response["usage"]["inputTokens"]
+        # OpenAI semantics: prompt_tokens covers the full prompt, cache buckets included.
+        cache_read = response["usage"].get("cacheReadInputTokens", 0)
+        cache_write = response["usage"].get("cacheWriteInputTokens", 0)
+        usage.prompt_tokens += (
+            response["usage"]["inputTokens"] + cache_read + cache_write
+        )
         usage.completion_tokens += response["usage"]["outputTokens"]
-        usage.total_tokens += response["usage"]["totalTokens"]
-        cached_tokens += response["usage"].get("cacheReadInputTokens", 0)
+        cached_tokens += cache_read
         message = response["output"]["message"]["content"]
         tool_calls, function_call = extract_tool_calls(
             message,
@@ -948,6 +952,7 @@ async def format_response(
                 ),
             )
         )
+    usage.total_tokens = usage.prompt_tokens + usage.completion_tokens
     if cached_tokens:
         usage.prompt_tokens_details = PromptTokensDetails(cached_tokens=cached_tokens)
 

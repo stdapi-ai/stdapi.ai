@@ -63,6 +63,7 @@ if TYPE_CHECKING:
         MessageCreateParams,
         ServerTools,
     )
+    from stdapi.types.openai import ResponseModeration
     from stdapi.types.openai_chat_completions import ChatCompletion
     from stdapi.types.openai_chat_completions import (
         CompletionCreateParams as ChatCompletionCreateParams,
@@ -388,7 +389,11 @@ class ChatModel(ChatModelBase[Any, Any]):
         )
 
     async def create_response(
-        self, request: ResponseCreateParams, response_id: str, created_at: float
+        self,
+        request: ResponseCreateParams,
+        response_id: str,
+        created_at: float,
+        moderation_builder: Callable[[], ResponseModeration | None] | None = None,
     ) -> Response | EventSourceResponse:
         """Handle a response request via the OpenAI Responses route.
 
@@ -396,6 +401,9 @@ class ChatModel(ChatModelBase[Any, Any]):
             request: Responses API creation request.
             response_id: Unique identifier for the response.
             created_at: Unix timestamp of request creation.
+            moderation_builder: Optional callable building the response
+                ``moderation`` field, invoked once the full guardrail trace
+                is available (at stream end when streaming).
 
         Returns:
             Completed response or streaming ``EventSourceResponse``.
@@ -496,6 +504,7 @@ class ChatModel(ChatModelBase[Any, Any]):
                         suppress_with_img,
                         post_handler,
                         web_search_names,
+                        moderation_builder,
                     )
                 )
             )
@@ -516,6 +525,8 @@ class ChatModel(ChatModelBase[Any, Any]):
                 response_id,
                 SETTINGS.image_generation_model,
             )
+        if moderation_builder is not None:
+            response.moderation = moderation_builder()
         return response
 
     async def _prepare_converse_request(

@@ -16,7 +16,14 @@ from starlette.requests import Request as StarletteRequest
 from stdapi import monitoring, usage
 from stdapi.config import SETTINGS
 from stdapi.models import ModelBase
-from stdapi.monitoring import REQUEST_ID, EventLog, _finalize_usage, log_request_event
+from stdapi.monitoring import (
+    REQUEST_ID,
+    REQUEST_LOG,
+    EventLog,
+    SseHandledStreamError,
+    _finalize_usage,
+    log_request_event,
+)
 from stdapi.pricing import Dimension
 from stdapi.usage import get_model_state, record_bedrock_usage
 from tests.conftest import set_test_price
@@ -24,6 +31,8 @@ from tests.conftest import set_test_price
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator
     from typing import Any
+
+    from stdapi.config import LogLevel
 
 
 #: All tests in this module exercise the local implementation in-process.
@@ -539,3 +548,55 @@ class TestStreamClientDisconnect:
         finally:
             REQUEST_ID.reset(id_token)
             usage.USAGE.reset(usage_token)
+
+
+class TestSseHandledStreamErrorLevel:
+    """SseHandledStreamError.__init__: level defaults from status; explicit override wins."""
+
+    @pytest.mark.parametrize(
+        ("status", "level", "expected"),
+        [
+            (400, None, "warning"),
+            (500, None, "error"),
+            (None, None, "error"),
+            (500, "warning", "warning"),
+        ],
+    )
+    def test_level_defaults_from_status_unless_overridden(
+        self, status: int | None, level: LogLevel | None, expected: LogLevel
+    ) -> None:
+        """The resolved level follows the status-based default unless *level* is given."""
+        exc = SseHandledStreamError("boom", status=status, level=level)
+        assert exc.level == expected
+
+
+class TestMidStreamErrorLoggedInStreamEvent:
+    """Mid-stream ApiError/ClientError/SseHandledStreamError land in the request_stream log."""
+
+    async def test_sse_handled_stream_error_logs_message_and_warning_level(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A mid-stream SseHandledStreamError(status=400) is recorded as a warning."""
+        written: list[EventLog] = []
+        monkeypatch.setattr(monitoring, "write_log_event", written.append)
+        id_token = REQUEST_ID.set("test-request-id")
+        log_token = REQUEST_LOG.set(_new_log())
+        try:
+
+            async def source() -> AsyncGenerator[ServerSentEvent]:
+                yield ServerSentEvent(data="first")
+                message = "bad request"
+                raise SseHandledStreamError(message, status=400)
+
+            stream = monitoring.log_request_sse_stream_event(source())
+            events = [chunk async for chunk in stream]
+
+            assert len(events) == 1
+            (stream_log,) = [w for w in written if w["type"] == "request_stream"]
+            assert stream_log["level"] == "warning"
+            assert any(
+                "bad request" in str(detail) for detail in stream_log["error_detail"]
+            )
+        finally:
+            REQUEST_ID.reset(id_token)
+            REQUEST_LOG.reset(log_token)

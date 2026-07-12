@@ -1,13 +1,19 @@
 """OpenAI Responses API endpoint implementation.
 
-This module implements the OpenAI-compatible /v1/responses endpoint, providing
+This module implements the OpenAI-compatible /v1/responses endpoints, providing
 AWS Bedrock Converse integration while maintaining full API compatibility.
 
 The module provides:
     - POST /v1/responses — create a model response
     - POST /v1/responses/input_tokens — count input tokens without generating a response
+    - POST /v1/responses/compact — compact a conversation into a reusable summary item
+    - GET /v1/responses/{response_id} — retrieve a stored model response
+    - POST /v1/responses/{response_id}/cancel — cancel a background model response (always fails)
+    - DELETE /v1/responses/{response_id} — delete a stored model response
+    - GET /v1/responses/{response_id}/input_items — list a stored model response's input items
 """
 
+from functools import partial
 from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Path, Query
@@ -157,7 +163,9 @@ def _normalized_input_items(stored_input: Any) -> list[dict[str, Any]]:  # noqa:
         raw = [{"role": "user", "content": raw}]
     items: list[dict[str, Any]] = []
     for index, entry in enumerate(raw):
-        item = dict(entry)
+        # Drop null fields from already-stored documents (e.g. a null `phase`
+        # or `type` dumped before storage started excluding them).
+        item = {key: value for key, value in dict(entry).items() if value is not None}
         if isinstance(content := item.get("content"), str):
             if item.get("role") == "assistant":
                 item["content"] = [
@@ -165,8 +173,8 @@ def _normalized_input_items(stored_input: Any) -> list[dict[str, Any]]:  # noqa:
                 ]
             else:
                 item["content"] = [{"type": "input_text", "text": content}]
-            item.setdefault("type", "message")
             item.setdefault("status", "completed")
+        item.setdefault("type", "message")
         item.setdefault("id", f"msg-{index}")
         items.append(item)
     return items
@@ -277,29 +285,37 @@ async def create_response(
     created_at = REQUEST_TIME.get().timestamp()
     try:
         result = await get_chat_model(model_id).create_response(
-            request, response_id, created_at
+            request,
+            response_id,
+            created_at,
+            moderation_builder=partial(build_response_moderation, request.moderation),
         )
     except BaseException:
         if store:
             await discard_stored_response_session(response_id)
         raise
     if isinstance(result, Response):
-        result.moderation = build_response_moderation(request.moderation)
         if previous_response_id:
             result.previous_response_id = previous_response_id
         if store:
-            await save_stored_response(
-                response_id,
-                {
-                    "input": request.model_dump(
-                        mode="json", by_alias=True, include={"input"}
-                    )["input"],
-                    "instructions": request.instructions,
-                    "response": result.model_dump(
-                        mode="json", by_alias=True, exclude_none=True
-                    ),
-                },
-            )
+            try:
+                await save_stored_response(
+                    response_id,
+                    {
+                        "input": request.model_dump(
+                            mode="json",
+                            by_alias=True,
+                            include={"input"},
+                            exclude_none=True,
+                        )["input"],
+                        "response": result.model_dump(
+                            mode="json", by_alias=True, exclude_none=True
+                        ),
+                    },
+                )
+            except BaseException:
+                await discard_stored_response_session(response_id)
+                raise
     return result
 
 
@@ -383,8 +399,6 @@ async def count_input_tokens(
         "support this endpoint."
     ),
     response_description="The compacted response.",
-    status_code=200,
-    response_model=CompactedResponse,
     responses={
         400: {"description": "Invalid request or unsupported parameters."},
         404: {"description": "Model not found."},
@@ -607,7 +621,8 @@ async def list_response_input_items(
             description=(
                 "Cursor for pagination: the item ID to start after "
                 "(the last ID from a previous page)."
-            )
+            ),
+            pattern=r"^msg-[0-9]+$",
         ),
     ] = None,
     limit: Annotated[
@@ -634,7 +649,9 @@ async def list_response_input_items(
     Raises:
         ApiError: With 404 if the stored response does not exist.
     """
-    log_request_params({"response_id": response_id, "after": after, "limit": limit})
+    log_request_params(
+        {"response_id": response_id, "after": after, "limit": limit, "order": order}
+    )
     stored = await load_stored_response(response_id)
     items = _normalized_input_items(stored.get("input"))
     if order == "desc":
@@ -650,8 +667,8 @@ async def list_response_input_items(
             {
                 "object": "list",
                 "data": page,
-                "first_id": page[0]["id"] if page else "",
-                "last_id": page[-1]["id"] if page else "",
+                "first_id": page[0]["id"] if page else None,
+                "last_id": page[-1]["id"] if page else None,
                 "has_more": has_more,
             }
         )

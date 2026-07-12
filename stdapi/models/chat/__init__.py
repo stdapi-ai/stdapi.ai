@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, TypedDict
 from stdapi.models import ModelBase, get_model, load_model_plugins
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from re import Pattern
 
     from sse_starlette import EventSourceResponse
@@ -26,6 +27,7 @@ if TYPE_CHECKING:
         MessageCreateParams,
         ThinkingEffort,
     )
+    from stdapi.types.openai import ResponseModeration
     from stdapi.types.openai_chat_completions import ChatCompletion, ReasoningEffort
     from stdapi.types.openai_chat_completions import (
         CompletionCreateParams as ChatCompletionCreateParams,
@@ -100,7 +102,11 @@ class ChatModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
 
     @abstractmethod
     async def create_response(
-        self, request: ResponseCreateParams, response_id: str, created_at: float
+        self,
+        request: ResponseCreateParams,
+        response_id: str,
+        created_at: float,
+        moderation_builder: Callable[[], ResponseModeration | None] | None = None,
     ) -> Response | EventSourceResponse:
         """Create a response using the OpenAI Responses API format.
 
@@ -108,6 +114,9 @@ class ChatModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
             request: Responses API creation request.
             response_id: Stable identifier for the response.
             created_at: Unix timestamp of the request.
+            moderation_builder: Optional callable building the response
+                ``moderation`` field, invoked once the full guardrail trace
+                is available (at stream end when streaming).
 
         Returns:
             - Response when stream is False.

@@ -9,13 +9,19 @@ import json as _json
 from asyncio import sleep
 from secrets import token_hex
 from time import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from aiobotocore.session import get_session
 from openai import APIError, BadRequestError, InternalServerError, NotFoundError, OpenAI
 from pybase64 import b64encode
 
+from stdapi.config import SETTINGS
+from stdapi.models.chat._adapters._openai_chat_completion import (
+    _LEGACY_FUNCTION,
+    format_response,
+)
+from stdapi.models.chat._adapters._openai_common import extract_stream_usage
 from tests.conftest import logged_usage_entries
 
 if TYPE_CHECKING:
@@ -2891,3 +2897,98 @@ class TestChatCompletionsUsage:
             f"Usage logged {len(entries)} times for one streaming request; "
             "expected exactly one (no double-counting)"
         )
+
+
+class TestPromptTokensDetailsGate:
+    """prompt_tokens_details is set only when cached tokens are truthy (unit)."""
+
+    pytestmark = pytest.mark.local
+
+    @staticmethod
+    def _converse_response(cache_read_input_tokens: int) -> dict[str, Any]:
+        """Build a minimal Converse response with the given cached-token count."""
+        return {
+            "output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}},
+            "stopReason": "end_turn",
+            "usage": {
+                "inputTokens": 10,
+                "outputTokens": 5,
+                "cacheReadInputTokens": cache_read_input_tokens,
+            },
+        }
+
+    async def test_format_response_omits_details_when_cache_read_is_zero(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Non-streaming: cacheReadInputTokens present but zero omits prompt_tokens_details."""
+        monkeypatch.setattr(SETTINGS, "log_request_params", False)
+        token = _LEGACY_FUNCTION.set(False)
+        try:
+            completion = await format_response(
+                completion_id="chatcmpl-1",
+                created=0,
+                model_id="model",
+                responses=[self._converse_response(0)],  # type: ignore[list-item]
+                service_tier=None,
+                audio_params=None,
+                modalities=["text"],
+            )
+        finally:
+            _LEGACY_FUNCTION.reset(token)
+        assert completion.usage is not None
+        assert completion.usage.prompt_tokens_details is None
+
+    async def test_format_response_sets_details_when_cache_read_is_positive(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Non-streaming: a positive cacheReadInputTokens sets prompt_tokens_details."""
+        monkeypatch.setattr(SETTINGS, "log_request_params", False)
+        token = _LEGACY_FUNCTION.set(False)
+        try:
+            completion = await format_response(
+                completion_id="chatcmpl-1",
+                created=0,
+                model_id="model",
+                responses=[self._converse_response(3)],  # type: ignore[list-item]
+                service_tier=None,
+                audio_params=None,
+                modalities=["text"],
+            )
+        finally:
+            _LEGACY_FUNCTION.reset(token)
+        assert completion.usage is not None
+        assert completion.usage.prompt_tokens_details is not None
+        assert completion.usage.prompt_tokens_details.cached_tokens == 3
+
+    def test_extract_stream_usage_omits_details_when_cache_read_is_zero(self) -> None:
+        """Streaming: cacheReadInputTokens present but zero omits prompt_tokens_details."""
+        event: dict[str, Any] = {
+            "metadata": {
+                "usage": {
+                    "inputTokens": 10,
+                    "outputTokens": 5,
+                    "cacheReadInputTokens": 0,
+                }
+            }
+        }
+        usage = extract_stream_usage(event)  # type: ignore[arg-type]
+        assert usage is not None
+        assert usage.prompt_tokens_details is None
+
+    def test_extract_stream_usage_sets_details_when_cache_read_is_positive(
+        self,
+    ) -> None:
+        """Streaming: a positive cacheReadInputTokens sets prompt_tokens_details."""
+        event: dict[str, Any] = {
+            "metadata": {
+                "usage": {
+                    "inputTokens": 10,
+                    "outputTokens": 5,
+                    "cacheReadInputTokens": 4,
+                }
+            }
+        }
+        usage = extract_stream_usage(event)  # type: ignore[arg-type]
+        assert usage is not None
+        assert usage.prompt_tokens_details is not None
+        assert usage.prompt_tokens_details.cached_tokens == 4

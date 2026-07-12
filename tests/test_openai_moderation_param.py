@@ -111,10 +111,11 @@ class _StubChatBackend:
         request: Any,  # noqa: ANN401
         response_id: str,
         created_at: float,
+        moderation_builder: Any = None,  # noqa: ANN401
     ) -> Response:
-        """Capture context and return a canned response."""
+        """Capture context and return a canned response, honoring the builder contract."""
         self._capture()
-        return Response(
+        response = Response(
             id=response_id,
             created_at=created_at,
             model=request.model,
@@ -131,6 +132,9 @@ class _StubChatBackend:
                 total_tokens=2,
             ),
         )
+        if moderation_builder is not None:
+            response.moderation = moderation_builder()
+        return response
 
 
 @pytest.fixture

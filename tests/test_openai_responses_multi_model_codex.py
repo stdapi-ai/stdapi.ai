@@ -59,12 +59,20 @@ if TYPE_CHECKING:
 #: is a different tool and should not be used here.
 _CODEX_BIN_NAME = "codex-x86_64-unknown-linux-musl"
 
+#: Codex CLI vendored by the JetBrains ACP agent runtime (newer IDE layout).
+_ACP_CODEX_GLOB = (
+    "*/acp-agents/.runtimes/node/*/npm-cache/_npx/*/node_modules/@openai/"
+    "codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"
+)
+
 
 def _find_jetbrains_codex() -> str | None:
-    """Search the JetBrains AIA cache for the Codex CLI binary.
+    """Search the JetBrains caches for the Codex CLI binary.
 
-    Scans ``~/.cache/JetBrains/*/aia/codex/bin/<name>`` across all IDE versions,
-    returning the path from the newest version directory (sorted descending).
+    Scans the ACP agent runtime layout
+    (``~/.cache/JetBrains/*/acp-agents/.runtimes/node/...``) first, then the
+    legacy AIA layout (``~/.cache/JetBrains/*/aia/codex/bin/<name>``); the
+    newest match wins within each layout.
 
     Returns:
         Absolute path string if found, otherwise ``None``.
@@ -72,6 +80,13 @@ def _find_jetbrains_codex() -> str | None:
     cache_root = Path.home() / ".cache" / "JetBrains"
     if not cache_root.is_dir():
         return None
+    acp_candidates = sorted(
+        cache_root.glob(_ACP_CODEX_GLOB),
+        key=lambda p: p.stat().st_mtime,  # Newest install wins.
+        reverse=True,
+    )
+    if acp_candidates:
+        return str(acp_candidates[0])
     # Sort descending so the newest IDE version wins.
     candidates = sorted(
         cache_root.glob(f"*/aia/codex/bin/{_CODEX_BIN_NAME}"),
@@ -144,7 +159,9 @@ _MODEL_CONFIGS = [
         id="qwen3-coder-30b",
     ),
     pytest.param(
-        {"model_env": "qwen.qwen3-coder-next", "extra_env": {}}, id="qwen3-coder-next"
+        # Notably slower than its siblings; give each agent run extra headroom.
+        {"model_env": "qwen.qwen3-coder-next", "extra_env": {}, "timeout": 1200},
+        id="qwen3-coder-next",
     ),
     # ── MiniMax ───────────────────────────────────────────────────────────────
     pytest.param(
@@ -365,16 +382,32 @@ def codex_base_url(_stdapi_server_session: _ServerHandle) -> str:
 # Core subprocess helper
 # ---------------------------------------------------------------------------
 
-#: Common ``-c`` overrides that redirect Codex to use the OpenAI Responses API
-#: wire format against a custom base URL, bypassing the JetBrains proxy.
-_CODEX_PROVIDER_OVERRIDES = [
-    "-c",
-    'model_provider="openai"',
-    "-c",
-    'model_providers.openai.name="OpenAI"',
-    "-c",
-    'model_providers.openai.wire_api="responses"',
-]
+
+def _codex_provider_overrides(base_url: str) -> list[str]:
+    """Build the ``-c`` overrides pointing Codex at the stdapi.ai server.
+
+    Newer Codex CLIs reject overrides of the reserved built-in ``openai``
+    provider, so a dedicated ``stdapi`` provider is declared instead, using
+    the OpenAI Responses API wire format.
+
+    Args:
+        base_url: The stdapi.ai ``/v1`` endpoint URL.
+
+    Returns:
+        ``-c`` flag/value pairs for ``codex exec``.
+    """
+    return [
+        "-c",
+        'model_provider="stdapi"',
+        "-c",
+        'model_providers.stdapi.name="stdapi.ai"',
+        "-c",
+        f'model_providers.stdapi.base_url="{base_url}"',
+        "-c",
+        'model_providers.stdapi.env_key="OPENAI_API_KEY"',
+        "-c",
+        'model_providers.stdapi.wire_api="responses"',
+    ]
 
 
 def _run_codex(
@@ -418,7 +451,7 @@ def _run_codex(
     cmd: list[str] = [
         _CODEX_BIN,
         "exec",
-        *_CODEX_PROVIDER_OVERRIDES,
+        *_codex_provider_overrides(base_url),
         "-m",
         model_env,
         "--json",
@@ -642,6 +675,7 @@ class TestCodexPipeline:
             prompt=_PROMPT_REQUEST_PIPELINE,
             model_env=model_config["model_env"],
             extra_env=model_config["extra_env"],
+            timeout=model_config.get("timeout", 600),
         )
         _log_metrics(events, model_config["model_env"], "test_trace_request_pipeline")
         result = _assert_result(events, contains="converse", min_tool_calls=2)
@@ -666,6 +700,7 @@ class TestCodexPipeline:
             prompt=_PROMPT_STREAMING_PATH,
             model_env=model_config["model_env"],
             extra_env=model_config["extra_env"],
+            timeout=model_config.get("timeout", 600),
         )
         _log_metrics(events, model_config["model_env"], "test_trace_streaming_path")
         result = _assert_result(events, min_tool_calls=2)
@@ -702,6 +737,7 @@ class TestCodexAnalysis:
             prompt=_PROMPT_PARAMETER_MAPPING,
             model_env=model_config["model_env"],
             extra_env=model_config["extra_env"],
+            timeout=model_config.get("timeout", 600),
         )
         _log_metrics(events, model_config["model_env"], "test_audit_parameter_mapping")
         result = _assert_result(events, min_tool_calls=2)
@@ -732,6 +768,7 @@ class TestCodexAnalysis:
             prompt=_PROMPT_MODEL_OVERRIDES,
             model_env=model_config["model_env"],
             extra_env=model_config["extra_env"],
+            timeout=model_config.get("timeout", 600),
         )
         _log_metrics(
             events, model_config["model_env"], "test_enumerate_model_overrides"

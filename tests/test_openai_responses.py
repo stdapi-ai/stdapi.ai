@@ -1727,52 +1727,44 @@ class TestUnsupportedFeatures:
     are natively supported — the restrictions are gateway-specific.
     """
 
-    @pytest.mark.parametrize(
-        "tool_type",
-        [
-            {"type": "file_search", "vector_store_ids": ["vs_123"]},
-            {"type": "computer"},
-            {
-                "type": "computer_use_preview",
-                "display_height": 768,
-                "display_width": 1024,
-                "environment": "linux",
-            },
-            {"type": "mcp", "server_label": "my_server"},
-            {"type": "local_shell"},
-            {"type": "shell"},
-            {"type": "custom", "name": "my_custom"},
-            {"type": "namespace", "name": "ns", "description": "d", "tools": []},
-            {"type": "tool_search"},
-            {"type": "apply_patch"},
-        ],
-    )
-    def test_unsupported_tool_returns_400(
-        self,
-        openai_client: OpenAI,
-        responses_model: str,
-        use_official_api: bool,
-        tool_type: dict,  # type: ignore[type-arg]
+    def test_unsupported_tools_are_ignored(
+        self, openai_client: OpenAI, responses_model: str, use_official_api: bool
     ) -> None:
-        """Unsupported tool types are rejected with a 400 error.
+        """Tool types without a backend equivalent are accepted and dropped.
 
         Validates:
-            - BadRequestError is raised for each unsupported tool type
+            - The request succeeds with every hosted tool type present
+            - The model still answers (the dropped tools impose no constraint)
         """
         if use_official_api:
             pytest.skip(
-                "official API supports these tools; restriction is gateway-specific"
+                "official API supports these tools; the drop is gateway-specific"
             )
-        with pytest.raises(BadRequestError):
-            openai_client.responses.create(
-                model=responses_model,
-                input="Hello.",
-                tools=[tool_type],  # type: ignore[list-item]
-            )
+        response = openai_client.responses.create(
+            model=responses_model,
+            input="Reply with OK.",
+            tools=[
+                {"type": "file_search", "vector_store_ids": ["vs_123"]},
+                {"type": "computer"},
+                {
+                    "type": "computer_use_preview",
+                    "display_height": 768,
+                    "display_width": 1024,
+                    "environment": "linux",
+                },
+                {"type": "mcp", "server_label": "my_server"},
+                {"type": "local_shell"},
+                {"type": "shell"},
+                {"type": "custom", "name": "my_custom"},
+                {"type": "namespace", "name": "ns", "description": "d", "tools": []},
+                {"type": "tool_search"},
+                {"type": "apply_patch"},
+            ],
+        )
+        assert response.status == "completed"
+        assert response.output_text
 
-    @pytest.mark.parametrize(
-        ("param", "value"), [("truncation", "auto"), ("stream_options", {})]
-    )
+    @pytest.mark.parametrize(("param", "value"), [("truncation", "auto")])
     def test_unsupported_param_returns_400(
         self,
         openai_client: OpenAI,

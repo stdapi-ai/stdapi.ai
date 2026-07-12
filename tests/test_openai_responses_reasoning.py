@@ -2,7 +2,7 @@
 
 import json
 from base64 import urlsafe_b64encode
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 import pytest
 
@@ -16,11 +16,14 @@ from stdapi.models.chat._adapters._openai_responses import (
 from stdapi.monitoring import REQUEST_LOG
 from stdapi.types.openai_responses import (
     Reasoning,
-    ReasoningItemContent,
+    ReasoningItemContentInput,
     ReasoningItemSummary,
     Response,
     ResponseCreateParams,
+    ResponseOutputMessage,
+    ResponseOutputText,
     ResponseReasoningItem,
+    ResponseReasoningItemInput,
 )
 
 if TYPE_CHECKING:
@@ -28,6 +31,12 @@ if TYPE_CHECKING:
 
     from openai import OpenAI
     from sse_starlette import JSONServerSentEvent
+    from types_aiobotocore_bedrock_runtime.type_defs import (
+        ConverseResponseTypeDef,
+        ConverseStreamOutputTypeDef,
+    )
+
+    from stdapi.types.openai_responses import ResponseInputItem
 
 
 @pytest.fixture(autouse=True)
@@ -46,29 +55,37 @@ _SIGNED_REASONING_BLOCK = {
 }
 
 
-def _bedrock_response(contents: list[dict]) -> dict:
+def _bedrock_response(contents: list[dict[str, Any]]) -> ConverseResponseTypeDef:
     """Build a minimal Bedrock Converse response around content blocks."""
-    return {
-        "output": {"message": {"role": "assistant", "content": contents}},
-        "usage": _USAGE,
-        "stopReason": "end_turn",
-    }
+    return cast(
+        "ConverseResponseTypeDef",
+        {
+            "output": {"message": {"role": "assistant", "content": contents}},
+            "usage": _USAGE,
+            "stopReason": "end_turn",
+        },
+    )
 
 
-def _request(**kwargs: object) -> ResponseCreateParams:
+def _request(**kwargs: Any) -> ResponseCreateParams:  # noqa: ANN401
     """Build a Responses creation request with optional extra fields."""
     return ResponseCreateParams(model="anthropic.claude-sonnet-5", input="hi", **kwargs)
 
 
-def _payload(sse: JSONServerSentEvent) -> dict:
+def _payload(sse: JSONServerSentEvent) -> dict[str, Any]:
     """Return the decoded data payload of an SSE event."""
-    return sse.data if isinstance(sse.data, dict) else json.loads(sse.data)
+    if isinstance(sse.data, dict):
+        return sse.data
+    assert isinstance(sse.data, str)
+    return json.loads(sse.data)  # type: ignore[no-any-return]
 
 
-async def _stream(events: list[dict]) -> AsyncGenerator[dict]:
+async def _stream(
+    events: list[dict[str, Any]],
+) -> AsyncGenerator[ConverseStreamOutputTypeDef]:
     """Yield fabricated Bedrock ConverseStream events."""
     for event in events:
-        yield event
+        yield cast("ConverseStreamOutputTypeDef", event)
 
 
 @pytest.mark.local
@@ -98,12 +115,13 @@ class TestReasoningContentCodec:
 
     def test_invalid_payload_shapes_decode_to_none(self) -> None:
         """Envelopes with wrong field types are rejected."""
-        for payload in (
+        payloads: tuple[dict[str, object], ...] = (
             {"signatures": "sig-1", "redacted": []},
             {"signatures": [1], "redacted": []},
             {"signatures": []},
             {"signatures": [], "redacted": ["%%%"]},
-        ):
+        )
+        for payload in payloads:
             encoded = urlsafe_b64encode(json.dumps(payload).encode()).decode()
             assert decode_reasoning_content(encoded) is None
 
@@ -127,12 +145,15 @@ class TestReasoningOutput:
         assert reasoning.type == "reasoning"
         assert reasoning.status == "completed"
         assert reasoning.summary == []
+        assert reasoning.content is not None
         assert [(part.type, part.text) for part in reasoning.content] == [
             ("reasoning_text", "think")
         ]
         assert reasoning.encrypted_content is None
-        assert message.type == "message"
-        assert message.content[0].text == "Hello"
+        assert isinstance(message, ResponseOutputMessage)
+        text_part = message.content[0]
+        assert isinstance(text_part, ResponseOutputText)
+        assert text_part.text == "Hello"
 
     async def test_encrypted_content_requires_include(self) -> None:
         """encrypted_content is set only when include requests it."""
@@ -144,6 +165,7 @@ class TestReasoningOutput:
             _request(include=["reasoning.encrypted_content"]),
         )
         reasoning = response.output[0]
+        assert isinstance(reasoning, ResponseReasoningItem)
         assert reasoning.encrypted_content
         assert decode_reasoning_content(reasoning.encrypted_content) == (["sig-1"], [])
 
@@ -161,13 +183,14 @@ class TestReasoningOutput:
         reasoning = response.output[0]
         assert isinstance(reasoning, ResponseReasoningItem)
         assert reasoning.content == []
+        assert reasoning.encrypted_content is not None
         assert decode_reasoning_content(reasoning.encrypted_content) == (
             [],
             [b"\x01\x02"],
         )
 
-    async def test_contiguous_blocks_aggregate_into_one_item(self) -> None:
-        """A contiguous run of reasoning blocks becomes a single item."""
+    async def test_contiguous_blocks_yield_one_item_per_block(self) -> None:
+        """Each Bedrock reasoning block becomes its own reasoning item."""
         response = await format_response(
             "resp-1",
             0.0,
@@ -189,12 +212,16 @@ class TestReasoningOutput:
             ),
             _request(include=["reasoning.encrypted_content"]),
         )
-        reasoning, message = response.output
-        assert reasoning.content[0].text == "a\nb"
-        assert decode_reasoning_content(reasoning.encrypted_content) == (
-            ["s1", "s2"],
-            [],
-        )
+        first, second, message = response.output
+        assert isinstance(first, ResponseReasoningItem)
+        assert isinstance(second, ResponseReasoningItem)
+        assert first.id == "resp-1-rs-0"
+        assert second.id == "resp-1-rs-1"
+        for item, text, signature in ((first, "a", "s1"), (second, "b", "s2")):
+            assert item.content is not None
+            assert item.content[0].text == text
+            assert item.encrypted_content is not None
+            assert decode_reasoning_content(item.encrypted_content) == ([signature], [])
         assert message.type == "message"
 
     async def test_reasoning_config_is_echoed(self) -> None:
@@ -221,7 +248,7 @@ class TestReasoningStreaming:
     """Streaming reasoning events and final response parity."""
 
     #: Bedrock stream: one reasoning block (text + signature) then a text block.
-    _EVENTS: ClassVar[list[dict]] = [
+    _EVENTS: ClassVar[list[dict[str, Any]]] = [
         {"messageStart": {"role": "assistant"}},
         {"contentBlockDelta": {"delta": {"reasoningContent": {"text": "thi"}}}},
         {"contentBlockDelta": {"delta": {"reasoningContent": {"text": "nk"}}}},
@@ -234,7 +261,7 @@ class TestReasoningStreaming:
     ]
 
     async def _collect(
-        self, events: list[dict], request: ResponseCreateParams
+        self, events: list[dict[str, Any]], request: ResponseCreateParams
     ) -> list[JSONServerSentEvent]:
         return [
             sse
@@ -316,11 +343,15 @@ class TestReasoningStreaming:
             request,
         )
         assert completed.output[0] == non_streaming.output[0]
-        assert completed.output[1].content == non_streaming.output[1].content
+        completed_message = completed.output[1]
+        non_streaming_message = non_streaming.output[1]
+        assert isinstance(completed_message, ResponseOutputMessage)
+        assert isinstance(non_streaming_message, ResponseOutputMessage)
+        assert completed_message.content == non_streaming_message.content
 
     async def test_redacted_only_stream(self) -> None:
         """Redacted deltas open and close the item without text events."""
-        events = [
+        events: list[dict[str, Any]] = [
             {
                 "contentBlockDelta": {
                     "delta": {"reasoningContent": {"redactedContent": b"\x01"}}
@@ -344,7 +375,10 @@ class TestReasoningStreaming:
             [],
             [b"\x01"],
         )
-        assert not any(sse.event.startswith("response.reasoning_text") for sse in sses)
+        assert not any(
+            sse.event is not None and sse.event.startswith("response.reasoning_text")
+            for sse in sses
+        )
 
     async def test_no_encrypted_content_without_include(self) -> None:
         """Streaming omits encrypted_content when include does not ask for it."""
@@ -360,15 +394,17 @@ class TestReasoningInputRoundTrip:
 
     async def test_emitted_item_maps_back_with_signature_and_redacted(self) -> None:
         """Our own encrypted_content re-attaches signatures and redacted bytes."""
-        item = ResponseReasoningItem(
+        item = ResponseReasoningItemInput(
             id="rs-1",
             summary=[],
             type="reasoning",
-            content=[ReasoningItemContent(text="think", type="reasoning_text")],
+            content=[ReasoningItemContentInput(text="think", type="reasoning_text")],
             encrypted_content=encode_reasoning_content(["sig-1"], [b"\x00\x01"]),
             status="completed",
         )
-        messages, system = await map_input([item], None)
+        messages, system = await map_input(
+            cast("list[ResponseInputItem]", [item]), None
+        )
         assert system == []
         (message,) = messages
         assert message["role"] == "assistant"
@@ -381,14 +417,50 @@ class TestReasoningInputRoundTrip:
             {"reasoningContent": {"redactedContent": b"\x00\x01"}},
         ]
 
+    async def test_multi_block_run_reattaches_each_signature(self) -> None:
+        """Multi-block reasoning items echo back with their own signatures."""
+        response = await format_response(
+            "resp-1",
+            0.0,
+            "model",
+            _bedrock_response(
+                [
+                    {
+                        "reasoningContent": {
+                            "reasoningText": {"text": "a", "signature": "s1"}
+                        }
+                    },
+                    {
+                        "reasoningContent": {
+                            "reasoningText": {"text": "b", "signature": "s2"}
+                        }
+                    },
+                    {"text": "Hello"},
+                ]
+            ),
+            _request(include=["reasoning.encrypted_content"]),
+        )
+        reasoning_items = [
+            item for item in response.output if isinstance(item, ResponseReasoningItem)
+        ]
+        assert len(reasoning_items) == 2
+        messages, _ = await map_input(
+            cast("list[ResponseInputItem]", reasoning_items), None
+        )
+        (message,) = messages
+        assert message["content"] == [
+            {"reasoningContent": {"reasoningText": {"text": "a", "signature": "s1"}}},
+            {"reasoningContent": {"reasoningText": {"text": "b", "signature": "s2"}}},
+        ]
+
     async def test_summary_only_item_maps_to_text(self) -> None:
         """OpenAI-style summary-only items are injected as reasoning text."""
-        item = ResponseReasoningItem(
+        item = ResponseReasoningItemInput(
             id="rs-1",
             summary=[ReasoningItemSummary(text="the summary", type="summary_text")],
             type="reasoning",
         )
-        messages, _ = await map_input([item], None)
+        messages, _ = await map_input(cast("list[ResponseInputItem]", [item]), None)
         (message,) = messages
         assert message["content"] == [
             {"reasoningContent": {"reasoningText": {"text": "the summary"}}}
@@ -396,35 +468,35 @@ class TestReasoningInputRoundTrip:
 
     async def test_content_preferred_over_summary(self) -> None:
         """Content parts win over summary parts when both are present."""
-        item = ResponseReasoningItem(
+        item = ResponseReasoningItemInput(
             id="rs-1",
             summary=[ReasoningItemSummary(text="summary", type="summary_text")],
             type="reasoning",
-            content=[ReasoningItemContent(text="raw", type="reasoning_text")],
+            content=[ReasoningItemContentInput(text="raw", type="reasoning_text")],
         )
-        messages, _ = await map_input([item], None)
+        messages, _ = await map_input(cast("list[ResponseInputItem]", [item]), None)
         assert messages[0]["content"] == [
             {"reasoningContent": {"reasoningText": {"text": "raw"}}}
         ]
 
     async def test_foreign_encrypted_content_is_ignored(self) -> None:
         """OpenAI-encrypted content falls back to text-only mapping."""
-        item = ResponseReasoningItem(
+        item = ResponseReasoningItemInput(
             id="rs-1",
             summary=[],
             type="reasoning",
-            content=[ReasoningItemContent(text="think", type="reasoning_text")],
+            content=[ReasoningItemContentInput(text="think", type="reasoning_text")],
             encrypted_content="gAAAAABforeign-openai-content",
         )
-        messages, _ = await map_input([item], None)
+        messages, _ = await map_input(cast("list[ResponseInputItem]", [item]), None)
         assert messages[0]["content"] == [
             {"reasoningContent": {"reasoningText": {"text": "think"}}}
         ]
 
     async def test_empty_item_is_dropped(self) -> None:
         """Items without any text or envelope produce no Bedrock message."""
-        item = ResponseReasoningItem(id="rs-1", summary=[], type="reasoning")
-        messages, _ = await map_input([item], None)
+        item = ResponseReasoningItemInput(id="rs-1", summary=[], type="reasoning")
+        messages, _ = await map_input(cast("list[ResponseInputItem]", [item]), None)
         assert messages == []
 
 
@@ -471,7 +543,7 @@ class TestReasoningLive:
             # Claude extended thinking signatures ride the round-trip envelope.
             assert item.encrypted_content
 
-        follow_up = openai_client.responses.create(
+        follow_up = openai_client.responses.create(  # type: ignore[call-overload]
             model=model,
             input=[
                 *[
