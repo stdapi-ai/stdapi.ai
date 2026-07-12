@@ -774,6 +774,9 @@ export AWS_BEDROCK_REGIONS=us-east-1,us-west-2,eu-west-1
 !!! warning "Startup Warning"
     If any models in the configured regions fail availability checks (not enabled, unauthorized, or missing entitlement/agreement in your AWS account), a warning listing the affected models and per-region issues is logged at startup. Enable the required models in the [AWS Bedrock console](https://console.aws.amazon.com/bedrock/home#/modelaccess) for each configured region.
 
+!!! info "Unreachable Region Tolerance"
+    A configured region that cannot be reached (invalid region for the account, network issue, throttling) does not block startup: it is skipped with an `unreachable_bedrock_regions` warning and its models are served from the remaining regions. The skipped region is retried automatically on the next model list refresh (see [`MODEL_CACHE_SECONDS`](#model-cache-seconds)), so a recovered region rejoins without a restart. Startup only fails when **every** configured region fails — which indicates broken credentials or configuration rather than a regional outage.
+
 #### `AWS_BEDROCK_CROSS_REGION_INFERENCE` { #cross-region-inference }
 
 :octicons-package-24: **Purpose**

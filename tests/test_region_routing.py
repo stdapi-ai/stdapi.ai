@@ -636,6 +636,29 @@ class TestCandidateRegions:
         ):
             await _compute_candidate_regions(MODEL)
 
+    async def test_s3_required_input_overlap_without_bucket_falls_back_to_bucketed_region(
+        self,
+    ) -> None:
+        """s3_required=True never pins to an overlapping S3 input region lacking a bucket."""
+        from stdapi.models import compute_candidate_regions  # noqa: PLC0415
+
+        model = _make_model_details([ROUTING_PRIMARY, ROUTING_SECONDARY])
+        with (
+            patch("stdapi.models.get_model_details", new=AsyncMock(return_value=model)),
+            patch(
+                "stdapi.models.get_s3_input_regions",
+                # Primary holds the S3 input but has no configured bucket.
+                return_value={ROUTING_PRIMARY: 500},
+            ),
+            patch(
+                "stdapi.models.get_s3_bucket_for_region",
+                side_effect=lambda r: "b" if r == ROUTING_SECONDARY else None,
+            ),
+        ):
+            assert await compute_candidate_regions(MODEL, s3_required=True) == [
+                ROUTING_SECONDARY
+            ]
+
     async def test_s3_required_with_bucket_returns_capable_regions(self) -> None:
         """With s3_required=True, only regions with a configured bucket are returned."""
         from stdapi.models import _compute_candidate_regions  # noqa: PLC0415

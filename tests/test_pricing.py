@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 import pytest
+from botocore.exceptions import BotoCoreError, ClientError
 
 from stdapi import models, pricing
 from stdapi.aws import AWSConnectionManager, get_client
@@ -41,7 +42,14 @@ from stdapi.pricing import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Generator
+    from collections.abc import AsyncIterator, Generator, Mapping
+
+    from stdapi.monitoring import EventLog
+
+
+#: All tests in this module exercise the local implementation in-process.
+pytestmark = pytest.mark.local
+
 
 _FIXTURES_DIR = Path(__file__).parent / "fixtures" / "pricing"
 
@@ -70,6 +78,33 @@ def _ingest_fixture(
             json.dumps(item), service, region, "USD", results, claims, diagnostics
         )
     return results, diagnostics
+
+
+def _price_item(
+    attrs: Mapping[str, object], *, unit: str, price: str
+) -> dict[str, object]:
+    """Build a minimal AWS Price List item dict with one OnDemand price dimension.
+
+    Args:
+        attrs: The ``product.attributes`` mapping (must include ``regionCode``).
+        unit: The ``priceDimensions`` ``unit`` string.
+        price: The raw USD ``pricePerUnit`` string.
+
+    Returns:
+        A price-list item dict, ready for ``json.dumps()`` or direct use.
+    """
+    return {
+        "product": {"attributes": dict(attrs)},
+        "terms": {
+            "OnDemand": {
+                "SKU1": {
+                    "priceDimensions": {
+                        "SKU1.A": {"unit": unit, "pricePerUnit": {"USD": price}}
+                    }
+                }
+            }
+        },
+    }
 
 
 class TestIngestPriceListItem:
@@ -196,29 +231,17 @@ class TestIngestPriceListItem:
         """
         results: dict[PriceKey, Price] = {}
         item = json.dumps(
-            {
-                "product": {
-                    "attributes": {
-                        "regionCode": "us-east-1",
-                        "usagetype": "USE1-NovaMicro-Model-Customization-input-tokens",
-                        "inferenceType": "Input tokens",
-                        "model": "Nova Micro",
-                        "feature": "Model Customization",
-                    }
+            _price_item(
+                {
+                    "regionCode": "us-east-1",
+                    "usagetype": "USE1-NovaMicro-Model-Customization-input-tokens",
+                    "inferenceType": "Input tokens",
+                    "model": "Nova Micro",
+                    "feature": "Model Customization",
                 },
-                "terms": {
-                    "OnDemand": {
-                        "SKU1": {
-                            "priceDimensions": {
-                                "SKU1.A": {
-                                    "unit": "Tokens",
-                                    "pricePerUnit": {"USD": "0.001"},
-                                }
-                            }
-                        }
-                    }
-                },
-            }
+                unit="Tokens",
+                price="0.001",
+            )
         )
         _ingest_price_list_item(item, Service.BEDROCK, "us-east-1", "USD", results)
         assert results == {}
@@ -242,28 +265,16 @@ class TestIngestPriceListItem:
         """
         results: dict[PriceKey, Price] = {}
         item = json.dumps(
-            {
-                "product": {
-                    "attributes": {
-                        "regionCode": "us-east-1",
-                        "usagetype": "USE1-SomeModel-input-tokens",
-                        "inferenceType": "Input tokens",
-                        "model": "Some Model",
-                    }
+            _price_item(
+                {
+                    "regionCode": "us-east-1",
+                    "usagetype": "USE1-SomeModel-input-tokens",
+                    "inferenceType": "Input tokens",
+                    "model": "Some Model",
                 },
-                "terms": {
-                    "OnDemand": {
-                        "SKU1": {
-                            "priceDimensions": {
-                                "SKU1.A": {
-                                    "unit": "1K tokens",
-                                    "pricePerUnit": {"USD": bad_price},
-                                }
-                            }
-                        }
-                    }
-                },
-            }
+                unit="1K tokens",
+                price=bad_price,
+            )
         )
         _ingest_price_list_item(item, Service.BEDROCK, "us-east-1", "USD", results)
         assert results == {}
@@ -451,28 +462,16 @@ class TestCrossFetchCollisionDetection:
     @staticmethod
     def _bedrock_item(usagetype: str, price: str) -> dict[str, object]:
         """Build one Bedrock price-list item resolving to ``_KEY``."""
-        return {
-            "product": {
-                "attributes": {
-                    "regionCode": "us-east-1",
-                    "usagetype": usagetype,
-                    "inferenceType": "Input tokens",
-                    "model": "Some Model",
-                }
+        return _price_item(
+            {
+                "regionCode": "us-east-1",
+                "usagetype": usagetype,
+                "inferenceType": "Input tokens",
+                "model": "Some Model",
             },
-            "terms": {
-                "OnDemand": {
-                    "SKU1": {
-                        "priceDimensions": {
-                            "SKU1.A": {
-                                "unit": "1K tokens",
-                                "pricePerUnit": {"USD": price},
-                            }
-                        }
-                    }
-                }
-            },
-        }
+            unit="1K tokens",
+            price=price,
+        )
 
     async def _load_catalog(
         self,
@@ -561,29 +560,19 @@ class TestNativeCacheTtl:
         """A "1 hour" usagetype row must be keyed under cache_ttl="1h", not merged."""
         results: dict[PriceKey, Price] = {}
         item = json.dumps(
-            {
-                "product": {
-                    "attributes": {
-                        "regionCode": "us-east-1",
-                        "usagetype": "USE1-Claude4Sonnet-cache-write-input-token-count-1-hour",
-                        "inferenceType": "Prompt cache write input tokens",
-                        "model": "Claude Sonnet 4.5",
-                        "feature": "On-demand Inference",
-                    }
+            _price_item(
+                {
+                    "regionCode": "us-east-1",
+                    "usagetype": (
+                        "USE1-Claude4Sonnet-cache-write-input-token-count-1-hour"
+                    ),
+                    "inferenceType": "Prompt cache write input tokens",
+                    "model": "Claude Sonnet 4.5",
+                    "feature": "On-demand Inference",
                 },
-                "terms": {
-                    "OnDemand": {
-                        "SKU1": {
-                            "priceDimensions": {
-                                "SKU1.A": {
-                                    "unit": "1K tokens",
-                                    "pricePerUnit": {"USD": "0.0075"},
-                                }
-                            }
-                        }
-                    }
-                },
-            }
+                unit="1K tokens",
+                price="0.0075",
+            )
         )
         _ingest_price_list_item(item, Service.BEDROCK, "us-east-1", "USD", results)
         key = PriceKey(
@@ -607,27 +596,15 @@ class TestMarketplaceCacheTtl:
     ) -> dict[PriceKey, Price]:
         results: dict[PriceKey, Price] = {}
         item = json.dumps(
-            {
-                "product": {
-                    "attributes": {
-                        "regionCode": "us-east-1",
-                        "usagetype": usagetype,
-                        "servicename": "Claude Opus 4.5 (Amazon Bedrock Edition)",
-                    }
+            _price_item(
+                {
+                    "regionCode": "us-east-1",
+                    "usagetype": usagetype,
+                    "servicename": "Claude Opus 4.5 (Amazon Bedrock Edition)",
                 },
-                "terms": {
-                    "OnDemand": {
-                        "SKU1": {
-                            "priceDimensions": {
-                                "SKU1.A": {
-                                    "unit": "Units",
-                                    "pricePerUnit": {"USD": price},
-                                }
-                            }
-                        }
-                    }
-                },
-            }
+                unit="Units",
+                price=price,
+            )
         )
         _ingest_price_list_item(item, Service.BEDROCK, "us-east-1", "USD", results)
         return results
@@ -779,6 +756,151 @@ class TestNovaCanvasIngestion:
         # "ModelUnits" row must not appear at all, under any key.
         assert len(results) == 2
         assert Decimal("30.25") not in {price.amount for price in results.values()}
+
+
+class TestVideoGenerationIngestion:
+    """Nova Reel-like T2V/I2V rows: OUTPUT_SECONDS dimension, "hdres" usagetype -> spec="hd"."""
+
+    @staticmethod
+    def _item(inference_type: str, usagetype: str, price: str) -> str:
+        return json.dumps(
+            _price_item(
+                {
+                    "regionCode": "us-east-1",
+                    "usagetype": usagetype,
+                    "inferenceType": inference_type,
+                    "model": "Nova Reel",
+                },
+                unit="Seconds",
+                price=price,
+            )
+        )
+
+    def test_t2v_row_maps_to_output_seconds_dimension(self) -> None:
+        """A "T2V ..." inferenceType must resolve to Dimension.OUTPUT_SECONDS."""
+        results: dict[PriceKey, Price] = {}
+        _ingest_price_list_item(
+            self._item(
+                "T2V Standard fps Standard Resolution",
+                "USE1-NovaReel-output-seconds",
+                "0.06",
+            ),
+            Service.BEDROCK,
+            "us-east-1",
+            "USD",
+            results,
+        )
+        key = PriceKey(
+            Service.BEDROCK,
+            "novareel",
+            "us-east-1",
+            Dimension.OUTPUT_SECONDS,
+            "standard",
+        )
+        assert key in results
+        assert results[key].amount == Decimal("0.06")
+
+    def test_i2v_row_also_maps_to_output_seconds(self) -> None:
+        """An "I2V ..." (image-to-video) inferenceType must resolve the same as T2V."""
+        results: dict[PriceKey, Price] = {}
+        _ingest_price_list_item(
+            self._item(
+                "I2V Standard fps Standard Resolution",
+                "USE1-NovaReel-output-seconds",
+                "0.06",
+            ),
+            Service.BEDROCK,
+            "us-east-1",
+            "USD",
+            results,
+        )
+        key = PriceKey(
+            Service.BEDROCK,
+            "novareel",
+            "us-east-1",
+            Dimension.OUTPUT_SECONDS,
+            "standard",
+        )
+        assert key in results
+
+    def test_hdres_usagetype_ingests_under_the_hd_spec_bucket(self) -> None:
+        """A "HDResolution" usagetype segment must resolve to spec="hd", distinct from standard."""
+        results: dict[PriceKey, Price] = {}
+        claims: dict[PriceKey, str] = {}
+        diagnostics: list[str] = []
+        _ingest_price_list_item(
+            self._item(
+                "T2V Standard fps Standard Resolution",
+                "USE1-NovaReel-output-seconds",
+                "0.06",
+            ),
+            Service.BEDROCK,
+            "us-east-1",
+            "USD",
+            results,
+            claims,
+            diagnostics,
+        )
+        _ingest_price_list_item(
+            self._item(
+                "T2V Standard fps HD Resolution",
+                "USE1-NovaReel-HDResolution-output-seconds",
+                "0.08",
+            ),
+            Service.BEDROCK,
+            "us-east-1",
+            "USD",
+            results,
+            claims,
+            diagnostics,
+        )
+        assert diagnostics == []
+        standard_key = PriceKey(
+            Service.BEDROCK,
+            "novareel",
+            "us-east-1",
+            Dimension.OUTPUT_SECONDS,
+            "standard",
+        )
+        hd_key = PriceKey(
+            Service.BEDROCK,
+            "novareel",
+            "us-east-1",
+            Dimension.OUTPUT_SECONDS,
+            "standard",
+            "",
+            "",
+            "hd",
+        )
+        assert results[standard_key].amount == Decimal("0.06")
+        assert results[hd_key].amount == Decimal("0.08")
+
+    def test_resolve_price_round_trip_for_hd_spec(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """resolve_price() must find the ingested HD row via a real Bedrock model ID."""
+        results: dict[PriceKey, Price] = {}
+        _ingest_price_list_item(
+            self._item(
+                "T2V Standard fps HD Resolution",
+                "USE1-NovaReel-HDResolution-output-seconds",
+                "0.08",
+            ),
+            Service.BEDROCK,
+            "us-east-1",
+            "USD",
+            results,
+        )
+        monkeypatch.setattr(pricing._state, "price_index", results)  # noqa: SLF001
+        price = resolve_price(
+            Service.BEDROCK,
+            "amazon.nova-reel-v1:1",
+            "us-east-1",
+            Dimension.OUTPUT_SECONDS,
+            spec="hd",
+        )
+        assert price is not None
+        assert price.amount == Decimal("0.08")
 
 
 class TestLumaRayIngestion:
@@ -991,27 +1113,15 @@ class TestMarketplaceCacheWriteOneHourNewGeneration:
         servicename: str = "Claude Opus 4.5 (Amazon Bedrock Edition)",
     ) -> str:
         return json.dumps(
-            {
-                "product": {
-                    "attributes": {
-                        "regionCode": "eu-west-1",
-                        "usagetype": usagetype,
-                        "servicename": servicename,
-                    }
+            _price_item(
+                {
+                    "regionCode": "eu-west-1",
+                    "usagetype": usagetype,
+                    "servicename": servicename,
                 },
-                "terms": {
-                    "OnDemand": {
-                        "SKU1": {
-                            "priceDimensions": {
-                                "SKU1.A": {
-                                    "unit": "Units",
-                                    "pricePerUnit": {"USD": price},
-                                }
-                            }
-                        }
-                    }
-                },
-            }
+                unit="Units",
+                price=price,
+            )
         )
 
     def test_1h_new_generation_usagetype_maps_to_cache_write_1h(self) -> None:
@@ -1128,27 +1238,15 @@ class TestMarketplaceLegacyContextWindowListingsSkipped:
     @staticmethod
     def _item(servicename: str, price: str = "3.26") -> str:
         return json.dumps(
-            {
-                "product": {
-                    "attributes": {
-                        "regionCode": "us-east-1",
-                        "usagetype": "USE1-MP:USE1_InputTokenCount-Units",
-                        "servicename": servicename,
-                    }
+            _price_item(
+                {
+                    "regionCode": "us-east-1",
+                    "usagetype": "USE1-MP:USE1_InputTokenCount-Units",
+                    "servicename": servicename,
                 },
-                "terms": {
-                    "OnDemand": {
-                        "SKU1": {
-                            "priceDimensions": {
-                                "SKU1.A": {
-                                    "unit": "Units",
-                                    "pricePerUnit": {"USD": price},
-                                }
-                            }
-                        }
-                    }
-                },
-            }
+                unit="Units",
+                price=price,
+            )
         )
 
     def test_100k_context_window_listing_is_not_ingested(self) -> None:
@@ -1196,27 +1294,15 @@ class TestMarketplaceClaimIncludesListingName:
     @staticmethod
     def _item(servicename: str, price: str) -> str:
         return json.dumps(
-            {
-                "product": {
-                    "attributes": {
-                        "regionCode": "us-west-2",
-                        "usagetype": "USW2-MP:USW2_InputTokenCount-Units",
-                        "servicename": servicename,
-                    }
+            _price_item(
+                {
+                    "regionCode": "us-west-2",
+                    "usagetype": "USW2-MP:USW2_InputTokenCount-Units",
+                    "servicename": servicename,
                 },
-                "terms": {
-                    "OnDemand": {
-                        "SKU1": {
-                            "priceDimensions": {
-                                "SKU1.A": {
-                                    "unit": "Units",
-                                    "pricePerUnit": {"USD": price},
-                                }
-                            }
-                        }
-                    }
-                },
-            }
+                unit="Units",
+                price=price,
+            )
         )
 
     def test_same_model_key_different_listing_same_usagetype_warns(self) -> None:
@@ -1251,27 +1337,15 @@ class TestMarketplaceLatencyOptimizedRouting:
     @staticmethod
     def _item(usagetype: str, price: str) -> str:
         return json.dumps(
-            {
-                "product": {
-                    "attributes": {
-                        "regionCode": "us-west-2",
-                        "usagetype": usagetype,
-                        "servicename": "Claude Opus 4.5 (Amazon Bedrock Edition)",
-                    }
+            _price_item(
+                {
+                    "regionCode": "us-west-2",
+                    "usagetype": usagetype,
+                    "servicename": "Claude Opus 4.5 (Amazon Bedrock Edition)",
                 },
-                "terms": {
-                    "OnDemand": {
-                        "SKU1": {
-                            "priceDimensions": {
-                                "SKU1.A": {
-                                    "unit": "Units",
-                                    "pricePerUnit": {"USD": price},
-                                }
-                            }
-                        }
-                    }
-                },
-            }
+                unit="Units",
+                price=price,
+            )
         )
 
     def test_latency_optimized_usagetype_ingests_with_routing_latency(self) -> None:
@@ -1337,6 +1411,57 @@ class TestMarketplaceLatencyOptimizedRouting:
         assert results[plain_key].amount == Decimal("3.00") / 1_000_000
 
 
+class TestMarketplaceScaleOneDimensions:
+    """Marketplace usagetypes billed flat per-unit, not per-1M (createdimage/searchunit/...).
+
+    Unlike token dimensions (see _MARKETPLACE_PER_MILLION_DIMENSIONS), these
+    quote a per-unit price directly -- no /1_000_000 scaling applies.
+    """
+
+    @staticmethod
+    def _item(usagetype: str, price: str) -> str:
+        return json.dumps(
+            _price_item(
+                {
+                    "regionCode": "us-east-1",
+                    "usagetype": usagetype,
+                    "servicename": "Test Image Model (Amazon Bedrock Edition)",
+                },
+                unit="Units",
+                price=price,
+            )
+        )
+
+    def test_created_image_usagetype_resolves_the_unscaled_per_image_price(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A "CreatedImage" usagetype must price per image, not divided by 1M."""
+        results: dict[PriceKey, Price] = {}
+        _ingest_price_list_item(
+            self._item("USE1-MP:USE1_CreatedImage-Units", "0.04"),
+            Service.BEDROCK,
+            "us-east-1",
+            "USD",
+            results,
+        )
+        key = PriceKey(
+            Service.BEDROCK,
+            normalize_model_key("Test Image Model"),
+            "us-east-1",
+            Dimension.OUTPUT_IMAGES,
+            "standard",
+        )
+        assert key in results
+        assert results[key].amount == Decimal("0.04")
+
+        monkeypatch.setattr(pricing._state, "price_index", results)  # noqa: SLF001
+        price = resolve_price(
+            Service.BEDROCK, "Test Image Model", "us-east-1", Dimension.OUTPUT_IMAGES
+        )
+        assert price is not None
+        assert price.amount == Decimal("0.04")
+
+
 class TestLongContextAxis:
     """Long-context (>200K prompt) pricing bucket, signaled by a "long-context" usagetype segment."""
 
@@ -1348,55 +1473,31 @@ class TestLongContextAxis:
         claims: dict[PriceKey, str] = {}
         diagnostics: list[str] = []
         standard_item = json.dumps(
-            {
-                "product": {
-                    "attributes": {
-                        "regionCode": "us-east-1",
-                        "usagetype": "USE1-Claude4Sonnet-input-tokens-cross-region-global",
-                        "inferenceType": "Input tokens",
-                        "model": "Claude Sonnet 4",
-                    }
+            _price_item(
+                {
+                    "regionCode": "us-east-1",
+                    "usagetype": "USE1-Claude4Sonnet-input-tokens-cross-region-global",
+                    "inferenceType": "Input tokens",
+                    "model": "Claude Sonnet 4",
                 },
-                "terms": {
-                    "OnDemand": {
-                        "SKU1": {
-                            "priceDimensions": {
-                                "SKU1.A": {
-                                    "unit": "1K tokens",
-                                    "pricePerUnit": {"USD": "0.003"},
-                                }
-                            }
-                        }
-                    }
-                },
-            }
+                unit="1K tokens",
+                price="0.003",
+            )
         )
         long_item = json.dumps(
-            {
-                "product": {
-                    "attributes": {
-                        "regionCode": "us-east-1",
-                        "usagetype": (
-                            "USE1-Claude4Sonnet-input-tokens-long-context"
-                            "-cross-region-global"
-                        ),
-                        "inferenceType": "Input tokens long context",
-                        "model": "Claude Sonnet 4",
-                    }
+            _price_item(
+                {
+                    "regionCode": "us-east-1",
+                    "usagetype": (
+                        "USE1-Claude4Sonnet-input-tokens-long-context"
+                        "-cross-region-global"
+                    ),
+                    "inferenceType": "Input tokens long context",
+                    "model": "Claude Sonnet 4",
                 },
-                "terms": {
-                    "OnDemand": {
-                        "SKU1": {
-                            "priceDimensions": {
-                                "SKU1.A": {
-                                    "unit": "1K tokens",
-                                    "pricePerUnit": {"USD": "0.006"},
-                                }
-                            }
-                        }
-                    }
-                },
-            }
+                unit="1K tokens",
+                price="0.006",
+            )
         )
         _ingest_price_list_item(
             standard_item,
@@ -1443,58 +1544,34 @@ class TestLongContextAxis:
         claims: dict[PriceKey, str] = {}
         diagnostics: list[str] = []
         standard_item = json.dumps(
-            {
-                "product": {
-                    "attributes": {
-                        "regionCode": "us-east-1",
-                        "usagetype": (
-                            "USE1-Claude4Sonnet-cache-read-input-token-count"
-                            "-cross-region-global"
-                        ),
-                        "featuretype": "Prompt cache read",
-                        "model": "Claude Sonnet 4",
-                    }
+            _price_item(
+                {
+                    "regionCode": "us-east-1",
+                    "usagetype": (
+                        "USE1-Claude4Sonnet-cache-read-input-token-count"
+                        "-cross-region-global"
+                    ),
+                    "featuretype": "Prompt cache read",
+                    "model": "Claude Sonnet 4",
                 },
-                "terms": {
-                    "OnDemand": {
-                        "SKU1": {
-                            "priceDimensions": {
-                                "SKU1.A": {
-                                    "unit": "1K tokens",
-                                    "pricePerUnit": {"USD": "0.0003"},
-                                }
-                            }
-                        }
-                    }
-                },
-            }
+                unit="1K tokens",
+                price="0.0003",
+            )
         )
         long_item = json.dumps(
-            {
-                "product": {
-                    "attributes": {
-                        "regionCode": "us-east-1",
-                        "usagetype": (
-                            "USE1-Claude4Sonnet-cache-read-input-token-count"
-                            "-long-context-cross-region-global"
-                        ),
-                        "featuretype": "Prompt cache read",
-                        "model": "Claude Sonnet 4",
-                    }
+            _price_item(
+                {
+                    "regionCode": "us-east-1",
+                    "usagetype": (
+                        "USE1-Claude4Sonnet-cache-read-input-token-count"
+                        "-long-context-cross-region-global"
+                    ),
+                    "featuretype": "Prompt cache read",
+                    "model": "Claude Sonnet 4",
                 },
-                "terms": {
-                    "OnDemand": {
-                        "SKU1": {
-                            "priceDimensions": {
-                                "SKU1.A": {
-                                    "unit": "1K tokens",
-                                    "pricePerUnit": {"USD": "0.0006"},
-                                }
-                            }
-                        }
-                    }
-                },
-            }
+                unit="1K tokens",
+                price="0.0006",
+            )
         )
         _ingest_price_list_item(
             standard_item,
@@ -1540,20 +1617,11 @@ class TestNovaMultiModalEmbeddingsInputMediaExclusion:
     @staticmethod
     def _item(usagetype: str, unit: str, price: str) -> str:
         return json.dumps(
-            {
-                "product": {
-                    "attributes": {"regionCode": "us-east-1", "usagetype": usagetype}
-                },
-                "terms": {
-                    "OnDemand": {
-                        "SKU1": {
-                            "priceDimensions": {
-                                "SKU1.A": {"unit": unit, "pricePerUnit": {"USD": price}}
-                            }
-                        }
-                    }
-                },
-            }
+            _price_item(
+                {"regionCode": "us-east-1", "usagetype": usagetype},
+                unit=unit,
+                price=price,
+            )
         )
 
     @pytest.mark.parametrize(
@@ -1666,27 +1734,15 @@ class TestNovaGroundingRequests:
         """The "nova-grounding" usagetype marker must resolve to Dimension.GROUNDING_REQUESTS."""
         results: dict[PriceKey, Price] = {}
         item = json.dumps(
-            {
-                "product": {
-                    "attributes": {
-                        "regionCode": "us-east-1",
-                        "usagetype": "USE1-Nova2.0Lite-nova-grounding",
-                        "model": "Nova 2.0 Lite",
-                    }
+            _price_item(
+                {
+                    "regionCode": "us-east-1",
+                    "usagetype": "USE1-Nova2.0Lite-nova-grounding",
+                    "model": "Nova 2.0 Lite",
                 },
-                "terms": {
-                    "OnDemand": {
-                        "SKU1": {
-                            "priceDimensions": {
-                                "SKU1.A": {
-                                    "unit": "Requests",
-                                    "pricePerUnit": {"USD": "0.03"},
-                                }
-                            }
-                        }
-                    }
-                },
-            }
+                unit="Requests",
+                price="0.03",
+            )
         )
         _ingest_price_list_item(item, Service.BEDROCK, "us-east-1", "USD", results)
         monkeypatch.setattr(pricing._state, "price_index", results)  # noqa: SLF001
@@ -1707,34 +1763,114 @@ class TestReservedCapacityExclusion:
         """A "Reserved - 1 Month" feature row must be skipped, even with no inferenceType."""
         results: dict[PriceKey, Price] = {}
         item = json.dumps(
-            {
-                "product": {
-                    "attributes": {
-                        "regionCode": "eu-west-1",
-                        "usagetype": (
-                            "EU-Claude4.5Sonnet-reserved-1-month-input-tokens"
-                            "-per-minute-cross-region-global"
-                        ),
-                        "feature": "Reserved - 1 Month",
-                        "model": "Claude Sonnet 4.5",
-                    }
+            _price_item(
+                {
+                    "regionCode": "eu-west-1",
+                    "usagetype": (
+                        "EU-Claude4.5Sonnet-reserved-1-month-input-tokens"
+                        "-per-minute-cross-region-global"
+                    ),
+                    "feature": "Reserved - 1 Month",
+                    "model": "Claude Sonnet 4.5",
                 },
-                "terms": {
-                    "OnDemand": {
-                        "SKU1": {
-                            "priceDimensions": {
-                                "SKU1.A": {
-                                    "unit": "1K tokens",
-                                    "pricePerUnit": {"USD": "1.5"},
-                                }
-                            }
-                        }
-                    }
-                },
-            }
+                unit="1K tokens",
+                price="1.5",
+            )
         )
         _ingest_price_list_item(item, Service.BEDROCK, "eu-west-1", "USD", results)
         assert results == {}
+
+
+class TestTranslateAndComprehendIngestion:
+    """TranslateText/DetectDominantLanguage/DetectToxicContent synthetic model keys.
+
+    These services carry no `model` attribute; _synthesize_service_model_key()
+    reconstructs the exact synthetic model string record_translate_usage()/
+    record_comprehend_usage() bill against (see stdapi/usage.py).
+    """
+
+    @staticmethod
+    def _item(operation: str, usagetype: str, unit: str, price: str) -> str:
+        return json.dumps(
+            _price_item(
+                {
+                    "regionCode": "us-east-1",
+                    "usagetype": usagetype,
+                    "operation": operation,
+                },
+                unit=unit,
+                price=price,
+            )
+        )
+
+    def test_translate_text_ingests_under_the_synthetic_translate_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A TranslateText row must key under "amazon.translate", billed via INPUT_CHARACTERS."""
+        results: dict[PriceKey, Price] = {}
+        _ingest_price_list_item(
+            self._item("TranslateText", "USE1-TranslateText", "Characters", "0.000015"),
+            Service.TRANSLATE,
+            "us-east-1",
+            "USD",
+            results,
+        )
+        key = PriceKey(
+            Service.TRANSLATE,
+            normalize_model_key("amazon.translate"),
+            "us-east-1",
+            Dimension.INPUT_CHARACTERS,
+            "standard",
+        )
+        assert key in results
+        assert results[key].amount == Decimal("0.000015")
+
+        monkeypatch.setattr(pricing._state, "price_index", results)  # noqa: SLF001
+        price = resolve_price(
+            Service.TRANSLATE,
+            "amazon.translate",
+            "us-east-1",
+            Dimension.INPUT_CHARACTERS,
+        )
+        assert price is not None
+        assert price.amount == Decimal("0.000015")
+
+    def test_detect_dominant_language_ingests_under_the_language_detection_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A DetectDominantLanguage row must key under "amazon.comprehend-language-detection"."""
+        results: dict[PriceKey, Price] = {}
+        _ingest_price_list_item(
+            self._item(
+                "DetectDominantLanguage",
+                "USE1-DetectDominantLanguage",
+                "Units",
+                "0.0001",
+            ),
+            Service.COMPREHEND,
+            "us-east-1",
+            "USD",
+            results,
+        )
+        key = PriceKey(
+            Service.COMPREHEND,
+            normalize_model_key("amazon.comprehend-language-detection"),
+            "us-east-1",
+            Dimension.COMPREHEND_UNITS,
+            "standard",
+        )
+        assert key in results
+        assert results[key].amount == Decimal("0.0001")
+
+        monkeypatch.setattr(pricing._state, "price_index", results)  # noqa: SLF001
+        price = resolve_price(
+            Service.COMPREHEND,
+            "amazon.comprehend-language-detection",
+            "us-east-1",
+            Dimension.COMPREHEND_UNITS,
+        )
+        assert price is not None
+        assert price.amount == Decimal("0.0001")
 
 
 class TestUsagetypeTokenFallbackTierSuffixes:
@@ -1747,27 +1883,11 @@ class TestUsagetypeTokenFallbackTierSuffixes:
     @staticmethod
     def _item(usagetype: str, model: str = "xai.grok-4.3", price: str = "0.002") -> str:
         return json.dumps(
-            {
-                "product": {
-                    "attributes": {
-                        "regionCode": "us-east-1",
-                        "usagetype": usagetype,
-                        "model": model,
-                    }
-                },
-                "terms": {
-                    "OnDemand": {
-                        "SKU1": {
-                            "priceDimensions": {
-                                "SKU1.A": {
-                                    "unit": "1K tokens",
-                                    "pricePerUnit": {"USD": price},
-                                }
-                            }
-                        }
-                    }
-                },
-            }
+            _price_item(
+                {"regionCode": "us-east-1", "usagetype": usagetype, "model": model},
+                unit="1K tokens",
+                price=price,
+            )
         )
 
     @pytest.mark.parametrize(
@@ -1846,28 +1966,16 @@ class TestNovaSonicModality:
     @staticmethod
     def _item(inference_type: str, usagetype: str, price: str = "0.0034") -> str:
         return json.dumps(
-            {
-                "product": {
-                    "attributes": {
-                        "regionCode": "us-east-1",
-                        "usagetype": usagetype,
-                        "inferenceType": inference_type,
-                        "model": "Nova Sonic",
-                    }
+            _price_item(
+                {
+                    "regionCode": "us-east-1",
+                    "usagetype": usagetype,
+                    "inferenceType": inference_type,
+                    "model": "Nova Sonic",
                 },
-                "terms": {
-                    "OnDemand": {
-                        "SKU1": {
-                            "priceDimensions": {
-                                "SKU1.A": {
-                                    "unit": "1K tokens",
-                                    "pricePerUnit": {"USD": price},
-                                }
-                            }
-                        }
-                    }
-                },
-            }
+                unit="1K tokens",
+                price=price,
+            )
         )
 
     def test_text_input_token_maps_to_input_tokens(self) -> None:
@@ -1956,28 +2064,16 @@ class TestNativeLatencyOptimizedRouting:
     @staticmethod
     def _item(model: str, usagetype: str, price: str) -> str:
         return json.dumps(
-            {
-                "product": {
-                    "attributes": {
-                        "regionCode": "us-east-1",
-                        "usagetype": usagetype,
-                        "inferenceType": "Input tokens",
-                        "model": model,
-                    }
+            _price_item(
+                {
+                    "regionCode": "us-east-1",
+                    "usagetype": usagetype,
+                    "inferenceType": "Input tokens",
+                    "model": model,
                 },
-                "terms": {
-                    "OnDemand": {
-                        "SKU1": {
-                            "priceDimensions": {
-                                "SKU1.A": {
-                                    "unit": "1K tokens",
-                                    "pricePerUnit": {"USD": price},
-                                }
-                            }
-                        }
-                    }
-                },
-            }
+                unit="1K tokens",
+                price=price,
+            )
         )
 
     def test_latency_optimized_model_attribute_ingests_under_the_base_key_with_routing_latency(
@@ -2237,7 +2333,9 @@ class TestApplyPriceOverrides:
             "standard",
         )
         assert index[us_key].currency == "USD"
+        assert index[us_key].amount == Decimal("0.000003")
         assert index[eusc_key].currency == "EUR"
+        assert index[eusc_key].amount == Decimal("0.000003")
 
     @pytest.mark.parametrize("bad_price", [float("nan"), float("inf"), -1.0, 0.0])
     def test_non_finite_or_non_positive_price_is_rejected(
@@ -2743,7 +2841,8 @@ class TestResolvePrice:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A model in _MODEL_KEY_OVERRIDES must resolve via its overridden key."""
-        model_id, override_key = next(iter(pricing._MODEL_KEY_OVERRIDES.items()))  # noqa: SLF001
+        model_id, override_key = "openai.gpt-oss-120b-1:0", "gptoss120b"
+        assert pricing._MODEL_KEY_OVERRIDES[model_id] == override_key  # noqa: SLF001
         key = PriceKey(
             Service.BEDROCK,
             override_key,
@@ -3135,9 +3234,8 @@ class TestRefreshPriceCatalogForNewModels:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A model listed in _MODEL_KEY_OVERRIDES must be checked under its override key."""
-        override_model_id, override_key = next(
-            iter(pricing._MODEL_KEY_OVERRIDES.items())  # noqa: SLF001
-        )
+        override_model_id, override_key = "openai.gpt-oss-120b-1:0", "gptoss120b"
+        assert pricing._MODEL_KEY_OVERRIDES[override_model_id] == override_key  # noqa: SLF001
         key = PriceKey(
             Service.BEDROCK,
             override_key,
@@ -3211,12 +3309,178 @@ class TestRefreshPriceCatalogForNewModels:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """An empty model_ids iterable must never trigger a reload."""
+        monkeypatch.setattr(SETTINGS, "cost_tracking", True)
 
         async def _fail(_diagnostics: list[str]) -> None:
             pytest.fail("_load_price_catalog must not be called with no model IDs")
 
         monkeypatch.setattr(pricing, "_load_price_catalog", _fail)
         await refresh_price_catalog_for_new_models([])
+
+
+class TestStartPriceCatalogBackgroundLoad:
+    """start/stop_price_catalog: background load task lifecycle and logging."""
+
+    @pytest.fixture(autouse=True)
+    async def _stop_task_after_test(self) -> AsyncIterator[None]:
+        """Always stop a leftover background load task after each test."""
+        yield
+        await pricing.stop_price_catalog()
+
+    @pytest.fixture
+    def events(self, monkeypatch: pytest.MonkeyPatch) -> list[EventLog]:
+        """Capture the background events written by the load task."""
+        from stdapi import monitoring  # noqa: PLC0415
+
+        written: list[EventLog] = []
+        monkeypatch.setattr(monitoring, "write_log_event", written.append)
+        return written
+
+    def test_disabled_cost_tracking_spawns_no_task(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No task must be spawned when cost tracking is disabled."""
+        monkeypatch.setattr(SETTINGS, "cost_tracking", False)
+        pricing.start_price_catalog()
+        assert pricing._state.load_task is None  # noqa: SLF001
+
+    async def test_successful_load_logs_an_info_background_event(
+        self, monkeypatch: pytest.MonkeyPatch, events: list[EventLog]
+    ) -> None:
+        """A clean load completes the task and logs one info background event."""
+        monkeypatch.setattr(SETTINGS, "cost_tracking", True)
+
+        async def _load(_diagnostics: list[str]) -> None:
+            return
+
+        monkeypatch.setattr(pricing, "_load_price_catalog", _load)
+        pricing.start_price_catalog()
+        task = pricing._state.load_task  # noqa: SLF001
+        assert task is not None
+        await task
+
+        (event,) = events
+        assert event["type"] == "background"
+        assert event["event"] == "price_catalog_load"
+        assert event["level"] == "info"
+        assert "error_detail" not in event
+        assert isinstance(event["execution_time_ms"], int)
+
+    async def test_diagnostics_downgrade_the_event_to_a_warning(
+        self, monkeypatch: pytest.MonkeyPatch, events: list[EventLog]
+    ) -> None:
+        """Load diagnostics surface as the event's error detail at warning level."""
+        monkeypatch.setattr(SETTINGS, "cost_tracking", True)
+
+        async def _load(diagnostics: list[str]) -> None:
+            diagnostics.append("Price catalog collision on X")
+
+        monkeypatch.setattr(pricing, "_load_price_catalog", _load)
+        pricing.start_price_catalog()
+        assert pricing._state.load_task is not None  # noqa: SLF001
+        await pricing._state.load_task  # noqa: SLF001
+
+        (event,) = events
+        assert event["level"] == "warning"
+        assert event["error_detail"] == ["Price catalog collision on X"]
+
+    async def test_aws_error_is_retried_until_success(
+        self, monkeypatch: pytest.MonkeyPatch, events: list[EventLog]
+    ) -> None:
+        """An AWS error is logged and retried after a backoff, not fatal."""
+        monkeypatch.setattr(SETTINGS, "cost_tracking", True)
+        monkeypatch.setattr(pricing, "_LOAD_RETRY_INITIAL_SECONDS", 0)
+        attempts = 0
+
+        async def _load(_diagnostics: list[str]) -> None:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                error_response = {"Error": {"Code": "Throttling", "Message": "x"}}
+                raise ClientError(error_response, "GetProducts")  # type: ignore[arg-type]
+
+        monkeypatch.setattr(pricing, "_load_price_catalog", _load)
+        pricing.start_price_catalog()
+        assert pricing._state.load_task is not None  # noqa: SLF001
+        await pricing._state.load_task  # noqa: SLF001
+
+        assert attempts == 2
+        assert [event["level"] for event in events] == ["warning", "info"]
+        assert "retrying in 0s" in str(events[0]["error_detail"])
+
+    async def test_stop_cancels_an_inflight_load(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """stop_price_catalog cancels the task and clears the state reference."""
+        monkeypatch.setattr(SETTINGS, "cost_tracking", True)
+        started = asyncio.Event()
+
+        async def _load(_diagnostics: list[str]) -> None:
+            started.set()
+            await asyncio.sleep(3600)
+
+        monkeypatch.setattr(pricing, "_load_price_catalog", _load)
+        pricing.start_price_catalog()
+        task = pricing._state.load_task  # noqa: SLF001
+        assert task is not None
+        await asyncio.wait_for(started.wait(), timeout=5)
+
+        await pricing.stop_price_catalog()
+
+        assert pricing._state.load_task is None  # noqa: SLF001
+        assert task.cancelled()
+
+    async def test_unexpected_error_is_logged_and_retried(
+        self, monkeypatch: pytest.MonkeyPatch, events: list[EventLog]
+    ) -> None:
+        """A non-AWS bug (e.g. AttributeError) is logged at error level and retried."""
+        monkeypatch.setattr(SETTINGS, "cost_tracking", True)
+        monkeypatch.setattr(pricing, "_LOAD_RETRY_INITIAL_SECONDS", 0)
+        attempts = 0
+
+        async def _load(_diagnostics: list[str]) -> None:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                msg = "unexpected price-row shape"
+                raise AttributeError(msg)
+
+        monkeypatch.setattr(pricing, "_load_price_catalog", _load)
+        pricing.start_price_catalog()
+        task = pricing._state.load_task  # noqa: SLF001
+        assert task is not None
+        await task
+
+        assert attempts == 2
+        assert [event["level"] for event in events] == ["error", "info"]
+        assert "unexpected price-row shape" in str(events[0]["error_detail"])
+        assert "retrying in 0s" in str(events[0]["error_detail"])
+
+    async def test_stop_during_unexpected_error_backoff_does_not_raise(
+        self, monkeypatch: pytest.MonkeyPatch, events: list[EventLog]
+    ) -> None:
+        """stop_price_catalog must not raise while backing off from an unexpected error."""
+        monkeypatch.setattr(SETTINGS, "cost_tracking", True)
+        monkeypatch.setattr(pricing, "_LOAD_RETRY_INITIAL_SECONDS", 3600)
+        attempted = asyncio.Event()
+
+        async def _load(_diagnostics: list[str]) -> None:
+            attempted.set()
+            msg = "unexpected price-row shape"
+            raise AttributeError(msg)
+
+        monkeypatch.setattr(pricing, "_load_price_catalog", _load)
+        pricing.start_price_catalog()
+        task = pricing._state.load_task  # noqa: SLF001
+        assert task is not None
+        await asyncio.wait_for(attempted.wait(), timeout=5)
+
+        await pricing.stop_price_catalog()  # must not raise, even mid-backoff
+
+        assert pricing._state.load_task is None  # noqa: SLF001
+        assert task.cancelled()
+        (event,) = events
+        assert event["level"] == "error"
 
 
 @pytest.mark.expensive
@@ -3256,7 +3520,7 @@ async def test_bedrock_model_pricing_coverage() -> None:
     try:
         async with AWSConnectionManager(("sts", None)):
             pass
-    except Exception as exc:  # noqa: BLE001
+    except (BotoCoreError, ClientError) as exc:
         pytest.skip(f"AWS is not reachable: {exc}")
 
     async with AWSConnectionManager(
@@ -3266,7 +3530,7 @@ async def test_bedrock_model_pricing_coverage() -> None:
         ("pricing", pricing.pricing_endpoint_region()),  # type: ignore[arg-type]
     ):
         await models.initialize_bedrock_models()
-        await pricing.start_price_catalog()
+        await pricing._load_price_catalog([])  # noqa: SLF001
         registered = dict(models._MODELS)  # noqa: SLF001
         configured_regions = [str(r) for r in SETTINGS.aws_bedrock_regions]
 

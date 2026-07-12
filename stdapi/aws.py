@@ -1,5 +1,6 @@
 """AWS client management and connection pooling."""
 
+from asyncio import gather
 from contextlib import AsyncExitStack
 from logging import getLogger
 from os import environ
@@ -94,19 +95,26 @@ class AWSConnectionManager:
             ),
         }
 
-        for service, region in {
-            (service, region or SETTINGS.aws_bedrock_regions[0])
-            for service, region in self._client_specs
-        }:
-            _CLIENTS.setdefault(service, {})[
-                region
-            ] = await self._exit_stack.enter_async_context(
-                AWS_SESSION.create_client(  # type: ignore[call-overload]
-                    service.split(".", 1)[0],
-                    region_name=region,
-                    config=services_configs.get(service, CONFIG),
+        specs = [
+            *{
+                (service, region or SETTINGS.aws_bedrock_regions[0])
+                for service, region in self._client_specs
+            }
+        ]
+        clients = await gather(
+            *(
+                self._exit_stack.enter_async_context(
+                    AWS_SESSION.create_client(  # type: ignore[call-overload]
+                        service.split(".", 1)[0],
+                        region_name=region,
+                        config=services_configs.get(service, CONFIG),
+                    )
                 )
+                for service, region in specs
             )
+        )
+        for (service, region), client in zip(specs, clients, strict=True):
+            _CLIENTS.setdefault(service, {})[region] = client
 
         if (
             SETTINGS.aws_bedrock_region_routing != "disabled"
@@ -123,14 +131,20 @@ class AWSConnectionManager:
                 connect_timeout=SETTINGS.aws_connect_timeout,
                 read_timeout=SETTINGS.ai_response_timeout,
             )
-            for region in _CLIENTS["bedrock-runtime"]:
-                _CLIENTS.setdefault("bedrock-runtime.no-retry", {})[
-                    region
-                ] = await self._exit_stack.enter_async_context(
-                    AWS_SESSION.create_client(
-                        "bedrock-runtime", region_name=region, config=no_retry
+            regions = [*_CLIENTS["bedrock-runtime"]]
+            no_retry_clients = await gather(
+                *(
+                    self._exit_stack.enter_async_context(
+                        AWS_SESSION.create_client(
+                            "bedrock-runtime", region_name=region, config=no_retry
+                        )
                     )
+                    for region in regions
                 )
+            )
+            _CLIENTS["bedrock-runtime.no-retry"] = dict(
+                zip(regions, no_retry_clients, strict=True)
+            )
         return self
 
     async def __aexit__(

@@ -4,7 +4,7 @@ from asyncio import gather
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 
 from stdapi.api_errors import ApiError, UnsupportedModelError
 from stdapi.aws import get_client
@@ -17,7 +17,7 @@ from stdapi.models import (
     ModelDetails,
 )
 from stdapi.models.audio import AudioModelBase, TTSResponse
-from stdapi.monitoring import REQUEST_LOG
+from stdapi.monitoring import REQUEST_LOG, EventLog, add_server_warning
 from stdapi.types import BaseModelResponse, JsonMapping
 from stdapi.types.openai_audio import OPENAI_VOICES_FEMALE
 from stdapi.usage import record_comprehend_usage, record_polly_usage
@@ -134,19 +134,39 @@ async def _get_voices_per_engine(engine: EngineType) -> None:
             break
 
 
-async def initialize_polly_models() -> None:
-    """Initialize voices for all models."""
+async def initialize_polly_models(start_event: EventLog | None = None) -> None:
+    """Initialize voices for all models.
+
+    An engine whose voice retrieval fails with an AWS error is disabled
+    (warned about on *start_event*) instead of failing startup; text-to-
+    speech keeps working for the other engines.
+
+    Args:
+        start_event: Optional startup event log to record warnings on for
+            engines whose voices could not be retrieved.
+    """
     _VOICES_DESCRIPTIONS.clear()
     _VOICES_BY_GENDERS.clear()
     _VOICES_BY_LANGUAGE.clear()
     _VOICES_BY_ENGINE.clear()
     _VOICES_BY_NAME_LOWER.clear()
-    await gather(
-        *(
-            _get_voices_per_engine(_engine_from_model(model))
-            for model in _SUPPORTED_SPEECH_MODELS
-        )
+    engines = [_engine_from_model(model) for model in _SUPPORTED_SPEECH_MODELS]
+    results = await gather(
+        *(_get_voices_per_engine(engine) for engine in engines), return_exceptions=True
     )
+    failed: dict[str, str] = {}
+    for engine, result in zip(engines, results, strict=True):
+        if isinstance(result, BaseException):
+            if not isinstance(result, (BotoCoreError, ClientError)):
+                raise result
+            failed[engine] = f"{type(result).__name__}: {result}"
+            # Drop any partially paginated voice set for the failed engine.
+            _VOICES_BY_ENGINE.pop(engine, None)
+    if failed and start_event is not None:
+        add_server_warning(
+            start_event,
+            {"unavailable_polly_engines": failed},  # type: ignore[dict-item]
+        )
     polly: PollyClient = get_client("polly")
     for engine, voices in _VOICES_BY_ENGINE.items():
         if voices:

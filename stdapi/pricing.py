@@ -33,7 +33,10 @@ import re
 from dataclasses import dataclass, field, replace
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
+from time import perf_counter_ns
 from typing import TYPE_CHECKING, Any, Final, Literal
+
+from botocore.exceptions import BotoCoreError, ClientError
 
 from stdapi.aws import get_client
 from stdapi.config import AWS_REGION, SETTINGS
@@ -44,7 +47,7 @@ if TYPE_CHECKING:
 
     from types_aiobotocore_pricing.client import PricingClient
 
-    from stdapi.monitoring import EventLog
+    from stdapi.config import LogLevel
 
 
 class Dimension(StrEnum):
@@ -412,6 +415,8 @@ class _PriceCatalogState:
     price_index: dict[PriceKey, Price] = field(default_factory=dict)
     # Serializes on-demand refreshes to prevent duplicate catalog reloads.
     refresh_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    # Background startup load task, owned here and cancelled at shutdown.
+    load_task: asyncio.Task[None] | None = None
 
 
 #: Module state. Swapping price_index wholesale keeps concurrent readers safe.
@@ -586,8 +591,11 @@ _SERVICE_CODE_TO_SERVICE: Final[dict[str, Service]] = {
     "comprehend": Service.COMPREHEND,
 }
 
-#: Max time the initial catalog load may delay app startup.
-_STARTUP_LOAD_TIMEOUT: Final[int] = 60
+#: Initial delay before retrying a failed background catalog load.
+_LOAD_RETRY_INITIAL_SECONDS: Final[int] = 60
+
+#: Max delay between background catalog load retries.
+_LOAD_RETRY_MAX_SECONDS: Final[int] = 900
 
 #: Regions hosting the AWS Price List API (commercial endpoints serve identical data).
 type _PricingEndpoint = Literal[
@@ -1758,45 +1766,113 @@ async def refresh_price_catalog_for_new_models(model_ids: Iterable[str]) -> None
         await _load_price_catalog([])
 
 
-async def start_price_catalog(start_event: EventLog | None = None) -> None:
-    """Initialize the price catalog at application startup.
+def start_price_catalog() -> None:
+    """Start loading the price catalog in a background task at startup.
 
-    Should be called during application startup. Diagnostics collected while
-    loading the catalog (collisions, invalid overrides, or a slow initial
-    load) are recorded as a single warning on *start_event*, if given, via
-    :func:`stdapi.monitoring.add_server_warning` (imported inside the
-    function: ``stdapi.monitoring`` transitively imports this module).
-    AWS Pricing API failures other than the startup timeout propagate to
-    the caller.
+    Returns immediately: server readiness never waits on the AWS Price List
+    API. Requests served before the load completes record usage without a
+    cost. Each load attempt's outcome (diagnostics, or the AWS error being
+    retried with backoff) is written as a ``background`` log event named
+    ``price_catalog_load``. Stop the task via :func:`stop_price_catalog`.
 
     There is no periodic background refresh afterward: the catalog is kept
     current on demand by :func:`refresh_price_catalog_for_new_models`,
     triggered by ``initialize_bedrock_models()`` whenever its own lazy
     refresh discovers a model with no price-catalog entry.
-
-    Args:
-        start_event: Optional startup event log to record a diagnostics
-            summary on.
     """
     if not SETTINGS.cost_tracking:
         return
+    _state.load_task = asyncio.get_running_loop().create_task(
+        _load_price_catalog_with_retry()
+    )
 
-    diagnostics: list[str] = []
+
+async def stop_price_catalog() -> None:
+    """Cancel and await the background catalog load, if still running.
+
+    Never raises: any exception other than cancellation left in the task
+    (e.g. an unexpected load error already logged where it occurred) is
+    logged again here and swallowed, so shutdown always completes cleanly.
+    """
+    if (task := _state.load_task) is None:
+        return
+    _state.load_task = None
+    task.cancel()
+    start = perf_counter_ns()
     try:
-        await asyncio.wait_for(
-            _load_price_catalog(diagnostics), timeout=_STARTUP_LOAD_TIMEOUT
+        await task
+    except asyncio.CancelledError:
+        pass
+    except Exception as exception:  # noqa: BLE001 -- logged and swallowed by design
+        _log_price_catalog_event(
+            "error",
+            [
+                "Price catalog load task raised during shutdown "
+                f"({type(exception).__name__}: {exception})"
+            ],
+            start,
         )
-    except TimeoutError:
-        # The cancelled load never swapped the index: the catalog stays empty.
-        diagnostics.append(
-            f"Price catalog initialization exceeded {_STARTUP_LOAD_TIMEOUT}s; continuing "
-            "startup with an empty catalog"
-        )
-    if diagnostics and start_event is not None:
-        from stdapi.monitoring import add_server_warning  # noqa: PLC0415
 
-        # add_server_warning serializes concurrent startup writers under its lock.
-        add_server_warning(
-            start_event,
-            {"price_catalog": diagnostics},  # type: ignore[dict-item]
-        )
+
+async def _load_price_catalog_with_retry() -> None:
+    """Load the catalog, retrying any failure with capped exponential backoff.
+
+    An unexpected (non-AWS) exception is logged at error level and retried
+    on the same backoff schedule as AWS errors, so a transient anomaly can
+    self-heal and a deterministic bug produces a periodic error-log signal
+    instead of permanently disabling cost tracking for the process lifetime.
+    """
+    delay = _LOAD_RETRY_INITIAL_SECONDS
+    while True:
+        diagnostics: list[str] = []
+        start = perf_counter_ns()
+        try:
+            await _load_price_catalog(diagnostics)
+        except (BotoCoreError, ClientError) as exception:
+            diagnostics.append(
+                f"Price catalog load failed ({type(exception).__name__}: "
+                f"{exception}); retrying in {delay}s"
+            )
+            _log_price_catalog_event("warning", diagnostics, start)
+        except Exception as exception:  # noqa: BLE001 -- logged and retried by design
+            diagnostics.append(
+                f"Price catalog load failed on unexpected error "
+                f"({type(exception).__name__}: {exception}); retrying in {delay}s"
+            )
+            _log_price_catalog_event("error", diagnostics, start)
+        else:
+            _log_price_catalog_event(
+                "warning" if diagnostics else "info", diagnostics, start
+            )
+            return
+        await asyncio.sleep(delay)
+        delay = min(delay * 2, _LOAD_RETRY_MAX_SECONDS)
+
+
+def _log_price_catalog_event(
+    level: LogLevel, diagnostics: list[str], start_ns: int
+) -> None:
+    """Write a ``background`` log event for one price-catalog load attempt.
+
+    Args:
+        level: Event severity.
+        diagnostics: Load diagnostics, recorded as the event's error detail.
+        start_ns: ``perf_counter_ns()`` timestamp when the attempt started.
+    """
+    # Imported here: stdapi.monitoring transitively imports this module.
+    from stdapi import server  # noqa: PLC0415
+    from stdapi.metering import SERVER_FULL_VERSION  # noqa: PLC0415
+    from stdapi.monitoring import EventLog, write_log_event  # noqa: PLC0415
+
+    event = EventLog(
+        type="background",
+        level=level,
+        date=SETTINGS.now(),
+        server_id=server.SERVER_NAME,
+        server_version=SERVER_FULL_VERSION,
+        event="price_catalog_load",
+        execution_time_ms=(perf_counter_ns() - start_ns) // 1000000,
+    )
+    if diagnostics:
+        event["error_detail"] = list(diagnostics)
+    write_log_event(event)

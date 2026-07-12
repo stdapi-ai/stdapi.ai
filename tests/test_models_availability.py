@@ -1,19 +1,34 @@
-"""Unit tests for stdapi.models._filter_model's availability-warning logic.
+"""Unit tests for the Bedrock model refresh helpers.
 
-Regression: AWS's foundation-model-availability API can report
-``regionAvailability != AVAILABLE`` for a model that ``list_foundation_models``
-just advertised in that same region (seen live, e.g.
-``amazon.titan-embed-g1-text-02``). That specific inconsistency isn't
-operator-actionable, so it's skipped silently instead of surfacing a
-false-positive warning; any other issue (alone or combined with it) is still
-recorded.
+Covers `_check_model_availability`'s warning matrix (the AWS
+availability API can report ``regionAvailability != AVAILABLE`` for a model
+``list_foundation_models`` just advertised — seen live, e.g.
+``amazon.titan-embed-g1-text-02`` — which is skipped silently), the
+round-based `_check_candidates` resolution, and `_collect_region_candidates`'
+per-region fault isolation.
 """
 
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from stdapi.models import ModelDetails, _filter_model
+import pytest
+from botocore.exceptions import ClientError, EndpointConnectionError
+
+import stdapi.models
+from stdapi import region_routing
+from stdapi.models import (
+    ModelDetails,
+    _check_candidates,
+    _check_model_availability,
+    _collect_region_candidates,
+    _merge_candidate,
+)
+from stdapi.monitoring import REQUEST_LOG, EventLog
 
 if TYPE_CHECKING:
+    from collections.abc import Generator
+
+    from pydantic import JsonValue
     from types_aiobotocore_bedrock.literals import RegionName
 
 
@@ -34,7 +49,7 @@ def _make_model(
 class _StubBedrockClient:
     """Stub Bedrock control-plane client returning a fixed availability payload."""
 
-    def __init__(self, availability: dict[str, Any]) -> None:
+    def __init__(self, availability: dict[str, Any] | Exception) -> None:
         self._availability = availability
 
     async def get_foundation_model_availability(
@@ -42,6 +57,8 @@ class _StubBedrockClient:
         modelId: str,  # noqa: N803
     ) -> dict[str, Any]:
         """Return the fixed availability payload regardless of the requested model."""
+        if isinstance(self._availability, Exception):
+            raise self._availability
         return self._availability
 
 
@@ -61,57 +78,339 @@ def _availability(
     }
 
 
-class TestFilterModelAvailabilityWarnings:
-    """Whether an unavailable model surfaces an entry in unavailable_models."""
+def _stub_client(
+    monkeypatch: pytest.MonkeyPatch, availability: dict[str, Any] | Exception
+) -> None:
+    """Route stdapi.models.get_client to a stub returning *availability*."""
+    client = _StubBedrockClient(availability)
+    monkeypatch.setattr(
+        stdapi.models, "get_client", lambda _service, _region=None: client
+    )
 
-    async def test_region_unavailable_alone_is_skipped_silently(self) -> None:
-        """Issues == ["unavailable"] alone: skipped, no models/unavailable_models entry."""
-        model = _make_model()
-        client = _StubBedrockClient(_availability(region="UNAVAILABLE"))
-        models: dict[str, ModelDetails] = {}
-        unavailable_models: dict[str, dict[str, list[str]]] = {}
 
-        await _filter_model(client, model, models, unavailable_models)  # type: ignore[arg-type]
+class TestCheckModelAvailability:
+    """_check_model_availability: issue labels per availability payload."""
 
-        assert models == {}
-        assert unavailable_models == {}
+    async def test_fully_available_model_has_no_issues(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A model with no issues at all returns an empty issue list."""
+        _stub_client(monkeypatch, _availability())
+        assert await _check_model_availability(_make_model()) == []
 
-    async def test_unauthorized_alone_is_recorded(self) -> None:
-        """Issues == ["unauthorized"] alone: recorded in unavailable_models."""
-        model = _make_model()
-        client = _StubBedrockClient(_availability(authorization="DENIED"))
-        models: dict[str, ModelDetails] = {}
-        unavailable_models: dict[str, dict[str, list[str]]] = {}
+    async def test_unauthorized_alone_is_reported(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A denied authorization is reported as ["unauthorized"]."""
+        _stub_client(monkeypatch, _availability(authorization="DENIED"))
+        assert await _check_model_availability(_make_model()) == ["unauthorized"]
 
-        await _filter_model(client, model, models, unavailable_models)  # type: ignore[arg-type]
-
-        assert models == {}
-        assert unavailable_models == {model.id: {"us-east-1": ["unauthorized"]}}
-
-    async def test_unauthorized_and_unavailable_together_are_recorded(self) -> None:
-        """Issues == ["unauthorized", "unavailable"]: recorded (not silently skipped)."""
-        model = _make_model()
-        client = _StubBedrockClient(
-            _availability(authorization="DENIED", region="UNAVAILABLE")
+    async def test_unauthorized_and_unavailable_are_combined(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Multiple failing statuses are all reported, in a stable order."""
+        _stub_client(
+            monkeypatch, _availability(authorization="DENIED", region="UNAVAILABLE")
         )
-        models: dict[str, ModelDetails] = {}
-        unavailable_models: dict[str, dict[str, list[str]]] = {}
+        assert await _check_model_availability(_make_model()) == [
+            "unauthorized",
+            "unavailable",
+        ]
 
-        await _filter_model(client, model, models, unavailable_models)  # type: ignore[arg-type]
+    async def test_aws_error_is_reported_as_issue_not_raised(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An AWS error during the check becomes an issue label, not an exception."""
+        error = ClientError(
+            {"Error": {"Code": "ThrottlingException", "Message": "slow down"}},
+            "GetFoundationModelAvailability",
+        )
+        _stub_client(monkeypatch, error)
+        assert await _check_model_availability(_make_model()) == [
+            "availability check failed: ClientError"
+        ]
 
-        assert models == {}
-        assert unavailable_models == {
-            model.id: {"us-east-1": ["unauthorized", "unavailable"]}
+
+class TestMergeCandidate:
+    """_merge_candidate: later regions extend an already-confirmed model."""
+
+    def test_new_region_and_profile_are_appended(self) -> None:
+        """A candidate from a new region adds its region and inference profile."""
+        existing = _make_model()
+        candidate = _make_model(region="eu-west-1")
+        candidate.set_inference_profile("eu-west-1", "arn:aws:bedrock:eu-west-1::p/x")
+
+        _merge_candidate(existing, candidate)
+
+        assert existing.regions == ["us-east-1", "eu-west-1"]
+        assert (existing.inference_profiles or {})["eu-west-1"] == (
+            "arn:aws:bedrock:eu-west-1::p/x"
+        )
+
+    def test_duplicate_region_is_ignored(self) -> None:
+        """A candidate from an already-known region changes nothing."""
+        existing = _make_model()
+        _merge_candidate(existing, _make_model())
+        assert existing.regions == ["us-east-1"]
+
+
+class TestCheckCandidates:
+    """_check_candidates: round-based resolution across candidate regions."""
+
+    @staticmethod
+    def _patch_availability(
+        monkeypatch: pytest.MonkeyPatch, issues_by_region: dict[str, list[str]]
+    ) -> list[str]:
+        """Fake _check_model_availability with per-region issues; returns call log."""
+        calls: list[str] = []
+
+        async def _fake(model: ModelDetails) -> list[str]:
+            calls.append(f"{model.id}@{model.regions[0]}")
+            return issues_by_region.get(model.regions[0], [])
+
+        monkeypatch.setattr(stdapi.models, "_check_model_availability", _fake)
+        return calls
+
+    async def test_first_region_success_merges_later_regions_unchecked(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A model passing in its first region absorbs later regions with one check."""
+        calls = self._patch_availability(monkeypatch, {})
+        candidates = {"m1": [_make_model("m1"), _make_model("m1", region="eu-west-1")]}
+        unavailable: dict[str, dict[str, list[str]]] = {}
+
+        result = await _check_candidates(candidates, unavailable)
+
+        assert result["m1"].regions == ["us-east-1", "eu-west-1"]
+        assert calls == ["m1@us-east-1"]
+        assert unavailable == {}
+
+    async def test_failure_falls_through_to_the_next_region(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A model unauthorized in region 1 is retried and found in region 2."""
+        calls = self._patch_availability(monkeypatch, {"us-east-1": ["unauthorized"]})
+        candidates = {"m1": [_make_model("m1"), _make_model("m1", region="eu-west-1")]}
+        unavailable: dict[str, dict[str, list[str]]] = {}
+
+        result = await _check_candidates(candidates, unavailable)
+
+        assert result["m1"].regions == ["eu-west-1"]
+        assert calls == ["m1@us-east-1", "m1@eu-west-1"]
+        assert unavailable == {"m1": {"us-east-1": ["unauthorized"]}}
+
+    async def test_model_unavailable_everywhere_is_dropped(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A model failing in every candidate region ends up in unavailable only."""
+        self._patch_availability(
+            monkeypatch, {"us-east-1": ["unauthorized"], "eu-west-1": ["no_agreement"]}
+        )
+        candidates = {"m1": [_make_model("m1"), _make_model("m1", region="eu-west-1")]}
+        unavailable: dict[str, dict[str, list[str]]] = {}
+
+        result = await _check_candidates(candidates, unavailable)
+
+        assert result == {}
+        assert unavailable == {
+            "m1": {"us-east-1": ["unauthorized"], "eu-west-1": ["no_agreement"]}
         }
 
-    async def test_fully_available_model_is_added_to_models(self) -> None:
-        """A model with no issues at all is added to `models`, not `unavailable_models`."""
-        model = _make_model()
-        client = _StubBedrockClient(_availability())
-        models: dict[str, ModelDetails] = {}
-        unavailable_models: dict[str, dict[str, list[str]]] = {}
+    async def test_region_unavailable_alone_is_skipped_silently(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Issues == ["unavailable"] alone: no unavailable_models entry (AWS quirk)."""
+        self._patch_availability(monkeypatch, {"us-east-1": ["unavailable"]})
+        unavailable: dict[str, dict[str, list[str]]] = {}
 
-        await _filter_model(client, model, models, unavailable_models)  # type: ignore[arg-type]
+        result = await _check_candidates({"m1": [_make_model("m1")]}, unavailable)
 
-        assert models == {model.id: model}
-        assert unavailable_models == {}
+        assert result == {}
+        assert unavailable == {}
+
+    async def test_all_models_are_checked_in_one_round(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Models first listed in different regions are all checked in round one."""
+        calls = self._patch_availability(monkeypatch, {})
+        candidates = {
+            "m1": [_make_model("m1")],
+            "m2": [_make_model("m2", region="eu-west-1")],
+        }
+
+        await _check_candidates(candidates, {})
+
+        assert sorted(calls) == ["m1@us-east-1", "m2@eu-west-1"]
+
+
+def _patch_regions_and_fetch(
+    monkeypatch: pytest.MonkeyPatch, results: dict[str, list[ModelDetails] | Exception]
+) -> None:
+    """Fake the region list and per-region fetch results."""
+    monkeypatch.setattr(region_routing, "ORDERED_BEDROCK_REGIONS", list(results))
+
+    async def _fake(region: RegionName) -> list[ModelDetails]:
+        result = results[region]
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(stdapi.models, "_get_bedrock_models_from_region", _fake)
+
+
+class TestCollectRegionCandidates:
+    """_collect_region_candidates: per-region fault isolation."""
+
+    @staticmethod
+    def _aws_error() -> EndpointConnectionError:
+        return EndpointConnectionError(endpoint_url="https://bedrock.invalid")
+
+    async def test_one_failed_region_is_tolerated_and_recorded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failing region is skipped with a diagnostic; others still merge."""
+        _patch_regions_and_fetch(
+            monkeypatch,
+            {"us-east-1": self._aws_error(), "eu-west-1": [_make_model("m1")]},
+        )
+        failed: dict[str, str] = {}
+
+        candidates = await _collect_region_candidates(failed)
+
+        assert list(candidates) == ["m1"]
+        assert list(failed) == ["us-east-1"]
+        assert failed["us-east-1"].startswith("EndpointConnectionError")
+
+    async def test_all_regions_failing_raises_the_first_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When every region fails, the refresh fails (startup keeps failing fast)."""
+        _patch_regions_and_fetch(
+            monkeypatch,
+            {"us-east-1": self._aws_error(), "eu-west-1": self._aws_error()},
+        )
+
+        with pytest.raises(EndpointConnectionError):
+            await _collect_region_candidates({})
+
+    async def test_non_aws_errors_propagate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Programming errors are never swallowed as a region failure."""
+        _patch_regions_and_fetch(
+            monkeypatch,
+            {"us-east-1": ValueError("bug"), "eu-west-1": [_make_model("m1")]},
+        )
+
+        with pytest.raises(ValueError, match="bug"):
+            await _collect_region_candidates({})
+
+    async def test_candidates_keep_region_priority_order(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Per-model candidate lists follow the configured region order."""
+        _patch_regions_and_fetch(
+            monkeypatch,
+            {
+                "us-east-1": [_make_model("m1")],
+                "eu-west-1": [_make_model("m1", region="eu-west-1")],
+            },
+        )
+
+        candidates = await _collect_region_candidates({})
+
+        assert [m.regions[0] for m in candidates["m1"]] == ["us-east-1", "eu-west-1"]
+
+
+def _unreachable_regions(entries: list[JsonValue]) -> dict[str, JsonValue]:
+    """Extract the unreachable_bedrock_regions payload from log entries."""
+    (payload,) = [
+        entry["unreachable_bedrock_regions"]
+        for entry in entries
+        if isinstance(entry, dict) and "unreachable_bedrock_regions" in entry
+    ]
+    assert isinstance(payload, dict)
+    return payload
+
+
+@pytest.fixture
+def _isolated_model_cache(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
+    """Force a stale cache and snapshot/restore the module-level model state."""
+    saved = {
+        name: dict(getattr(stdapi.models, name))
+        for name in (
+            "_MODELS",
+            "_ALL_MODELS",
+            "_MODELS_INPUT_MODALITY",
+            "_MODELS_OUTPUT_MODALITY",
+            "_ALL_MODELS_INPUT_MODALITY",
+            "_ALL_MODELS_OUTPUT_MODALITY",
+            "MODEL_ALIASES",
+        )
+    }
+    monkeypatch.setitem(stdapi.models._CACHE, "update_next", None)  # noqa: SLF001
+    yield
+    for name, content in saved.items():
+        target = getattr(stdapi.models, name)
+        target.clear()
+        target.update(content)
+
+
+@pytest.mark.usefixtures("_isolated_model_cache")
+class TestInitializeBedrockModelsFaultIsolation:
+    """initialize_bedrock_models: end-to-end behavior with a failing region."""
+
+    @staticmethod
+    def _patch_fetches(monkeypatch: pytest.MonkeyPatch) -> None:
+        """One healthy region, one failing region, all checks passing."""
+        results: dict[str, list[ModelDetails] | Exception] = {
+            "us-east-1": EndpointConnectionError(endpoint_url="https://bad.invalid"),
+            "eu-west-1": [_make_model("m1", region="eu-west-1")],
+        }
+        _patch_regions_and_fetch(monkeypatch, results)
+
+        async def _available(_model: ModelDetails) -> list[str]:
+            return []
+
+        monkeypatch.setattr(stdapi.models, "_check_model_availability", _available)
+
+    async def test_startup_survives_one_region_and_warns(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Startup keeps the healthy region's models and warns about the other."""
+        self._patch_fetches(monkeypatch)
+        start_event = EventLog(
+            type="start",
+            level="info",
+            date=datetime.now(UTC),
+            server_id="test",
+            server_version="0.0.0",
+        )
+
+        assert await stdapi.models.initialize_bedrock_models(start_event) is True
+
+        assert "m1" in stdapi.models._MODELS  # noqa: SLF001
+        assert "us-east-1" in _unreachable_regions(start_event["server_warnings"])
+        # The TTL was armed: the failed region is retried on the next refresh.
+        assert stdapi.models._CACHE["update_next"] is not None  # noqa: SLF001
+
+    async def test_lazy_refresh_warns_in_the_request_log(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A lazy refresh surfaces the unreachable region on the request log."""
+        self._patch_fetches(monkeypatch)
+        request_log = EventLog(
+            type="request",
+            level="info",
+            date=datetime.now(UTC),
+            server_id="test",
+            server_version="0.0.0",
+        )
+        token = REQUEST_LOG.set(request_log)
+        try:
+            await stdapi.models.initialize_bedrock_models()
+        finally:
+            REQUEST_LOG.reset(token)
+
+        assert request_log["level"] == "warning"
+        assert "us-east-1" in _unreachable_regions(request_log["error_detail"])

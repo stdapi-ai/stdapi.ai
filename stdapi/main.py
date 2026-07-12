@@ -49,7 +49,11 @@ from stdapi.monitoring import (
     otel_manager,
     write_log_event,
 )
-from stdapi.pricing import pricing_endpoint_region, start_price_catalog
+from stdapi.pricing import (
+    pricing_endpoint_region,
+    start_price_catalog,
+    stop_price_catalog,
+)
 from stdapi.region_routing import measure_region_latencies
 from stdapi.routes import discover_routers
 from stdapi.server import SERVER_VERSION
@@ -97,42 +101,47 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
             span_context = otel_manager.start_span(
                 "Application start", attributes={"server.id": server.SERVER_NAME}
             )
-            with otel_manager.use_span(span_context):
-                region_latencies = await measure_region_latencies()
-                start_event = EventLog(
-                    type="start",
-                    level="info",
-                    date=SETTINGS.now(),
-                    server_id=server.SERVER_NAME,
-                    server_version=SERVER_FULL_VERSION,
-                )
-                await gather(
-                    initialize_authentication(start_event),
-                    initialize_bedrock_models(start_event),
-                    initialize_polly_models(),
-                    initialize_transcribe_models(),
-                    register(start_event),
-                    initialize_aws_account_info(),
-                    start_price_catalog(start_event),
-                )
-                update_unified_models_collections()
-            if region_latencies:
-                start_event["region_latencies"] = region_latencies
-            if not SETTINGS.aws_s3_bucket:
-                add_server_warning(
-                    start_event,
-                    "S3 bucket not configured ('aws_s3_bucket' not set): "
-                    "some features are disabled",
-                )
-            if deprecated := SETTINGS.deprecated():
-                add_server_warning(
-                    start_event,
-                    f"Deprecated settings ignored (token estimation removed): "
-                    f"{', '.join(deprecated)}",
-                )
-            start_event["server_start_time_ms"] = (time_ns() - start) // 1000000
-            write_log_event(start_event)
-            yield
+            try:
+                with otel_manager.use_span(span_context):
+                    # Latency probes run alone so no concurrent AWS traffic
+                    # (catalog load included) can skew their measurements.
+                    region_latencies = await measure_region_latencies()
+                    start_price_catalog()
+                    start_event = EventLog(
+                        type="start",
+                        level="info",
+                        date=SETTINGS.now(),
+                        server_id=server.SERVER_NAME,
+                        server_version=SERVER_FULL_VERSION,
+                    )
+                    await gather(
+                        initialize_authentication(start_event),
+                        initialize_bedrock_models(start_event),
+                        initialize_polly_models(start_event),
+                        initialize_transcribe_models(),
+                        register(start_event),
+                        initialize_aws_account_info(),
+                    )
+                    update_unified_models_collections()
+                if region_latencies:
+                    start_event["region_latencies"] = region_latencies
+                if not SETTINGS.aws_s3_bucket:
+                    add_server_warning(
+                        start_event,
+                        "S3 bucket not configured ('aws_s3_bucket' not set): "
+                        "some features are disabled",
+                    )
+                if deprecated := SETTINGS.deprecated():
+                    add_server_warning(
+                        start_event,
+                        f"Deprecated settings ignored (token estimation removed): "
+                        f"{', '.join(deprecated)}",
+                    )
+                start_event["server_start_time_ms"] = (time_ns() - start) // 1000000
+                write_log_event(start_event)
+                yield
+            finally:
+                await stop_price_catalog()
     except (BotoCoreError, ClientError, ServerError) as exception:
         write_log_event(
             EventLog(

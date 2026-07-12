@@ -11,7 +11,7 @@ from re import Pattern
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Never, TypedDict, TypeVar
 
-from botocore.exceptions import ClientError, HTTPClientError
+from botocore.exceptions import BotoCoreError, ClientError, HTTPClientError
 from botocore.exceptions import ConnectionError as BotocoreConnectionError
 from pydantic import AwareDatetime, BaseModel, JsonValue
 from pydantic_core import from_json, to_json
@@ -1251,8 +1251,100 @@ async def _get_bedrock_models_from_region(region: RegionName) -> list[ModelDetai
     ]
 
 
+async def _collect_region_candidates(
+    failed_regions: dict[str, str],
+) -> dict[str, list[ModelDetails]]:
+    """Fetch candidate models from every configured region, in parallel.
+
+    A region whose fetch fails with an AWS error is skipped (recorded in
+    *failed_regions*) instead of failing the whole refresh; it is retried
+    on the next cache refresh. Models only available in a skipped region
+    drop out of the cache until that region recovers.
+
+    Args:
+        failed_regions: Accumulator mapping unreachable regions to the error.
+
+    Returns:
+        Per model ID, its per-region candidates in region priority order.
+
+    Raises:
+        BotoCoreError: When every configured region fails (first error).
+        ClientError: When every configured region fails (first error).
+    """
+    regions = list(_region_routing.ORDERED_BEDROCK_REGIONS)
+    region_models = await gather(
+        *(_get_bedrock_models_from_region(region) for region in regions),
+        return_exceptions=True,
+    )
+    candidates: dict[str, list[ModelDetails]] = {}
+    errors: list[BaseException] = []
+    for region, result in zip(regions, region_models, strict=True):
+        if isinstance(result, BaseException):
+            if not isinstance(result, (BotoCoreError, ClientError)):
+                raise result
+            errors.append(result)
+            failed_regions[region] = f"{type(result).__name__}: {result}"
+            continue
+        for model in result:
+            candidates.setdefault(model.id, []).append(model)
+    if errors and len(errors) == len(regions):
+        raise errors[0]
+    return candidates
+
+
+async def _check_candidates(
+    candidates: dict[str, list[ModelDetails]],
+    unavailable_models: dict[str, dict[str, list[str]]],
+) -> dict[str, ModelDetails]:
+    """Resolve candidates through availability checks, in parallel rounds.
+
+    Each round checks every still-unresolved model against its next candidate
+    region, all models concurrently; nearly all resolve in the first round. A
+    model failing in one region falls through to its next candidate region.
+    Once a model passes, its remaining candidate regions are merged unchecked,
+    matching the long-standing "later regions are trusted" behavior.
+
+    Args:
+        candidates: Per model ID, per-region candidates in priority order.
+        unavailable_models: Accumulator for failed availability checks.
+
+    Returns:
+        Available models keyed by model ID, with region data merged.
+    """
+    all_models: dict[str, ModelDetails] = {}
+    pending: dict[str, int] = dict.fromkeys(candidates, 0)
+    while pending:
+        batch = list(pending.items())
+        results = await gather(
+            *(
+                _check_model_availability(candidates[model_id][index])
+                for model_id, index in batch
+            )
+        )
+        pending = {}
+        for (model_id, index), issues in zip(batch, results, strict=True):
+            model = candidates[model_id][index]
+            if not issues:
+                for later in candidates[model_id][index + 1 :]:
+                    _merge_candidate(model, later)
+                all_models[model_id] = model
+                continue
+            region = model.regions[0] if model.regions else None
+            if region is not None and issues != ["unavailable"]:
+                # "unavailable" alone is an AWS catalog inconsistency (listed
+                # but region-unavailable, e.g. amazon.titan-embed-g1-text-02):
+                # not operator-actionable, skip silently.
+                unavailable_models.setdefault(model_id, {})[region] = issues
+            if index + 1 < len(candidates[model_id]):
+                pending[model_id] = index + 1
+    return all_models
+
+
 async def initialize_bedrock_models(start_event: EventLog | None = None) -> bool:
     """Refresh the Bedrock model cache from all configured regions if stale.
+
+    Individual unreachable regions are tolerated (warned about, retried on
+    the next refresh); the refresh only fails when every region fails.
 
     When this is a lazy on-demand refresh (``start_event`` is None, i.e. not
     the initial startup call) and it discovers model IDs not previously
@@ -1263,37 +1355,21 @@ async def initialize_bedrock_models(start_event: EventLog | None = None) -> bool
 
     Args:
         start_event: Optional startup event log to record warnings on for
-            unavailable models, invalid ARN mappings, and unmatched
-            ``aws_bedrock_model_region_restrict`` keys.
+            unreachable regions, unavailable models, invalid ARN mappings,
+            and unmatched ``aws_bedrock_model_region_restrict`` keys.
 
     Returns:
         ``True`` if the cache was refreshed, ``False`` otherwise.
     """
     updated = False
     unavailable_models: dict[str, dict[str, list[str]]] = {}
+    failed_regions: dict[str, str] = {}
     new_model_ids: set[str] = set()
 
     async with _CACHE["update_lock"]:
         if _CACHE["update_next"] is None or _CACHE["update_next"] <= SETTINGS.now():
-            region_models = await gather(
-                *(
-                    _get_bedrock_models_from_region(region)
-                    for region in _region_routing.ORDERED_BEDROCK_REGIONS
-                )
-            )
-            all_models: dict[str, ModelDetails] = {}
-            for region, models in zip(
-                _region_routing.ORDERED_BEDROCK_REGIONS, region_models, strict=False
-            ):
-                bedrock_client: BedrockClient = get_client("bedrock", region)
-                await gather(
-                    *(
-                        _filter_model(
-                            bedrock_client, model, all_models, unavailable_models
-                        )
-                        for model in models
-                    )
-                )
+            candidates = await _collect_region_candidates(failed_regions)
+            all_models = await _check_candidates(candidates, unavailable_models)
 
             invalid_arn_mappings = _apply_user_profiles(all_models)
 
@@ -1328,14 +1404,18 @@ async def initialize_bedrock_models(start_event: EventLog | None = None) -> bool
                     _MODELS_INPUT_MODALITY.clear()
                     _MODELS_INPUT_MODALITY.update(models_input)
                     updated = True
-                if updated and _CACHE["update_next"] is not None:
+                if updated:
                     update_unified_models_collections()
             _CACHE["update_next"] = SETTINGS.now() + _CACHE["update_interval"]
         else:
             invalid_arn_mappings = {}
             unmatched_restrict_keys = set()
-    _warn_bedrock_startup_issues(
-        start_event, unavailable_models, invalid_arn_mappings, unmatched_restrict_keys
+    _warn_bedrock_refresh_issues(
+        start_event,
+        failed_regions,
+        unavailable_models,
+        invalid_arn_mappings,
+        unmatched_restrict_keys,
     )
     await _trigger_price_catalog_refresh(start_event, new_model_ids)
     return updated
@@ -1358,23 +1438,38 @@ async def _trigger_price_catalog_refresh(
         await refresh_price_catalog_for_new_models(new_model_ids)
 
 
-def _warn_bedrock_startup_issues(
+def _warn_bedrock_refresh_issues(
     start_event: EventLog | None,
+    failed_regions: dict[str, str],
     unavailable_models: dict[str, dict[str, list[str]]],
     invalid_arn_mappings: dict[str, str],
     unmatched_restrict_keys: set[str],
 ) -> None:
-    """Record startup warnings for Bedrock model availability/configuration issues.
+    """Record warnings for Bedrock model availability/configuration issues.
+
+    On lazy refreshes (no *start_event*), unreachable regions are still
+    surfaced as a warning on the current request log, if any.
 
     Args:
         start_event: Startup event log to record warnings on, if any.
+        failed_regions: Regions whose fetch failed, mapped to the error.
         unavailable_models: Model IDs mapped to per-region availability issues.
         invalid_arn_mappings: Model IDs mapped to ARN-mapping error messages.
         unmatched_restrict_keys: ``aws_bedrock_model_region_restrict`` keys that
             did not match any available model.
     """
     if start_event is None:
+        if failed_regions and REQUEST_LOG.get(None) is not None:
+            log_error_details(
+                {"unreachable_bedrock_regions": failed_regions},  # type: ignore[dict-item]
+                level="warning",
+            )
         return
+    if failed_regions:
+        add_server_warning(
+            start_event,
+            {"unreachable_bedrock_regions": failed_regions},  # type: ignore[dict-item]
+        )
     if unavailable_models:
         add_server_warning(
             start_event,
@@ -1488,35 +1583,40 @@ def _populate_model_aliases(all_models: dict[str, ModelDetails]) -> None:
         all_models[model_id].aliases = sorted(aliases)
 
 
-async def _filter_model(
-    bedrock_client: BedrockClient,
-    model: ModelDetails,
-    models: dict[str, ModelDetails],
-    unavailable_models: dict[str, dict[str, list[str]]],
-) -> None:
-    """Check *model* availability and add it to *models*, or append region data if already known.
-
-    When *model* is already present from another region, its ``available_regions`` and
-    ``inference_profiles_by_region`` are extended rather than creating a duplicate entry.
+def _merge_candidate(existing: ModelDetails, candidate: ModelDetails) -> None:
+    """Append *candidate*'s region and inference profile to *existing*.
 
     Args:
-        bedrock_client: Bedrock control-plane client for the model's region.
-        model: Candidate model from ``_get_bedrock_models_from_region``.
-        models: Accumulator dict updated in-place.
-        unavailable_models: Accumulator for models that fail the availability check.
+        existing: Model already confirmed available in an earlier region.
+        candidate: The same model as listed by another region.
     """
-    model_region = model.regions[0] if model.regions else None
-    if model.id in models:
-        existing = models[model.id]
-        if model_region is not None and model_region not in existing.regions:
-            existing.regions.append(model_region)
-            if model_profile := (model.inference_profiles or {}).get(model_region):
-                existing.set_inference_profile(model_region, model_profile)
-        return
+    region = candidate.regions[0] if candidate.regions else None
+    if region is not None and region not in existing.regions:
+        existing.regions.append(region)
+        if profile := (candidate.inference_profiles or {}).get(region):
+            existing.set_inference_profile(region, profile)
 
-    availability = await bedrock_client.get_foundation_model_availability(
-        modelId=model.id
+
+async def _check_model_availability(model: ModelDetails) -> list[str]:
+    """Check one candidate model's availability in its listing region.
+
+    Args:
+        model: Candidate model from ``_get_bedrock_models_from_region``.
+
+    Returns:
+        Issue labels; empty when the model is fully available. An AWS error
+        during the check is reported as an issue, not raised, so one degraded
+        region cannot fail a whole refresh.
+    """
+    bedrock_client: BedrockClient = get_client(
+        "bedrock", model.regions[0] if model.regions else None
     )
+    try:
+        availability = await bedrock_client.get_foundation_model_availability(
+            modelId=model.id
+        )
+    except (BotoCoreError, ClientError) as exception:
+        return [f"availability check failed: {type(exception).__name__}"]
     if (
         availability["authorizationStatus"] == "AUTHORIZED"
         and availability["entitlementAvailability"] == "AVAILABLE"
@@ -1526,27 +1626,21 @@ async def _filter_model(
             or availability["agreementAvailability"]["status"] == "AVAILABLE"
         )
     ):
-        models[model.id] = model
-    elif model_region is not None:
-        issues = [
-            issue
-            for issue, value, expected in (
-                ("unauthorized", availability["authorizationStatus"], "AUTHORIZED"),
-                ("unentitled", availability["entitlementAvailability"], "AVAILABLE"),
-                ("unavailable", availability["regionAvailability"], "AVAILABLE"),
-                (
-                    "no_agreement",
-                    availability["agreementAvailability"]["status"],
-                    "AVAILABLE",
-                ),
-            )
-            if value != expected
-        ]
-        if issues == ["unavailable"]:
-            # AWS catalog inconsistency (listed but region-unavailable, e.g.
-            # amazon.titan-embed-g1-text-02): not operator-actionable, skip.
-            return
-        unavailable_models.setdefault(model.id, {})[model_region] = issues
+        return []
+    return [
+        issue
+        for issue, value, expected in (
+            ("unauthorized", availability["authorizationStatus"], "AUTHORIZED"),
+            ("unentitled", availability["entitlementAvailability"], "AVAILABLE"),
+            ("unavailable", availability["regionAvailability"], "AVAILABLE"),
+            (
+                "no_agreement",
+                availability["agreementAvailability"]["status"],
+                "AVAILABLE",
+            ),
+        )
+        if value != expected
+    ]
 
 
 def load_model_plugins[ModelT: ModelBase[Any, Any]](
@@ -1653,7 +1747,10 @@ async def _compute_candidate_regions(
        loop stays pinned to it.  S3 content blocks are resolved as a terminal
        operation (the ``s3Location`` URI is written into the request body and
        ``_bedrock_source`` is deleted); retrying on a different region would
-       send a cross-region S3 reference that Bedrock cannot access.
+       send a cross-region S3 reference that Bedrock cannot access.  When
+       ``s3_required`` is also set, an S3 input region without a configured
+       bucket is never pinned to (it cannot serve an async invocation), so the
+       ranking only considers bucket-configured regions.
        When no S3 input region overlaps with the model's available regions,
        falls back to the first model region that has a configured S3 bucket
        (the object will be copied there).  Raises :class:`ApiError` when no
@@ -1685,13 +1782,18 @@ async def _compute_candidate_regions(
     regions = model.regions
 
     if s3_input_regions := get_s3_input_regions():
-        if priority := [
-            r
-            for r in sorted(
-                s3_input_regions, key=s3_input_regions.__getitem__, reverse=True
-            )
-            if r in regions
-        ]:
+        sorted_input_regions = sorted(
+            s3_input_regions, key=s3_input_regions.__getitem__, reverse=True
+        )
+        if s3_required:
+            # An unbucketed region cannot serve an async invocation regardless of
+            # S3 input locality, so it is not a valid pin candidate here.
+            sorted_input_regions = [
+                r
+                for r in sorted_input_regions
+                if get_s3_bucket_for_region(r) is not None
+            ]
+        if priority := [r for r in sorted_input_regions if r in regions]:
             # Single region only — S3 content blocks are terminal and cannot be re-resolved.
             return priority[:1]
         if bucketed := [r for r in regions if get_s3_bucket_for_region(r) is not None]:

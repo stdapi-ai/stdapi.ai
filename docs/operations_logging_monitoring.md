@@ -237,14 +237,11 @@ When `COST_TRACKING=true` is enabled, stdapi.ai computes real-time costs from li
 
 The loaded catalog is also queryable through the [Model Pricing API](api_model_pricing.md) (`GET /model_pricing`) for cost-aware model selection.
 
-1. **Price Catalog**: At startup, stdapi.ai fetches the AWS Price List API for all configured regions and services, then caches in memory
-2. **On-Demand Refresh**: The catalog is refreshed whenever a newly available Bedrock model is discovered with no catalog entry yet — not on a proactive schedule
+1. **Price Catalog**: At startup, stdapi.ai fetches the AWS Price List API for all configured regions and services in a background task, then caches in memory. Server readiness never waits on it: requests served before the load completes simply record usage without a cost. Failed loads are retried with exponential backoff (1–15 min), and each attempt's outcome is logged as a `background` event named `price_catalog_load`
+2. **On-Demand Refresh**: The catalog is refreshed whenever a newly available Bedrock model is discovered with no catalog entry yet — not on a proactive schedule. If that refresh's AWS call fails, the error fails the request that triggered it
 3. **Per-Request Computation**: For each request, costs are computed by multiplying billed quantities by the resolved unit price
 4. **Built-in Defaults**: A few models are priced only on the [AWS pricing page](https://aws.amazon.com/bedrock/pricing/), not in the Price List API (e.g. the Stability AI Image Services) — their page rates ship built in, used only when AWS publishes no row for the model; `COST_PRICE_OVERRIDES` still takes precedence
 5. **Fallback on a Missing Price**: Once the catalog has been fetched, if a specific model/dimension has no resolvable price in it, the cost field is omitted for that entry rather than blocking the request, and the request log carries a `warning`-level `error_detail` naming the model and unpriced dimensions (a hint to supply the missing price via `COST_PRICE_OVERRIDES`)
-
-!!! warning "Fetch/refresh failures are not yet resilient"
-    Steps 1 and 2 call the AWS Price List API directly. If that call itself fails (network error, missing IAM permission, throttling, etc.), the error currently propagates instead of being handled gracefully — this can fail server startup, or fail the request that triggered an on-demand refresh. Improving resilience here (e.g. falling back to no pricing instead of failing) is planned but not yet implemented. This is distinct from step 4 above, which only covers a price missing from an already-fetched catalog.
 
 ### Configuration
 
