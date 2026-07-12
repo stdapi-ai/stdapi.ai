@@ -1,12 +1,13 @@
-"""Stored model responses backed by AWS Bedrock session management.
+"""Stored generations backed by AWS Bedrock session management.
 
-Responses created with ``store=true`` persist in AWS Bedrock sessions
-(bedrock-agent-runtime): one session per stored response, holding a single
-invocation whose steps carry the JSON document (chunked into text blocks).
-AWS keeps all state, so any server instance can retrieve, delete, or continue
-a stored response without shared server state.
+Responses and chat completions created with ``store=true`` persist in AWS
+Bedrock sessions (bedrock-agent-runtime): one session per stored object,
+holding a single invocation whose steps carry the JSON document (chunked
+into text blocks). AWS keeps all state, so any server instance can retrieve,
+delete, or continue a stored object without shared server state.
 
-Sessions live in the primary Bedrock region.
+The stored object ID is its API ID (``resp-<session ID>`` or
+``chatcmpl-<session ID>``). Sessions live in the primary Bedrock region.
 """
 
 from contextlib import suppress
@@ -32,10 +33,13 @@ if TYPE_CHECKING:
 #: Regex pattern that a valid stored response ID must match.
 RESPONSE_ID_PATTERN: str = r"^resp-[A-Za-z0-9-]+$"
 
+#: Regex pattern that a valid stored chat completion ID must match.
+COMPLETION_ID_PATTERN: str = r"^chatcmpl-[A-Za-z0-9-]+$"
+
 #: Maximum characters per invocation step text block (stays under the payload quota).
 _CHUNK_SIZE: int = 200_000
 
-#: AWS error code surfaced as a stored-response 404.
+#: AWS error code surfaced as a stored-object 404.
 _NOT_FOUND_CODE = "ResourceNotFoundException"
 
 #: AWS error code meaning session storage is not enabled on this server.
@@ -44,7 +48,7 @@ _ACCESS_DENIED_CODE = "AccessDeniedException"
 
 def _session_id(response_id: str) -> str:
     """Return the AWS Bedrock session ID backing *response_id*."""
-    return response_id.removeprefix("resp-")
+    return response_id.split("-", 1)[-1]
 
 
 def _client() -> AgentsforBedrockRuntimeClient:
@@ -56,12 +60,13 @@ def _client() -> AgentsforBedrockRuntimeClient:
 
 
 def _not_found(response_id: str) -> Never:
-    """Raise the stored-response 404 error.
+    """Raise the stored-object 404 error.
 
     Raises:
         ApiError: Always, with status 404.
     """
-    msg = f"Response with id '{response_id}' not found."
+    noun = "Chat completion" if response_id.startswith("chatcmpl-") else "Response"
+    msg = f"{noun} with id '{response_id}' not found."
     raise ApiError(msg, status=404)
 
 

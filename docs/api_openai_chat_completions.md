@@ -31,6 +31,9 @@ Generate conversational AI responses with AWS Bedrock foundation models—includ
 | Endpoint               | Method | What It Does                               | Powered By               | MCP Tool                  |
 |------------------------|--------|--------------------------------------------|--------------------------|---------------------------|
 | `/v1/chat/completions` | POST   | Conversational AI with multi-modal support | AWS Bedrock Converse API | `openai_chat_completion` |
+| `/v1/chat/completions/{completion_id}` | GET | Retrieve a stored chat completion     | AWS Bedrock Sessions     | `openai_chat_completion_get` |
+| `/v1/chat/completions/{completion_id}` | DELETE | Delete a stored chat completion    | AWS Bedrock Sessions     | `openai_chat_completion_delete` |
+| `/v1/chat/completions/{completion_id}/messages` | GET | List the input messages of a stored chat completion | AWS Bedrock Sessions | `openai_chat_completion_messages` |
 
 ## Feature Compatibility
 
@@ -90,10 +93,21 @@ Generate conversational AI responses with AWS Bedrock foundation models—includ
 | **Other**                                |                                          |                                                                 |
 | Service tiers                            |   :material-check-circle:{ .success }    | Mapped to Bedrock service tiers and latency options             |
 | `metadata`                               |   :material-check-circle:{ .success }    | Can be used to filter Bedrock invocation log.                   |
-| `store`                                  | :material-close-circle:{ .unsupported }  | OpenAI-specific storage feature                                 |
+| `store`                                  |   :material-check-circle:{ .success }    | Persists the completion in AWS Bedrock session storage (non-streaming) |
+| List / update stored completions         | :material-close-circle:{ .unsupported }  | `GET /v1/chat/completions` (list) and metadata update not supported |
 | `safety_identifier` / `user`             |   :material-minus-circle:{ .partial }    | Logged                                                          |
 | Bedrock Guardrails                       | :material-plus-circle:{ .extra-feature } | Content safety policies                                         |
 | `moderation`                             |   :material-check-circle:{ .success }    | Applies an AWS Bedrock guardrail; results in the response (non-streaming) |
+
+</div>
+
+## Stored Chat Completions
+
+Set `store: true` to persist a chat completion in [AWS Bedrock session storage](https://docs.aws.amazon.com/bedrock/latest/userguide/sessions.html) — same mechanism, region, and [KMS setting](operations_configuration.md#aws-bedrock-session-encryption-key-arn) as [stored responses](api_openai_responses.md#stored-responses). The returned `id` then works with `GET`/`DELETE /v1/chat/completions/{completion_id}` and `GET /v1/chat/completions/{completion_id}/messages`.
+
+`store` defaults to **false** on this implementation and is ignored with `stream=true` or when the server lacks the session storage IAM permissions (a warning is recorded in the request log). Listing stored completions and updating their metadata are not supported.
+
+<div class="feature-table" markdown>
 
 </div>
 

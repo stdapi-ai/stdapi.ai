@@ -3652,7 +3652,7 @@ export AWS_BEDROCK_ALLOW_GUARDRAIL_OVERRIDE=true
 #### `AWS_BEDROCK_SESSION_ENCRYPTION_KEY_ARN` { #aws-bedrock-session-encryption-key-arn }
 
 :octicons-package-24: **Purpose**
-:   KMS key ARN encrypting the AWS Bedrock sessions that back [stored responses](api_openai_responses.md#stored-responses) (`store=true`)
+:   KMS key ARN encrypting the AWS Bedrock sessions that back [stored responses](api_openai_responses.md#stored-responses) and [stored chat completions](api_openai_chat_completions.md#stored-chat-completions) (`store=true`)
 
 :octicons-gear-24: **Default**
 :   Unset — sessions are encrypted with the AWS-managed key

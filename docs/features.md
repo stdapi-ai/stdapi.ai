@@ -84,6 +84,7 @@ Your existing applications, SDKs, and tools work immediately — no plugins or c
 | `/v1/responses/input_tokens` | Count input tokens without generating a response                          | AWS Bedrock CountTokens API          |
 | `/v1/responses/compact`      | Compact a conversation into a reusable summary item                       | AWS Bedrock Converse API             |
 | `/v1/responses/{id}`         | Retrieve, continue (`previous_response_id`), or delete stored responses   | AWS Bedrock Sessions                 |
+| `/v1/chat/completions/{id}`  | Retrieve or delete stored chat completions                                 | AWS Bedrock Sessions                 |
 | `/v1/embeddings`             | Vector embeddings for search & RAG                                        | AWS Bedrock Embedding Models         |
 | `/v1/moderations`            | Content safety classification                                             | AWS Bedrock Guardrails               |
 | `/v1/images/generations`     | Text-to-image generation                                                  | AWS Bedrock Image Models             |

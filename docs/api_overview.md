@@ -34,6 +34,7 @@ stdapi.ai provides multiple interfaces for exploring and testing the API—choos
 | Category          | Endpoint                          | Capability                                                                  | Documentation                                          |
 |-------------------|-----------------------------------|-----------------------------------------------------------------------------|--------------------------------------------------------|
 | **💬 Chat**       | `POST /v1/chat/completions`       | Multi-modal conversations with text, images, video, documents               | [Chat Completions →](api_openai_chat_completions.md)   |
+|                   | `GET/DELETE /v1/chat/completions/{id}` | Retrieve or delete stored chat completions                             | [Chat Completions →](api_openai_chat_completions.md)   |
 |                   | `POST /v1/completions`            | Simple prompt-to-text completion — recommended for MCP and text-only agents | [Completions →](api_openai_completions.md)             |
 |                   | `POST /v1/responses`              | Stateless conversational AI with tool calling and streaming                 | [Responses →](api_openai_responses.md)                 |
 |                   | `POST /v1/responses/input_tokens` | Count input tokens without generating a response                            | [Responses →](api_openai_responses.md)                 |
@@ -87,6 +88,9 @@ When `ENABLE_MCP_STREAMABLE_HTTP=true` or `ENABLE_MCP_SSE=true` is configured, s
 |----------------------------------|---------------------------------------------|
 | **OpenAI Tools**                 |                                             |
 | `openai_chat_completion`         | `POST /v1/chat/completions`                 |
+| `openai_chat_completion_get`     | `GET /v1/chat/completions/{completion_id}`  |
+| `openai_chat_completion_delete`  | `DELETE /v1/chat/completions/{completion_id}` |
+| `openai_chat_completion_messages` | `GET /v1/chat/completions/{completion_id}/messages` |
 | `openai_completion`              | `POST /v1/completions`                      |
 | `openai_response`                | `POST /v1/responses`                        |
 | `openai_response_input_tokens`   | `POST /v1/responses/input_tokens`           |

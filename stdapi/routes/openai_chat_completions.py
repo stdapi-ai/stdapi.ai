@@ -20,22 +20,41 @@ Functions:
     Various helper functions for message conversion, validation, and response processing
 """
 
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Path, Query
 
+from stdapi.api_errors import ApiError
 from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
 from stdapi.config import SETTINGS
 from stdapi.models import validate_model
 from stdapi.models.capabilities import register_route_capability
 from stdapi.models.chat import get_chat_model
-from stdapi.monitoring import REQUEST_ID, REQUEST_TIME, log_request_params
+from stdapi.monitoring import (
+    REQUEST_ID,
+    REQUEST_TIME,
+    log_request_params,
+    log_response_params,
+)
+from stdapi.responses_store import (
+    COMPLETION_ID_PATTERN,
+    delete_stored_response,
+    discard_stored_response_session,
+    load_stored_response,
+    save_stored_response,
+    try_create_stored_response_session,
+)
 from stdapi.routes._moderation import (
     apply_request_moderation,
     build_response_moderation,
 )
-from stdapi.types.openai_chat_completions import ChatCompletion, CompletionCreateParams
+from stdapi.types.openai_chat_completions import (
+    ChatCompletion,
+    ChatCompletionDeleted,
+    ChatCompletionStoreMessageList,
+    CompletionCreateParams,
+)
 
 if TYPE_CHECKING:
     from sse_starlette import EventSourceResponse
@@ -50,6 +69,15 @@ register_route_capability(
 router = APIRouter(
     prefix=f"{SETTINGS.openai_routes_prefix}/v1/chat", tags=["Chat", TAG_OPENAI]
 )
+
+#: Reusable path annotation for the ``completion_id`` path parameter.
+_CompletionId = Annotated[
+    str,
+    Path(
+        description="The ID of the stored chat completion.",
+        pattern=COMPLETION_ID_PATTERN,
+    ),
+]
 
 
 @router.post(
@@ -178,19 +206,190 @@ async def create_chat_completion(
         - EventSourceResponse streaming ChatCompletionChunk events when stream is True.
 
     Raises:
-        ApiError: If model is invalid or does not support text output.
+        ApiError: If the model is invalid.
     """
     log_request_params(request, user_id=request.safety_identifier or request.user)
+    store = bool(request.store)
+    if store and request.stream:
+        log_error_details(
+            "'store' is not supported with streaming on this backend: ignored.",
+            level="warning",
+        )
+        store = False
     apply_request_moderation(request.moderation)
-    result = await get_chat_model(
-        (
-            await validate_model(
-                request.model, input_modality="TEXT", output_modality="TEXT"
-            )
-        ).id
-    ).create_completion(
-        request, f"chatcmpl-{REQUEST_ID.get()}", int(REQUEST_TIME.get().timestamp())
+    model_id = (
+        await validate_model(
+            request.model, input_modality="TEXT", output_modality="TEXT"
+        )
+    ).id
+    session_id = await try_create_stored_response_session() if store else None
+    store = session_id is not None
+    completion_id = (
+        f"chatcmpl-{session_id}" if store else f"chatcmpl-{REQUEST_ID.get()}"
     )
+    try:
+        result = await get_chat_model(model_id).create_completion(
+            request, completion_id, int(REQUEST_TIME.get().timestamp())
+        )
+    except BaseException:
+        if store:
+            await discard_stored_response_session(completion_id)
+        raise
     if isinstance(result, ChatCompletion):
         result.moderation = build_response_moderation(request.moderation)
+        if store:
+            await save_stored_response(
+                completion_id,
+                {
+                    "messages": request.model_dump(
+                        mode="json", by_alias=True, include={"messages"}
+                    )["messages"],
+                    "response": result.model_dump(
+                        mode="json", by_alias=True, exclude_none=True
+                    ),
+                },
+            )
     return result
+
+
+@router.get(
+    "/completions/{completion_id}",
+    summary="Retrieve a stored chat completion (OpenAI format)",
+    operation_id="openai_chat_completion_get",
+    description=(
+        "Returns a chat completion previously persisted with `store=true` "
+        "(OpenAI Chat Completions API).\n\n"
+        "Stored chat completions live in AWS Bedrock session storage."
+    ),
+    response_description="The stored chat completion.",
+    responses={
+        200: {"description": "The stored chat completion."},
+        404: {"description": "Chat completion not found."},
+    },
+    response_model_exclude_none=True,
+)
+async def retrieve_chat_completion(
+    completion_id: _CompletionId, _: Annotated[None, Depends(authenticate)] = None
+) -> ChatCompletion:
+    """Retrieve a stored chat completion.
+
+    Args:
+        completion_id: Stored chat completion identifier.
+
+    Returns:
+        The stored chat completion.
+
+    Raises:
+        ApiError: With 404 if the stored chat completion does not exist.
+    """
+    log_request_params({"completion_id": completion_id})
+    stored = await load_stored_response(completion_id)
+    return log_response_params(ChatCompletion.model_validate(stored["response"]))
+
+
+@router.delete(
+    "/completions/{completion_id}",
+    summary="Delete a stored chat completion (OpenAI format)",
+    operation_id="openai_chat_completion_delete",
+    description=(
+        "Deletes a chat completion previously persisted with `store=true`, "
+        "along with its AWS Bedrock session (OpenAI Chat Completions API)."
+    ),
+    response_description="Deletion confirmation.",
+    responses={
+        200: {"description": "Chat completion deleted."},
+        404: {"description": "Chat completion not found."},
+    },
+    response_model_exclude_none=True,
+)
+async def delete_chat_completion(
+    completion_id: _CompletionId, _: Annotated[None, Depends(authenticate)] = None
+) -> ChatCompletionDeleted:
+    """Delete a stored chat completion.
+
+    Args:
+        completion_id: Stored chat completion identifier.
+
+    Returns:
+        Deletion confirmation.
+
+    Raises:
+        ApiError: With 404 if the stored chat completion does not exist.
+    """
+    log_request_params({"completion_id": completion_id})
+    await delete_stored_response(completion_id)
+    return log_response_params(ChatCompletionDeleted(id=completion_id))
+
+
+@router.get(
+    "/completions/{completion_id}/messages",
+    summary="List the input messages of a stored chat completion (OpenAI format)",
+    operation_id="openai_chat_completion_messages",
+    description=(
+        "Returns the input messages of a chat completion previously persisted "
+        "with `store=true` (OpenAI Chat Completions API)."
+    ),
+    response_description="A paginated list of input messages.",
+    responses={
+        200: {"description": "The input messages."},
+        404: {"description": "Chat completion not found."},
+    },
+    response_model_exclude_none=True,
+)
+async def list_chat_completion_messages(
+    completion_id: _CompletionId,
+    after: Annotated[
+        str | None,
+        Query(
+            description=(
+                "Cursor for pagination: the message ID to start after "
+                "(the last ID from a previous page)."
+            )
+        ),
+    ] = None,
+    limit: Annotated[
+        int,
+        Query(ge=1, le=100, description="A limit on the number of objects returned."),
+    ] = 20,
+    order: Annotated[
+        Literal["asc", "desc"],
+        Query(description="Sort order: `asc` is conversation order."),
+    ] = "asc",
+    _: Annotated[None, Depends(authenticate)] = None,
+) -> ChatCompletionStoreMessageList:
+    """List the input messages of a stored chat completion.
+
+    Args:
+        completion_id: Stored chat completion identifier.
+        after: Message ID cursor; only messages strictly after it are returned.
+        limit: Maximum number of messages to return.
+        order: Sort order relative to the conversation order.
+
+    Returns:
+        Paginated list of input messages.
+
+    Raises:
+        ApiError: With 404 if the stored chat completion does not exist.
+    """
+    log_request_params({"completion_id": completion_id, "after": after})
+    stored = await load_stored_response(completion_id)
+    messages = [
+        {"id": f"msg-{index}", **message}
+        for index, message in enumerate(stored.get("messages") or [])
+    ]
+    if order == "desc":
+        messages.reverse()
+    if after is not None:
+        index = next(
+            (i for i, message in enumerate(messages) if message["id"] == after), None
+        )
+        messages = messages[index + 1 :] if index is not None else []
+    page, has_more = messages[:limit], len(messages) > limit
+    return log_response_params(
+        ChatCompletionStoreMessageList(
+            data=page,
+            has_more=has_more,
+            first_id=page[0]["id"] if page else "",
+            last_id=page[-1]["id"] if page else "",
+        )
+    )

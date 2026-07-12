@@ -6,7 +6,12 @@ from pydantic import AliasChoices, Field, model_validator
 
 from stdapi.api_errors import UnsupportedParameterError
 from stdapi.input_file import FileIdInputFile, InputFile
-from stdapi.types import BaseModelRequest, BaseModelRequestWithExtra, BaseModelResponse
+from stdapi.types import (
+    BaseModelRequest,
+    BaseModelRequestWithExtra,
+    BaseModelResponse,
+    JsonMapping,
+)
 from stdapi.types.bedrock import AmazonBedrockGuardrailConfigParams
 from stdapi.types.openai import (
     AssistantRoleLiteral,
@@ -1143,7 +1148,10 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
     )
     store: bool | None = Field(
         default=None,
-        description="Store the completion output. Supports text and image inputs. UNSUPPORTED on this implementation.",
+        description="Persist the chat completion in AWS Bedrock session "
+        "storage for later retrieval. Defaults to false on this "
+        "implementation. Ignored (with a request-log warning) when streaming "
+        "or when session storage is not enabled on the server.",
     )
     stream_options: ChatCompletionStreamOptionsParam | None = Field(
         default=None,
@@ -1241,7 +1249,6 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
 
     # Extra validations
     _UNSUPPORTED: ClassVar[set[str]] = {
-        # Ignored silently: "store"
         "logprobs",
         "prediction",
         "verbosity",
@@ -1328,3 +1335,35 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
         ):
             msg = "`custom` tools are not supported on this backend."
             raise ValueError(msg)
+
+
+# Ref: openai.types.chat.chat_completion_deleted.ChatCompletionDeleted
+class ChatCompletionDeleted(BaseModelResponse):
+    """Stored chat completion deletion confirmation."""
+
+    id: str = Field(description="Identifier of the deleted chat completion.")
+    object: Literal["chat.completion.deleted"] = Field(
+        default="chat.completion.deleted",
+        description="The object type, which is always `chat.completion.deleted`.",
+    )
+    deleted: bool = Field(
+        default=True, description="Whether the chat completion was deleted."
+    )
+
+
+class ChatCompletionStoreMessageList(BaseModelResponse):
+    """Paginated list of the input messages of a stored chat completion."""
+
+    object: Literal["list"] = Field(
+        default="list", description="The object type, which is always `list`."
+    )
+    data: list[JsonMapping] = Field(
+        description="Input messages of the stored chat completion."
+    )
+    has_more: bool = Field(description="Whether more results exist after this page.")
+    first_id: str = Field(
+        description="ID of the first message in the list, or '' when empty."
+    )
+    last_id: str = Field(
+        description="ID of the last message in the list, or '' when empty."
+    )
