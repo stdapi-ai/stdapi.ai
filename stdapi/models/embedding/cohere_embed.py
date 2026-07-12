@@ -8,6 +8,7 @@
 from asyncio import gather
 from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
 
+from stdapi.api_errors import ApiError
 from stdapi.input_file import InputFile, InputFileUrl
 from stdapi.models.embedding import EmbeddingModelBase, EmbeddingResponse
 
@@ -118,6 +119,14 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             if self._model_id.endswith("v3"):
                 request["input_type"] = "image"
         elif any(is_data):
+            if "v4" not in self._model_id:
+                msg = (
+                    "Mixing texts and images in a single request is only supported by "
+                    "Cohere Embed v4. Use separate requests, or a single content type "
+                    "(all texts or all images), with cohere.embed-english-v3 or "
+                    "cohere.embed-multilingual-v3."
+                )
+                raise ApiError(msg)
             request["inputs"] = [
                 _InputContent(content=[content])
                 for content in (

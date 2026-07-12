@@ -67,9 +67,10 @@ stdapi.ai provides multiple interfaces for exploring and testing the API—choos
 
 ### ![Cohere](styles/logo_cohere.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Cohere-Compatible API
 
-| Category      | Endpoint                 | Capability                                     | Documentation                     |
-|---------------|--------------------------|------------------------------------------------|-----------------------------------|
-| **🔀 Rerank** | `POST /cohere/v2/rerank` | Rank documents by semantic relevance to a query | [Rerank →](api_cohere_rerank.md) |
+| Category          | Endpoint                 | Capability                                      | Documentation                     |
+|-------------------|--------------------------|-------------------------------------------------|-----------------------------------|
+| **🔀 Rerank**     | `POST /cohere/v2/rerank` | Rank documents by semantic relevance to a query | [Rerank →](api_cohere_rerank.md)  |
+| **🧠 Embeddings** | `POST /cohere/v2/embed`  | Vector embeddings for semantic search           | [Embed →](api_cohere_embed.md)    |
 
 ## :material-tools: MCP (Model Context Protocol)
 
@@ -115,6 +116,7 @@ When `ENABLE_MCP_STREAMABLE_HTTP=true` or `ENABLE_MCP_SSE=true` is configured, s
 | `anthropic_file_content`         | `GET /anthropic/v1/files/{file_id}/content` |
 | **Cohere Tools**                 |                                             |
 | `cohere_rerank`                  | `POST /cohere/v2/rerank`                    |
+| `cohere_embed`                   | `POST /cohere/v2/embed`                     |
 | **Native Extension Tools**       |                                             |
 | `search_models`                  | `GET /search_models`                        |
 | `model_pricing`                  | `GET /model_pricing`                        |
@@ -151,13 +153,13 @@ Your Anthropic SDK applications continue to work without any code changes—just
 
 ### ![Cohere](styles/logo_cohere.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Using the Cohere-Compatible API
 
-**To connect your Cohere rerank application:**
+**To connect your Cohere application:**
 
 1. **Replace the Cohere API URL** (`https://api.cohere.com`) with your stdapi.ai deployment URL + `/cohere` (e.g., `https://your-endpoint.com/cohere`)
 2. **Use the same authentication mechanism** (Bearer token in the `Authorization` header)
-3. **Use AWS Bedrock rerank model IDs** (e.g., `cohere.rerank-v3-5:0`)
+3. **Use AWS Bedrock model IDs** (e.g., `cohere.rerank-v3-5:0`, `cohere.embed-v4:0`)
 
-Your Cohere rerank integrations continue to work without any code changes—just point them to stdapi.ai instead of Cohere.
+Your Cohere rerank and embed integrations continue to work without any code changes—just point them to stdapi.ai instead of Cohere.
 
 ## :material-arrow-right: Next Steps
 

@@ -3,7 +3,7 @@
 from pydantic import Field
 
 from stdapi.types import BaseModelRequest, BaseModelRequestWithExtra, BaseModelResponse
-from stdapi.types.cohere import ApiMeta  # noqa: TC001
+from stdapi.types.cohere import ApiMeta
 
 
 class RerankRequest(BaseModelRequestWithExtra):

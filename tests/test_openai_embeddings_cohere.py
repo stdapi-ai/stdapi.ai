@@ -1,8 +1,14 @@
 """Basic tests for Cohere embedding models via OpenAI-compatible embeddings API."""
 
 from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock
 
 import pytest
+
+from stdapi.api_errors import ApiError
+from stdapi.input_file import InputFileUrl
+from stdapi.models import InvokeResult
+from stdapi.models.embedding.cohere_embed import EmbeddingModel
 
 if TYPE_CHECKING:
     from openai import OpenAI
@@ -12,6 +18,9 @@ COHERE_V4 = "cohere.embed-v4:0"
 
 COHERE_ALL = (COHERE_V3, COHERE_V4)
 COHERE_SAMPLE = (COHERE_V4,)
+
+#: Minimal data URI, sufficient to exercise the image branch without a real image.
+_SAMPLE_IMAGE_DATA_URI = "data:image/png;base64,AAAA"
 
 
 class TestCohereEmbeddings:
@@ -184,3 +193,42 @@ class TestCohereEmbeddings:
         assert len(item.embedding) > 0
         # If respected exactly, length must match; otherwise just ensure non-empty
         assert len(item.embedding) == dimensions
+
+
+@pytest.mark.local
+class TestCohereEmbedFusedInputsGuard:
+    """Offline checks for mixed text+image handling in the model layer."""
+
+    async def test_mixed_input_on_v3_model_raises_clear_error(self) -> None:
+        """A fused text+image request on a V3 model raises a 400 ApiError."""
+        model = EmbeddingModel(COHERE_V3)
+        model.invoke = AsyncMock()  # type: ignore[method-assign]
+        with pytest.raises(ApiError, match="Cohere Embed v4") as exc_info:
+            await model.embed_text(
+                ["A sample text.", InputFileUrl(_SAMPLE_IMAGE_DATA_URI)],
+                dimensions=None,
+                extra_params={},
+            )
+        assert exc_info.value.status == 400
+        model.invoke.assert_not_called()
+
+    async def test_mixed_input_on_v4_model_builds_fused_body(self) -> None:
+        """A fused text+image request on the V4 model builds the ``inputs`` body."""
+        model = EmbeddingModel(COHERE_V4)
+        model.invoke = AsyncMock(  # type: ignore[method-assign]
+            return_value=InvokeResult(response={"embeddings": [[0.1]]})
+        )
+        await model.embed_text(
+            ["A sample text.", InputFileUrl(_SAMPLE_IMAGE_DATA_URI)],
+            dimensions=None,
+            extra_params={},
+        )
+        request = model.invoke.call_args.args[0]
+        assert request["inputs"] == [
+            {"content": [{"type": "text", "text": "A sample text."}]},
+            {
+                "content": [
+                    {"type": "image_url", "image_url": {"url": _SAMPLE_IMAGE_DATA_URI}}
+                ]
+            },
+        ]

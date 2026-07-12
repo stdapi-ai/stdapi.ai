@@ -11,7 +11,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, JsonValue
 from stdapi.api_errors import ApiError
 from stdapi.aws import get_client
 from stdapi.config import SETTINGS
-from stdapi.types import JsonMapping  # noqa: TC001
+from stdapi.types import JsonMapping
 from stdapi.utils import validation_error_handler
 
 if TYPE_CHECKING:

@@ -5,9 +5,9 @@ from typing import Annotated, ClassVar, Literal, Self
 from pydantic import AliasChoices, Field, model_validator
 
 from stdapi.api_errors import UnsupportedParameterError
-from stdapi.input_file import FileIdInputFile, InputFile  # noqa: TC001
+from stdapi.input_file import FileIdInputFile, InputFile
 from stdapi.types import BaseModelRequest, BaseModelRequestWithExtra, BaseModelResponse
-from stdapi.types.bedrock import AmazonBedrockGuardrailConfigParams  # noqa: TC001
+from stdapi.types.bedrock import AmazonBedrockGuardrailConfigParams
 from stdapi.types.openai import (
     AssistantRoleLiteral,
     CustomLiteral,

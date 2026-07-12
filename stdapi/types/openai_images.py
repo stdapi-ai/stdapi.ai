@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Literal, Self
 from pydantic import Field, field_validator, model_validator
 
 from stdapi.config import SETTINGS
-from stdapi.input_file import FileIdInputFile, InputFileUrl  # noqa: TC001
+from stdapi.input_file import FileIdInputFile, InputFileUrl
 from stdapi.monitoring import log_error_details
 from stdapi.types import (
     BaseModelRequest,

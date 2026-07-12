@@ -6,10 +6,10 @@ from pydantic import Field, model_validator
 
 from stdapi.input_file import InputFileUrl
 from stdapi.types import BaseModelRequestWithExtra, BaseModelResponse
-from stdapi.types.openai_chat_completions import (  # noqa: TC001
+from stdapi.types.openai_chat_completions import (
     ChatCompletionStreamOptionsParam as StreamOptions,
 )
-from stdapi.types.openai_chat_completions import (  # noqa: TC001
+from stdapi.types.openai_chat_completions import (
     CompletionUsage,
     PromptCacheRetention,
     ServiceTiers,

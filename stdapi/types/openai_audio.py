@@ -6,7 +6,7 @@ from pydantic import AliasChoices, BaseModel, Field, model_validator
 
 from stdapi.api_errors import UnsupportedParameterError
 from stdapi.config import SETTINGS
-from stdapi.input_file import InputFile  # noqa: TC001
+from stdapi.input_file import InputFile
 from stdapi.types import BaseModelRequest, BaseModelRequestWithExtra, BaseModelResponse
 from stdapi.types.openai import Auto
 

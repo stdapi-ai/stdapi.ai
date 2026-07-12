@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import Field
 
-from stdapi.input_file import IngestInputFile  # noqa: TC001
+from stdapi.input_file import IngestInputFile
 from stdapi.types import BaseModelRequest, BaseModelResponse
 
 

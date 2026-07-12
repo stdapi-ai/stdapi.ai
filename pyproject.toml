@@ -115,6 +115,16 @@ split-on-trailing-comma=false
 [tool.ruff.lint.flake8-annotations]
 suppress-dummy-args = true
 
+[tool.ruff.lint.flake8-type-checking]
+# Pydantic model field annotations are evaluated at class-definition time.
+runtime-evaluated-base-classes = [
+    "pydantic.BaseModel",
+    "stdapi.types.BaseModelRequest",
+    "stdapi.types.BaseModelRequestWithExtra",
+    "stdapi.types.BaseModelRequestWithFormExtra",
+    "stdapi.types.BaseModelResponse",
+]
+
 [tool.ruff.lint.flake8-bugbear]
 extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.BackgroundTasks"]
 
@@ -149,8 +159,8 @@ addopts = [
     "--dist=loadgroup",
 ]
 markers = [
-    "expensive",
-    "agentic",
+    "expensive: compute/cost/time expensive tests, skipped unless --expensive is passed",
+    "agentic: agentic tests, skipped unless --agentic is passed",
     "local: tests the local implementation in-process, skipped with --server-url or --use-official-api",
     "xdist_group: group tests to run on the same xdist worker",
 ]

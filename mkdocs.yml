@@ -74,6 +74,7 @@ nav:
             - Models: api_anthropic_models.md
           - Cohere Compatible:
             - Rerank: api_cohere_rerank.md
+            - Embed: api_cohere_embed.md
           - Native Extensions:
             - Search Models: api_search_models.md
             - Model Pricing: api_model_pricing.md

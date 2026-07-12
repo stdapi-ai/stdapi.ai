@@ -4,7 +4,7 @@ from typing import Annotated, Literal
 
 from pydantic import AliasChoices, Field
 
-from stdapi.input_file import FileIdInputFile, InputFile  # noqa: TC001
+from stdapi.input_file import FileIdInputFile, InputFile
 from stdapi.types import (
     BaseModelRequest,
     BaseModelRequestWithExtra,

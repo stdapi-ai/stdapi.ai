@@ -4,14 +4,14 @@ from typing import Literal
 
 from pydantic import Field
 
-from stdapi.input_file import IngestInputFile  # noqa: TC001
+from stdapi.input_file import IngestInputFile
 from stdapi.types import (
     PART_ID_PATTERN,
     UPLOAD_ID_PATTERN,
     BaseModelRequest,
     BaseModelResponse,
 )
-from stdapi.types.openai_files import FileObject, FilePurpose  # noqa: TC001
+from stdapi.types.openai_files import FileObject, FilePurpose
 
 #: Valid status values for an in-progress or finished upload.
 UploadStatus = Literal["pending", "completed", "cancelled", "expired"]
