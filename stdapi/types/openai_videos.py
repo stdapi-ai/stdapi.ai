@@ -81,6 +81,11 @@ class Video(BaseModelResponse):
     prompt: str | None = Field(
         default=None, description="The prompt used to generate the video, when known."
     )
+    remixed_from_video_id: str | None = Field(
+        default=None,
+        description="ID of the source video for remixes. Always `null` "
+        "(remix is not available on AWS Bedrock).",
+    )
     error: VideoError | None = Field(
         default=None, description="Error payload when generation failed."
     )

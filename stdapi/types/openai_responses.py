@@ -852,6 +852,10 @@ class Reasoning(BaseModelRequest):
     summary: Literal["auto", "concise", "detailed"] | None = Field(
         default=None, description="Reasoning summary: `auto`, `concise`, or `detailed`."
     )
+    context: Literal["auto", "current_turn", "all_turns"] | None = Field(
+        default=None,
+        description="Reasoning context scope.\nUNSUPPORTED on this implementation.",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2477,6 +2481,27 @@ class McpCall(BaseModelResponse):
     ) = Field(default=None, description="Tool call status.")
 
 
+# Ref: openai.types.responses.response_output_item.AdditionalTools
+class AdditionalTools(BaseModelResponse):
+    """An output item advertising additional tools (never emitted by this backend)."""
+
+    id: str = Field(description="Item ID.")
+    role: Literal[
+        "unknown",
+        "user",
+        "assistant",
+        "system",
+        "critic",
+        "discriminator",
+        "developer",
+        "tool",
+    ] = Field(description="Role that provided the additional tools.")
+    tools: list[Tool] = Field(description="The additional tools.")
+    type: Literal["additional_tools"] = Field(
+        description="Item type. Always `additional_tools`."
+    )
+
+
 # Ref: openai.types.responses.response_output_item.ResponseOutputItem
 ResponseOutputItem = Annotated[
     ResponseOutputMessage
@@ -2503,7 +2528,8 @@ ResponseOutputItem = Annotated[
     | McpApprovalRequest
     | McpApprovalResponseOutput
     | ResponseCustomToolCall
-    | ResponseCustomToolCallOutputItem,
+    | ResponseCustomToolCallOutputItem
+    | AdditionalTools,
     Field(discriminator="type"),
 ]
 
@@ -3807,6 +3833,9 @@ class ResponseCreateParams(BaseModelRequest):
             )
             msg = f"Unsupported tool type(s): {tool_names}."
             raise ValueError(msg)
+        if self.reasoning is not None and self.reasoning.context is not None:
+            parameter = "reasoning.context"
+            raise UnsupportedParameterError(parameter)
         for key in self._UNSUPPORTED & self.model_fields_set:
             raise UnsupportedParameterError(key)
         return self
@@ -3852,6 +3881,11 @@ class InputTokenCountParams(BaseModelRequest):
         default=None,
         description="Conversation ID.\nUNSUPPORTED on this implementation.",
     )
+    personality: str | None = Field(
+        default=None,
+        description="Personality preset applied to the model.\n"
+        "UNSUPPORTED on this implementation.",
+    )
 
     # Extra validations
     _UNSUPPORTED: ClassVar[set[str]] = {
@@ -3859,6 +3893,7 @@ class InputTokenCountParams(BaseModelRequest):
         "truncation",
         "previous_response_id",
         "conversation",
+        "personality",
     }
 
     @model_validator(mode="after")
@@ -3868,6 +3903,9 @@ class InputTokenCountParams(BaseModelRequest):
         Raises:
             UnsupportedParameterError: If a parameter marked as unsupported is used.
         """
+        if self.reasoning is not None and self.reasoning.context is not None:
+            parameter = "reasoning.context"
+            raise UnsupportedParameterError(parameter)
         for key in self._UNSUPPORTED & self.model_fields_set:
             raise UnsupportedParameterError(key)
         return self

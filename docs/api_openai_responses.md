@@ -67,6 +67,7 @@ Generate model responses with AWS Bedrock foundation models through an OpenAI Re
 | `top_p`                                                               |      :material-cog:{ .model-dep }       | 0–1 range; nucleus sampling                                                  |
 | `top_logprobs`                                                        |      :material-cog:{ .model-dep }       | 0–20 range; token log-probability output                                     |
 | `reasoning` (effort)                                                  |      :material-cog:{ .model-dep }       | Configures reasoning on models that support it                               |
+| `reasoning.context`                                                   | :material-close-circle:{ .unsupported } | Returns `400`; not supported                                                 |
 | `metadata`                                                            |   :material-check-circle:{ .success }   | Forwarded to Bedrock `requestMetadata`                                       |
 | `prompt_cache_key`                                                    |      :material-cog:{ .model-dep }       | Cache prompts to reduce costs and latency                                    |
 | `prompt_cache_retention`                                              |      :material-cog:{ .model-dep }       | Cache TTL: `in-memory`, `24h`, `1h`, or `5m`                                 |
@@ -633,7 +634,7 @@ curl -X POST "$BASE/v1/responses/input_tokens" \
 ```
 
 !!! note "Limitations"
-    The `previous_response_id` and `conversation` parameters are not supported for token counting.
+    The `previous_response_id`, `conversation`, and `personality` parameters are not supported for token counting.
 
 ## Conversation Compaction
 
