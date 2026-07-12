@@ -1,6 +1,8 @@
 """Tests for stored chat completions routes (unit)."""
 
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 import pytest
 from starlette.testclient import TestClient
@@ -54,8 +56,13 @@ class _StubStore:
         self.deleted: list[str] = []
         self.discarded: list[str] = []
         self.documents: dict[str, dict[str, Any]] = {}
+        self.created_kinds: list[str] = []
+        #: Canned ``(session_id, created_at)`` pairs returned by ``list_sessions``.
+        self.sessions: list[tuple[str, datetime]] = []
+        self.list_sessions_kinds: list[str] = []
 
-    async def create_session(self) -> str:
+    async def create_session(self, kind: str) -> str:
+        self.created_kinds.append(kind)
         return "sess-1"
 
     async def save(self, completion_id: str, document: dict[str, Any]) -> None:
@@ -75,6 +82,28 @@ class _StubStore:
 
     async def discard(self, completion_id: str) -> None:
         self.discarded.append(completion_id)
+
+    async def list_sessions(self, kind: str) -> list[tuple[str, datetime]]:
+        self.list_sessions_kinds.append(kind)
+        return self.sessions
+
+
+def _store_completion(
+    store: _StubStore,
+    session_id: str,
+    *,
+    model: str = "m",
+    metadata: dict[str, str] | None = None,
+) -> None:
+    """Register a stored chat completion document for *session_id*."""
+    completion = _canned_completion(f"chatcmpl-{session_id}", model)
+    completion.metadata = metadata
+    store.documents[f"chatcmpl-{session_id}"] = {
+        "messages": [],
+        "response": completion.model_dump(
+            mode="json", by_alias=True, exclude_none=True
+        ),
+    }
 
 
 @pytest.fixture
@@ -124,6 +153,9 @@ def store(monkeypatch: pytest.MonkeyPatch) -> _StubStore:
     monkeypatch.setattr(
         openai_chat_completions, "discard_stored_response_session", stub.discard
     )
+    monkeypatch.setattr(
+        openai_chat_completions, "list_stored_sessions", stub.list_sessions
+    )
     return stub
 
 
@@ -134,21 +166,25 @@ class TestStoreOnChatCreate:
     def test_store_persists_completion(
         self, client: TestClient, backend: _StubChatBackend, store: _StubStore
     ) -> None:
-        """The completion is generated under the session ID and persisted."""
+        """The completion is generated under a chat_completion session and persisted."""
         response = client.post(
             "/v1/chat/completions",
             json={
                 "model": "amazon.nova-micro-v1:0",
                 "messages": [{"role": "user", "content": "hello"}],
                 "store": True,
+                "metadata": {"team": "x"},
             },
         )
         assert response.status_code == 200, response.text
         assert response.json()["id"] == "chatcmpl-sess-1"
+        assert response.json()["metadata"] == {"team": "x"}
+        assert store.created_kinds == ["chat_completion"]
         ((completion_id, document),) = store.saved
         assert completion_id == "chatcmpl-sess-1"
         assert document["messages"][0]["content"] == "hello"
         assert document["response"]["id"] == "chatcmpl-sess-1"
+        assert document["response"]["metadata"] == {"team": "x"}
 
     def test_store_with_stream_is_ignored(
         self, client: TestClient, backend: _StubChatBackend, store: _StubStore
@@ -321,21 +357,198 @@ class TestStoredChatCompletionRoutes:
         assert [message["id"] for message in body["data"]] == ["msg-1", "msg-0"]
 
 
+@pytest.mark.local
+class TestListChatCompletions:
+    """GET /v1/chat/completions."""
+
+    def test_default_order_is_ascending_by_created_at(
+        self, client: TestClient, store: _StubStore
+    ) -> None:
+        """Without an explicit order, the oldest session comes first."""
+        store.sessions = [
+            ("s2", datetime(2024, 1, 2, tzinfo=UTC)),
+            ("s1", datetime(2024, 1, 1, tzinfo=UTC)),
+        ]
+        _store_completion(store, "s1")
+        _store_completion(store, "s2")
+        response = client.get("/v1/chat/completions")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert [item["id"] for item in body["data"]] == ["chatcmpl-s1", "chatcmpl-s2"]
+
+    def test_order_desc_returns_newest_first(
+        self, client: TestClient, store: _StubStore
+    ) -> None:
+        """order=desc reverses the creation-time order."""
+        store.sessions = [
+            ("s1", datetime(2024, 1, 1, tzinfo=UTC)),
+            ("s2", datetime(2024, 1, 2, tzinfo=UTC)),
+        ]
+        _store_completion(store, "s1")
+        _store_completion(store, "s2")
+        response = client.get("/v1/chat/completions?order=desc")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert [item["id"] for item in body["data"]] == ["chatcmpl-s2", "chatcmpl-s1"]
+
+    def test_after_cursor_returns_later_items(
+        self, client: TestClient, store: _StubStore
+    ) -> None:
+        """A known after cursor skips itself and every earlier item."""
+        store.sessions = [
+            ("s1", datetime(2024, 1, 1, tzinfo=UTC)),
+            ("s2", datetime(2024, 1, 2, tzinfo=UTC)),
+            ("s3", datetime(2024, 1, 3, tzinfo=UTC)),
+        ]
+        for session_id in ("s1", "s2", "s3"):
+            _store_completion(store, session_id)
+        response = client.get("/v1/chat/completions?after=chatcmpl-s1")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert [item["id"] for item in body["data"]] == ["chatcmpl-s2", "chatcmpl-s3"]
+
+    def test_after_unknown_cursor_returns_empty_page(
+        self, client: TestClient, store: _StubStore
+    ) -> None:
+        """An unknown after cursor yields an empty page."""
+        store.sessions = [("s1", datetime(2024, 1, 1, tzinfo=UTC))]
+        _store_completion(store, "s1")
+        response = client.get("/v1/chat/completions?after=chatcmpl-zzz")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["data"] == []
+        assert body["first_id"] == ""
+        assert body["last_id"] == ""
+
+    def test_limit_reports_has_more(
+        self, client: TestClient, store: _StubStore
+    ) -> None:
+        """A limit lower than the total sets has_more and truncates the page."""
+        store.sessions = [
+            (f"s{i}", datetime(2024, 1, i + 1, tzinfo=UTC)) for i in range(3)
+        ]
+        for i in range(3):
+            _store_completion(store, f"s{i}")
+        response = client.get("/v1/chat/completions?limit=2")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert len(body["data"]) == 2
+        assert body["has_more"] is True
+
+    def test_model_filter(self, client: TestClient, store: _StubStore) -> None:
+        """Only completions generated by the given model are returned."""
+        store.sessions = [
+            ("s1", datetime(2024, 1, 1, tzinfo=UTC)),
+            ("s2", datetime(2024, 1, 2, tzinfo=UTC)),
+        ]
+        _store_completion(store, "s1", model="model-a")
+        _store_completion(store, "s2", model="model-b")
+        response = client.get("/v1/chat/completions?model=model-b")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert [item["id"] for item in body["data"]] == ["chatcmpl-s2"]
+
+    def test_metadata_filter(self, client: TestClient, store: _StubStore) -> None:
+        """metadata[key]=value filters on the stored completion's metadata."""
+        store.sessions = [
+            ("s1", datetime(2024, 1, 1, tzinfo=UTC)),
+            ("s2", datetime(2024, 1, 2, tzinfo=UTC)),
+        ]
+        _store_completion(store, "s1", metadata={"team": "a"})
+        _store_completion(store, "s2", metadata={"team": "b"})
+        response = client.get("/v1/chat/completions?metadata[team]=a")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert [item["id"] for item in body["data"]] == ["chatcmpl-s1"]
+
+    def test_response_envelope(self, client: TestClient, store: _StubStore) -> None:
+        """The list response carries the list envelope fields."""
+        store.sessions = [
+            ("s1", datetime(2024, 1, 1, tzinfo=UTC)),
+            ("s2", datetime(2024, 1, 2, tzinfo=UTC)),
+        ]
+        _store_completion(store, "s1")
+        _store_completion(store, "s2")
+        response = client.get("/v1/chat/completions")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["object"] == "list"
+        assert body["first_id"] == "chatcmpl-s1"
+        assert body["last_id"] == "chatcmpl-s2"
+
+    def test_lists_chat_completion_kind_only(
+        self, client: TestClient, store: _StubStore
+    ) -> None:
+        """The route only scans sessions tagged as chat_completion."""
+        response = client.get("/v1/chat/completions")
+        assert response.status_code == 200, response.text
+        assert store.list_sessions_kinds == ["chat_completion"]
+
+
+@pytest.mark.local
+class TestUpdateChatCompletion:
+    """POST /v1/chat/completions/{id}."""
+
+    def test_replaces_metadata(self, client: TestClient, store: _StubStore) -> None:
+        """A metadata body replaces the stored metadata."""
+        _store_completion(store, "s1", metadata={"team": "a"})
+        response = client.post(
+            "/v1/chat/completions/chatcmpl-s1", json={"metadata": {"team": "b"}}
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["metadata"] == {"team": "b"}
+
+    def test_null_metadata_clears_it(
+        self, client: TestClient, store: _StubStore
+    ) -> None:
+        """A null metadata body clears the stored metadata."""
+        _store_completion(store, "s1", metadata={"team": "a"})
+        response = client.post(
+            "/v1/chat/completions/chatcmpl-s1", json={"metadata": None}
+        )
+        assert response.status_code == 200, response.text
+        assert "metadata" not in response.json()
+
+    def test_persists_updated_document(
+        self, client: TestClient, store: _StubStore
+    ) -> None:
+        """The updated document is saved back to the store."""
+        _store_completion(store, "s1")
+        response = client.post(
+            "/v1/chat/completions/chatcmpl-s1", json={"metadata": {"k": "v"}}
+        )
+        assert response.status_code == 200, response.text
+        ((completion_id, document),) = store.saved
+        assert completion_id == "chatcmpl-s1"
+        assert document["response"]["metadata"] == {"k": "v"}
+
+    def test_unknown_id_is_not_found(
+        self, client: TestClient, store: _StubStore
+    ) -> None:
+        """Updating an unknown stored chat completion surfaces as 404."""
+        response = client.post(
+            "/v1/chat/completions/chatcmpl-zzz", json={"metadata": {"k": "v"}}
+        )
+        assert response.status_code == 404
+
+
 class TestStoredChatCompletionsLive:
     """Live stored chat completions lifecycle against AWS Bedrock sessions."""
 
     def test_store_lifecycle(
         self, openai_client: OpenAI, chat_model: str, use_official_api: bool
     ) -> None:
-        """store=true persists; retrieve, messages, and delete work."""
+        """store=true persists; retrieve, messages, list, update, and delete work."""
         if use_official_api:
             pytest.skip("official API stores completions asynchronously (delayed)")
         from openai import NotFoundError  # noqa: PLC0415
 
+        marker = uuid4().hex
         created = openai_client.chat.completions.create(
             model=chat_model,
             messages=[{"role": "user", "content": "Reply with the word: banana"}],
             store=True,
+            metadata={"test-marker": marker},
         )
         try:
             assert created.id.startswith("chatcmpl-")
@@ -348,6 +561,18 @@ class TestStoredChatCompletionsLive:
             messages = list(openai_client.chat.completions.messages.list(created.id))
             assert messages
             assert "banana" in messages[0].content
+
+            page = openai_client.chat.completions.list(
+                order="desc", metadata={"test-marker": marker}
+            )
+            assert created.id in [item.id for item in page.data]
+
+            updated = openai_client.chat.completions.update(
+                created.id, metadata={"test-marker": marker, "stage": "updated"}
+            )
+            assert updated.metadata == {"test-marker": marker, "stage": "updated"}
+            reretrieved = openai_client.chat.completions.retrieve(created.id)
+            assert reretrieved.metadata == {"test-marker": marker, "stage": "updated"}
         finally:
             deleted = openai_client.chat.completions.delete(created.id)
             assert deleted.deleted is True

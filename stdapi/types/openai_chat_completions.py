@@ -997,6 +997,11 @@ class ChatCompletion(_Completion):
     object: Literal["chat.completion"] = Field(
         description="Object type. Always `chat.completion`."
     )
+    metadata: Metadata | None = Field(
+        default=None,
+        description="Key-value pairs attached to the chat completion, echoed "
+        "from the request and updatable on stored chat completions.",
+    )
 
 
 # Ref: openai.types.chat.chat_completion_chunk.Choice
@@ -1348,6 +1353,32 @@ class ChatCompletionDeleted(BaseModelResponse):
     )
     deleted: bool = Field(
         default=True, description="Whether the chat completion was deleted."
+    )
+
+
+# Ref: openai.types.chat.completion_update_params.CompletionUpdateParams
+class ChatCompletionUpdateParams(BaseModelRequest):
+    """Request body for updating a stored chat completion."""
+
+    metadata: Metadata | None = Field(
+        description="Key-value pairs replacing the stored chat completion's "
+        "metadata; `null` clears it."
+    )
+
+
+class ChatCompletionList(BaseModelResponse):
+    """Paginated list of stored chat completions."""
+
+    object: Literal["list"] = Field(
+        default="list", description="The object type, which is always `list`."
+    )
+    data: list[ChatCompletion] = Field(description="Stored chat completions.")
+    has_more: bool = Field(description="Whether more results exist after this page.")
+    first_id: str = Field(
+        description="ID of the first chat completion in the list, or '' when empty."
+    )
+    last_id: str = Field(
+        description="ID of the last chat completion in the list, or '' when empty."
     )
 
 

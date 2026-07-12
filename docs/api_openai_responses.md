@@ -35,6 +35,7 @@ Generate model responses with AWS Bedrock foundation models through an OpenAI Re
 | `/v1/responses/compact`      | `POST` | Compact a conversation into a reusable summary   | AWS Bedrock Converse API    | `openai_response_compact`      |
 | `/v1/responses/{response_id}` | `GET`  | Retrieve a stored response                       | AWS Bedrock Sessions        | `openai_response_get`          |
 | `/v1/responses/{response_id}` | `DELETE` | Delete a stored response                       | AWS Bedrock Sessions        | `openai_response_delete`       |
+| `/v1/responses/{response_id}/cancel` | `POST` | Cancel a background response (always fails: no background support) | AWS Bedrock Sessions | `openai_response_cancel` |
 | `/v1/responses/{response_id}/input_items` | `GET` | List the input items of a stored response | AWS Bedrock Sessions   | `openai_response_input_items`  |
 
 ## Feature Compatibility
@@ -655,13 +656,14 @@ The returned `id` then works with:
 - `GET /v1/responses/{response_id}` — retrieve the stored response.
 - `GET /v1/responses/{response_id}/input_items` — list the input items that produced it.
 - `DELETE /v1/responses/{response_id}` — delete it (and its AWS Bedrock session).
+- `POST /v1/responses/{response_id}/cancel` — present for API parity; always fails with the OpenAI synchronous-response error since `background=true` is not supported.
 - `previous_response_id` on a new request — continue the conversation: the stored input and output are automatically prepended to the new input (instructions are not carried over, per the OpenAI API).
 
 !!! note "Behavior notes"
     - `store` defaults to **false** on this implementation (the OpenAI API defaults to true).
     - `store=true` is ignored with `stream=true` (a warning is recorded in the request log).
     - Sessions are created in the primary Bedrock region and persist until deleted through the API.
-    - Requires the AWS Bedrock session management IAM permissions (`bedrock:CreateSession`, `bedrock:CreateInvocation`, `bedrock:PutInvocationStep`, `bedrock:GetInvocationStep`, `bedrock:ListInvocationSteps`, `bedrock:ListInvocations`, `bedrock:EndSession`, `bedrock:DeleteSession`, `bedrock:TagResource`). Without them, `store=true` is ignored (with a request-log warning) and the response is not persisted.
+    - Requires the AWS Bedrock session management IAM permissions (`bedrock:CreateSession`, `bedrock:CreateInvocation`, `bedrock:PutInvocationStep`, `bedrock:GetInvocationStep`, `bedrock:ListInvocationSteps`, `bedrock:ListInvocations`, `bedrock:ListSessions`, `bedrock:ListTagsForResource`, `bedrock:EndSession`, `bedrock:DeleteSession`, `bedrock:TagResource`). Without them, `store=true` is ignored (with a request-log warning) and the response is not persisted.
 
 ## Conversation Compaction
 

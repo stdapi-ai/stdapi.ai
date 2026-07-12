@@ -1707,11 +1707,20 @@ Required only if clients use `store=true` on the [Responses](api_openai_response
         "bedrock:GetInvocationStep",
         "bedrock:EndSession",
         "bedrock:DeleteSession",
-        "bedrock:TagResource"
+        "bedrock:TagResource",
+        "bedrock:ListTagsForResource"
       ],
       "Resource": "arn:aws:bedrock:*:*:session/*"
+    },
+    {
+      "Sid": "BedrockSessionListing",
+      "Effect": "Allow",
+      "Action": "bedrock:ListSessions",
+      "Resource": "*"
     }
     ```
+
+    `bedrock:ListSessions` and `bedrock:ListTagsForResource` serve the stored chat completions listing endpoint (`GET /v1/chat/completions`); the account-level `ListSessions` action does not support resource scoping.
 
     Add `kms:Decrypt` and `kms:GenerateDataKey` on the key when [`AWS_BEDROCK_SESSION_ENCRYPTION_KEY_ARN`](#aws-bedrock-session-encryption-key-arn) is configured.
 
@@ -2112,7 +2121,7 @@ Required if you configure API authentication. See [Authentication](#authenticati
 | **Bedrock Marketplace Auto-Subscribe**          | `aws-marketplace:Subscribe`<br>`aws-marketplace:ViewSubscriptions`                                                                                         | `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE=true` (default)                      |
 | **Bedrock Inference Profiles & Prompt Routers** | `bedrock:GetInferenceProfile`<br>`bedrock:GetPromptRouter`                                                                                                 | `AWS_BEDROCK_ALLOW_*_ARN=true` or `AWS_BEDROCK_MODEL_ARN_MAPPING` configured |
 | **Bedrock Guardrails & Moderations**            | `bedrock:ApplyGuardrail`                                                                                                                                   | `AWS_BEDROCK_GUARDRAIL_IDENTIFIER`                                           |
-| **Stored Responses & Chat Completions**         | Bedrock session permissions (`bedrock:CreateSession`, `bedrock:*Invocation*`, `bedrock:EndSession`, `bedrock:DeleteSession`, `bedrock:TagResource`)        | `store=true` requests                                                        |
+| **Stored Responses & Chat Completions**         | Bedrock session permissions (`bedrock:CreateSession`, `bedrock:*Invocation*`, `bedrock:ListSessions`, `bedrock:EndSession`, `bedrock:DeleteSession`, `bedrock:*TagResource*`)        | `store=true` requests and stored-completion listings                                                        |
 | **File Storage**                                | `s3:PutObject`<br>`s3:PutObjectTagging`<br>`s3:GetObject`<br>`s3:DeleteObject`<br>`s3:CreateMultipartUpload`<br>`s3:UploadPart`<br>`s3:CompleteMultipartUpload`<br>`s3:AbortMultipartUpload`<br>`s3:ListMultipartUploadParts`<br>`s3:ListBucket`<br>`s3:ListBucketMultipartUploads` | `AWS_S3_BUCKET`                                                              |
 | **Video Generation**                            | Bedrock invoke permissions (incl. `bedrock:GetAsyncInvoke`, `bedrock:ListAsyncInvokes`, `bedrock:ListTagsForResource`, `bedrock:TagResource`)<br>File Storage S3 permissions on each regional bucket | `AWS_S3_REGIONAL_BUCKETS`                                                    |
 | **KMS Encrypted S3 Buckets**                    | `kms:Decrypt`<br>`kms:GenerateDataKey`<br>with `kms:ViaService` condition                                                                                  | If S3 buckets use KMS encryption                                             |

@@ -84,13 +84,13 @@ Your existing applications, SDKs, and tools work immediately — no plugins or c
 | `/v1/responses/input_tokens` | Count input tokens without generating a response                          | AWS Bedrock CountTokens API          |
 | `/v1/responses/compact`      | Compact a conversation into a reusable summary item                       | AWS Bedrock Converse API             |
 | `/v1/responses/{id}`         | Retrieve, continue (`previous_response_id`), or delete stored responses   | AWS Bedrock Sessions                 |
-| `/v1/chat/completions/{id}`  | Retrieve or delete stored chat completions                                 | AWS Bedrock Sessions                 |
+| `/v1/chat/completions/{id}`  | Retrieve, list, update, or delete stored chat completions                 | AWS Bedrock Sessions                 |
 | `/v1/embeddings`             | Vector embeddings for search & RAG                                        | AWS Bedrock Embedding Models         |
-| `/v1/moderations`            | Content safety classification                                             | AWS Bedrock Guardrails, Amazon Comprehend |
+| [`/v1/moderations`](api_openai_moderations.md) | Content safety classification                           | AWS Bedrock Guardrails, Amazon Comprehend |
 | `/v1/images/generations`     | Text-to-image generation                                                  | AWS Bedrock Image Models             |
 | `/v1/images/edits`           | Image editing, inpainting & transformations                               | AWS Bedrock Image Models             |
 | `/v1/images/variations`      | Image variations                                                          | AWS Bedrock Image Models             |
-| `/v1/videos`                 | Asynchronous text/image-to-video generation                               | AWS Bedrock Video Models             |
+| [`/v1/videos`](api_openai_videos.md) | Asynchronous text/image-to-video generation                       | AWS Bedrock Video Models             |
 | `/v1/audio/speech`           | Text-to-speech with SSML support                                          | Amazon Polly                         |
 | `/v1/audio/transcriptions`   | Speech-to-text with speaker diarization                                   | Amazon Transcribe                    |
 | `/v1/audio/translations`     | Speech-to-English translation                                             | Amazon Transcribe + Amazon Translate |
@@ -115,8 +115,8 @@ Your existing applications, SDKs, and tools work immediately — no plugins or c
 
 | Endpoint     | Capability                                   | AWS Backend                  |
 |--------------|----------------------------------------------|------------------------------|
-| `/v2/rerank` | Document reranking by relevance to a query   | AWS Bedrock Rerank API       |
-| `/v2/embed`  | Vector embeddings for search & RAG           | AWS Bedrock Embedding Models |
+| [`/v2/rerank`](api_cohere_rerank.md) | Document reranking by relevance to a query   | AWS Bedrock Rerank API       |
+| [`/v2/embed`](api_cohere_embed.md)  | Vector embeddings for search & RAG           | AWS Bedrock Embedding Models |
 
 !!! note "Route prefix"
     Cohere-compatible routes are prefixed with `/cohere` by default (e.g., `/cohere/v2/rerank`). The prefix is configurable via `COHERE_ROUTES_PREFIX`.
@@ -126,7 +126,7 @@ Your existing applications, SDKs, and tools work immediately — no plugins or c
 | Endpoint                     | Capability                                                                | AWS Backend                          |
 |------------------------------|---------------------------------------------------------------------------|--------------------------------------|
 | `/search_models`             | Search models by capability: modality, route, MCP tool, region, streaming | Internal                             |
-| `/model_pricing`             | Exact AWS unit prices per model: tokens, tiers, cache TTLs, routing, specs | AWS Price List                       |
+| [`/model_pricing`](api_model_pricing.md) | Exact AWS unit prices per model: tokens, tiers, cache TTLs, routing, specs | AWS Price List                       |
 
 ### Parameter Coverage
 

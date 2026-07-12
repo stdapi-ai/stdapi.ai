@@ -78,8 +78,10 @@ class _StubStore:
         self.deleted: list[str] = []
         self.discarded: list[str] = []
         self.documents: dict[str, dict[str, Any]] = {}
+        self.created_kinds: list[str] = []
 
-    async def create_session(self) -> str:
+    async def create_session(self, kind: str) -> str:
+        self.created_kinds.append(kind)
         return "sess-1"
 
     async def save(self, response_id: str, document: dict[str, Any]) -> None:
@@ -166,6 +168,7 @@ class TestStoreOnCreate:
         )
         assert response.status_code == 200, response.text
         assert response.json()["id"] == "resp-sess-1"
+        assert store.created_kinds == ["response"]
         ((response_id, document),) = store.saved
         assert response_id == "resp-sess-1"
         assert document["input"] == "hello"
@@ -391,13 +394,46 @@ class TestStoredResponseRoutes:
         assert body["has_more"] is False
 
 
+@pytest.mark.local
+class TestCancelResponse:
+    """POST /v1/responses/{id}/cancel."""
+
+    def test_stored_response_cannot_be_cancelled(
+        self, client: TestClient, store: _StubStore
+    ) -> None:
+        """Cancelling any stored (synchronous) response fails with 400."""
+        store.documents["resp-sess-1"] = {"input": "x", "response": {}}
+        response = client.post("/v1/responses/resp-sess-1/cancel")
+        assert response.status_code == 400
+        assert (
+            response.json()["error"]["message"]
+            == "Cannot cancel a synchronous response."
+        )
+
+    def test_unknown_id_is_not_found(
+        self, client: TestClient, store: _StubStore
+    ) -> None:
+        """Cancelling an unknown stored response surfaces as 404."""
+        response = client.post("/v1/responses/resp-zzz/cancel")
+        assert response.status_code == 404
+
+    def test_invalid_id_pattern_is_rejected(
+        self, client: TestClient, store: _StubStore
+    ) -> None:
+        """An ID not matching the stored response pattern is rejected."""
+        response = client.post("/v1/responses/not-a-response-id/cancel")
+        assert response.status_code == 400
+
+
 class TestStoredResponsesLive:
     """Live stored-responses lifecycle (AWS Bedrock sessions or official API)."""
 
     def test_store_lifecycle_and_continuation(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """store=true persists; retrieve, input_items, continuation, delete work."""
+        """store=true persists; retrieve, input_items, cancel, continuation, delete work."""
+        from openai import BadRequestError  # noqa: PLC0415
+
         created = openai_client.responses.create(
             model=responses_model,
             input="The secret word is 'xylophone'. Acknowledge briefly.",
@@ -409,6 +445,9 @@ class TestStoredResponsesLive:
             retrieved = openai_client.responses.retrieve(created.id)
             assert retrieved.id == created.id
             assert retrieved.output_text == created.output_text
+
+            with pytest.raises(BadRequestError, match="synchronous response"):
+                openai_client.responses.cancel(created.id)
 
             items = list(
                 openai_client.responses.input_items.list(created.id, order="asc")

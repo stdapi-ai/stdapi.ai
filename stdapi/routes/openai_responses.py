@@ -236,7 +236,7 @@ async def create_response(
             request.model, input_modality="TEXT", output_modality="TEXT"
         )
     ).id
-    session_id = await try_create_stored_response_session() if store else None
+    session_id = await try_create_stored_response_session("response") if store else None
     store = session_id is not None
     response_id = f"resp-{session_id}" if store else f"resp-{REQUEST_ID.get()}"
     created_at = REQUEST_TIME.get().timestamp()
@@ -472,6 +472,44 @@ async def retrieve_response(
     log_request_params({"response_id": response_id})
     stored = await load_stored_response(response_id)
     return log_response_params(Response.model_validate(stored["response"]))
+
+
+@router.post(
+    "/{response_id}/cancel",
+    summary="Cancel a background model response (OpenAI format)",
+    operation_id="openai_response_cancel",
+    description=(
+        "Cancels a model response (OpenAI Responses API). Only responses "
+        "created with `background=true` can be cancelled, and background "
+        "responses are not supported on this backend, so this always fails "
+        "with the OpenAI error for synchronous responses."
+    ),
+    response_description="Never returned; the request always fails.",
+    responses={
+        400: {"description": "The response is synchronous and cannot be cancelled."},
+        404: {"description": "Response not found."},
+    },
+    response_model_exclude_none=True,
+)
+async def cancel_response(
+    response_id: _ResponseId, _: Annotated[None, Depends(authenticate)] = None
+) -> Response:
+    """Cancel a background model response.
+
+    Args:
+        response_id: Stored response identifier.
+
+    Returns:
+        Never; cancellation always fails on this backend.
+
+    Raises:
+        ApiError: With 404 if the stored response does not exist, else with
+            400 since all responses are synchronous on this backend.
+    """
+    log_request_params({"response_id": response_id})
+    await load_stored_response(response_id)
+    msg = "Cannot cancel a synchronous response."
+    raise ApiError(msg)
 
 
 @router.delete(
