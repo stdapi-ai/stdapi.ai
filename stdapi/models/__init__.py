@@ -364,6 +364,9 @@ class ModelBase[RequestT, ResponseT]:
     #: Whether the model supports ``s3Location`` for document content blocks in the Bedrock Converse API.
     S3_LOCATION_DOCUMENT_SUPPORTED: ClassVar[bool] = True
 
+    #: Route operation IDs this class cannot serve despite matching modalities.
+    UNSUPPORTED_OPERATIONS: ClassVar[frozenset[str]] = frozenset()
+
     @classmethod
     def get_supported_operations(cls) -> Capability:
         """Return capability flags for route-based model matching.
@@ -1004,11 +1007,16 @@ def _compute_model_capabilities(
         if model_class is not None
         else Capability(0)
     )
+    unsupported = (
+        model_class.UNSUPPORTED_OPERATIONS if model_class is not None else frozenset()
+    )
     input_mods = model.input_modalities
     output_mods = model.output_modalities
     routes: list[str] = []
     tools: list[str] = []
     for op_id, cap in ROUTE_CAPABILITIES.items():
+        if op_id in unsupported:
+            continue
         if cap.required_input_modality not in input_mods:
             continue
         if cap.required_output_modality not in output_mods:

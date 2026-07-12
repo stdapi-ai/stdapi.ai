@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, cast
 import openai
 import pytest
 
+from stdapi.models import ModelDetails, _compute_model_capabilities
 from stdapi.models.chat import get_chat_model
 from stdapi.models.chat.bedrock_rerank import ChatModel as RerankChatModel
 from stdapi.pricing import Dimension
@@ -24,6 +25,27 @@ class TestRerankChatModelDispatch:
     def test_matcher_dispatch(self, model_id: str) -> None:
         """The registry resolves rerank IDs to the rerank override class."""
         assert type(get_chat_model(model_id)) is RerankChatModel
+
+
+class TestRerankSupportedRoutes:
+    """Rerank models must not advertise Converse-served text routes."""
+
+    @pytest.mark.parametrize("model_id", RERANK_MODELS)
+    def test_no_converse_routes_advertised(self, model_id: str) -> None:
+        """supported_routes excludes chat/completions/responses/messages."""
+        details = ModelDetails(
+            id=model_id,
+            name=model_id,
+            provider="Vendor",
+            input_modalities=["TEXT"],
+            output_modalities=["TEXT"],
+            regions=["us-east-1"],
+        )
+        routes, tools = _compute_model_capabilities(model_id, details)
+        assert not any("chat/completions" in route for route in routes)
+        assert not any("responses" in route for route in routes)
+        assert not any("messages" in route for route in routes)
+        assert "openai_chat_completion" not in tools
 
 
 class TestRerankUsageRecording:

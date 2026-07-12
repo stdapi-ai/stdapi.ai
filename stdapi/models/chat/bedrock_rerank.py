@@ -22,6 +22,18 @@ class ChatModel(_BaseChatModel):
     """Bedrock rerank model served via Converse, billed per search unit."""
 
     MATCHER = re_compile(r"(?:amazon|cohere)\.rerank")
+    # Converse rejects rerank models (confirmed live): keep them out of the
+    # advertised text routes until AWS enables it or a Rerank endpoint exists.
+    UNSUPPORTED_OPERATIONS = frozenset(
+        {
+            "openai_chat_completion",
+            "openai_completion",
+            "openai_response",
+            "openai_response_input_tokens",
+            "anthropic_message",
+            "anthropic_message_count_tokens",
+        }
+    )
 
     def _record_converse_usage(
         self,
