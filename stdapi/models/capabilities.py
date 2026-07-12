@@ -19,6 +19,7 @@ class Capability(IntFlag):
     IMAGE_EDITION = auto()
     IMAGE_VARIATION = auto()
     RERANK = auto()
+    VIDEO_GENERATION = auto()
 
 
 @dataclass(frozen=True, slots=True)

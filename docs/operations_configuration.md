@@ -161,6 +161,8 @@ This section provides a quick reference of all available configuration options. 
 | [`AWS_S3_ACCEPTED_BUCKETS`](#aws-s3-accepted-buckets)   | `{}`            | External S3 buckets with read access, mapped to their region for S3 URI conversion and routing       |
 | [`AWS_S3_TMP_PREFIX`](#aws-s3-tmp-prefix)               | `tmp/`          | S3 prefix for temporary files used for jobs; configure lifecycle policies on this prefix             |
 | [`AWS_S3_FILES_PREFIX`](#aws-s3-files-prefix)           | `files/`        | S3 prefix for Files API objects; configure S3 lifecycle policies on this prefix                     |
+| [`AWS_S3_VIDEOS_PREFIX`](#aws-s3-videos-prefix)         | `videos/`       | S3 prefix for generated videos (Videos API); persists until deleted through the API                  |
+| [`AWS_S3_VIDEOS_EXPIRES_AFTER`](#aws-s3-videos-expires-after) | Unset     | Retention period in seconds for generated videos; sets `Video.expires_at` and blocks expired downloads |
 | [`AWS_TRANSCRIBE_S3_BUCKET`](#aws-transcribe-s3-bucket) | `AWS_S3_BUCKET` | S3 bucket for temporary audio transcription files; must be in same region as `AWS_TRANSCRIBE_REGION` |
 
 ### :material-robot: AWS AI Services
@@ -561,6 +563,41 @@ export AWS_S3_FILES_PREFIX=staging/files/
 # No prefix (store at bucket root - not recommended)
 export AWS_S3_FILES_PREFIX=
 ```
+
+#### `AWS_S3_VIDEOS_PREFIX` { #aws-s3-videos-prefix }
+
+:octicons-package-24: **Purpose**
+:   S3 prefix (folder path) for videos generated through the [Videos API](api_openai_videos.md)
+
+:octicons-gear-24: **Default**
+:   `videos/`
+
+:octicons-check-circle-24: **Best Practice**
+:   Generated videos persist until deleted through the API — configure an S3 lifecycle rule on this prefix to cap storage costs
+
+```bash
+export AWS_S3_VIDEOS_PREFIX=videos/
+```
+
+AWS Bedrock writes each video generation job's output (MP4 and manifest) under this prefix, in a folder named after the job. Because AWS Bedrock requires the output bucket to be in the same region as the invocation, videos are stored in the [`AWS_S3_REGIONAL_BUCKETS`](#aws-s3-regional-buckets) bucket of the region that served the job.
+
+#### `AWS_S3_VIDEOS_EXPIRES_AFTER` { #aws-s3-videos-expires-after }
+
+:octicons-package-24: **Purpose**
+:   Retention period in seconds (minimum `3600`) for videos generated through the [Videos API](api_openai_videos.md)
+
+:octicons-gear-24: **Default**
+:   Unset — videos never expire and persist until deleted through the API
+
+:octicons-check-circle-24: **Best Practice**
+:   Pair with an S3 Lifecycle expiration rule on [`AWS_S3_VIDEOS_PREFIX`](#aws-s3-videos-prefix) covering the same duration (rounded up to whole days) so the objects are actually deleted
+
+```bash
+# Expire generated videos after 24 hours
+export AWS_S3_VIDEOS_EXPIRES_AFTER=86400
+```
+
+When set, the `Video` object reports `expires_at` (job completion time plus this value) and downloading expired video content returns a 404. The server enforces expiry at the API level only; the paired S3 Lifecycle rule performs the physical cleanup.
 
 #### `AWS_TRANSCRIBE_S3_BUCKET` { #aws-transcribe-s3-bucket }
 
@@ -1555,6 +1592,7 @@ These permissions are mandatory for stdapi.ai to discover and invoke Bedrock mod
         "bedrock:InvokeModel",
         "bedrock:InvokeModelWithResponseStream",
         "bedrock:InvokeTool",
+        "bedrock:ListAsyncInvokes",
         "bedrock:Rerank"
       ],
       "Resource": "*"
@@ -1563,7 +1601,8 @@ These permissions are mandatory for stdapi.ai to discover and invoke Bedrock mod
       "Sid": "BedrockAsyncInvokeTagging",
       "Effect": "Allow",
       "Action": [
-        "bedrock:TagResource"
+        "bedrock:TagResource",
+        "bedrock:ListTagsForResource"
       ],
       "Resource": "arn:aws:bedrock:*:*:async-invoke/*"
     },
@@ -1649,9 +1688,9 @@ Required only if you configure Bedrock Guardrails for content filtering. See [Be
 
 ### S3 File Storage (Optional)
 
-**Environment Variables**: [`AWS_S3_BUCKET`](#aws-s3-bucket)
+**Environment Variables**: [`AWS_S3_BUCKET`](#aws-s3-bucket), [`AWS_S3_REGIONAL_BUCKETS`](#aws-s3-regional-buckets)
 
-Required for storing generated images, audio files, and documents. See [Storage Configuration](#storage-configuration) for bucket setup details.
+Required for storing generated images, audio files, documents, and videos. See [Storage Configuration](#storage-configuration) for bucket setup details.
 
 ??? example "S3 File Storage IAM Policy Statements"
     ```json
@@ -1683,7 +1722,7 @@ Required for storing generated images, audio files, and documents. See [Storage 
     ```
 
     !!! info "Replace Bucket Name"
-        Replace `AWS_S3_BUCKET_VALUE` with the value of your [`AWS_S3_BUCKET`](#aws-s3-bucket) environment variable.
+        Replace `AWS_S3_BUCKET_VALUE` with the value of your [`AWS_S3_BUCKET`](#aws-s3-bucket) environment variable. Repeat both statements for each [`AWS_S3_REGIONAL_BUCKETS`](#aws-s3-regional-buckets) bucket (used for async operations such as video generation).
 
     **If your S3 bucket uses KMS encryption**, also add:
 
@@ -2027,6 +2066,7 @@ Required if you configure API authentication. See [Authentication](#authenticati
 | **Bedrock Inference Profiles & Prompt Routers** | `bedrock:GetInferenceProfile`<br>`bedrock:GetPromptRouter`                                                                                                 | `AWS_BEDROCK_ALLOW_*_ARN=true` or `AWS_BEDROCK_MODEL_ARN_MAPPING` configured |
 | **Bedrock Guardrails**                          | `bedrock:ApplyGuardrail`                                                                                                                                   | `AWS_BEDROCK_GUARDRAIL_IDENTIFIER`                                           |
 | **File Storage**                                | `s3:PutObject`<br>`s3:PutObjectTagging`<br>`s3:GetObject`<br>`s3:DeleteObject`<br>`s3:CreateMultipartUpload`<br>`s3:UploadPart`<br>`s3:CompleteMultipartUpload`<br>`s3:AbortMultipartUpload`<br>`s3:ListMultipartUploadParts`<br>`s3:ListBucket`<br>`s3:ListBucketMultipartUploads` | `AWS_S3_BUCKET`                                                              |
+| **Video Generation**                            | Bedrock invoke permissions (incl. `bedrock:GetAsyncInvoke`, `bedrock:ListAsyncInvokes`, `bedrock:ListTagsForResource`, `bedrock:TagResource`)<br>File Storage S3 permissions on each regional bucket | `AWS_S3_REGIONAL_BUCKETS`                                                    |
 | **KMS Encrypted S3 Buckets**                    | `kms:Decrypt`<br>`kms:GenerateDataKey`<br>with `kms:ViaService` condition                                                                                  | If S3 buckets use KMS encryption                                             |
 | **Text-to-Speech**                              | `polly:SynthesizeSpeech`<br>`polly:DescribeVoices`                                                                                                         | `AWS_POLLY_REGION`                                                           |
 | **Speech-to-Text**                              | `transcribe:StartTranscriptionJob`<br>`transcribe:GetTranscriptionJob`<br>`transcribe:DeleteTranscriptionJob`<br>`transcribe:TagResource` (on `arn:aws:transcribe:*:*:transcription-job/*`)<br>`s3:PutObject` (transcribe bucket)        | `AWS_TRANSCRIBE_REGION`<br>`AWS_TRANSCRIBE_S3_BUCKET`                        |

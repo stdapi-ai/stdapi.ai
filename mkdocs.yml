@@ -63,6 +63,7 @@ nav:
             - Images Generations: api_openai_images_generations.md
             - Images Edits: api_openai_images_edits.md
             - Images Variations: api_openai_images_variations.md
+            - Videos: api_openai_videos.md
             - Audio Speech: api_openai_audio_speech.md
             - Audio Transcriptions: api_openai_audio_transcriptions.md
             - Audio Translations: api_openai_audio_translations.md

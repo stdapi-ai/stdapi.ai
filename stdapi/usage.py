@@ -639,6 +639,7 @@ def record_bedrock_usage(
     cached_tokens: int | None = None,
     cache_write_tokens: int | None = None,
     output_images: int | None = None,
+    output_seconds: int | None = None,
     grounding_requests: int | None = None,
     search_units: int | None = None,
     input_images: int | None = None,
@@ -662,6 +663,7 @@ def record_bedrock_usage(
         cached_tokens: Number of cached (prompt cache) tokens.
         cache_write_tokens: Number of tokens written to prompt cache.
         output_images: Number of generated images.
+        output_seconds: Generated media duration in seconds (e.g. video).
         grounding_requests: Number of built-in grounding-tool invocations
             (e.g. Amazon Nova Grounding, billed per request).
         search_units: Number of rerank search units.
@@ -693,6 +695,7 @@ def record_bedrock_usage(
             Dimension.CACHE_READ_TOKENS: cached_tokens or 0,
             Dimension.CACHE_WRITE_TOKENS: cache_write_tokens or 0,
             Dimension.OUTPUT_IMAGES: output_images or 0,
+            Dimension.OUTPUT_SECONDS: output_seconds or 0,
             Dimension.GROUNDING_REQUESTS: grounding_requests or 0,
             Dimension.SEARCH_UNITS: search_units or 0,
             Dimension.INPUT_IMAGES: input_images or 0,

@@ -557,6 +557,36 @@ class _Settings(BaseSettings):
         ),
     )
 
+    aws_s3_videos_prefix: str = Field(
+        default="videos/",
+        description=(
+            "S3 prefix (folder path) for generated videos (Videos API).\n\n"
+            "AWS Bedrock writes each video generation job's output under this "
+            "prefix, in a folder named after the job (in the regional bucket "
+            "of the region that served the job). Videos persist until deleted "
+            "through the API; configure an S3 Lifecycle rule on this prefix "
+            "to cap storage costs.\n\n"
+            "Example: 'videos/' stores objects under s3://bucket/videos/\n"
+            "Example: '' (empty string) stores videos at bucket root (not recommended)"
+        ),
+    )
+
+    aws_s3_videos_expires_after: int | None = Field(
+        default=None,
+        ge=3600,
+        description=(
+            "Retention period in seconds for generated videos (Videos API).\n\n"
+            "When set, `Video.expires_at` reports the job completion time plus "
+            "this value and expired video content can no longer be downloaded "
+            "(404). The server does not delete objects itself: pair this "
+            "setting with an S3 Lifecycle expiration rule on "
+            "AWS_S3_VIDEOS_PREFIX covering the same duration (rounded up to "
+            "whole days).\n\n"
+            "Unset (default): videos never expire and persist until deleted "
+            "through the API."
+        ),
+    )
+
     aws_translate_region: RegionName | None = Field(
         default=None,
         description=(

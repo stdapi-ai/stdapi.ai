@@ -40,6 +40,7 @@ stdapi.ai provides multiple interfaces for exploring and testing the API—choos
 | **🎨 Images**     | `POST /v1/images/generations`     | Text-to-image generation                                                    | [Generations →](api_openai_images_generations.md)      |
 |                   | `POST /v1/images/edits`           | Image editing and transformations                                           | [Edits →](api_openai_images_edits.md)                  |
 |                   | `POST /v1/images/variations`      | Generate image variations                                                   | [Variations →](api_openai_images_variations.md)        |
+| **🎬 Videos**     | `POST/GET/DELETE /v1/videos`      | Asynchronous text/image-to-video generation jobs                            | [Videos →](api_openai_videos.md)                       |
 | **🔊 Audio**      | `POST /v1/audio/speech`           | Text-to-speech synthesis                                                    | [Text to Speech →](api_openai_audio_speech.md)         |
 |                   | `POST /v1/audio/transcriptions`   | Speech-to-text transcription                                                | [Transcriptions →](api_openai_audio_transcriptions.md) |
 |                   | `POST /v1/audio/translations`     | Speech-to-English translation                                               | [Translations →](api_openai_audio_translations.md)     |
@@ -77,7 +78,7 @@ stdapi.ai provides multiple interfaces for exploring and testing the API—choos
 When `ENABLE_MCP_STREAMABLE_HTTP=true` or `ENABLE_MCP_SSE=true` is configured, stdapi.ai exposes all its endpoints as MCP tools. The tool names follow the pattern `provider_action`.
 
 !!! tip "JSON body support for file and audio tools"
-    MCP tools send JSON bodies — they cannot construct `multipart/form-data`. All file upload, audio, and upload-part tools therefore accept the file or audio content as a base64 string, data URI (`data:<mime>;base64,<data>`), HTTPS URL, or S3 URI in the `file` / `data` field instead of a binary attachment. The full multipart upload workflow (`openai_upload` → `openai_upload_part` → `openai_upload_complete`) is fully MCP-compatible this way.
+    MCP tools send JSON bodies — they cannot construct `multipart/form-data`. All file upload, audio, and upload-part tools therefore accept the file or audio content as a base64 string, data URI (`data:<mime>;base64,<data>`), HTTPS URL, or S3 URI in the `file` / `data` field instead of a binary attachment — as does the video generation tool's `input_reference` image. The full multipart upload workflow (`openai_upload` → `openai_upload_part` → `openai_upload_complete`) is fully MCP-compatible this way.
 
 | MCP Tool                         | Endpoint                                    |
 |----------------------------------|---------------------------------------------|
@@ -89,6 +90,11 @@ When `ENABLE_MCP_STREAMABLE_HTTP=true` or `ENABLE_MCP_SSE=true` is configured, s
 | `openai_image_generation`        | `POST /v1/images/generations`               |
 | `openai_image_edit`              | `POST /v1/images/edits`                     |
 | `openai_image_variation`         | `POST /v1/images/variations`                |
+| `openai_video_generation`        | `POST /v1/videos`                           |
+| `openai_video_list`              | `GET /v1/videos`                            |
+| `openai_video_get`               | `GET /v1/videos/{video_id}`                 |
+| `openai_video_content`           | `GET /v1/videos/{video_id}/content`         |
+| `openai_video_delete`            | `DELETE /v1/videos/{video_id}`              |
 | `openai_audio_speech`            | `POST /v1/audio/speech`                     |
 | `openai_audio_transcription`     | `POST /v1/audio/transcriptions`             |
 | `openai_audio_translation`       | `POST /v1/audio/translations`               |
@@ -167,6 +173,7 @@ Your Cohere rerank and embed integrations continue to work without any code chan
 
 - :material-chat: [**Chat Completions**](api_openai_chat_completions.md) — Conversational AI with multi-modal support
 - :material-image: [**Images**](api_openai_images_generations.md) — Generation, edits, and variations
+- :material-movie-open: [**Videos**](api_openai_videos.md) — Asynchronous text/image-to-video generation
 - :material-music: [**Audio**](api_openai_audio_speech.md) — Text-to-speech, transcription, and translation
 - :material-vector-polyline: [**Embeddings**](api_openai_embeddings.md) — Vector embeddings for search and RAG
 - :material-sort: [**Rerank**](api_cohere_rerank.md) — Cohere-compatible document reranking for search and RAG

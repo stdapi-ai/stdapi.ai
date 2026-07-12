@@ -14,7 +14,7 @@ import pytest
 
 from stdapi import usage
 from stdapi.config import SETTINGS
-from stdapi.pricing import Dimension, Price, PriceKey, Service, _state
+from stdapi.pricing import Dimension, Service
 from stdapi.usage import (
     IMAGE_SPEC,
     UsageKey,
@@ -41,9 +41,11 @@ pytestmark = pytest.mark.local
 @pytest.fixture(autouse=True)
 def _reset_context_vars() -> Generator[None]:
     """Reset request-scoped context vars so tests don't leak state via execution order."""
+    usage_token = usage.init_usage()
     model_state_token = usage.init_model_state()
     image_spec_token = IMAGE_SPEC.set("")
     yield
+    usage.USAGE.reset(usage_token)
     usage.MODEL_STATE.reset(model_state_token)
     IMAGE_SPEC.reset(image_spec_token)
 
@@ -80,6 +82,15 @@ class TestComputeCostsMultiCurrency:
         assert "currency" not in entry
         assert entry["costs"] == {"USD": "0.003", "EUR": "0.015"}
 
+    def test_multi_currency_return_value_warns_naming_both_currencies(self) -> None:
+        """compute_costs()'s return value must surface a warning naming both currencies."""
+        self._record_mixed_currency_usage()
+        warnings = compute_costs()
+        assert warnings == [
+            "Multiple currencies resolved for bedrock-runtime/mixedmodel "
+            "in us-east-1: ['EUR', 'USD']"
+        ]
+
     def test_single_currency_still_uses_cost_and_currency(self) -> None:
         """A normal, single-currency record must still use cost/currency, never costs."""
         usage.init_usage()
@@ -105,17 +116,14 @@ class TestRoutingTierPricing:
         set_test_price(
             "routedmodel", "us-east-1", Dimension.INPUT_TOKENS, "0.0033", "USD"
         )
-        _state.price_index[
-            PriceKey(
-                Service.BEDROCK,
-                "routedmodel",
-                "us-east-1",
-                Dimension.INPUT_TOKENS,
-                "standard",
-                "",
-                "global",
-            )
-        ] = Price(Decimal("0.003"), "USD")
+        set_test_price(
+            "routedmodel",
+            "us-east-1",
+            Dimension.INPUT_TOKENS,
+            "0.003",
+            "USD",
+            routing="global",
+        )
 
     def test_global_routing_used_prices_at_global_rate(self) -> None:
         """A global-routed call must use the cheaper global price."""
@@ -150,30 +158,22 @@ class TestImageSpecPricing:
         """Two calls with different specs in one record must each use their own price."""
         usage.init_usage()
         get_model_state("imagemodel").region = "us-east-1"
-        _state.price_index[
-            PriceKey(
-                Service.BEDROCK,
-                "imagemodel",
-                "us-east-1",
-                Dimension.OUTPUT_IMAGES,
-                "standard",
-                "",
-                "",
-                "512:standard",
-            )
-        ] = Price(Decimal("0.008"), "USD")
-        _state.price_index[
-            PriceKey(
-                Service.BEDROCK,
-                "imagemodel",
-                "us-east-1",
-                Dimension.OUTPUT_IMAGES,
-                "standard",
-                "",
-                "",
-                "1024:premium",
-            )
-        ] = Price(Decimal("0.012"), "USD")
+        set_test_price(
+            "imagemodel",
+            "us-east-1",
+            Dimension.OUTPUT_IMAGES,
+            "0.008",
+            "USD",
+            spec="512:standard",
+        )
+        set_test_price(
+            "imagemodel",
+            "us-east-1",
+            Dimension.OUTPUT_IMAGES,
+            "0.012",
+            "USD",
+            spec="1024:premium",
+        )
 
         IMAGE_SPEC.set("512:standard")
         record_bedrock_usage("imagemodel", output_images=2)
@@ -194,18 +194,14 @@ class TestImageSpecPricing:
         """
         usage.init_usage()
         get_model_state("mixedimagemodel").region = "us-east-1"
-        _state.price_index[
-            PriceKey(
-                Service.BEDROCK,
-                "mixedimagemodel",
-                "us-east-1",
-                Dimension.OUTPUT_IMAGES,
-                "standard",
-                "",
-                "",
-                "1024:standard",
-            )
-        ] = Price(Decimal("0.01"), "USD")
+        set_test_price(
+            "mixedimagemodel",
+            "us-east-1",
+            Dimension.OUTPUT_IMAGES,
+            "0.01",
+            "USD",
+            spec="1024:standard",
+        )
         set_test_price(
             "mixedimagemodel", "us-east-1", Dimension.OUTPUT_IMAGES, "0.0036", "USD"
         )
@@ -279,26 +275,22 @@ class TestCacheTtlPricing:
         """Two TTL buckets in one record must each use their own price."""
         usage.init_usage()
         get_model_state("cachemodel").region = "us-east-1"
-        _state.price_index[
-            PriceKey(
-                Service.BEDROCK,
-                "cachemodel",
-                "us-east-1",
-                Dimension.CACHE_WRITE_TOKENS,
-                "standard",
-                "5m",
-            )
-        ] = Price(Decimal("0.000004"), "USD")
-        _state.price_index[
-            PriceKey(
-                Service.BEDROCK,
-                "cachemodel",
-                "us-east-1",
-                Dimension.CACHE_WRITE_TOKENS,
-                "standard",
-                "1h",
-            )
-        ] = Price(Decimal("0.000008"), "USD")
+        set_test_price(
+            "cachemodel",
+            "us-east-1",
+            Dimension.CACHE_WRITE_TOKENS,
+            "0.000004",
+            "USD",
+            cache_ttl="5m",
+        )
+        set_test_price(
+            "cachemodel",
+            "us-east-1",
+            Dimension.CACHE_WRITE_TOKENS,
+            "0.000008",
+            "USD",
+            cache_ttl="1h",
+        )
 
         record_bedrock_usage(
             "cachemodel",
@@ -315,16 +307,14 @@ class TestCacheTtlPricing:
         """A flat-only call mixed with a TTL-bearing call must not lose the flat portion's cost."""
         usage.init_usage()
         get_model_state("mixedcachemodel").region = "us-east-1"
-        _state.price_index[
-            PriceKey(
-                Service.BEDROCK,
-                "mixedcachemodel",
-                "us-east-1",
-                Dimension.CACHE_WRITE_TOKENS,
-                "standard",
-                "1h",
-            )
-        ] = Price(Decimal("0.000008"), "USD")
+        set_test_price(
+            "mixedcachemodel",
+            "us-east-1",
+            Dimension.CACHE_WRITE_TOKENS,
+            "0.000008",
+            "USD",
+            cache_ttl="1h",
+        )
         set_test_price(
             "mixedcachemodel",
             "us-east-1",
@@ -701,19 +691,14 @@ class TestLongContextDetection:
         set_test_price(
             "longmodel", "us-east-1", Dimension.INPUT_TOKENS, "0.000003", "USD"
         )
-        _state.price_index[
-            PriceKey(
-                Service.BEDROCK,
-                "longmodel",
-                "us-east-1",
-                Dimension.INPUT_TOKENS,
-                "standard",
-                "",
-                "",
-                "",
-                "long",
-            )
-        ] = Price(Decimal("0.000006"), "USD")
+        set_test_price(
+            "longmodel",
+            "us-east-1",
+            Dimension.INPUT_TOKENS,
+            "0.000006",
+            "USD",
+            context="long",
+        )
 
         record_bedrock_usage("longmodel", input_tokens=1_000)  # standard
         record_bedrock_usage("longmodel", input_tokens=200_001)  # long
@@ -752,15 +737,9 @@ class TestGroundingRequests:
         """Cost is computed from an indexed GROUNDING_REQUESTS price."""
         usage.init_usage()
         get_model_state("groundedmodel").region = "us-east-1"
-        _state.price_index[
-            PriceKey(
-                Service.BEDROCK,
-                "groundedmodel",
-                "us-east-1",
-                Dimension.GROUNDING_REQUESTS,
-                "standard",
-            )
-        ] = Price(Decimal("0.03"), "USD")
+        set_test_price(
+            "groundedmodel", "us-east-1", Dimension.GROUNDING_REQUESTS, "0.03", "USD"
+        )
         record_bedrock_usage("groundedmodel", grounding_requests=2)
         record = next(iter(usage.USAGE.get().values()))
         compute_costs()
@@ -793,18 +772,14 @@ class TestInputMediaSpecUsage:
         """input_images with media_spec="document" must price from the "document" spec bucket."""
         usage.init_usage()
         get_model_state("mediaimagemodel").region = "us-east-1"
-        _state.price_index[
-            PriceKey(
-                Service.BEDROCK,
-                "mediaimagemodel",
-                "us-east-1",
-                Dimension.INPUT_IMAGES,
-                "standard",
-                "",
-                "",
-                "document",
-            )
-        ] = Price(Decimal("0.0008"), "USD")
+        set_test_price(
+            "mediaimagemodel",
+            "us-east-1",
+            Dimension.INPUT_IMAGES,
+            "0.0008",
+            "USD",
+            spec="document",
+        )
         record_bedrock_usage("mediaimagemodel", input_images=2, media_spec="document")
         record = next(iter(usage.USAGE.get().values()))
         assert record.quantities[Dimension.INPUT_IMAGES] == 2
@@ -818,18 +793,14 @@ class TestInputMediaSpecUsage:
         """input_seconds with media_spec="audio" must price from the "audio" spec bucket."""
         usage.init_usage()
         get_model_state("mediaaudiomodel").region = "us-east-1"
-        _state.price_index[
-            PriceKey(
-                Service.BEDROCK,
-                "mediaaudiomodel",
-                "us-east-1",
-                Dimension.INPUT_SECONDS,
-                "standard",
-                "",
-                "",
-                "audio",
-            )
-        ] = Price(Decimal("0.0001"), "USD")
+        set_test_price(
+            "mediaaudiomodel",
+            "us-east-1",
+            Dimension.INPUT_SECONDS,
+            "0.0001",
+            "USD",
+            spec="audio",
+        )
         record_bedrock_usage("mediaaudiomodel", input_seconds=45, media_spec="audio")
         record = next(iter(usage.USAGE.get().values()))
         assert record.quantities[Dimension.INPUT_SECONDS] == 45
@@ -845,30 +816,22 @@ class TestInputMediaSpecUsage:
         """Two calls with different media_spec values must each use their own rate."""
         usage.init_usage()
         get_model_state("mixedaudiovideomodel").region = "us-east-1"
-        _state.price_index[
-            PriceKey(
-                Service.BEDROCK,
-                "mixedaudiovideomodel",
-                "us-east-1",
-                Dimension.INPUT_SECONDS,
-                "standard",
-                "",
-                "",
-                "audio",
-            )
-        ] = Price(Decimal("0.0001"), "USD")
-        _state.price_index[
-            PriceKey(
-                Service.BEDROCK,
-                "mixedaudiovideomodel",
-                "us-east-1",
-                Dimension.INPUT_SECONDS,
-                "standard",
-                "",
-                "",
-                "video",
-            )
-        ] = Price(Decimal("0.0005"), "USD")
+        set_test_price(
+            "mixedaudiovideomodel",
+            "us-east-1",
+            Dimension.INPUT_SECONDS,
+            "0.0001",
+            "USD",
+            spec="audio",
+        )
+        set_test_price(
+            "mixedaudiovideomodel",
+            "us-east-1",
+            Dimension.INPUT_SECONDS,
+            "0.0005",
+            "USD",
+            spec="video",
+        )
         record_bedrock_usage(
             "mixedaudiovideomodel", input_seconds=30, media_spec="audio"
         )
@@ -894,17 +857,14 @@ class TestLatencyRoutingUsage:
         set_test_price(
             "latencymodel", "us-east-1", Dimension.INPUT_TOKENS, "0.0033", "USD"
         )
-        _state.price_index[
-            PriceKey(
-                Service.BEDROCK,
-                "latencymodel",
-                "us-east-1",
-                Dimension.INPUT_TOKENS,
-                "standard",
-                "",
-                "latency",
-            )
-        ] = Price(Decimal("0.004"), "USD")
+        set_test_price(
+            "latencymodel",
+            "us-east-1",
+            Dimension.INPUT_TOKENS,
+            "0.004",
+            "USD",
+            routing="latency",
+        )
         record_bedrock_usage("latencymodel", input_tokens=1000)
         key, record = next(iter(usage.USAGE.get().items()))
         assert key.routing == "latency"
@@ -975,6 +935,36 @@ class TestNonBedrockRecordUsageHelpers:
         assert billed == expected
         record = next(iter(usage.USAGE.get().values()))
         assert record.quantities[Dimension.COMPREHEND_UNITS] == expected
+
+    def test_record_polly_usage_with_zero_characters_records_nothing(self) -> None:
+        """Zero characters must not create a usage record."""
+        usage.init_usage()
+        billed = record_polly_usage(0, "neural")
+        assert billed == 0
+        assert usage.USAGE.get() == {}
+
+    def test_record_translate_usage_with_zero_characters_records_nothing(self) -> None:
+        """Zero characters must not create a usage record."""
+        usage.init_usage()
+        billed = record_translate_usage(0)
+        assert billed == 0
+        assert usage.USAGE.get() == {}
+
+    def test_record_transcribe_usage_with_zero_duration_bills_the_minimum(self) -> None:
+        """Zero duration must still bill the 15-second minimum, not record nothing."""
+        usage.init_usage()
+        billed = record_transcribe_usage(0)
+        assert billed == 15
+        record = next(iter(usage.USAGE.get().values()))
+        assert record.quantities[Dimension.INPUT_SECONDS] == 15
+
+    def test_record_comprehend_usage_with_zero_length_bills_the_minimum(self) -> None:
+        """Zero text length must still bill the 3-unit minimum, not record nothing."""
+        usage.init_usage()
+        billed = record_comprehend_usage(0, "language-detection")
+        assert billed == 3
+        record = next(iter(usage.USAGE.get().values()))
+        assert record.quantities[Dimension.COMPREHEND_UNITS] == 3
 
     def test_non_bedrock_usage_does_not_inherit_a_prior_bedrock_region(self) -> None:
         """Regression: Polly/Transcribe/Translate/Comprehend must not inherit a Bedrock model's region.

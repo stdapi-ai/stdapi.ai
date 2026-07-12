@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
     from pluggy import Result as _PluggyResult
 
-    from stdapi.pricing import Dimension
+    from stdapi.pricing import CacheTtlBucket, ContextLength, Dimension, Routing
 
 
 def logged_usage_entries(
@@ -67,22 +67,56 @@ def logged_usage_entries(
 
 
 def set_test_price(
-    model: str, region: str, dimension: Dimension, amount: str, currency: str
+    model: str,
+    region: str,
+    dimension: Dimension,
+    amount: str,
+    currency: str,
+    *,
+    tier: str = "standard",
+    cache_ttl: CacheTtlBucket = "",
+    routing: Routing = "",
+    spec: str = "",
+    context: ContextLength = "",
 ) -> None:
-    """Seed the price index with one test price (standard tier, no TTL/routing bucket).
+    """Seed the price index with one test price.
 
     Shared by pricing/usage/monitoring tests that need a real, resolvable
     price rather than mocking ``resolve_price`` itself. *model* is used
     as-is, not normalized -- pick a name with no "-"/"_" separators so
-    normalize_model_key() doesn't alter it. For a non-standard tier or a
-    bucketed price, build a ``PriceKey`` directly instead (see
-    ``TestRoutingTierPricing._set_routed_prices`` in test_usage.py).
+    normalize_model_key() doesn't alter it. Defaults seed the standard tier,
+    undifferentiated bucket; pass ``tier``/``cache_ttl``/``routing``/``spec``/
+    ``context`` to seed a non-default ``PriceKey`` bucket (e.g. a routed,
+    cache-TTL, media-spec, or long-context price) without building
+    ``PriceKey``/``Price`` by hand.
+
+    Args:
+        model: Model ID, used as-is (see above).
+        region: AWS region.
+        dimension: The billed dimension.
+        amount: The unit price, as a decimal string.
+        currency: The currency code.
+        tier: Service tier (standard, flex, priority, batch).
+        cache_ttl: Cache TTL bucket ("5m"/"1h"), for CACHE_WRITE_TOKENS.
+        routing: Serving profile ("global", "latency" or "").
+        spec: Media/image spec bucket -- see ``PriceKey.spec``.
+        context: Context-length bucket ("long" or "").
     """
     from decimal import Decimal  # noqa: PLC0415
 
     from stdapi.pricing import Price, PriceKey, Service, _state  # noqa: PLC0415
 
-    key = PriceKey(Service.BEDROCK, model, region, dimension, "standard")
+    key = PriceKey(
+        Service.BEDROCK,
+        model,
+        region,
+        dimension,
+        tier,
+        cache_ttl,
+        routing,
+        spec,
+        context,
+    )
     _state.price_index[key] = Price(Decimal(amount), currency)
 
 
@@ -206,6 +240,8 @@ environ.update(
 )
 # Disable cost tracking unless a profile enables it (avoids AWS Pricing API calls).
 environ.setdefault("cost_tracking", "false")
+# Usage-log tests require info-level request logs to capture JSON usage events.
+environ.setdefault("log_level", "info")
 
 # Model mappings for different test contexts
 MODEL_MAPPINGS = {
@@ -229,6 +265,8 @@ MODEL_MAPPINGS = {
         "image_generation": "amazon.nova-canvas-v1:0",
         "image_generation_hd": "amazon.nova-canvas-v1:0",
         "image_generation_stream": "amazon.nova-canvas-v1:0",
+        # Luma is the only non-legacy video model (Nova Reel is LEGACY on AWS).
+        "video_generation": "luma.ray-v2:0",
     },
     "openai": {
         "transcription": "whisper-1",
@@ -250,6 +288,7 @@ MODEL_MAPPINGS = {
         "image_generation": "dall-e-2",  # Cheapest/default model
         "image_generation_hd": "dall-e-3",  # For HD & style quality features
         "image_generation_stream": "gpt-image-1",  # For streaming features
+        "video_generation": "sora-2",  # Cheapest video model
     },
 }
 _CACHE_DIR = Path(__file__).parent / ".cache"
@@ -302,7 +341,12 @@ def pytest_report_header() -> str | None:
 def pytest_collection_modifyitems(
     config: pytest.Config, items: list[pytest.Item]
 ) -> None:
-    """Skip expensive tests at collection time unless explicitly requested."""
+    """Skip expensive/agentic tests, and local tests against a remote target, at collection time.
+
+    ``local``-marked tests are skipped when ``--server-url`` or
+    ``--use-official-api`` selects a remote target; ``expensive``/``agentic``
+    tests are skipped unless their matching flag is passed.
+    """
     if config.getoption("--server-url") or config.getoption("--use-official-api"):
         skip_marker = pytest.mark.skip(
             reason="Tests the local implementation (remote target selected)"
@@ -459,6 +503,12 @@ def image_generation_stream_model(models: dict[str, str]) -> str:
 
 
 @pytest.fixture(scope="session")
+def video_generation_model(models: dict[str, str]) -> str:
+    """Provide the appropriate default video generation model."""
+    return models["video_generation"]
+
+
+@pytest.fixture(scope="session")
 def api_key() -> str:
     """Returns the API key used for the test session with local clients."""
     return _TEST_API_KEY
@@ -470,8 +520,6 @@ def test_client(request: pytest.FixtureRequest) -> Generator[TestClient | None]:
     if not request.config.getoption(
         "--use-official-api"
     ) and not request.config.getoption("--server-url"):
-        # Enable JSON logs so tests can assert on captured log events.
-        environ["log_level"] = "info"
         from stdapi.main import app  # noqa: PLC0415
 
         with TestClient(app) as test_client:
@@ -813,7 +861,7 @@ def anthropic_count_tokens_model(anthropic_models: dict[str, str]) -> str:
 @pytest.fixture(scope="session")
 def anthropic_client(
     request: pytest.FixtureRequest, test_client: TestClient | None, api_key: str
-) -> Anthropic:
+) -> Anthropic | AnthropicBedrock:
     """Create an Anthropic client for either local or official API testing."""
     if test_client:
         return Anthropic(
@@ -825,7 +873,7 @@ def anthropic_client(
     if request.config.getoption("--use-official-api"):
         if getenv("ANTHROPIC_API_KEY"):
             return Anthropic(max_retries=5)
-        return AnthropicBedrock(max_retries=5)  # type: ignore[return-value]
+        return AnthropicBedrock(max_retries=5)
     return Anthropic(
         base_url=f"{request.config.getoption('--server-url').rstrip('/')}/anthropic/",
         max_retries=0,

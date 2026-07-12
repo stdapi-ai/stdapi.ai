@@ -86,6 +86,7 @@ Your existing applications, SDKs, and tools work immediately — no plugins or c
 | `/v1/images/generations`     | Text-to-image generation                                                  | AWS Bedrock Image Models             |
 | `/v1/images/edits`           | Image editing, inpainting & transformations                               | AWS Bedrock Image Models             |
 | `/v1/images/variations`      | Image variations                                                          | AWS Bedrock Image Models             |
+| `/v1/videos`                 | Asynchronous text/image-to-video generation                               | AWS Bedrock Video Models             |
 | `/v1/audio/speech`           | Text-to-speech with SSML support                                          | Amazon Polly                         |
 | `/v1/audio/transcriptions`   | Speech-to-text with speaker diarization                                   | Amazon Transcribe                    |
 | `/v1/audio/translations`     | Speech-to-English translation                                             | Amazon Transcribe + Amazon Translate |
@@ -250,6 +251,8 @@ Access every model available on AWS Bedrock through a single, consistent API.
 
 ### :material-video: Video
 
+- Text-to-video and image-to-video generation (Amazon Nova Reel, Luma Ray 2) via the OpenAI Videos API
+- Asynchronous job workflow — create, list, poll, download, delete — with stateless job tracking
 - Video input in chat completions for supported models (e.g., Amazon Nova)
 - S3 URLs as direct video input for multimodal embeddings
 
@@ -529,6 +532,7 @@ All four solutions below expose an OpenAI-compatible API in front of AWS Bedrock
 | **OpenAI Image generation**                 |  :material-check:{ .green-check }   |    :material-check:{ .green-check }     |                    —                    |                    —                    |
 | **OpenAI Image editing**                    |  :material-check:{ .green-check }   |                    —                    |                    —                    |                    —                    |
 | **OpenAI Image variations**                 |  :material-check:{ .green-check }   |                    —                    |                    —                    |                    —                    |
+| **OpenAI Videos API**                       |  :material-check:{ .green-check }   |                    —                    |                    —                    |                    —                    |
 | **OpenAI TTS (speech)**                     |  :material-check:{ .green-check }   | :material-check:{ .yellow-check } [^12] |                    —                    |                    —                    |
 | **OpenAI STT (transcription)**              |  :material-check:{ .green-check }   |                    —                    |                    —                    |                    —                    |
 | **OpenAI Files & Uploads API**              |  :material-check:{ .green-check }   |                    —                    |                    —                    |                    —                    |
