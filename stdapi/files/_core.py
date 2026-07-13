@@ -37,6 +37,7 @@ from stdapi.aws_s3 import (
     track_temporary_s3_objects,
 )
 from stdapi.config import SETTINGS
+from stdapi.monitoring import log_error_details
 from stdapi.server import AWS_APN_ID
 from stdapi.types import FILE_ID_PATTERN
 from stdapi.utils import now_utc_timestamp, parse_content_disposition_filename
@@ -118,7 +119,14 @@ def _require_bucket() -> str:
     """
     if bucket := SETTINGS.aws_s3_bucket:
         return bucket
-    msg = "Files API is not available: aws_s3_bucket is not configured."
+    log_error_details(
+        "S3 bucket not configured (aws_s3_bucket): the Files API is disabled.",
+        level="warning",
+    )
+    msg = (
+        "The Files API is not available on the current server. "
+        "Please contact the administrator to enable it."
+    )
     raise ApiError(msg, status=503)
 
 

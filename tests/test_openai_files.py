@@ -18,7 +18,9 @@ from openai import NotFoundError as OpenAINotFoundError
 from openai.types import FileObject
 from starlette.testclient import TestClient
 
-from stdapi.files import _multipart
+from stdapi.api_errors import ApiError
+from stdapi.config import SETTINGS
+from stdapi.files import _core, _multipart
 
 #: Minimal valid PDF bytes for testing document endpoints.
 _MINIMAL_PDF: bytes = (
@@ -438,6 +440,26 @@ class TestOpenAIFiles:
             assert len(content) > 0
         finally:
             openai_client.files.delete(uploaded.id)
+
+
+@pytest.mark.local
+class TestRequireBucketUnit:
+    """Unit tests for the Files API S3 bucket gate."""
+
+    def test_no_bucket_hides_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Without a bucket, the 503 hides settings and warns the administrator."""
+        monkeypatch.setattr(SETTINGS, "aws_s3_bucket", None)
+        warnings: list[object] = []
+        monkeypatch.setattr(
+            _core, "log_error_details", lambda *args, **_kwargs: warnings.extend(args)
+        )
+        with pytest.raises(ApiError) as exc_info:
+            _core._require_bucket()  # noqa: SLF001
+        assert exc_info.value.status == 503
+        message = str(exc_info.value)
+        assert "administrator" in message
+        assert "aws_s3_bucket" not in message
+        assert any("aws_s3_bucket" in str(warning) for warning in warnings)
 
 
 class _StubMultipartS3Client:
