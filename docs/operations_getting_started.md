@@ -8,8 +8,13 @@ keywords: deploy OpenAI gateway AWS, AWS Bedrock deployment, Terraform AWS AI, e
 
 Get a production-grade OpenAI-compatible AI gateway running on AWS in 5 minutes. Terraform handles everything — ECS Fargate, HTTPS, auto-scaling, optional WAF, and optional monitoring.
 
-!!! tip "14-Day Free Trial"
+!!! tip trial "14-Day Free Trial"
     The AWS Marketplace subscription includes a **14-day free trial**. Test the full production stack in your environment risk-free.
+
+!!! tip offer "Save 10% with an AWS Marketplace private offer"
+    Contact us to receive a private rate of **$0.09/container-hour** instead of $0.10. Same pay-per-use model, no upfront payment or minimum usage. Want to try first? Use the 14-day free trial of the public listing, then accept the private offer.
+
+    [:material-email-outline: Request a Private Offer](contact.md)
 
 !!! info "Need help?"
     For questions, issue reports, or assistance, see the [Contact](contact.md) page.

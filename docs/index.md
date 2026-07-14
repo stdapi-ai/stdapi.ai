@@ -306,6 +306,10 @@ stdapi.ai is an **AWS Qualified Software** solution, verified against AWS techni
 
     [:octicons-arrow-right-24: Start 14-Day Free Trial](operations_getting_started.md)
 
+    **:material-tag-outline: Save 10% with a private offer:** pay **$0.09/container-hour** instead of $0.10.
+
+    [:octicons-arrow-right-24: Request Your Private Offer](contact.md)
+
 </div>
 
 <div class="cta-banner" markdown>

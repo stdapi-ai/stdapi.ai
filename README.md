@@ -152,8 +152,11 @@ The commercial license via [AWS Marketplace](https://aws.amazon.com/marketplace/
 - ✅ **Hardened containers** — security-optimized with regular updates
 - ✅ **Terraform module** — production-ready infrastructure in minutes
 - ✅ **Streamlined AWS billing** — consolidated with your existing AWS costs
+- ✅ **$0.10/container-hour** — no markup on model usage; pay AWS Bedrock rates directly
 
 **[Start 14-Day Free Trial →](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo)**
+
+**Save 10% with a private offer:** pay **$0.09/container-hour** instead — same pay-per-use model, 14-day free trial included, no upfront payment or minimum usage. [Contact us](https://stdapi.ai/contact/) with your AWS account ID to request one.
 
 ---
 

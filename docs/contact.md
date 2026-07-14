@@ -11,21 +11,37 @@ hide:
 
 Feel free to get in touch to discuss your needs.
 
+!!! tip offer "Request a 10% discount via a private offer"
+
+    Get **$0.09/container-hour** instead of $0.10 — a 10% reduction on the standard rate. Same pay-per-use model, no upfront payment or minimum usage. Want to try first? Use the [14-day free trial](operations_getting_started.md) of the public listing, then accept the private offer. Send us the AWS account ID that will purchase the product. We will create a private AWS Marketplace offer for that account. You will receive an AWS notification and can review the complete pricing and terms before accepting.
+
+    Please include:
+
+    - Company name
+    - **AWS account ID that will accept the offer** (required by AWS to create the offer)
+    - Use case (optional)
+    - Expected deployment date (optional)
+    - Contact email (optional)
+
+    [private@offers.stdapi.ai](mailto:private@offers.stdapi.ai)
+
+---
+
 <div class="grid" markdown>
 
-!!! info ":material-email: &nbsp; Support"
+!!! info email "Support"
 
     [support@stdapi.ai](mailto:support@stdapi.ai)
 
     For help, bug reports, or technical questions about stdapi.ai.
 
-!!! info ":material-email: &nbsp; Business & general inquiries"
+!!! info email "Business & general inquiries"
 
     [contact@stdapi.ai](mailto:contact@stdapi.ai)
 
     For sales, partnerships, or any other questions.
 
-!!! abstract ":material-clock-fast: &nbsp; Availability"
+!!! abstract availability "Availability"
 
     Replies typically within 1 business day (Europe/Paris timezone)
 
