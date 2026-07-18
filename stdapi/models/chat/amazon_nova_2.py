@@ -4,6 +4,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 from stdapi.models.chat._default import ChatModel as _BaseChatModel
+from stdapi.monitoring import log_error_details
 from stdapi.types.anthropic_messages import (
     CodeExecutionResultBlock,
     CodeExecutionResultBlockParam,
@@ -12,11 +13,18 @@ from stdapi.types.anthropic_messages import (
 )
 
 if TYPE_CHECKING:
+    from types_aiobotocore_bedrock_runtime.literals import ServiceTierTypeType
     from types_aiobotocore_bedrock_runtime.type_defs import (
         ContentBlockTypeDef,
+        InferenceConfigurationTypeDef,
+        JsonSchemaDefinitionTypeDef,
+        MessageTypeDef,
+        SystemContentBlockTypeDef,
+        ToolConfigurationTypeDef,
         ToolResultContentBlockOutputTypeDef,
     )
 
+    from stdapi.aws_bedrock import ConverseRequestBaseTypeDef
     from stdapi.models.chat import Effort
     from stdapi.types import JsonMapping
     from stdapi.types.anthropic_messages import ContentBlock, ContentBlockParam
@@ -86,6 +94,58 @@ class ChatModel(_BaseChatModel):
             "type": "enabled",
             "maxReasoningEffort": _REASONING_OVERRIDE.get(reasoning_effort, "medium"),
         }
+
+    async def _prepare_converse_request(
+        self,
+        bedrock_messages: list[MessageTypeDef],
+        inference_cfg: InferenceConfigurationTypeDef,
+        system_blocks: list[SystemContentBlockTypeDef] | None,
+        tool_config: ToolConfigurationTypeDef | None,
+        additional_request_fields: dict[str, Any],
+        service_tier: ServiceTierTypeType | None,
+        output_config: JsonSchemaDefinitionTypeDef | None = None,
+        request_metadata: dict[str, str] | None = None,
+    ) -> ConverseRequestBaseTypeDef:
+        """Build the Converse request, honoring the Nova high-effort constraint.
+
+        Nova rejects requests that set ``maxTokens`` while ``reasoningConfig``
+        is enabled with ``maxReasoningEffort: high`` — the token limit is
+        dropped with a logged warning in that case.
+
+        Args:
+            bedrock_messages: Converted Bedrock message list.
+            inference_cfg: Bedrock inference configuration.
+            system_blocks: Optional top-level system instruction blocks.
+            tool_config: Optional Bedrock tool configuration.
+            additional_request_fields: Additional request fields.
+            service_tier: Service tier configuration.
+            output_config: Optional Bedrock output JSON Schema configuration.
+            request_metadata: Optional key-value metadata.
+
+        Returns:
+            Bedrock Converse request payload.
+        """
+        reasoning = additional_request_fields.get("reasoningConfig") or {}
+        if (
+            reasoning.get("type") == "enabled"
+            and reasoning.get("maxReasoningEffort") == "high"
+            and inference_cfg.pop("maxTokens", None) is not None
+        ):
+            log_error_details(
+                "'max_tokens' is not supported with high reasoning effort on "
+                "Amazon Nova 2 models: ignored.",
+                level="warning",
+            )
+        return await super()._prepare_converse_request(
+            bedrock_messages=bedrock_messages,
+            inference_cfg=inference_cfg,
+            system_blocks=system_blocks,
+            tool_config=tool_config,
+            additional_request_fields=additional_request_fields,
+            service_tier=service_tier,
+            output_config=output_config,
+            request_metadata=request_metadata,
+        )
 
     @staticmethod
     def _build_code_execution_result(
