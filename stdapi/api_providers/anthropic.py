@@ -22,6 +22,7 @@ _STATUS = {
     404: "not_found_error",
     429: "rate_limit_error",
     500: "api_error",
+    502: "api_error",
     503: "overloaded_error",
     529: "overloaded_error",
 }

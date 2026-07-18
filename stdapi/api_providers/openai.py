@@ -27,6 +27,10 @@ _STATUS = {
     403: "permission_error",
     409: "conflict_error",
     429: "rate_limit_error",
+    500: "server_error",
+    502: "server_error",
+    503: "server_error",
+    529: "server_error",
 }
 
 
