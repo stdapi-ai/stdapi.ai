@@ -62,10 +62,41 @@ if TYPE_CHECKING:
 # Claude binary detection
 # ---------------------------------------------------------------------------
 
-_CLAUDE_BIN: str | None = shutil.which("claude")
+#: JetBrains ACP agent-runtime glob for the Claude Code CLI bundled with the Agent SDK.
+_ACP_CLAUDE_GLOB = (
+    "*/acp-agents/.runtimes/node/*/npm-cache/_npx/*/node_modules/"
+    "@anthropic-ai/claude-agent-sdk-*/claude"
+)
+
+
+def _find_jetbrains_claude() -> str | None:
+    """Search the JetBrains caches for the Claude Code CLI binary.
+
+    Scans the ACP agent runtime layout for the native ``claude`` executable
+    bundled with the Claude Agent SDK platform package; the newest install
+    wins.
+
+    Returns:
+        Absolute path string if found, otherwise ``None``.
+    """
+    cache_root = Path.home() / ".cache" / "JetBrains"
+    if not cache_root.is_dir():
+        return None
+    candidates = sorted(
+        (p for p in cache_root.glob(_ACP_CLAUDE_GLOB) if os.access(p, os.X_OK)),
+        key=lambda p: p.stat().st_mtime,  # Newest install wins.
+        reverse=True,
+    )
+    return str(candidates[0]) if candidates else None
+
+
+_CLAUDE_BIN: str | None = shutil.which("claude") or _find_jetbrains_claude()
 _SKIP_NO_CLAUDE = pytest.mark.skipif(
     _CLAUDE_BIN is None,
-    reason="claude CLI not found in PATH — install Claude Code to run these tests",
+    reason=(
+        "claude CLI not found in PATH or the JetBrains ACP cache — "
+        "install Claude Code to run these tests"
+    ),
 )
 
 # ---------------------------------------------------------------------------
@@ -246,7 +277,15 @@ def _stdapi_server_session(request: pytest.FixtureRequest) -> Generator[_ServerH
         return
 
     port = _find_free_port()
-    env = {**os.environ, "API_KEY": _STDAPI_TEST_API_KEY}
+    # Remove all case variants first: conftest.py sets lowercase ``api_key``
+    # via os.environ.update(), and the lowercase variant wins the settings'
+    # case-insensitive collision in the subprocess — the server would then
+    # reject the key forwarded to Claude Code.
+    env = {**os.environ}
+    for key in list(env):
+        if key.lower() == "api_key":
+            del env[key]
+    env["API_KEY"] = _STDAPI_TEST_API_KEY
 
     proc = subprocess.Popen(  # noqa: S603
         [  # noqa: S607
@@ -396,11 +435,30 @@ def claude_code_api_key(_stdapi_server_session: _ServerHandle) -> str:
 
 @pytest.fixture
 def claude_workdir(tmp_path: Path) -> Path:
-    """Isolated working directory with Claude Code security policy pre-applied."""
+    """Isolated working directory with Claude Code security policy pre-applied.
+
+    A sandboxed ``CLAUDE_CONFIG_DIR`` (``claude-config/``) is created next to
+    the workspace with the workspace pre-trusted, so runs never read or mutate
+    the user-level Claude Code configuration.
+    """
     claude_dir = tmp_path / ".claude"
     claude_dir.mkdir()
     (claude_dir / "settings.json").write_text(json.dumps(_CLAUDE_SETTINGS, indent=2))
     (tmp_path / "results").mkdir()
+    config_dir = tmp_path / "claude-config"
+    config_dir.mkdir()
+    (config_dir / ".claude.json").write_text(
+        json.dumps(
+            {
+                "hasCompletedOnboarding": True,
+                "bypassPermissionsModeAccepted": True,
+                "projects": {
+                    str(tmp_path): {"hasTrustDialogAccepted": True},
+                    str(_STDAPI_SRC): {"hasTrustDialogAccepted": True},
+                },
+            }
+        )
+    )
     return tmp_path
 
 
@@ -460,10 +518,26 @@ def _run_claude(
         "ANTHROPIC_BASE_URL": base_url,
         "ANTHROPIC_AUTH_TOKEN": api_key,
         "ANTHROPIC_DEFAULT_SONNET_MODEL": model_env,
+        # Sandboxed config with the workspace pre-trusted: never read or
+        # mutate the user-level Claude Code configuration.
+        "CLAUDE_CONFIG_DIR": str(workdir / "claude-config"),
     }
     # Remove CLAUDECODE so claude can start even when invoked from inside another
-    # Claude Code session (e.g. when running these tests from Claude Code itself).
-    env.pop("CLAUDECODE", None)
+    # Claude Code session (e.g. when running these tests from Claude Code itself),
+    # and strip inherited auth/transport overrides that would bypass the test
+    # server (user-level API keys or direct-Bedrock routing).
+    for conflicting in (
+        "CLAUDECODE",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_CUSTOM_HEADERS",
+        "ANTHROPIC_MODEL",
+        "ANTHROPIC_SMALL_FAST_MODEL",
+        "ANTHROPIC_BEDROCK_BASE_URL",
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_VERTEX",
+        "AWS_BEARER_TOKEN_BEDROCK",
+    ):
+        env.pop(conflicting, None)
     if extra_env:
         env.update(extra_env)
 
