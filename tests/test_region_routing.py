@@ -1082,6 +1082,131 @@ class TestRouteAndExecute:
             MODEL, _ROUTING_REGIONS[0], "ConnectionError"
         )
 
+    async def test_mantle_error_failover_throttling_retries_next_region(self) -> None:
+        """A failover MantleError with status 429 is mapped to ThrottlingException and retried."""
+        import stdapi.models as _models  # noqa: PLC0415
+        import stdapi.region_routing as _rr_mod  # noqa: PLC0415
+        from stdapi.aws_bedrock_mantle import MantleError  # noqa: PLC0415
+        from stdapi.config import SETTINGS  # noqa: PLC0415
+        from stdapi.monitoring import REQUEST_LOG  # noqa: PLC0415
+
+        REQUEST_LOG.set({"level": "info"})  # type: ignore[typeddict-item]
+        router = _rr_mod.RegionRouter()
+        original_mark_error = _rr_mod.RegionRouter.mark_error
+        calls = 0
+
+        async def fn(_region: str) -> str:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                msg = "throttled"
+                raise MantleError(msg, status=429, failover=True)
+            return "ok"
+
+        with (
+            patch.object(_rr_mod, "REGION_ROUTER", router),
+            patch.object(_models, "REGION_ROUTER", router),
+            patch.object(SETTINGS, "aws_bedrock_region_routing", "ordered"),
+            patch.object(SETTINGS, "aws_bedrock_regions", _ROUTING_REGIONS),
+            patch.object(SETTINGS, "aws_bedrock_max_retries", 1),
+            patch.object(
+                _rr_mod.RegionRouter,
+                "mark_error",
+                side_effect=lambda model_id, region, code: original_mark_error(
+                    router, model_id, region, code
+                ),
+            ) as mock_mark_error,
+        ):
+            result = await _models.route_and_execute(
+                MODEL,
+                list(_ROUTING_REGIONS),  # type: ignore[arg-type]
+                fn,
+            )
+
+        assert result == "ok"
+        assert calls == 2
+        mock_mark_error.assert_called_once_with(
+            MODEL, _ROUTING_REGIONS[0], "ThrottlingException"
+        )
+
+    async def test_mantle_error_failover_unavailable_retries_next_region(self) -> None:
+        """A failover MantleError with status 503 is mapped to ServiceUnavailableException and retried."""
+        import stdapi.models as _models  # noqa: PLC0415
+        import stdapi.region_routing as _rr_mod  # noqa: PLC0415
+        from stdapi.aws_bedrock_mantle import MantleError  # noqa: PLC0415
+        from stdapi.config import SETTINGS  # noqa: PLC0415
+        from stdapi.monitoring import REQUEST_LOG  # noqa: PLC0415
+
+        REQUEST_LOG.set({"level": "info"})  # type: ignore[typeddict-item]
+        router = _rr_mod.RegionRouter()
+        original_mark_error = _rr_mod.RegionRouter.mark_error
+        calls = 0
+
+        async def fn(_region: str) -> str:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                msg = "unavailable"
+                raise MantleError(msg, status=503, failover=True)
+            return "ok"
+
+        with (
+            patch.object(_rr_mod, "REGION_ROUTER", router),
+            patch.object(_models, "REGION_ROUTER", router),
+            patch.object(SETTINGS, "aws_bedrock_region_routing", "ordered"),
+            patch.object(SETTINGS, "aws_bedrock_regions", _ROUTING_REGIONS),
+            patch.object(SETTINGS, "aws_bedrock_max_retries", 1),
+            patch.object(
+                _rr_mod.RegionRouter,
+                "mark_error",
+                side_effect=lambda model_id, region, code: original_mark_error(
+                    router, model_id, region, code
+                ),
+            ) as mock_mark_error,
+        ):
+            result = await _models.route_and_execute(
+                MODEL,
+                list(_ROUTING_REGIONS),  # type: ignore[arg-type]
+                fn,
+            )
+
+        assert result == "ok"
+        assert calls == 2
+        mock_mark_error.assert_called_once_with(
+            MODEL, _ROUTING_REGIONS[0], "ServiceUnavailableException"
+        )
+
+    async def test_mantle_error_without_failover_is_reraised_immediately(self) -> None:
+        """A non-failover MantleError is re-raised without retrying another region."""
+        import stdapi.models as _models  # noqa: PLC0415
+        import stdapi.region_routing as _rr_mod  # noqa: PLC0415
+        from stdapi.aws_bedrock_mantle import MantleError  # noqa: PLC0415
+        from stdapi.config import SETTINGS  # noqa: PLC0415
+
+        calls = 0
+
+        async def fn(_region: str) -> str:
+            nonlocal calls
+            calls += 1
+            msg = "bad request"
+            raise MantleError(msg, status=400, failover=False)
+
+        with (
+            patch.object(_rr_mod, "REGION_ROUTER", _rr_mod.RegionRouter()),
+            patch.object(SETTINGS, "aws_bedrock_region_routing", "ordered"),
+            patch.object(SETTINGS, "aws_bedrock_regions", _ROUTING_REGIONS),
+            patch.object(SETTINGS, "aws_bedrock_max_retries", 1),
+            pytest.raises(MantleError) as exc_info,
+        ):
+            await _models.route_and_execute(
+                MODEL,
+                list(_ROUTING_REGIONS),  # type: ignore[arg-type]
+                fn,
+            )
+
+        assert exc_info.value.status == 400
+        assert calls == 1
+
 
 # ---------------------------------------------------------------------------
 # Group 11 — S3 integration tests (require aws_s3_bucket to be configured)

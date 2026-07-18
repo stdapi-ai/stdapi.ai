@@ -28,15 +28,15 @@ Generate model responses with AWS Bedrock foundation models through an OpenAI Re
 
 ## Quick Start: Available Endpoints
 
-| Endpoint                     | Method | What It Does                                     | Powered By                  | MCP Tool                       |
-|------------------------------|--------|--------------------------------------------------|-----------------------------|--------------------------------|
-| `/v1/responses`              | `POST` | Create a model response                          | AWS Bedrock Converse API    | `openai_response`              |
-| `/v1/responses/input_tokens` | `POST` | Count input tokens without generating a response | AWS Bedrock CountTokens API | `openai_response_input_tokens` |
-| `/v1/responses/compact`      | `POST` | Compact a conversation into a reusable summary   | AWS Bedrock Converse API    | `openai_response_compact`      |
-| `/v1/responses/{response_id}` | `GET`  | Retrieve a stored response                       | AWS Bedrock Sessions        | `openai_response_get`          |
-| `/v1/responses/{response_id}` | `DELETE` | Delete a stored response                       | AWS Bedrock Sessions        | `openai_response_delete`       |
-| `/v1/responses/{response_id}/cancel` | `POST` | Cancel a background response — see [Stored Responses](#stored-responses) | AWS Bedrock Sessions | `openai_response_cancel` |
-| `/v1/responses/{response_id}/input_items` | `GET` | List the input items of a stored response | AWS Bedrock Sessions   | `openai_response_input_items`  |
+| Endpoint                                  | Method   | What It Does                                                             | Powered By                                | MCP Tool                       |
+|-------------------------------------------|----------|--------------------------------------------------------------------------|-------------------------------------------|--------------------------------|
+| `/v1/responses`                           | `POST`   | Create a model response                                                  | AWS Bedrock Converse API · Bedrock Mantle | `openai_response`              |
+| `/v1/responses/input_tokens`              | `POST`   | Count input tokens without generating a response                         | AWS Bedrock CountTokens API               | `openai_response_input_tokens` |
+| `/v1/responses/compact`                   | `POST`   | Compact a conversation into a reusable summary                           | AWS Bedrock Converse API                  | `openai_response_compact`      |
+| `/v1/responses/{response_id}`             | `GET`    | Retrieve a stored response                                               | AWS Bedrock Sessions · Bedrock Mantle     | `openai_response_get`          |
+| `/v1/responses/{response_id}`             | `DELETE` | Delete a stored response                                                 | AWS Bedrock Sessions · Bedrock Mantle     | `openai_response_delete`       |
+| `/v1/responses/{response_id}/cancel`      | `POST`   | Cancel a background response — see [Stored Responses](#stored-responses) | AWS Bedrock Sessions · Bedrock Mantle     | `openai_response_cancel`       |
+| `/v1/responses/{response_id}/input_items` | `GET`    | List the input items of a stored response                                | AWS Bedrock Sessions                      | `openai_response_input_items`  |
 
 ## Feature Compatibility
 
@@ -88,7 +88,7 @@ Generate model responses with AWS Bedrock foundation models through an OpenAI Re
 | `max_tool_calls`                                                      | :material-close-circle:{ .unsupported } | Returns `400`; not supported                                                 |
 | `context_management`                                                  | :material-close-circle:{ .unsupported } | Returns `400`; not supported                                                 |
 | `background`                                                          | :material-close-circle:{ .unsupported } | Accepted but ignored — execution is always synchronous; see [Stored Responses](#stored-responses) for the `cancel` endpoint caveat |
-| `store`                                                               |   :material-check-circle:{ .success }   | Persists the response in AWS Bedrock session storage (non-streaming)         |
+| `store`                                                               |   :material-check-circle:{ .success }   | Persists the response — AWS Bedrock session storage (non-streaming) or Mantle native storage for Mantle models (streaming supported) |
 | `stream_options`                                                      | :material-close-circle:{ .unsupported } | Accepted but ignored                                                         |
 | `conversation`                                                        | :material-close-circle:{ .unsupported } | Returns `400`; use `previous_response_id` or `input`                         |
 | `prompt` (template reference)                                         | :material-close-circle:{ .unsupported } | Returns `400`; not supported                                                 |
@@ -128,6 +128,13 @@ Generate model responses with AWS Bedrock foundation models through an OpenAI Re
 * :material-close-circle:{ .unsupported } **Unsupported** — Not available in this implementation
 
 </div>
+
+!!! note "Bedrock Mantle passthrough"
+    On [Mantle](features.md#bedrock-mantle-models) models served natively by the upstream Responses API, parameters listed above as accepted-but-ignored — `background`, `include`, `stream_options`, `reasoning.summary`, `text.verbosity`, `client_metadata`, `top_logprobs` — and the hosted tools (`file_search`, `code_interpreter`, `computer`, `mcp`, `image_generation`) are forwarded verbatim upstream: the upstream API decides whether they take effect or return a clean error. The `web_search` tool runs in cache-only mode (`external_web_access` is forced off).
+
+## Model Support
+
+All models supported by AWS Bedrock Converse and Converse Stream API are supported, plus every model served by [Amazon Bedrock Mantle](features.md#bedrock-mantle-models) when enabled — including OpenAI GPT-5.x, xAI Grok, and Google Gemma 4. Requests to Mantle models are passed through natively or converted automatically depending on the model's upstream API support.
 
 ## Advanced Features
 
@@ -291,7 +298,7 @@ curl -X POST "$BASE/v1/responses" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "anthropic.claude-sonnet-5",
+    "model": "openai.gpt-5.6-sol",
     "input": "Solve: if a train travels 120 km in 90 minutes, what is its speed?",
     "reasoning": {"effort": "low"},
     "max_output_tokens": 4096
@@ -314,7 +321,7 @@ curl -X POST "$BASE/v1/responses" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "anthropic.claude-sonnet-5",
+    "model": "openai.gpt-5.6-sol",
     "instructions": "You are a helpful assistant.",
     "input": "What is Python?",
     "prompt_cache_key": "default"
@@ -367,7 +374,7 @@ curl -X POST "$BASE/v1/responses" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "anthropic.claude-sonnet-5",
+    "model": "openai.gpt-5.6-sol",
     "input": "Hello",
     "prompt_cache_key": "default",
     "prompt_cache_retention": "24h"
@@ -628,7 +635,7 @@ curl -X POST "$BASE/v1/responses" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "anthropic.claude-sonnet-5",
+    "model": "openai.gpt-5.6-sol",
     "input": "Solve 12 × 13",
     "reasoning": {"effort": "low"},
     "max_output_tokens": 4096
@@ -675,7 +682,7 @@ curl -X POST "$BASE/v1/responses/input_tokens" \
 ```
 
 !!! note "Limitations"
-    The `previous_response_id` and `conversation` parameters are not supported for token counting (they would change the count); `personality` and `reasoning.context` are accepted and ignored.
+    The `previous_response_id` and `conversation` parameters are not supported for token counting (they would change the count); `personality` and `reasoning.context` are accepted and ignored. Token counting is not available for models served by [Amazon Bedrock Mantle](features.md#bedrock-mantle-models) (the request is rejected with a `400` error).
 
 ## Stored Responses
 
@@ -691,14 +698,15 @@ curl -X POST "$BASE/v1/responses" \
 The returned `id` then works with:
 
 - `GET /v1/responses/{response_id}` — retrieve the stored response.
-- `GET /v1/responses/{response_id}/input_items` — list the input items that produced it.
+- `GET /v1/responses/{response_id}/input_items` — list the input items that produced it. Bedrock Mantle native storage does not serve input item listings: for Mantle-stored responses this returns `404` with an explanatory message.
 - `DELETE /v1/responses/{response_id}` — delete it (and its AWS Bedrock session).
-- `POST /v1/responses/{response_id}/cancel` — present for API parity; always fails with the OpenAI synchronous-response error since `background=true` is not supported.
+- `POST /v1/responses/{response_id}/cancel` — for Mantle region-tagged IDs, proxied to Bedrock Mantle (background responses are cancellable upstream); for Bedrock-session-stored responses it fails with the OpenAI synchronous-response error since execution is synchronous.
 - `previous_response_id` on a new request — continue the conversation: the stored input and output are automatically prepended to the new input (instructions are not carried over, per the OpenAI API).
 
 !!! note "Behavior notes"
     - `store` defaults to **false** on this implementation (the OpenAI API defaults to true).
-    - `store=true` is ignored with `stream=true` (a warning is recorded in the request log).
+    - On AWS Bedrock session storage, `store=true` is ignored with `stream=true` (a warning is recorded in the request log). [Mantle](features.md#bedrock-mantle-models) models persist responses in Mantle native storage instead, where `store` works with streaming too.
+    - Mantle models without native Responses storage (Messages- or Chat-Completions-bound) use AWS Bedrock session storage like classic models. Only a `store=true` request answered through a mid-request API fallback (away from the upstream Responses API) is served without storage, with a warning recorded in the request log (agent harnesses request `store` unconditionally); its ID cannot be retrieved later. `previous_response_id` on such a fallback returns `400` instead — conversation history is never silently dropped.
     - Sessions are created in the primary Bedrock region and persist until deleted through the API.
     - Requires the AWS Bedrock session management IAM permissions (`bedrock:CreateSession`, `bedrock:CreateInvocation`, `bedrock:PutInvocationStep`, `bedrock:GetInvocationStep`, `bedrock:ListInvocationSteps`, `bedrock:ListInvocations`, `bedrock:ListSessions`, `bedrock:ListTagsForResource`, `bedrock:EndSession`, `bedrock:DeleteSession`, `bedrock:TagResource`). Without them, `store=true` is ignored (with a request-log warning) and the response is not persisted.
 

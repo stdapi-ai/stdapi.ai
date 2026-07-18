@@ -9,6 +9,9 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from stdapi.api_providers.anthropic import _format_error as anthropic_format_error
+from stdapi.api_providers.openai import _format_error as openai_format_error
+
 if TYPE_CHECKING:
     from starlette.testclient import TestClient
 
@@ -88,6 +91,52 @@ def _assert_anthropic_error_shape(body: dict[str, Any]) -> dict[str, Any]:
     assert isinstance(err["type"], str)
     assert isinstance(err["message"], str)
     return err  # type: ignore[no-any-return]
+
+
+class TestFormatErrorFunctions:
+    """Pure unit tests for the provider `_format_error` envelope builders.
+
+    No server or test client involved — these exercise the status-to-type
+    mapping functions directly.
+    """
+
+    @pytest.mark.parametrize(
+        ("status", "expected_type"),
+        [
+            (500, "server_error"),
+            (502, "server_error"),
+            (503, "server_error"),
+            (529, "server_error"),
+            (404, "invalid_request_error"),
+            (429, "rate_limit_error"),
+        ],
+    )
+    def test_openai_format_error_maps_status_to_type(
+        self, status: int, expected_type: str
+    ) -> None:
+        """`_format_error` maps each status code to the expected OpenAI error type."""
+        body, returned_status = openai_format_error(status, "boom")
+        err = _assert_openai_error_shape(body)
+        assert err["type"] == expected_type
+        assert returned_status == status
+
+    @pytest.mark.parametrize(
+        ("status", "expected_type", "expected_status"),
+        [
+            (500, "api_error", 500),
+            (502, "api_error", 502),
+            (503, "overloaded_error", 529),
+            (529, "overloaded_error", 529),
+        ],
+    )
+    def test_anthropic_format_error_maps_status_to_type(
+        self, status: int, expected_type: str, expected_status: int
+    ) -> None:
+        """`_format_error` maps each status code to type, remapping 503 to 529."""
+        body, returned_status = anthropic_format_error(status, "boom")
+        err = _assert_anthropic_error_shape(body)
+        assert err["type"] == expected_type
+        assert returned_status == expected_status
 
 
 class TestOpenaiErrorPayloads:

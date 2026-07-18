@@ -11,6 +11,7 @@ from aiohttp import ClientSession, ClientTimeout
 from botocore.exceptions import BotoCoreError, ClientError
 
 from stdapi import server
+from stdapi.aws_bedrock_mantle import mantle_http_session
 from stdapi.config import AWS_REGION, AWS_SESSION, SETTINGS
 
 if TYPE_CHECKING:
@@ -172,6 +173,9 @@ class AWSConnectionManager:
                 _CLIENTS["bedrock-runtime.no-retry"] = dict(
                     zip(regions, no_retry_results, strict=True)
                 )
+
+            if SETTINGS.aws_bedrock_mantle_enabled:
+                await self._exit_stack.enter_async_context(mantle_http_session())
         except BaseException:
             # __aenter__ raising skips __aexit__ under the context-manager
             # protocol: close whatever this attempt already entered so no

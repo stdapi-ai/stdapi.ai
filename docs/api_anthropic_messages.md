@@ -37,55 +37,55 @@ Generate conversational AI responses with AWS Bedrock foundation models—includ
 
 ## Quick Start: Available Endpoints
 
-| Endpoint                    | Method | What It Does                               | Powered By                  | MCP Tool                       |
-|-----------------------------|--------|--------------------------------------------|-----------------------------|--------------------------------|
-| `/v1/messages`              | POST   | Conversational AI with multi-modal support | AWS Bedrock Converse API    | `anthropic_message`            |
-| `/v1/messages/count_tokens` | POST   | Count tokens in a message without sending  | AWS Bedrock CountTokens API | `anthropic_message_count_tokens` |
+| Endpoint                    | Method | What It Does                               | Powered By                                   | MCP Tool                         |
+|-----------------------------|--------|--------------------------------------------|----------------------------------------------|----------------------------------|
+| `/v1/messages`              | POST   | Conversational AI with multi-modal support | AWS Bedrock Converse API · Bedrock Mantle    | `anthropic_message`              |
+| `/v1/messages/count_tokens` | POST   | Count tokens in a message without sending  | AWS Bedrock CountTokens API · Bedrock Mantle | `anthropic_message_count_tokens` |
 
 ## Feature Compatibility
 
 <div class="feature-table" markdown>
 
-| Feature                               |                  Status                  | Notes                                                                      |
-|---------------------------------------|:----------------------------------------:|----------------------------------------------------------------------------|
-| **Messages & Roles**                  |                                          |                                                                            |
-| Text messages                         |   :material-check-circle:{ .success }    | Full support for all text content                                          |
-| Image input (`image`)                 |       :material-cog:{ .model-dep }       | HTTP URLs, data URIs, base64                                               |
-| Document input (`document`)           |       :material-cog:{ .model-dep }       | PDF (base64/URL), plain text, content blocks                               |
-| Document citations                    |       :material-cog:{ .model-dep }       | Citation locations in responses (PDF only on some models)                  |
-| Search result input (`search_result`) |   :material-check-circle:{ .success }    | Pass search results as context                                             |
-| System messages                       |       :material-cog:{ .model-dep }       | System prompts                                                             |
-| Image & Document input from S3        | :material-plus-circle:{ .extra-feature } | S3 URLs                                                                    |
+| Feature                               |                  Status                  | Notes                                                                                        |
+|---------------------------------------|:----------------------------------------:|----------------------------------------------------------------------------------------------|
+| **Messages & Roles**                  |                                          |                                                                                              |
+| Text messages                         |   :material-check-circle:{ .success }    | Full support for all text content                                                            |
+| Image input (`image`)                 |       :material-cog:{ .model-dep }       | HTTP URLs, data URIs, base64                                                                 |
+| Document input (`document`)           |       :material-cog:{ .model-dep }       | PDF (base64/URL), plain text, content blocks                                                 |
+| Document citations                    |       :material-cog:{ .model-dep }       | Citation locations in responses (PDF only on some models)                                    |
+| Search result input (`search_result`) |   :material-check-circle:{ .success }    | Pass search results as context                                                               |
+| System messages                       |       :material-cog:{ .model-dep }       | System prompts                                                                               |
+| Image & Document input from S3        | :material-plus-circle:{ .extra-feature } | S3 URLs                                                                                      |
 | Files API (`file_id`)                 |   :material-check-circle:{ .success }    | Reference uploaded files in document/image sources — see [Files API](api_anthropic_files.md) |
-| **Tool Calling**                      |                                          |                                                                            |
-| Tool use (`tools`)                    |       :material-cog:{ .model-dep }       | Full Anthropic-compatible schema                                           |
-| Tool choice (`auto`, `any`, `tool`)   |       :material-cog:{ .model-dep }       | Control tool selection behavior                                            |
-| Tool choice `none`                    |   :material-minus-circle:{ .partial }    | Remove tools from request instead                                          |
-| Parallel tool calls                   |       :material-cog:{ .model-dep }       | Multiple tools in one turn                                                 |
-| Web search tool (`web_search`)        |       :material-cog:{ .model-dep }       | Available on models with system tool support (e.g., Amazon Nova 2)         |
-| Claude server tools                   |       :material-cog:{ .model-dep }       | Bash, text editor, computer use (Claude 3.5+), memory (Claude 3.7-4.5) |
-| **Generation Control**                |                                          |                                                                            |
-| `max_tokens`                          |   :material-check-circle:{ .success }    | Output length limits (required)                                            |
-| `temperature`                         |       :material-cog:{ .model-dep }       | Mapped to Bedrock inference params                                         |
-| `top_p`                               |       :material-cog:{ .model-dep }       | Nucleus sampling control                                                   |
-| `top_k`                               |       :material-cog:{ .model-dep }       | Top-k sampling control                                                     |
-| `stop_sequences`                      |       :material-cog:{ .model-dep }       | Custom stop strings                                                        |
-| Thinking                              |       :material-cog:{ .model-dep }       |                                                                            |
-| Prompt caching                        |       :material-cog:{ .model-dep }       | Cache prompts to reduce costs and latency                                  |
-| Extra model-specific params           | :material-plus-circle:{ .extra-feature } | Extra model-specific parameters not supported by the Anthropic API         |
-| **Streaming & Output**                |                                          |                                                                            |
-| Text                                  |   :material-check-circle:{ .success }    | Text messages                                                              |
-| Streaming (`stream: true`)            |   :material-check-circle:{ .success }    | Server-Sent Events (SSE)                                                   |
-| Thinking content                      |       :material-cog:{ .model-dep }       | Extended thinking output in content blocks                                 |
-| **Usage tracking**                    |                                          |                                                                            |
-| Input text tokens                     |   :material-check-circle:{ .success }    | Billing unit                                                               |
-| Output tokens                         |   :material-check-circle:{ .success }    | Billing unit                                                               |
-| Cache creation tokens                 |   :material-check-circle:{ .success }    | Prompt caching metrics (streaming and non-streaming)                       |
-| Cache read tokens                     |   :material-check-circle:{ .success }    | Prompt caching metrics                                                     |
-| **Other**                             |                                          |                                                                            |
-| Metadata                              |   :material-minus-circle:{ .partial }    | Logged                                                                     |
-| Bedrock Guardrails                    | :material-plus-circle:{ .extra-feature } | Content safety policies                                                    |
-| Service tiers                         |   :material-check-circle:{ .success }    | Mapped to Bedrock service tiers and latency options                        |
+| **Tool Calling**                      |                                          |                                                                                              |
+| Tool use (`tools`)                    |       :material-cog:{ .model-dep }       | Full Anthropic-compatible schema                                                             |
+| Tool choice (`auto`, `any`, `tool`)   |       :material-cog:{ .model-dep }       | Control tool selection behavior                                                              |
+| Tool choice `none`                    |   :material-minus-circle:{ .partial }    | Remove tools from request instead                                                            |
+| Parallel tool calls                   |       :material-cog:{ .model-dep }       | Multiple tools in one turn                                                                   |
+| Web search tool (`web_search`)        |       :material-cog:{ .model-dep }       | Available on models with system tool support (e.g., Amazon Nova 2)                           |
+| Claude server tools                   |       :material-cog:{ .model-dep }       | Bash, text editor, computer use (Claude 3.5+), memory (Claude 3.7-4.5)                       |
+| **Generation Control**                |                                          |                                                                                              |
+| `max_tokens`                          |   :material-check-circle:{ .success }    | Output length limits (required)                                                              |
+| `temperature`                         |       :material-cog:{ .model-dep }       | Mapped to Bedrock inference params                                                           |
+| `top_p`                               |       :material-cog:{ .model-dep }       | Nucleus sampling control                                                                     |
+| `top_k`                               |       :material-cog:{ .model-dep }       | Top-k sampling control                                                                       |
+| `stop_sequences`                      |       :material-cog:{ .model-dep }       | Custom stop strings                                                                          |
+| Thinking                              |       :material-cog:{ .model-dep }       |                                                                                              |
+| Prompt caching                        |       :material-cog:{ .model-dep }       | Cache prompts to reduce costs and latency                                                    |
+| Extra model-specific params           | :material-plus-circle:{ .extra-feature } | Extra model-specific parameters not supported by the Anthropic API                           |
+| **Streaming & Output**                |                                          |                                                                                              |
+| Text                                  |   :material-check-circle:{ .success }    | Text messages                                                                                |
+| Streaming (`stream: true`)            |   :material-check-circle:{ .success }    | Server-Sent Events (SSE)                                                                     |
+| Thinking content                      |       :material-cog:{ .model-dep }       | Extended thinking output in content blocks                                                   |
+| **Usage tracking**                    |                                          |                                                                                              |
+| Input text tokens                     |   :material-check-circle:{ .success }    | Billing unit                                                                                 |
+| Output tokens                         |   :material-check-circle:{ .success }    | Billing unit                                                                                 |
+| Cache creation tokens                 |   :material-check-circle:{ .success }    | Prompt caching metrics (streaming and non-streaming)                                         |
+| Cache read tokens                     |   :material-check-circle:{ .success }    | Prompt caching metrics                                                                       |
+| **Other**                             |                                          |                                                                                              |
+| Metadata                              |   :material-minus-circle:{ .partial }    | Logged                                                                                       |
+| Bedrock Guardrails                    | :material-plus-circle:{ .extra-feature } | Content safety policies                                                                      |
+| Service tiers                         |   :material-check-circle:{ .success }    | Mapped to Bedrock service tiers and latency options                                          |
 
 </div>
 
@@ -103,7 +103,23 @@ Generate conversational AI responses with AWS Bedrock foundation models—includ
 
 ## Model Support
 
-All models supported by AWS Bedrock Converse and Converse Stream API are supported.
+All models supported by AWS Bedrock Converse and Converse Stream API are supported, plus every model served by [Amazon Bedrock Mantle](features.md#bedrock-mantle-models) when enabled — including OpenAI GPT-5.x, xAI Grok, and Google Gemma 4. Requests to Mantle models are passed through natively or converted automatically depending on the model's upstream API support — see [Bedrock Mantle](#bedrock-mantle) below.
+
+### Bedrock Mantle
+
+Mantle-only Claude models are passed through to the upstream Anthropic Messages API; other Mantle models are converted to an OpenAI shape (Responses or Chat Completions). Parameter fidelity differs per path:
+
+| Parameter | Claude passthrough | Converted to an OpenAI shape |
+|-----------|--------------------|------------------------------|
+| Server tools (`web_search`, `code_execution`, `bash`, `text_editor`, `computer`, …) | Forwarded verbatim (`anthropic-beta` flags are **not** auto-injected on the Mantle path — pass them yourself) | Rejected with `400` |
+| `thinking` | Forwarded | Dropped on conversion (use `output_config.effort` for portable reasoning control) |
+| `output_config.effort` | Forwarded | Mapped to reasoning effort |
+| `output_config.format` | Fails upstream — not supported by the Mantle Messages API | `json_schema` mapped to OpenAI structured output |
+| `top_k` | Forwarded | Dropped |
+| `cache_control` markers | Forwarded (prompt caching preserved) | Dropped |
+| `stop_sequences` | Forwarded | Dropped when served via the Responses API |
+| `metadata.user_id` | Forwarded | Forwarded, SHA-256-hashed when over 64 characters |
+| `service_tier` | Forwarded | Only `auto` is forwarded |
 
 ### ![Claude](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Claude Models Name Aliases
 
@@ -432,7 +448,7 @@ curl -X POST "$BASE/v1/messages" \
 ```
 
 !!! tip "Beta Headers"
-    Claude server tools require specific `anthropic-beta` flags on Bedrock. These flags are **automatically injected** when the corresponding server tools are included in the request — no manual header required:
+    Claude server tools require specific `anthropic-beta` flags on Bedrock. On the classic Bedrock (Converse) path these flags are **automatically injected** when the corresponding server tools are included in the request — no manual header required (on the [Mantle](#bedrock-mantle) path they are not auto-injected; pass them yourself):
 
     - `bash`, `text_editor`, `computer` → `computer-use-2024-10-22` (Claude 3.5) or `computer-use-2025-01-24` (Claude 3.7+)
     - `memory` → `context-management-2025-06-27` (Claude 3.7+)
@@ -444,7 +460,7 @@ curl -X POST "$BASE/v1/messages" \
 
 ##### Unsupported Anthropic Server Tools
 
-The following Anthropic server tools are **not supported** via Bedrock:
+The following Anthropic server tools are **not supported** via the classic Bedrock (Converse) path:
 
 - `code_execution` — Code execution sandbox
 - `web_search` — Web search (only available on Amazon Nova models via `nova_grounding`)
@@ -452,7 +468,7 @@ The following Anthropic server tools are **not supported** via Bedrock:
 - `tool_search` — Tool search
 - `container_upload` — Container file upload
 
-Requests using these tools on any Claude model will return a `400 Bad Request` error.
+Requests using these tools on Converse-served Claude models will return a `400 Bad Request` error. On [Mantle](#bedrock-mantle)-served Claude models (passthrough), server tools are instead forwarded verbatim to the upstream Messages API, which decides support; when a Mantle request must be converted to an OpenAI shape, server tools are rejected with `400`.
 
 ### Provider-Specific Parameters
 

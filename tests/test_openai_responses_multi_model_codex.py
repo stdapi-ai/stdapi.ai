@@ -173,6 +173,14 @@ _MODEL_CONFIGS = [
     ),
     # ── Z.AI ──────────────────────────────────────────────────────────────────
     pytest.param({"model_env": "zai.glm-5", "extra_env": {}}, id="glm-5"),
+    # ── OpenAI (Bedrock Mantle) ───────────────────────────────────────────────
+    pytest.param(
+        # Responses-only reasoning model served natively by Bedrock Mantle.
+        {"model_env": "openai.gpt-5.6-luna", "extra_env": {}},
+        id="gpt-5.6-luna",
+    ),
+    # ── xAI (Bedrock Mantle) ──────────────────────────────────────────────────
+    pytest.param({"model_env": "xai.grok-4.3", "extra_env": {}}, id="grok-4.3"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -456,7 +464,6 @@ def _run_codex(
         model_env,
         "--json",
         "--ephemeral",
-        "--dangerously-bypass-approvals-and-sandbox",
         "-s",
         "read-only",
         "-C",
@@ -695,6 +702,16 @@ class TestCodexPipeline:
         Requires reading the adapter and SSE formatting code.
         Target: ≥2 shell tool calls.
         """
+        if model_config["model_env"] == "xai.grok-4.3":
+            # Codex lacks native Grok model metadata and its fallback profile
+            # makes these two analysis tasks behaviorally flaky (server-side
+            # requests all succeed); tracked as expected-flaky.
+            request.applymarker(
+                pytest.mark.xfail(
+                    strict=False,
+                    reason="Grok under Codex fallback metadata is behaviorally flaky",
+                )
+            )
         events = _run_codex(
             base_url=codex_base_url,
             prompt=_PROMPT_STREAMING_PATH,
@@ -732,6 +749,16 @@ class TestCodexAnalysis:
         Requires reading types, adapter, and map_input.
         Target: ≥2 shell tool calls.
         """
+        if model_config["model_env"] == "xai.grok-4.3":
+            # Codex lacks native Grok model metadata and its fallback profile
+            # makes these two analysis tasks behaviorally flaky (server-side
+            # requests all succeed); tracked as expected-flaky.
+            request.applymarker(
+                pytest.mark.xfail(
+                    strict=False,
+                    reason="Grok under Codex fallback metadata is behaviorally flaky",
+                )
+            )
         events = _run_codex(
             base_url=codex_base_url,
             prompt=_PROMPT_PARAMETER_MAPPING,

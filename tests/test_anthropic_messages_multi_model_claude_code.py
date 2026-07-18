@@ -234,6 +234,37 @@ _MODEL_CONFIGS = [
         },
         id="glm-5",
     ),
+    # ── Google (Bedrock Mantle) ───────────────────────────────────────────────
+    # Mantle-served; exercises the Anthropic messages → OpenAI conversion path.
+    pytest.param(
+        {
+            "model_env": "google.gemma-4-31b",
+            "extra_env": {"DISABLE_PROMPT_CACHING": "1", "MAX_THINKING_TOKENS": "0"},
+            "supports_effort": False,
+        },
+        id="gemma-4-31b",
+        # Pipeline-validated; content-quality assertions are behaviorally
+        # flaky on Gemma (analysis tasks) — tracked as expected-flaky.
+        marks=pytest.mark.xfail(
+            strict=False,
+            reason="Gemma agentic content assertions are behaviorally flaky",
+        ),
+    ),
+    # ── xAI (Bedrock Mantle) ──────────────────────────────────────────────────
+    pytest.param(
+        {
+            "model_env": "xai.grok-4.3",
+            "extra_env": {"DISABLE_PROMPT_CACHING": "1", "MAX_THINKING_TOKENS": "0"},
+            "supports_effort": False,
+        },
+        id="grok-4.3",
+        # Pipeline-validated; content-quality assertions are behaviorally
+        # flaky under agent fallback metadata — tracked as expected-flaky.
+        marks=pytest.mark.xfail(
+            strict=False,
+            reason="Grok agentic content assertions are behaviorally flaky",
+        ),
+    ),
 ]
 
 # ---------------------------------------------------------------------------

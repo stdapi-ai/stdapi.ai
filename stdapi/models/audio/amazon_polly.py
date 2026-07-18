@@ -384,7 +384,10 @@ class AudioModel(AudioModelBase[None, None]):
     MATCHER = _PREFIX
 
     @classmethod
-    def get_aliases(cls, all_models: dict[str, ModelDetails]) -> dict[str, str]:  # noqa: ARG003
+    def get_aliases(
+        cls,
+        all_models: dict[str, ModelDetails],  # noqa: ARG003
+    ) -> dict[str, str]:
         """Return dynamic aliases specific to this model class.
 
         Override in subclasses to provide model-specific aliases.

@@ -439,6 +439,48 @@ class TestFilterByLegacy:
         assert _IMAGE_MODEL.id in ids
 
 
+class TestModelService:
+    """The ``service`` field is client-visible via /search_models."""
+
+    def test_runtime_model_defaults_to_bedrock_runtime_service(
+        self, client: TestClient, fake_models: dict[str, str]
+    ) -> None:
+        """A model with no explicit ``service`` reports the AWS Bedrock Runtime default."""
+        body = _get(client, {"route": "/v1/chat/completions"}, fake_models)
+        assert body[0]["service"] == "AWS Bedrock Runtime"
+
+    def test_mantle_served_model_reports_mantle_service(
+        self, client: TestClient, fake_models: dict[str, str]
+    ) -> None:
+        """A model served by Bedrock Mantle round-trips its service through the listing."""
+        mantle_model = ModelDetails(
+            id="vendor.mantle-chat-v1",
+            name="Mantle Chat",
+            provider="Vendor",
+            service="AWS Bedrock Mantle",
+            input_modalities=["TEXT"],
+            output_modalities=["TEXT"],
+            regions=["us-east-1"],
+            supported_routes=["/v1/chat/completions"],
+        )
+        models = {**_FAKE_MODELS, mantle_model.id: mantle_model}
+
+        async def _fake_get_all() -> tuple[
+            dict[str, ModelDetails], dict[str, set[str]], dict[str, set[str]]
+        ]:
+            return models, _FAKE_OUTPUT_MODS, _FAKE_INPUT_MODS
+
+        with patch(
+            "stdapi.routes.core_models.get_all_models_details_and_modalities",
+            new=AsyncMock(side_effect=_fake_get_all),
+        ):
+            body = _get(client, {"route": "/v1/chat/completions"}, fake_models)
+
+        services = {m["id"]: m["service"] for m in body}
+        assert services[mantle_model.id] == "AWS Bedrock Mantle"
+        assert services["vendor.text-chat-v1"] == "AWS Bedrock Runtime"
+
+
 class TestCombinedFilters:
     """Tests that combine multiple query parameters."""
 

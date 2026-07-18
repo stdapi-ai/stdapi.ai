@@ -14,7 +14,15 @@ Design:
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any, TypedDict
 
-from stdapi.models import ModelBase, get_model, load_model_plugins
+from stdapi.config import SETTINGS
+from stdapi.models import (
+    MANTLE_MODELS,
+    ModelBase,
+    get_model,
+    is_mantle_served,
+    load_model_plugins,
+)
+from stdapi.monitoring import REQUEST
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -52,6 +60,14 @@ if TYPE_CHECKING:
 
 class ChatModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
     """Base class for provider-specific chat models."""
+
+    def native_store_supported(self) -> bool:
+        """Whether this model stores responses natively (Bedrock Mantle).
+
+        Returns:
+            False for Converse-backed models (the server's own storage is used).
+        """
+        return False
 
     @abstractmethod
     async def create_completion(
@@ -131,8 +147,32 @@ _CHAT_MODEL_REGISTRY: list[
 _CHAT_MODEL_CACHE: dict[str, ChatModelBase[Any, Any]] = {}
 
 
+def serves_via_mantle(model_id: str) -> bool:
+    """Whether this request should be served by the Bedrock Mantle endpoint.
+
+    Args:
+        model_id: The provider model identifier.
+
+    Returns:
+        True for Mantle-registered models, or when the (gated) per-request
+        ``x-stdapi-service: bedrock-mantle`` header targets a dual-homed model.
+    """
+    if (
+        SETTINGS.aws_bedrock_mantle_service_header
+        and model_id in MANTLE_MODELS
+        and (request := REQUEST.get(None)) is not None
+        and request.headers.get("x-stdapi-service") == "bedrock-mantle"
+    ):
+        return True
+    return is_mantle_served(model_id)
+
+
 def get_chat_model(model_id: str) -> ChatModelBase[Any, Any]:
     """Resolve the chat model class matching the provided identifier.
+
+    Mantle-served models (and dual-homed models targeted by the per-request
+    service header) resolve from the Mantle family registry; every other
+    model resolves from the classic Converse registry.
 
     Args:
         model_id: The provider model identifier (e.g., "amazon.nova-micro-v1:0").
@@ -143,6 +183,11 @@ def get_chat_model(model_id: str) -> ChatModelBase[Any, Any]:
     Raises:
         LookupError: If no registered chat model matches ``model_id``.
     """
+    if serves_via_mantle(model_id):
+        # Imported here: the _mantle package subclasses ChatModelBase.
+        from stdapi.models.chat._mantle import get_mantle_chat_model  # noqa: PLC0415
+
+        return get_mantle_chat_model(model_id)
     return get_model(model_id, _CHAT_MODEL_CACHE, _CHAT_MODEL_REGISTRY, __name__)
 
 
