@@ -28,6 +28,16 @@ MODEL_KEY_OVERRIDES: Final[dict[str, str]] = {
     # Bedrock's ID for DeepSeek-V3.1 -- normalize_model_key() yields "v3",
     # but the Price List `model` attribute is "DeepSeek V3.1".
     "deepseek.v3-v1:0": "deepseekv31",
+    # Mantle IDs whose Price List `model` attribute is the display name
+    # without the "-instruct" suffix (mantle rows keyed per invocation API).
+    "deepseek.v3.1": "deepseekv31",
+    "qwen.qwen3-coder-30b-a3b-instruct": "qwen3coder30ba3b",
+    "qwen.qwen3-coder-480b-a35b-instruct": "qwen3coder480ba35b",
+    "qwen.qwen3-next-80b-a3b-instruct": "qwen3next80ba3b",
+    "qwen.qwen3-vl-235b-a22b-instruct": "qwen3vl235ba22b",
+    # Dated snapshot aliases billed at the bare model's rate.
+    "openai.gpt-5.4-2026-03-05": "gpt54",
+    "openai.gpt-5.5-2026-04-23": "gpt55",
     "amazon.nova-2-omni-v1:0": "nova20omni",
     "amazon.nova-2-pro-v1:0": "nova20pro",
     # Marketplace-listed -- keyed from the listing name (servicename).
@@ -132,4 +142,36 @@ DEFAULT_MODEL_PRICES: Final[dict[str, dict[Dimension, str]]] = {
     "stability.stable-creative-upscale-v1:0": {Dimension.OUTPUT_IMAGES: "0.60"},
     "stability.stable-fast-upscale-v1:0": {Dimension.OUTPUT_IMAGES: "0.03"},
     "stability.stable-outpaint-v1:0": {Dimension.OUTPUT_IMAGES: "0.06"},
+    # OpenAI Mantle models: per-token rates from the Bedrock pricing page
+    # (per-1M page rates / 1e6; retrieved 2026-07-19), absent from the Price
+    # List API outside GovCloud. Dated aliases share these via
+    # MODEL_KEY_OVERRIDES.
+    "openai.gpt-5.4": {
+        Dimension.INPUT_TOKENS: "0.00000275",
+        Dimension.CACHE_READ_TOKENS: "0.000000275",
+        Dimension.OUTPUT_TOKENS: "0.0000165",
+    },
+    "openai.gpt-5.5": {
+        Dimension.INPUT_TOKENS: "0.0000055",
+        Dimension.CACHE_READ_TOKENS: "0.00000055",
+        Dimension.OUTPUT_TOKENS: "0.000033",
+    },
+    "openai.gpt-5.6-luna": {
+        Dimension.INPUT_TOKENS: "0.0000011",
+        Dimension.CACHE_WRITE_TOKENS: "0.00000138",
+        Dimension.CACHE_READ_TOKENS: "0.00000011",
+        Dimension.OUTPUT_TOKENS: "0.0000066",
+    },
+    "openai.gpt-5.6-sol": {
+        Dimension.INPUT_TOKENS: "0.0000055",
+        Dimension.CACHE_WRITE_TOKENS: "0.00000688",
+        Dimension.CACHE_READ_TOKENS: "0.00000055",
+        Dimension.OUTPUT_TOKENS: "0.000033",
+    },
+    "openai.gpt-5.6-terra": {
+        Dimension.INPUT_TOKENS: "0.00000275",
+        Dimension.CACHE_WRITE_TOKENS: "0.00000344",
+        Dimension.CACHE_READ_TOKENS: "0.00000028",
+        Dimension.OUTPUT_TOKENS: "0.0000165",
+    },
 }

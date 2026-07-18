@@ -3626,13 +3626,14 @@ async def test_bedrock_model_pricing_coverage() -> None:
         }
 
         def _missing_regions(model_id: str, check_regions: list[str]) -> list[str]:
+            # Mantle-only models are keyed under BEDROCK_MANTLE; a price on
+            # either invocation API means the model is priced.
             return [
                 region
                 for region in check_regions
                 if not any(
-                    resolve_price(
-                        Service.BEDROCK, model_id, region, dim, tier, "", "", spec
-                    )
+                    resolve_price(service, model_id, region, dim, tier, "", "", spec)
+                    for service in (Service.BEDROCK, Service.BEDROCK_MANTLE)
                     for dim in Dimension
                     for tier in ("standard", "flex", "priority", "batch")
                     for spec in spec_probes.get(dim, ("",))
@@ -3676,11 +3677,16 @@ async def test_bedrock_model_pricing_coverage() -> None:
         "stdapi/models/pricing_overrides.py:\n"
         '    "<unpriced-model-id>": "<candidate-normalized-key>",\n'
         "then re-run this test (see that module's docstring). If no candidate "
-        "matches, AWS hasn't published pricing yet (or withdrew it): either "
-        "wait, or -- once confirmed upstream against live Price List data -- "
-        "add the model ID to _KNOWN_PRICING_GAPS in this file. Never remove a "
-        "model's implementation because its pricing disappeared: keep it in "
-        "case pricing returns or users retain model access."
+        "matches, check the AWS Bedrock pricing page "
+        "(https://aws.amazon.com/bedrock/pricing/): when it publishes a rate "
+        "the Price List lacks, add a per-single-unit entry to "
+        "DEFAULT_MODEL_PRICES in stdapi/models/pricing_overrides.py (divide "
+        "the page's per-1M rate by 1e6). If the page has no rate either, AWS "
+        "hasn't published pricing yet (or withdrew it): either wait, or -- "
+        "once confirmed upstream -- add the model ID to _KNOWN_PRICING_GAPS "
+        "in this file. Never remove a model's implementation because its "
+        "pricing disappeared: keep it in case pricing returns or users "
+        "retain model access."
     )
     pytest.fail("\n".join(lines))
 
@@ -3692,7 +3698,11 @@ async def test_bedrock_model_pricing_coverage() -> None:
 # by removing the entry. Never remove a model's implementation for a pricing
 # gap: keep it in case pricing returns or users retain model access.
 _KNOWN_PRICING_GAPS: Final[frozenset[str]] = frozenset(
-    {"stability.stable-diffusion-xl-v1"}
+    {
+        "stability.stable-diffusion-xl-v1",
+        # No Price List rows and no pricing-page rate (only GLM 4.7/5 listed).
+        "zai.glm-4.6",
+    }
 )
 
 

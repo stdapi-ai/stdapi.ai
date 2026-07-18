@@ -30,7 +30,7 @@ Generate conversational AI responses with AWS Bedrock foundation models—includ
 
 | Endpoint               | Method | What It Does                               | Powered By               | MCP Tool                  |
 |------------------------|--------|--------------------------------------------|--------------------------|---------------------------|
-| `/v1/chat/completions` | POST   | Conversational AI with multi-modal support | AWS Bedrock Converse API | `openai_chat_completion` |
+| `/v1/chat/completions` | POST   | Conversational AI with multi-modal support | AWS Bedrock Converse API · Bedrock Mantle | `openai_chat_completion` |
 | `/v1/chat/completions` | GET | List stored chat completions | AWS Bedrock Sessions     | `openai_chat_completion_list` |
 | `/v1/chat/completions/{completion_id}` | GET | Retrieve a stored chat completion     | AWS Bedrock Sessions     | `openai_chat_completion_get` |
 | `/v1/chat/completions/{completion_id}` | POST | Update a stored chat completion's metadata | AWS Bedrock Sessions | `openai_chat_completion_update` |
@@ -84,7 +84,7 @@ Generate conversational AI responses with AWS Bedrock foundation models—includ
 | Text                                     |   :material-check-circle:{ .success }    | Text messages                                                   |
 | Streaming (`stream: true`)               |   :material-check-circle:{ .success }    | Server-Sent Events (SSE)                                        |
 | Streaming obfuscation                    | :material-close-circle:{ .unsupported }  | Unsupported                                                     |
-| Audio                                    |   :material-check-circle:{ .success }    | Model output or synthesis from text output                      |
+| Audio                                    |   :material-check-circle:{ .success }    | Model output or synthesis from text output (synthesis is Converse-only — not performed for Mantle-served requests) |
 | `response_format` (JSON mode)            |       :material-cog:{ .model-dep }       | Model-specific JSON support                                     |
 | `reasoning_content` (From Deepseek API)  |       :material-cog:{ .model-dep }       | Text reasoning messages                                         |
 | `annotations` (URL citations)            |   :material-check-circle:{ .success }    | URL citations from system tools (non-streaming only)            |
@@ -98,8 +98,8 @@ Generate conversational AI responses with AWS Bedrock foundation models—includ
 | `store`                                  |   :material-check-circle:{ .success }    | Persists the completion in AWS Bedrock session storage (non-streaming) |
 | List / update stored completions         |   :material-check-circle:{ .success }    | List with `model`/`metadata` filters; metadata update            |
 | `safety_identifier` / `user`             |   :material-minus-circle:{ .partial }    | Logged                                                          |
-| Bedrock Guardrails                       | :material-plus-circle:{ .extra-feature } | Content safety policies                                         |
-| `moderation`                             |   :material-check-circle:{ .success }    | Applies an AWS Bedrock guardrail; results in the response (non-streaming) |
+| Bedrock Guardrails                       | :material-plus-circle:{ .extra-feature } | Content safety policies — not applied to Mantle-served requests |
+| `moderation`                             |   :material-check-circle:{ .success }    | Applies an AWS Bedrock guardrail; results in the response (non-streaming) — not applied to Mantle-served requests |
 
 </div>
 
@@ -133,7 +133,17 @@ Set `store: true` to persist a chat completion in [AWS Bedrock session storage](
 
 ## Model Support
 
-All models supported by AWS Bedrock Converse and Converse Stream API are supported.
+All models supported by AWS Bedrock Converse and Converse Stream API are supported, plus every model served by [Amazon Bedrock Mantle](features.md#bedrock-mantle-models) when enabled — including OpenAI GPT-5.x, xAI Grok, and Google Gemma 4. Requests to Mantle models are passed through natively or converted automatically depending on the model's upstream API support — see [Bedrock Mantle](#bedrock-mantle) below.
+
+### Bedrock Mantle
+
+Mantle-served requests follow one of three paths, each with its own parameter fidelity:
+
+| Serving path                | Models                                                                    | Parameter behavior |
+|-----------------------------|---------------------------------------------------------------------------|--------------------|
+| **Passthrough**             | Chat-native models (xAI Grok, OpenAI gpt-oss, Google Gemma 4, other open-weight models) | All schema-accepted parameters are forwarded; the upstream API may reject unsupported ones per model with a clean `400` (the upstream error code and parameter are propagated) |
+| **Converted to Responses**  | OpenAI GPT frontier models; unknown models                                | Dropped silently: `stop`, `seed`, `frequency_penalty`, `presence_penalty`, `logit_bias`, `top_logprobs`, `audio`, `modalities`, `input_audio` content parts, legacy `functions`/`function_call`. Preserved: `metadata`, `safety_identifier`. `n > 1` rejected with `400`. `store` is handled by stdapi.ai only, never forwarded upstream |
+| **Converted to Messages**   | Mantle-only Anthropic Claude models                                       | Same drops and `n > 1` rejection as the Responses conversion, plus: `temperature` clamped to ≤ 1.0; `max_tokens` defaults to `4096` when unset; `reasoning_effort` mapped to Anthropic effort levels; `response_format` `json_object`/`json_schema` not available; `metadata`, `prompt_cache_key`, and `prompt_cache_retention` dropped; `service_tier` forwarded only when `auto` |
 
 ### Model Name Aliases
 

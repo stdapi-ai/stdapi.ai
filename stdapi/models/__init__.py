@@ -28,6 +28,8 @@ from stdapi.aws_bedrock import (
     handle_bedrock_client_error,
     usage_from_amazon_bedrock_invocation_metrics,
 )
+from stdapi.aws_bedrock_mantle import MantleError
+from stdapi.aws_bedrock_mantle import request_json as mantle_request_json
 from stdapi.aws_s3 import (
     get_s3_bucket_for_region,
     require_s3_bucket_for_region,
@@ -176,6 +178,28 @@ def _count_grounding_tool_uses(response: ConverseResponseTypeDef) -> int:
 #: Bedrock models details
 _MODELS: dict[str, ModelDetails] = {}
 
+#: Service label for models served by the Amazon Bedrock Mantle endpoint.
+MANTLE_SERVICE = "AWS Bedrock Mantle"
+
+#: Every Mantle-discovered model, including ones served by bedrock-runtime.
+MANTLE_MODELS: dict[str, ModelDetails] = {}
+
+#: Mantle model ID provider prefix to display name.
+_MANTLE_PROVIDERS = {
+    "anthropic": "Anthropic",
+    "deepseek": "DeepSeek",
+    "google": "Google",
+    "minimax": "MiniMax",
+    "mistral": "Mistral AI",
+    "moonshotai": "Moonshot AI",
+    "nvidia": "NVIDIA",
+    "openai": "OpenAI",
+    "qwen": "Qwen",
+    "writer": "Writer",
+    "xai": "xAI",
+    "zai": "Zhipu AI",
+}
+
 #: Non-Bedrock models details
 EXTRA_MODELS: dict[str, ModelDetails] = {}
 
@@ -272,7 +296,7 @@ class ModelDetails(BaseModel):
     id: str
     name: str
     provider: str
-    service: str = "AWS Bedrock"
+    service: str = "AWS Bedrock Runtime"
     input_modalities: list[str]
     output_modalities: list[str]
     response_streaming: bool | None = None
@@ -357,6 +381,9 @@ class ModelBase[RequestT, ResponseT]:
     #: Model ID matcher, regex pattern or string prefix
     MATCHER: ClassVar[str | Pattern[str]] = ""
 
+    #: Whether this model class targets the Amazon Bedrock Mantle endpoint.
+    IS_MANTLE: ClassVar[bool] = False
+
     #: Maps HTTP header name (lowercase) to a (field_key, transform) tuple.
     PASSTHROUGH_HEADERS: ClassVar[
         MappingProxyType[str, tuple[str, Callable[[str], Any]]]
@@ -390,21 +417,22 @@ class ModelBase[RequestT, ResponseT]:
     def get_aliases(cls, all_models: dict[str, ModelDetails]) -> dict[str, str]:
         """Return API model name aliases mapped to model IDs.
 
+        IDs are visited Mantle-first so a bedrock-runtime model wins when
+        both services derive the same alias.
+
         Args:
             all_models: All available models keyed by Bedrock model ID.
 
         Returns:
             A dict mapping model alias to model ID.
         """
-        return (
-            {
-                match.group(1): model_id
-                for model_id in all_models
-                if (match := cls.ALIAS_MATCHER.match(model_id))
-            }
-            if cls.ALIAS_MATCHER
-            else {}
-        )
+        if not cls.ALIAS_MATCHER:
+            return {}
+        return {
+            match.group(1): model_id
+            for model_id in _order_ids_mantle_first(all_models)
+            if (match := cls.ALIAS_MATCHER.match(model_id))
+        }
 
     @cached_property
     def model(self) -> ModelDetails:
@@ -970,11 +998,15 @@ def resolve_model_alias(model_id: str) -> str:
     return MODEL_ALIASES.get(model_id, model_id)
 
 
-def _find_model_class(model_id: str) -> type[ModelBase[Any, Any]] | None:
+def _find_model_class(
+    model_id: str, *, mantle: bool = False
+) -> type[ModelBase[Any, Any]] | None:
     """Find the most specific registered model class matching *model_id*.
 
     Args:
         model_id: Bedrock model identifier to look up.
+        mantle: When True, only consider Mantle model classes; when False,
+            only classic Converse model classes.
 
     Returns:
         The matching model class, or ``None`` if no class is registered for this ID.
@@ -982,6 +1014,8 @@ def _find_model_class(model_id: str) -> type[ModelBase[Any, Any]] | None:
     best: type[ModelBase[Any, Any]] | None = None
     best_score = -1
     for cls in _GLOBAL_MODEL_REGISTRY:
+        if cls.IS_MANTLE is not mantle:
+            continue
         matcher = getattr(cls, "MATCHER", "")
         if isinstance(matcher, Pattern):
             if matcher.match(model_id) and best_score < 0:
@@ -1031,7 +1065,7 @@ def _compute_model_capabilities(
     Returns:
         Tuple of (sorted list of route paths, sorted list of operation_ids / MCP tool names).
     """
-    model_class = _find_model_class(model_id)
+    model_class = _find_model_class(model_id, mantle=model.service == MANTLE_SERVICE)
     capability_flags = (
         model_class.get_supported_operations()
         if model_class is not None
@@ -1291,6 +1325,129 @@ async def _get_bedrock_models_from_region(region: RegionName) -> list[ModelDetai
     return models
 
 
+def is_mantle_preferred(model_id: str) -> bool:
+    """Whether *model_id* is configured to be served by Mantle over bedrock-runtime.
+
+    Args:
+        model_id: Model identifier.
+
+    Returns:
+        True when the ID matches an ``aws_bedrock_mantle_preferred_models``
+        entry (exact or prefix).
+    """
+    return any(
+        model_id == entry or model_id.startswith(entry)
+        for entry in SETTINGS.aws_bedrock_mantle_preferred_models
+    )
+
+
+def is_mantle_served(model_id: str) -> bool:
+    """Whether *model_id* is served by the Mantle endpoint by default.
+
+    Args:
+        model_id: Model identifier.
+
+    Returns:
+        True when the registered model's service is Mantle.
+    """
+    model = _ALL_MODELS.get(model_id)
+    return model is not None and model.service == MANTLE_SERVICE
+
+
+async def _get_mantle_models_from_region(region: RegionName) -> list[ModelDetails]:
+    """Fetch the Mantle model catalog from *region*.
+
+    Args:
+        region: AWS region to query.
+
+    Returns:
+        List of available Mantle model details for the given region.
+    """
+    catalog = await mantle_request_json(region, "GET", "/v1/models")
+    models: list[ModelDetails] = []
+    for entry in catalog.get("data") or ():
+        if not isinstance(entry, Mapping) or not (model_id := entry.get("id")):
+            continue
+        if entry.get("status") not in (None, "available"):
+            continue
+        provider_key, _, name = model_id.partition(".")
+        model_class = _find_model_class(model_id, mantle=True)
+        models.append(
+            ModelDetails(
+                id=model_id,
+                name=name or model_id,
+                provider=_MANTLE_PROVIDERS.get(provider_key, provider_key.capitalize()),
+                service=MANTLE_SERVICE,
+                regions=[region],
+                input_modalities=list(
+                    getattr(model_class, "INPUT_MODALITIES", None) or ["TEXT"]
+                ),
+                output_modalities=["TEXT"],
+                response_streaming=True,
+            )
+        )
+    return models
+
+
+async def _collect_mantle_models(
+    failed_regions: dict[str, str],
+) -> dict[str, ModelDetails]:
+    """Fetch the Mantle model catalog from every configured region, in parallel.
+
+    A region whose fetch fails is skipped (recorded in *failed_regions*) and
+    retried on the next cache refresh, mirroring the bedrock-runtime behavior.
+
+    Args:
+        failed_regions: Accumulator mapping unreachable regions to the error.
+
+    Returns:
+        Mantle models keyed by model ID, with per-region data merged in
+        region priority order.
+    """
+    regions = SETTINGS.aws_bedrock_mantle_regions
+    region_models = await gather(
+        *(_get_mantle_models_from_region(region) for region in regions),
+        return_exceptions=True,
+    )
+    models: dict[str, ModelDetails] = {}
+    for region, result in zip(regions, region_models, strict=True):
+        if isinstance(result, BaseException):
+            if not isinstance(result, Exception):
+                raise result
+            # Any per-region failure (including credential-chain errors)
+            # degrades gracefully: Mantle models are skipped with a warning.
+            failed_regions[f"{region} (Mantle)"] = f"{type(result).__name__}: {result}"
+            continue
+        for model in result:
+            if existing := models.get(model.id):
+                existing.regions.extend(model.regions)
+            else:
+                models[model.id] = model
+    return models
+
+
+async def _merge_mantle_models(
+    all_models: dict[str, ModelDetails], failed_regions: dict[str, str]
+) -> None:
+    """Discover Mantle models and merge them into *all_models*.
+
+    bedrock-runtime keeps priority for dual-homed models unless the model is
+    explicitly preferred on Mantle. No-op when Mantle support is disabled.
+
+    Args:
+        all_models: Resolved bedrock-runtime models, updated in-place.
+        failed_regions: Accumulator mapping unreachable regions to the error.
+    """
+    if not SETTINGS.aws_bedrock_mantle_enabled:
+        return
+    mantle_models = await _collect_mantle_models(failed_regions)
+    MANTLE_MODELS.clear()
+    MANTLE_MODELS.update(mantle_models)
+    for model_id, mantle_model in mantle_models.items():
+        if model_id not in all_models or is_mantle_preferred(model_id):
+            all_models[model_id] = mantle_model
+
+
 async def _collect_region_candidates(
     failed_regions: dict[str, str],
 ) -> dict[str, list[ModelDetails]]:
@@ -1412,6 +1569,14 @@ async def initialize_bedrock_models(start_event: EventLog | None = None) -> bool
 
             invalid_arn_mappings = _apply_user_profiles(all_models)
 
+            await _merge_mantle_models(all_models, failed_regions)
+
+            mantle_guardrail_models = (
+                sum(1 for m in all_models.values() if m.service == MANTLE_SERVICE)
+                if SETTINGS.aws_bedrock_guardrail_identifier
+                else 0
+            )
+
             unmatched_restrict_keys = {
                 restrict_key
                 for restrict_key in SETTINGS.aws_bedrock_model_region_restrict
@@ -1449,12 +1614,14 @@ async def initialize_bedrock_models(start_event: EventLog | None = None) -> bool
         else:
             invalid_arn_mappings = {}
             unmatched_restrict_keys = set()
+            mantle_guardrail_models = 0
     _warn_bedrock_refresh_issues(
         start_event,
         failed_regions,
         unavailable_models,
         invalid_arn_mappings,
         unmatched_restrict_keys,
+        mantle_guardrail_models,
     )
     await _trigger_price_catalog_refresh(start_event, new_model_ids)
     return updated
@@ -1493,6 +1660,7 @@ def _warn_bedrock_refresh_issues(
     unavailable_models: dict[str, dict[str, list[str]]],
     invalid_arn_mappings: dict[str, str],
     unmatched_restrict_keys: set[str],
+    mantle_guardrail_models: int = 0,
 ) -> None:
     """Record warnings for Bedrock model availability/configuration issues.
 
@@ -1506,6 +1674,8 @@ def _warn_bedrock_refresh_issues(
         invalid_arn_mappings: Model IDs mapped to ARN-mapping error messages.
         unmatched_restrict_keys: ``aws_bedrock_model_region_restrict`` keys that
             did not match any available model.
+        mantle_guardrail_models: Mantle-served models exposed while Amazon
+            Bedrock Guardrails are configured (guardrails do not apply to them).
     """
     if start_event is None:
         if failed_regions and REQUEST_LOG.get(None) is not None:
@@ -1535,6 +1705,13 @@ def _warn_bedrock_refresh_issues(
             "'aws_bedrock_model_region_restrict' has no matching available model "
             f"for: {', '.join(sorted(unmatched_restrict_keys))}. Check for unknown "
             "model IDs/prefixes or models not available in the configured regions.",
+        )
+    if mantle_guardrail_models:
+        add_server_warning(
+            start_event,
+            "Amazon Bedrock Guardrails do not apply to Bedrock Mantle-served "
+            f"models ({mantle_guardrail_models} models affected); set "
+            "AWS_BEDROCK_MANTLE_ENABLED=false to disable them.",
         )
 
 
@@ -1608,6 +1785,21 @@ def _warn_model_lifecycle(model: ModelDetails, original_id: str, model_id: str) 
     else:
         return
     log_error_details(warning, level="warning")
+
+
+def _order_ids_mantle_first(all_models: dict[str, ModelDetails]) -> list[str]:
+    """Return model IDs sorted with Mantle-served models first.
+
+    Mantle-served IDs come first so a bedrock-runtime model overwrites them
+    on alias collision (runtime has serving priority).
+
+    Args:
+        all_models: All available models keyed by model ID.
+
+    Returns:
+        Model IDs, Mantle-served first.
+    """
+    return sorted(all_models, key=lambda mid: all_models[mid].service != MANTLE_SERVICE)
 
 
 def _populate_model_aliases(all_models: dict[str, ModelDetails]) -> None:
@@ -1911,11 +2103,25 @@ async def route_and_execute[T](
         | BotocoreConnectionError
         | HTTPClientError
         | ModelRegionUnavailableError
+        | MantleError
     )
     for _ in range(SETTINGS.aws_bedrock_max_retries + 1):
         region = REGION_ROUTER.ordered_regions(model_id, candidates)[0]
         try:
             result = await fn(region)
+        except MantleError as exc:
+            if not exc.failover:
+                raise
+            last_exc = exc
+            # Reuse the Converse code taxonomy so the router applies the
+            # matching quota vs unavailability backoff.
+            REGION_ROUTER.mark_error(
+                model_id,
+                region,
+                "ThrottlingException"
+                if exc.status == 429
+                else "ServiceUnavailableException",
+            )
         except ClientError as exc:
             code = exc.response["Error"]["Code"]
             if code not in ROUTING_RETRYABLE_CODES and not _is_invalid_model_identifier(
@@ -1924,10 +2130,11 @@ async def route_and_execute[T](
                 raise
             last_exc = exc
             REGION_ROUTER.mark_error(model_id, region, code)
-        except ModelRegionUnavailableError as exc:
-            last_exc = exc
-            REGION_ROUTER.mark_error(model_id, region, exc.__class__.__name__)
-        except (BotocoreConnectionError, HTTPClientError) as exc:
+        except (
+            ModelRegionUnavailableError,
+            BotocoreConnectionError,
+            HTTPClientError,
+        ) as exc:
             last_exc = exc
             REGION_ROUTER.mark_error(model_id, region, exc.__class__.__name__)
         else:

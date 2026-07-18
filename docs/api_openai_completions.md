@@ -14,9 +14,9 @@ Generate text completions with AWS Bedrock foundation models—including Claude,
 
 ## Quick Start: Available Endpoint
 
-| Endpoint          | Method | What It Does                     | Powered By               | MCP Tool            |
-|-------------------|--------|----------------------------------|--------------------------|---------------------|
-| `/v1/completions` | POST   | Simple prompt-to-text completion | AWS Bedrock Converse API | `openai_completion` |
+| Endpoint          | Method | What It Does                     | Powered By                                | MCP Tool            |
+|-------------------|--------|----------------------------------|-------------------------------------------|---------------------|
+| `/v1/completions` | POST   | Simple prompt-to-text completion | AWS Bedrock Converse API · Bedrock Mantle | `openai_completion` |
 
 ## Feature Compatibility
 
@@ -26,35 +26,35 @@ Generate text completions with AWS Bedrock foundation models—including Claude,
 |------------------------------------|:----------------------------------------:|------------------------------------------------------------------|
 | **Prompt Input**                   |                                          |                                                                  |
 | Single text prompt                 |   :material-check-circle:{ .success }    | Full support for string prompts                                  |
-| Multiple prompts (batch)           |   :material-check-circle:{ .success }    | Returns one choice per prompt                                    |
+| Multiple prompts (batch)           |   :material-check-circle:{ .success }    | Returns one choice per prompt; rejected with `400` on Mantle-served models |
 | Text + files collapse (multimodal) | :material-plus-circle:{ .extra-feature } | `[text, file, …]` sent as one multimodal request with one choice |
 | Prompt from URL (`https://`)       |   :material-check-circle:{ .success }    | HTTP URL reference                                               |
 | Prompt from S3 (`s3://`)           | :material-plus-circle:{ .extra-feature } | S3 URI reference                                                 |
 | Prompt from data URI (`data:`)     |   :material-check-circle:{ .success }    | Base64-encoded data URI                                          |
 | Prompt from Files API (`file-id:`) | :material-plus-circle:{ .extra-feature } | Reference uploaded files                                         |
-| Token array prompts                | :material-close-circle:{ .unsupported }  | Not supported — use string prompts                               |
+| Token array prompts                | :material-close-circle:{ .unsupported }  | Not supported — use string prompts; rejected with `400` on Mantle-served models |
 | **Generation Control**             |                                          |                                                                  |
 | `max_tokens`                       |   :material-check-circle:{ .success }    | Output length limits                                             |
 | `temperature`                      |       :material-cog:{ .model-dep }       | Mapped to Bedrock inference params                               |
 | `top_p`                            |       :material-cog:{ .model-dep }       | Nucleus sampling control                                         |
-| `stop` sequences                   |       :material-cog:{ .model-dep }       | Custom stop strings                                              |
-| `n` (multiple choices)             |   :material-check-circle:{ .success }    | Supported with and without streaming                             |
+| `stop` sequences                   |       :material-cog:{ .model-dep }       | Custom stop strings; dropped when a Mantle request is converted to the Responses API |
+| `n` (multiple choices)             |   :material-check-circle:{ .success }    | Supported with and without streaming; `n > 1` rejected with `400` when a Mantle request is converted to the Responses or Messages API |
 | `best_of`                          | :material-close-circle:{ .unsupported }  | Accepted but ignored                                             |
-| `echo`                             | :material-close-circle:{ .unsupported }  | Accepted but ignored                                             |
+| `echo`                             | :material-close-circle:{ .unsupported }  | Accepted but ignored; rejected with `400` on Mantle-served models |
 | `frequency_penalty`                | :material-close-circle:{ .unsupported }  | Accepted but ignored                                             |
 | `presence_penalty`                 | :material-close-circle:{ .unsupported }  | Accepted but ignored                                             |
 | `logit_bias`                       | :material-close-circle:{ .unsupported }  | Accepted but ignored                                             |
-| `logprobs`                         | :material-close-circle:{ .unsupported }  | Accepted but ignored                                             |
+| `logprobs`                         | :material-close-circle:{ .unsupported }  | Accepted but ignored; rejected with `400` on Mantle-served models |
 | `seed`                             | :material-close-circle:{ .unsupported }  | Accepted but ignored                                             |
-| `suffix`                           | :material-close-circle:{ .unsupported }  | Accepted but ignored                                             |
+| `suffix`                           | :material-close-circle:{ .unsupported }  | Accepted but ignored; rejected with `400` on Mantle-served models |
 | **Streaming**                      |                                          |                                                                  |
 | Streaming (`stream: true`)         |   :material-check-circle:{ .success }    | Server-Sent Events (SSE)                                         |
 | `stream_options.include_usage`     |   :material-check-circle:{ .success }    | Usage in final chunk                                             |
 | Streaming with multiple prompts    |   :material-check-circle:{ .success }    | Deltas interleave; `choices[0].index` identifies the prompt      |
 | Streaming with n>1                 |   :material-check-circle:{ .success }    | Deltas interleave; `choices[0].index` identifies each choice     |
 | **Other**                          |                                          |                                                                  |
-| Service tiers                      |   :material-check-circle:{ .success }    | Mapped to Bedrock service tiers                                  |
-| `user` / `safety_identifier`       |   :material-minus-circle:{ .partial }    | Forwarded to AWS Bedrock as `requestMetadata`                    |
+| Service tiers                      |   :material-check-circle:{ .success }    | Mapped to Bedrock service tiers; `service_tier` and `prompt_cache_*` are not forwarded when a Mantle request is converted |
+| `user` / `safety_identifier`       |   :material-minus-circle:{ .partial }    | Forwarded to AWS Bedrock as `requestMetadata`; on Mantle, `user` is forwarded as the OpenAI `user` field (as `metadata.user_id` when served via the Anthropic API) and `safety_identifier` is not forwarded |
 
 </div>
 

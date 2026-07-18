@@ -185,6 +185,16 @@ This section provides a quick reference of all available configuration options. 
 | [`AWS_BEDROCK_REGION_ROUTING_UNAVAILABLE_BACKOFF_SECONDS`](#bedrock-region-routing-unavailable-backoff) | `30`      | Seconds to avoid a region after unavailability errors                                                                    |
 | [`AWS_BEDROCK_MAX_RETRIES`](#bedrock-max-retries)                                                       | `9`       | Total retries across all regions per Bedrock invocation; retries cycle through regions in order                          |
 
+### :material-layers-triple: Bedrock Mantle
+
+| Variable                                                                    | Default               | Description                                                                                          |
+|-----------------------------------------------------------------------------|-----------------------|------------------------------------------------------------------------------------------------------|
+| [`AWS_BEDROCK_MANTLE_ENABLED`](#bedrock-mantle-enabled)                     | `true`                | Expose models served by the Amazon Bedrock Mantle endpoint alongside classic Bedrock Converse models |
+| [`AWS_BEDROCK_MANTLE_REGIONS`](#bedrock-mantle-regions)                     | `AWS_BEDROCK_REGIONS` | AWS regions used for Bedrock Mantle, in failover priority order                                      |
+| [`AWS_BEDROCK_MANTLE_ENDPOINT_URL`](#bedrock-mantle-endpoint-url)           | None                  | Override the Bedrock Mantle endpoint URL template (`{region}` placeholder)                           |
+| [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](#bedrock-mantle-preferred-models)   | `[]`                  | Model IDs served via Mantle even when also available on the classic bedrock-runtime endpoint         |
+| [`AWS_BEDROCK_MANTLE_SERVICE_HEADER`](#bedrock-mantle-service-header)       | `false`               | Honor the `x-stdapi-service: bedrock-mantle` request header to route dual-homed models through Mantle per request |
+
 ### :material-shield-check: Bedrock Advanced
 
 | Variable                                                                                          | Default | Description                                                                                         |
@@ -1020,6 +1030,108 @@ export AWS_BEDROCK_MAX_RETRIES=18
 !!! tip "Related setting"
     See [`AWS_BEDROCK_REGION_ROUTING`](#bedrock-region-routing) and [Region Routing](operations_resilience.md) for the full retry and cycling behavior.
 
+#### `AWS_BEDROCK_MANTLE_ENABLED` { #bedrock-mantle-enabled }
+
+:octicons-package-24: **Purpose**
+:   Expose models served by the Amazon Bedrock Mantle endpoint (OpenAI/Anthropic-compatible APIs) in addition to the classic Bedrock Converse models
+
+:octicons-database-24: **Type**
+:   Boolean
+
+:octicons-gear-24: **Default**
+:   `true`
+
+:octicons-workflow-24: **Behavior**
+:   Mantle-only models (e.g. OpenAI GPT, xAI Grok, Google Gemma 4) become available on the chat completions, responses, messages, and completions routes. Models available on both the classic bedrock-runtime endpoint and Mantle are served by bedrock-runtime unless listed in [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](#bedrock-mantle-preferred-models).
+
+    Authentication requires no static secrets: short-term bearer tokens are derived automatically (SigV4-presigned) from the same AWS credential chain the server already uses, and refreshed transparently.
+
+    When Bedrock Mantle is unreachable or the IAM role lacks `bedrock-mantle` permissions, Mantle models are simply not listed and a warning is logged at startup — no configuration change required.
+
+```bash
+export AWS_BEDROCK_MANTLE_ENABLED=false
+```
+
+!!! warning "Guardrails Not Supported"
+    Amazon Bedrock Guardrails are not supported on Mantle-served requests. When guardrails are configured while Mantle models are exposed, a startup warning reports how many models are affected; set `AWS_BEDROCK_MANTLE_ENABLED=false` to disable them.
+
+!!! warning "Required IAM Permissions"
+    Enabling this setting requires the `bedrock-mantle` IAM permissions — see [Bedrock Mantle IAM Permissions](#bedrock-mantle-iam).
+
+[:octicons-arrow-right-24: Bedrock Mantle Models feature overview](features.md#bedrock-mantle-models)
+
+#### `AWS_BEDROCK_MANTLE_REGIONS` { #bedrock-mantle-regions }
+
+:octicons-package-24: **Purpose**
+:   List of AWS regions used for Amazon Bedrock Mantle, in failover priority order
+
+:octicons-database-24: **Type**
+:   Comma-separated string of AWS region identifiers
+
+:octicons-gear-24: **Default**
+:   [`AWS_BEDROCK_REGIONS`](#aws-bedrock-regions) when unset
+
+:octicons-workflow-24: **Behavior**
+:   Model availability differs per region; the served model catalog is the union of all listed regions. Region failover, quota backoff, and health tracking work exactly like classic Bedrock [region routing](operations_resilience.md).
+
+```bash
+export AWS_BEDROCK_MANTLE_REGIONS=us-east-1,eu-west-1
+```
+
+#### `AWS_BEDROCK_MANTLE_ENDPOINT_URL` { #bedrock-mantle-endpoint-url }
+
+:octicons-package-24: **Purpose**
+:   Override the Amazon Bedrock Mantle endpoint URL template
+
+:octicons-database-24: **Type**
+:   String — URL template with a `{region}` placeholder
+
+:octicons-gear-24: **Default**
+:   None (`https://bedrock-mantle.{region}.api.aws`)
+
+:octicons-workflow-24: **Behavior**
+:   The `{region}` placeholder is substituted with the target region.
+
+```bash
+export AWS_BEDROCK_MANTLE_ENDPOINT_URL='https://bedrock-mantle.{region}.api.aws'
+```
+
+#### `AWS_BEDROCK_MANTLE_PREFERRED_MODELS` { #bedrock-mantle-preferred-models }
+
+:octicons-package-24: **Purpose**
+:   Model IDs (or ID prefixes) served by Amazon Bedrock Mantle even when also available on the classic bedrock-runtime endpoint
+
+:octicons-database-24: **Type**
+:   Comma-separated string of model IDs or ID prefixes
+
+:octicons-gear-24: **Default**
+:   `[]` (empty — dual-homed models are served by bedrock-runtime)
+
+:octicons-workflow-24: **Behavior**
+:   Useful to leverage Mantle's independent throughput quotas or native response storage for selected models. Mantle quotas (per-model, per-region tokens-per-minute) are independent from bedrock-runtime quotas.
+
+```bash
+export AWS_BEDROCK_MANTLE_PREFERRED_MODELS='anthropic.claude-haiku-4-5,openai.gpt-oss'
+```
+
+#### `AWS_BEDROCK_MANTLE_SERVICE_HEADER` { #bedrock-mantle-service-header }
+
+:octicons-package-24: **Purpose**
+:   Honor the `x-stdapi-service: bedrock-mantle` request header to route a model available on both endpoints through Bedrock Mantle for that request instead of the default bedrock-runtime serving
+
+:octicons-database-24: **Type**
+:   Boolean
+
+:octicons-gear-24: **Default**
+:   `false`
+
+```bash
+export AWS_BEDROCK_MANTLE_SERVICE_HEADER=true
+```
+
+!!! warning "Incompatible with Bedrock Guardrails"
+    Requires [`AWS_BEDROCK_MANTLE_ENABLED`](#bedrock-mantle-enabled) and cannot be enabled together with Amazon Bedrock Guardrails: guardrails do not apply to Mantle-served requests, so a per-request header would allow clients to bypass them.
+
 #### `AWS_BEDROCK_MODEL_REGION_RESTRICT` { #bedrock-model-region-restrict }
 
 :octicons-package-24: **Purpose**
@@ -1724,6 +1836,36 @@ Required only if clients use `store=true` on the [Responses](api_openai_response
 
     Add `kms:Decrypt` and `kms:GenerateDataKey` on the key when [`AWS_BEDROCK_SESSION_ENCRYPTION_KEY_ARN`](#aws-bedrock-session-encryption-key-arn) is configured.
 
+### Bedrock Mantle (Optional) { #bedrock-mantle-iam }
+
+**Environment Variables**: [`AWS_BEDROCK_MANTLE_ENABLED`](#bedrock-mantle-enabled)
+
+Required for [`AWS_BEDROCK_MANTLE_ENABLED`](#bedrock-mantle-enabled) (enabled by default), which exposes models served by the Amazon Bedrock Mantle endpoint (OpenAI GPT, xAI Grok, Google Gemma, and more). Without these permissions the server still starts normally: Mantle models are not listed and a warning is logged.
+
+??? example "Bedrock Mantle IAM Policy Statements"
+    ```json
+    {
+      "Sid": "BedrockMantleInference",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock-mantle:CreateInference",
+        "bedrock-mantle:GetInference",
+        "bedrock-mantle:DeleteInference",
+        "bedrock-mantle:ListModels",
+        "bedrock-mantle:GetModel"
+      ],
+      "Resource": "arn:aws:bedrock-mantle:*:*:project/*"
+    },
+    {
+      "Sid": "BedrockMantleBearerToken",
+      "Effect": "Allow",
+      "Action": "bedrock-mantle:CallWithBearerToken",
+      "Resource": "*"
+    }
+    ```
+
+    `bedrock-mantle:CallWithBearerToken` authorizes the short-term bearer tokens the server derives from its AWS credential chain; it does not support resource scoping.
+
 ### S3 File Storage (Optional)
 
 **Environment Variables**: [`AWS_S3_BUCKET`](#aws-s3-bucket), [`AWS_S3_REGIONAL_BUCKETS`](#aws-s3-regional-buckets)
@@ -2122,6 +2264,7 @@ Required if you configure API authentication. See [Authentication](#authenticati
 | **Bedrock Inference Profiles & Prompt Routers** | `bedrock:GetInferenceProfile`<br>`bedrock:GetPromptRouter`                                                                                                 | `AWS_BEDROCK_ALLOW_*_ARN=true` or `AWS_BEDROCK_MODEL_ARN_MAPPING` configured |
 | **Bedrock Guardrails & Moderations**            | `bedrock:ApplyGuardrail`                                                                                                                                   | `AWS_BEDROCK_GUARDRAIL_IDENTIFIER`                                           |
 | **Stored Responses & Chat Completions**         | Bedrock session permissions (`bedrock:CreateSession`, `bedrock:*Invocation*`, `bedrock:ListSessions`, `bedrock:EndSession`, `bedrock:DeleteSession`, `bedrock:*TagResource*`)        | `store=true` requests and stored-completion listings                                                        |
+| **Bedrock Mantle**                              | `bedrock-mantle:CreateInference`<br>`bedrock-mantle:GetInference`<br>`bedrock-mantle:DeleteInference`<br>`bedrock-mantle:ListModels`<br>`bedrock-mantle:GetModel` (on `arn:aws:bedrock-mantle:*:*:project/*`)<br>`bedrock-mantle:CallWithBearerToken` | `AWS_BEDROCK_MANTLE_ENABLED=true`                                            |
 | **File Storage**                                | `s3:PutObject`<br>`s3:PutObjectTagging`<br>`s3:GetObject`<br>`s3:DeleteObject`<br>`s3:CreateMultipartUpload`<br>`s3:UploadPart`<br>`s3:CompleteMultipartUpload`<br>`s3:AbortMultipartUpload`<br>`s3:ListMultipartUploadParts`<br>`s3:ListBucket`<br>`s3:ListBucketMultipartUploads` | `AWS_S3_BUCKET`                                                              |
 | **Video Generation**                            | Bedrock invoke permissions (incl. `bedrock:GetAsyncInvoke`, `bedrock:ListAsyncInvokes`, `bedrock:ListTagsForResource`, `bedrock:TagResource`)<br>File Storage S3 permissions on each regional bucket | `AWS_S3_REGIONAL_BUCKETS`                                                    |
 | **KMS Encrypted S3 Buckets**                    | `kms:Decrypt`<br>`kms:GenerateDataKey`<br>with `kms:ViaService` condition                                                                                  | If S3 buckets use KMS encryption                                             |

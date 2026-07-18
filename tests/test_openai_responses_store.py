@@ -64,6 +64,10 @@ class _StubChatBackend:
     def __init__(self) -> None:
         self.requests: list[tuple[ResponseCreateParams, str]] = []
 
+    def native_store_supported(self) -> bool:
+        """Local-store stub: no Mantle native storage."""
+        return False
+
     async def create_response(
         self,
         request: ResponseCreateParams,
@@ -74,6 +78,10 @@ class _StubChatBackend:
         """Record the request and return a canned response."""
         self.requests.append((request, response_id))
         return _canned_response(response_id, request.model)
+
+
+#: Stored object kind declared by each document ``response.object`` field.
+_KIND_BY_OBJECT = {"response": "response", "chat.completion": "chat_completion"}
 
 
 class _StubStore:
@@ -93,19 +101,26 @@ class _StubStore:
     async def save(self, response_id: str, document: dict[str, Any]) -> None:
         self.saved.append((response_id, document))
 
-    async def load(self, response_id: str) -> dict[str, Any]:
-        if response_id not in self.documents:
+    def _document_or_not_found(self, response_id: str, kind: str) -> dict[str, Any]:
+        """Return the stored document, 404ing when absent or of a different kind."""
+        document = self.documents.get(response_id)
+        declared = document and _KIND_BY_OBJECT.get(
+            document.get("response", {}).get("object")
+        )
+        if document is None or (declared is not None and declared != kind):
             msg = f"Response with id '{response_id}' not found."
             raise ApiError(msg, status=404)
-        return self.documents[response_id]
+        return document
 
-    async def delete(self, response_id: str) -> None:
-        if response_id not in self.documents:
-            msg = f"Response with id '{response_id}' not found."
-            raise ApiError(msg, status=404)
+    async def load(self, response_id: str, kind: str) -> dict[str, Any]:
+        return self._document_or_not_found(response_id, kind)
+
+    async def delete(self, response_id: str, kind: str) -> None:
+        self._document_or_not_found(response_id, kind)
         self.deleted.append(response_id)
 
-    async def discard(self, response_id: str) -> None:
+    async def discard(self, response_id: str, kind: str) -> None:
+        del kind
         self.discarded.append(response_id)
 
 
@@ -397,6 +412,29 @@ class TestStoredResponseRoutes:
         }
         assert store.deleted == ["resp-sess-1"]
 
+    def test_retrieve_chat_completion_kind_session_is_not_found(
+        self, client: TestClient, store: _StubStore
+    ) -> None:
+        """Retrieving a chat-completion-kind session as a response 404s."""
+        store.documents["resp-sess-1"] = {
+            "messages": [],
+            "response": {"object": "chat.completion"},
+        }
+        response = client.get("/v1/responses/resp-sess-1")
+        assert response.status_code == 404
+
+    def test_delete_chat_completion_kind_session_is_not_found_and_not_deleted(
+        self, client: TestClient, store: _StubStore
+    ) -> None:
+        """Deleting a chat-completion-kind session as a response 404s without deleting."""
+        store.documents["resp-sess-1"] = {
+            "messages": [],
+            "response": {"object": "chat.completion"},
+        }
+        response = client.delete("/v1/responses/resp-sess-1")
+        assert response.status_code == 404
+        assert not store.deleted
+
     def test_input_items_listing(self, client: TestClient, store: _StubStore) -> None:
         """Input items are normalized, ordered, and paginated."""
         store.documents["resp-sess-1"] = {
@@ -449,6 +487,80 @@ class TestStoredResponseRoutes:
         assert [item["id"] for item in body["data"]] == ["msg-1"]
         assert body["has_more"] is False
 
+    def test_input_items_after_accepts_non_msg_prefixed_ids(
+        self, client: TestClient, store: _StubStore
+    ) -> None:
+        """The `after` cursor accepts non-`msg-N` IDs the listing itself emits."""
+        store.documents["resp-sess-1"] = {
+            "input": [
+                {"role": "user", "content": "question", "id": "resp-sess-1-msg-0"},
+                {"role": "assistant", "content": "prior answer"},
+            ],
+            "response": {},
+        }
+        response = client.get(
+            "/v1/responses/resp-sess-1/input_items?order=asc&after=resp-sess-1-msg-0"
+        )
+        assert response.status_code == 200, response.text
+        assert [item["id"] for item in response.json()["data"]] == ["msg-1"]
+
+    def test_input_items_unknown_after_cursor_is_not_found(
+        self, client: TestClient, store: _StubStore
+    ) -> None:
+        """An `after` cursor matching no item 404s instead of returning an empty page."""
+        store.documents["resp-sess-1"] = {
+            "input": [{"role": "user", "content": "question"}],
+            "response": {},
+        }
+        response = client.get(
+            "/v1/responses/resp-sess-1/input_items?after=msg-does-not-exist"
+        )
+        assert response.status_code == 404
+        assert "msg-does-not-exist" in response.json()["error"]["message"]
+
+    def test_input_items_listing_coerces_missing_required_fields(
+        self, client: TestClient, store: _StubStore
+    ) -> None:
+        """Canonical stored items missing an optional-in-practice field still list."""
+        store.documents["resp-sess-1"] = {
+            "input": [
+                {
+                    "type": "function_call_output",
+                    "id": "fc-out-1",
+                    "call_id": "call-1",
+                    "output": "42",
+                },
+                {"type": "reasoning", "id": "rs-1"},
+            ],
+            "response": {},
+        }
+        response = client.get("/v1/responses/resp-sess-1/input_items?order=asc")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert [item["type"] for item in body["data"]] == [
+            "function_call_output",
+            "reasoning",
+        ]
+        assert body["data"][0]["status"] == "completed"
+        assert body["data"][1]["summary"] == []
+
+    def test_input_items_listing_drops_unlistable_item_types(
+        self, client: TestClient, store: _StubStore
+    ) -> None:
+        """A stored `item_reference` entry is dropped instead of 500ing the listing."""
+        store.documents["resp-sess-1"] = {
+            "input": [
+                {"role": "user", "content": "question"},
+                {"type": "item_reference", "id": "ref_1"},
+            ],
+            "response": {},
+        }
+        response = client.get("/v1/responses/resp-sess-1/input_items?order=asc")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert [item["type"] for item in body["data"]] == ["message"]
+        assert body["has_more"] is False
+
     def test_input_items_listing_tolerates_legacy_none_fields(
         self, client: TestClient, store: _StubStore
     ) -> None:
@@ -495,6 +607,65 @@ class TestCancelResponse:
         """An ID not matching the stored response pattern is rejected."""
         response = client.post("/v1/responses/not-a-response-id/cancel")
         assert response.status_code == 400
+
+
+@pytest.mark.local
+class TestUndecodableMantleResponseId:
+    """An undecodable Mantle-form ID (``resp_...``) 404s before touching the local store."""
+
+    @pytest.mark.parametrize(
+        ("method", "path"),
+        [
+            ("get", "/v1/responses/resp_notdecodable0"),
+            ("delete", "/v1/responses/resp_notdecodable0"),
+            ("post", "/v1/responses/resp_notdecodable0/cancel"),
+            ("get", "/v1/responses/resp_notdecodable0/input_items"),
+        ],
+    )
+    def test_returns_404_without_touching_store(
+        self,
+        method: str,
+        path: str,
+        client: TestClient,
+        store: _StubStore,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A `resp_` ID that fails Mantle decoding 404s before any store lookup."""
+        calls = 0
+
+        async def _counting_load(_response_id: str, _kind: str) -> dict[str, Any]:
+            nonlocal calls
+            calls += 1
+            return store.documents[_response_id]
+
+        async def _counting_delete(_response_id: str, _kind: str) -> None:
+            nonlocal calls
+            calls += 1
+
+        monkeypatch.setattr(openai_responses, "load_stored_response", _counting_load)
+        monkeypatch.setattr(
+            openai_responses, "delete_stored_response", _counting_delete
+        )
+
+        response = getattr(client, method)(path)
+        assert response.status_code == 404
+        assert calls == 0
+
+    def test_create_with_undecodable_previous_response_id_returns_404(
+        self, client: TestClient, backend: _StubChatBackend, store: _StubStore
+    ) -> None:
+        """A `resp_` `previous_response_id` that fails Mantle decoding 404s before generation."""
+        response = client.post(
+            "/v1/responses",
+            json={
+                "model": "amazon.nova-micro-v1:0",
+                "input": "hello",
+                "previous_response_id": "resp_notdecodable0",
+            },
+        )
+        assert response.status_code == 404
+        assert not backend.requests
+        assert not store.saved
 
 
 class TestStoredResponsesLive:

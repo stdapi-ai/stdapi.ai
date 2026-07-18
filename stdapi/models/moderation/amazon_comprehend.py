@@ -15,7 +15,10 @@ class ModerationModel(ModerationModelBase):
     MATCHER = COMPREHEND_MODERATION_MODEL
 
     @classmethod
-    def get_aliases(cls, all_models: dict[str, ModelDetails]) -> dict[str, str]:  # noqa: ARG003
+    def get_aliases(
+        cls,
+        all_models: dict[str, ModelDetails],  # noqa: ARG003
+    ) -> dict[str, str]:
         """Return the OpenAI text moderation model aliases.
 
         Args:

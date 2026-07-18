@@ -1,7 +1,7 @@
 ---
 title: Features - OpenAI & Anthropic Compatible AI Gateway for AWS Bedrock
 description: stdapi.ai features — OpenAI and Anthropic API compatibility for AWS Bedrock & AI services. Multi-region access, compliance controls, security, observability, and more.
-keywords: AI gateway features, AWS Bedrock gateway, OpenAI API compatible, Anthropic API compatible, OpenAI to Bedrock, Anthropic to Bedrock, AWS AI services, private AI gateway, prompt caching, guardrails, data sovereignty, enterprise AI, multi-region AI, S3 integration, OpenTelemetry AI, OpenAI alternative AWS, Anthropic alternative AWS, LiteLLM alternative, Bedrock Access Gateway alternative, Bedrock Mantle alternative
+keywords: AI gateway features, AWS Bedrock gateway, OpenAI API compatible, Anthropic API compatible, OpenAI to Bedrock, Anthropic to Bedrock, AWS AI services, private AI gateway, prompt caching, guardrails, data sovereignty, enterprise AI, multi-region AI, S3 integration, OpenTelemetry AI, OpenAI alternative AWS, Anthropic alternative AWS, LiteLLM alternative, Bedrock Access Gateway alternative, Bedrock Mantle alternative, Bedrock Mantle models, OpenAI GPT on AWS, xAI Grok on AWS
 hide:
   - navigation
 ---
@@ -76,37 +76,37 @@ Your existing applications, SDKs, and tools work immediately — no plugins or c
 
 **OpenAI-Compatible:**
 
-| Endpoint                     | Capability                                                                | AWS Backend                          |
-|------------------------------|---------------------------------------------------------------------------|--------------------------------------|
-| `/v1/chat/completions`       | Conversational AI, tool calling, multi-modal                              | AWS Bedrock Converse API             |
-| `/v1/completions`            | Simple prompt-to-text                                                     | AWS Bedrock Converse API             |
-| `/v1/responses`              | Stateless conversational AI with tool calling and streaming               | AWS Bedrock Converse API             |
-| `/v1/responses/input_tokens` | Count input tokens without generating a response                          | AWS Bedrock CountTokens API          |
-| `/v1/responses/compact`      | Compact a conversation into a reusable summary item                       | AWS Bedrock Converse API             |
-| `/v1/responses/{id}`         | Retrieve, continue (`previous_response_id`), or delete stored responses   | AWS Bedrock Sessions                 |
-| `/v1/chat/completions/{id}`  | Retrieve, list, update, or delete stored chat completions                 | AWS Bedrock Sessions                 |
-| `/v1/embeddings`             | Vector embeddings for search & RAG                                        | AWS Bedrock Embedding Models         |
-| [`/v1/moderations`](api_openai_moderations.md) | Content safety classification                           | AWS Bedrock Guardrails, Amazon Comprehend |
-| `/v1/images/generations`     | Text-to-image generation                                                  | AWS Bedrock Image Models             |
-| `/v1/images/edits`           | Image editing, inpainting & transformations                               | AWS Bedrock Image Models             |
-| `/v1/images/variations`      | Image variations                                                          | AWS Bedrock Image Models             |
-| [`/v1/videos`](api_openai_videos.md) | Asynchronous text/image-to-video generation                       | AWS Bedrock Video Models             |
-| `/v1/audio/speech`           | Text-to-speech with SSML support                                          | Amazon Polly                         |
-| `/v1/audio/transcriptions`   | Speech-to-text with speaker diarization                                   | Amazon Transcribe                    |
-| `/v1/audio/translations`     | Speech-to-English translation                                             | Amazon Transcribe + Amazon Translate |
-| `/v1/models`                 | Model discovery & listing                                                 | AWS Bedrock                          |
-| `/v1/files`                  | File upload, listing, metadata, download, deletion                        | Amazon S3                            |
-| `/v1/uploads`                | Multipart upload sessions for large files                                 | Amazon S3                            |
+| Endpoint                                       | Capability                                                              | AWS Backend                               |
+|------------------------------------------------|-------------------------------------------------------------------------|-------------------------------------------|
+| `/v1/chat/completions`                         | Conversational AI, tool calling, multi-modal                            | AWS Bedrock Converse API · Bedrock Mantle |
+| `/v1/completions`                              | Simple prompt-to-text                                                   | AWS Bedrock Converse API · Bedrock Mantle |
+| `/v1/responses`                                | Stateless conversational AI with tool calling and streaming             | AWS Bedrock Converse API · Bedrock Mantle |
+| `/v1/responses/input_tokens`                   | Count input tokens without generating a response                        | AWS Bedrock CountTokens API               |
+| `/v1/responses/compact`                        | Compact a conversation into a reusable summary item                     | AWS Bedrock Converse API                  |
+| `/v1/responses/{id}`                           | Retrieve, continue (`previous_response_id`), or delete stored responses | AWS Bedrock Sessions · Bedrock Mantle     |
+| `/v1/chat/completions/{id}`                    | Retrieve, list, update, or delete stored chat completions               | AWS Bedrock Sessions                      |
+| `/v1/embeddings`                               | Vector embeddings for search & RAG                                      | AWS Bedrock Embedding Models              |
+| [`/v1/moderations`](api_openai_moderations.md) | Content safety classification                                           | AWS Bedrock Guardrails, Amazon Comprehend |
+| `/v1/images/generations`                       | Text-to-image generation                                                | AWS Bedrock Image Models                  |
+| `/v1/images/edits`                             | Image editing, inpainting & transformations                             | AWS Bedrock Image Models                  |
+| `/v1/images/variations`                        | Image variations                                                        | AWS Bedrock Image Models                  |
+| [`/v1/videos`](api_openai_videos.md)           | Asynchronous text/image-to-video generation                             | AWS Bedrock Video Models                  |
+| `/v1/audio/speech`                             | Text-to-speech with SSML support                                        | Amazon Polly                              |
+| `/v1/audio/transcriptions`                     | Speech-to-text with speaker diarization                                 | Amazon Transcribe                         |
+| `/v1/audio/translations`                       | Speech-to-English translation                                           | Amazon Transcribe + Amazon Translate      |
+| `/v1/models`                                   | Model discovery & listing                                               | AWS Bedrock                               |
+| `/v1/files`                                    | File upload, listing, metadata, download, deletion                      | Amazon S3                                 |
+| `/v1/uploads`                                  | Multipart upload sessions for large files                               | Amazon S3                                 |
 
 **Anthropic-Compatible:**
 
-| Endpoint                    | Capability                                         | AWS Backend                 |
-|-----------------------------|----------------------------------------------------|-----------------------------|
-| `/v1/messages`              | Conversational AI, tool calling, multi-modal       | AWS Bedrock Converse API    |
-| `/v1/messages/count_tokens` | Count tokens without sending a message             | AWS Bedrock CountTokens API |
-| `/v1/models`                | Model discovery & listing                          | AWS Bedrock                 |
-| `/v1/models/{model_id}`     | Model details                                      | AWS Bedrock                 |
-| `/v1/files`                 | File upload, listing, metadata, download, deletion | Amazon S3                   |
+| Endpoint                    | Capability                                         | AWS Backend                               |
+|-----------------------------|----------------------------------------------------|-------------------------------------------|
+| `/v1/messages`              | Conversational AI, tool calling, multi-modal       | AWS Bedrock Converse API · Bedrock Mantle |
+| `/v1/messages/count_tokens` | Count tokens without sending a message             | AWS Bedrock CountTokens API               |
+| `/v1/models`                | Model discovery & listing                          | AWS Bedrock                               |
+| `/v1/models/{model_id}`     | Model details                                      | AWS Bedrock                               |
+| `/v1/files`                 | File upload, listing, metadata, download, deletion | Amazon S3                                 |
 
 !!! note "Route prefix"
     Anthropic-compatible routes are prefixed with `/anthropic` by default (e.g., `/anthropic/v1/messages`). The prefix is configurable via `ANTHROPIC_ROUTES_PREFIX`.
@@ -146,12 +146,18 @@ stdapi.ai maps as many parameters as possible to Bedrock equivalents — across 
 
 ## :material-brain: 80+ Models Across 10+ Providers
 
-Access every model available on AWS Bedrock through a single, consistent API.
+Access every model available on AWS Bedrock through a single, consistent API — including OpenAI GPT, xAI Grok, and [other frontier models](#bedrock-mantle-models).
 
 <div class="grid cards" markdown>
 
 - ![Claude](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } **Anthropic Claude**
   <br>Claude Fable/Mythos, Claude Opus, Claude Sonnet, Claude Haiku — including reasoning models. Use official Anthropic model names (e.g., `claude-fable-5`) — they resolve automatically.
+
+- ![OpenAI](styles/logo_openai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } **OpenAI GPT**
+  <br>GPT frontier models plus open-weight gpt-oss.
+
+- ![Google](styles/logo_google.svg){ style="height: 1.2em; vertical-align: text-bottom;" } **Google Gemma**
+  <br>Gemma 4 and other Gemma open-weight variants.
 
 - ![Amazon Nova](styles/logo_amazon_nova.svg){ style="height: 1.2em; vertical-align: text-bottom;" } **Amazon Nova**
   <br>Nova — including reasoning-capable variants. Canvas for images. Multimodal embeddings. Built-in web grounding and code interpreter.
@@ -178,7 +184,7 @@ Access every model available on AWS Bedrock through a single, consistent API.
   <br>Stable Diffusion 3.5, SD3 Ultra, and specialty models (upscale, style, search).
 
 - ![MiniMax](styles/logo_minimax.svg){ style="height: 1.2em; vertical-align: text-bottom;" } **MiniMax & more**
-  <br>MiniMax, Writer Palmyra, AI21 Jamba, TwelveLabs Marengo video embeddings, and others.
+  <br>MiniMax, xAI Grok, Writer Palmyra, AI21 Jamba, TwelveLabs Marengo video embeddings, and others.
 
 </div>
 
@@ -304,6 +310,43 @@ Configure multiple AWS regions to scale your throughput and maximize availabilit
 | **System Tools (Nova)**            | Web grounding with URL citations; code interpreter                                                                     |
 | **Claude Server Tools**            | Bash, text editor, computer use (3.5+), memory (3.7+)                                                                  |
 | **Extra Model Parameters**         | Any model-specific parameter forwarded via `extra_body` or top-level field                                             |
+
+### :material-layers-triple: Bedrock Mantle Models { #bedrock-mantle-models }
+
+stdapi.ai serves models from the **Amazon Bedrock Mantle** endpoint alongside the classic Bedrock catalog: OpenAI GPT, xAI Grok, Google Gemma, Qwen, GLM, DeepSeek, MiniMax, Kimi, Nemotron, and more — the available catalog varies per region and grows over time.
+
+- **Every text API, every model** — All four text APIs (chat completions, responses, messages, legacy completions) work with every Mantle model: served natively (passthrough) when the model supports the API upstream, converted automatically otherwise, with an automatic fallback order (responses → chat completions → messages) learned at runtime
+- **Predictable routing** — Models available on both the classic endpoint and Mantle are served by the classic endpoint by default; Mantle serves Mantle-only models. Dual-homed models can be routed through Mantle globally or per request (`x-stdapi-service: bedrock-mantle` header) to tap Mantle's separate throughput quotas
+- **Automatic failover** — Region failover and quota backoff work exactly like classic Bedrock region routing; requests chained via `previous_response_id` are pinned to their origin region
+- **No static secrets** — Short-term bearer tokens are derived automatically (SigV4-presigned) from the same AWS credential chain the server already uses, and refreshed transparently
+- **Native stored conversations** — `/v1/responses` with `store`, `previous_response_id`, and `GET`/`DELETE /v1/responses/{id}` use Mantle's native server-side storage: 30-day retention, region-local, project-scoped
+- **Usage & billing** — Token usage (including cached tokens and standard/flex/priority service tiers) is recorded and priced at bedrock-mantle rates, like all other models
+
+Enabled by default; regions, routing preferences, the per-request Mantle routing header, and required IAM permissions are covered in the [Bedrock Mantle configuration](operations_configuration.md#bedrock-mantle-enabled) and [IAM](operations_configuration.md#bedrock-mantle-iam) sections — without the required permissions, Mantle models are simply not listed and a warning is logged at startup.
+
+Conversion preserves the core request semantics (messages, tools, sampling, streaming, usage); parameters with no equivalent in the serving API are dropped, and a few are adapted. The exact parameter tables are on the per-API pages: [chat completions](api_openai_chat_completions.md#bedrock-mantle), [responses](api_openai_responses.md#model-support), [messages](api_anthropic_messages.md#bedrock-mantle), and [legacy completions](api_openai_completions.md#feature-compatibility).
+
+| Model Family                                    | Native Mantle APIs           |
+|-------------------------------------------------|------------------------------|
+| **OpenAI GPT** (frontier models)                | Responses                    |
+| **Anthropic Claude**                            | Messages                     |
+| **xAI Grok · OpenAI gpt-oss · Google Gemma 4**  | Chat Completions + Responses |
+| **Other open-weight models** (Gemma 3, Qwen, GLM, Mistral, DeepSeek, MiniMax, Kimi, Nemotron, Palmyra) | Chat Completions             |
+
+!!! warning "Response IDs are stdapi.ai-specific"
+    stdapi.ai response IDs embed the serving AWS region, so conversation turns chained with `previous_response_id` stay region-local. These IDs **cannot** be used directly against the Bedrock Mantle API, and raw Mantle response IDs are not accepted by stdapi.ai.
+
+!!! note "Limitations"
+    - Amazon Bedrock Guardrails do not apply to Mantle-served requests
+    - Cross-region inference profiles are not available on Mantle
+    - Anthropic structured output (`output_config.format`) is not supported by the upstream Mantle Messages API
+    - Structured output is not available when a request is converted to the Anthropic Messages shape
+    - Effort-based reasoning settings are mapped between API shapes; Anthropic `thinking` configuration and token budgets are dropped on conversion
+    - The server-side `web_search` tool runs in cache-only mode (live web access is forced off, as it is not available upstream)
+    - Multiple prompts in a single legacy `/v1/completions` request are not supported for Mantle models
+    - Input-item listings, `/v1/responses/input_tokens`, and `/v1/responses/compact` are not available for Mantle stored conversations
+
+[:octicons-arrow-right-24: Bedrock Mantle Configuration](operations_configuration.md#bedrock-mantle-enabled)
 
 ### AWS AI Services Integration
 
@@ -524,7 +567,7 @@ export MCP_EXCLUDE_TOOLS="openai_files_delete,anthropic_files_delete"
 
 ## :material-scale-balance: How stdapi.ai Compares
 
-All four solutions below expose an OpenAI-compatible API in front of AWS Bedrock. The comparison focuses on the AWS deployment context — LiteLLM is evaluated with AWS services as the backend provider (Bedrock, Polly, Transcribe), not as a multi-cloud proxy. Bedrock Access Gateway is the official AWS-maintained open-source sample. Bedrock Mantle is AWS's own managed OpenAI-compatible endpoint, requiring no self-hosting.
+All four solutions below expose an OpenAI-compatible API in front of AWS Bedrock. The comparison focuses on the AWS deployment context — LiteLLM is evaluated with AWS services as the backend provider (Bedrock, Polly, Transcribe), not as a multi-cloud proxy. Bedrock Access Gateway is the official AWS-maintained open-source sample. Bedrock Mantle is AWS's own managed OpenAI-compatible endpoint, requiring no self-hosting — and stdapi.ai can also front it as an additional backend, serving Mantle-only models through the gateway (see [Bedrock Mantle Models](#bedrock-mantle-models)).
 
 | Capability                                  |              stdapi.ai              |            LiteLLM (on AWS)             |         Bedrock Access Gateway          |             Bedrock Mantle              |
 |---------------------------------------------|:-----------------------------------:|:---------------------------------------:|:---------------------------------------:|:---------------------------------------:|
@@ -571,7 +614,7 @@ All four solutions below expose an OpenAI-compatible API in front of AWS Bedrock
 
     - **LiteLLM** — widely adopted multi-cloud proxy with a large open-source community. Ideal when you need a single entry point across OpenAI, Azure, AWS, and others. AWS deployment and security features (WAF, VPC endpoints) require manual setup. Also offers a commercial Enterprise tier.
     - **Bedrock Access Gateway** — official open-source AWS sample (MIT-0), actively maintained by AWS teams. Covers chat completions and embeddings only. No WAF, auto-scaling, monitoring, or commercial support included.
-    - **Bedrock Mantle** — AWS's own native OpenAI-compatible endpoint backed by AWS's full compliance and SLA. No self-hosting required. Supports chat completions and the Responses API; limited to a subset of models (mostly newer open-weight models — Claude 3.x/4.x, Nova, Llama, Cohere, and Stability AI image models are not available). Routes through an AWS-managed endpoint, not your private VPC. See [model availability](https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html).
+    - **Bedrock Mantle** — AWS's own native OpenAI-compatible endpoint backed by AWS's full compliance and SLA. No self-hosting required. Supports chat completions and the Responses API; limited to a subset of models (mostly newer open-weight models — Claude 3.x/4.x, Nova, Llama, Cohere, and Stability AI image models are not available). Routes through an AWS-managed endpoint, not your private VPC. See [model availability](https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html). Rather than an either/or choice, stdapi.ai can serve the Mantle catalog itself: enable [Bedrock Mantle Models](#bedrock-mantle-models) to access OpenAI GPT, xAI Grok, and other Mantle-only models through the gateway, with all four text APIs available for every model.
 
 ---
 

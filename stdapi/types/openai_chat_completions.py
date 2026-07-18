@@ -940,6 +940,11 @@ class PromptTokensDetails(BaseModelResponse):
     cached_tokens: int | None = Field(
         default=None, description="Cached tokens present in the prompt."
     )
+    cache_write_tokens: int | None = Field(
+        default=None,
+        description="Extra feature: Tokens written to the prompt cache "
+        "(reported by some AWS Bedrock models).",
+    )
 
 
 # Ref: openai.types.completion_usage.CompletionUsage

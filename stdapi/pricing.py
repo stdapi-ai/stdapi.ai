@@ -70,8 +70,8 @@ class Dimension(StrEnum):
 class Service(StrEnum):
     """AWS services/APIs that have pricing support.
 
-    Bedrock is split per invocation API: the app serves and records via
-    bedrock-runtime only; bedrock-mantle rates are indexed for the future.
+    Bedrock is split per invocation API: bedrock-runtime (Converse) and
+    bedrock-mantle usage are recorded and priced independently.
     """
 
     BEDROCK = "bedrock-runtime"
@@ -475,9 +475,12 @@ def register_default_prices(
         model = resolve_model_key(model_id)
         for dimension, amount in dimension_prices.items():
             for region in regions:
-                _DEFAULT_PRICES[
-                    PriceKey(Service.BEDROCK, model, region, dimension, "standard")
-                ] = Price(Decimal(amount), "USD")
+                # The pricing page doesn't distinguish invocation APIs; key
+                # under both so Mantle-only models resolve at runtime too.
+                for service in (Service.BEDROCK, Service.BEDROCK_MANTLE):
+                    _DEFAULT_PRICES[
+                        PriceKey(service, model, region, dimension, "standard")
+                    ] = Price(Decimal(amount), "USD")
 
 
 #: AWS tier-price ratios: flex/batch = 0.5 (50% discount), priority = 1.75 (75% premium).
@@ -1334,7 +1337,11 @@ def _apply_default_prices(index: dict[PriceKey, Price]) -> None:
     Args:
         index: Price index to update.
     """
-    published_models = {key.model for key in index if key.service == Service.BEDROCK}
+    published_models = {
+        key.model
+        for key in index
+        if key.service in (Service.BEDROCK, Service.BEDROCK_MANTLE)
+    }
     index.update(
         {
             key: price

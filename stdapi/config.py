@@ -340,6 +340,69 @@ class _Settings(BaseSettings):
         ),
     )
 
+    aws_bedrock_mantle_enabled: bool = Field(
+        default=True,
+        description=(
+            "If true (default), expose models served by the Amazon Bedrock Mantle "
+            "endpoint (OpenAI/Anthropic-compatible APIs) in addition to the classic "
+            "Bedrock Converse models. Mantle-only models (e.g. OpenAI GPT, xAI "
+            "Grok, Google Gemma 4) become available on the chat completions, "
+            "responses, messages and completions routes. Models available on both "
+            "the classic bedrock-runtime endpoint and Mantle are served by "
+            "bedrock-runtime unless listed in aws_bedrock_mantle_preferred_models.\n\n"
+            "When Bedrock Mantle is unreachable or the IAM role lacks "
+            "bedrock-mantle permissions, Mantle models are simply not listed and "
+            "a warning is logged at startup.\n\n"
+            "Note: Amazon Bedrock Guardrails are not supported on Mantle-served "
+            "requests."
+        ),
+    )
+
+    aws_bedrock_mantle_regions: Annotated[list[RegionName], NoDecode] = Field(
+        default=[],
+        description=(
+            "List of AWS regions used for Amazon Bedrock Mantle, in failover "
+            "priority order. Defaults to aws_bedrock_regions when unset. "
+            "Model availability differs per region; the served model catalog is "
+            "the union of all listed regions.\n\n"
+            "Environment variable format: Comma-separated string"
+        ),
+    )
+
+    aws_bedrock_mantle_endpoint_url: str | None = Field(
+        default=None,
+        description=(
+            "Override the Amazon Bedrock Mantle endpoint URL template. "
+            "The '{region}' placeholder is substituted with the target region. "
+            "Default: 'https://bedrock-mantle.{region}.api.aws'."
+        ),
+    )
+
+    aws_bedrock_mantle_preferred_models: Annotated[list[str], NoDecode] = Field(
+        default=[],
+        description=(
+            "Model IDs (or ID prefixes) served by Amazon Bedrock Mantle even when "
+            "also available on the classic bedrock-runtime endpoint. Useful to "
+            "leverage Mantle's independent throughput quotas or native response "
+            "storage for selected models.\n\n"
+            "Environment variable format: Comma-separated string\n"
+            "Example: 'anthropic.claude-haiku-4-5,openai.gpt-oss'"
+        ),
+    )
+
+    aws_bedrock_mantle_service_header: bool = Field(
+        default=False,
+        description=(
+            "If true, honor the 'x-stdapi-service: bedrock-mantle' request "
+            "header to route a model available on both endpoints through "
+            "Bedrock Mantle for that request instead of the default "
+            "bedrock-runtime serving.\n\n"
+            "Cannot be enabled together with Amazon Bedrock Guardrails: guardrails "
+            "do not apply to Mantle-served requests, so a per-request header would "
+            "allow clients to bypass them."
+        ),
+    )
+
     aws_s3_accepted_buckets: dict[str, RegionName] = Field(
         default={},
         description=(
@@ -1171,9 +1234,8 @@ class _Settings(BaseSettings):
         Returns:
             A list of unique tool name strings, or None if the input is empty.
         """
-        if isinstance(value, str):
-            value = [t.strip() for t in value.split(",") if t.strip()]
-        return list(set(value)) if value else None
+        items = cls._parse_comma_list(value or [])
+        return list(set(items)) if items else None
 
     @field_validator("anthropic_beta_allowlist", mode="before")
     @classmethod
@@ -1191,22 +1253,34 @@ class _Settings(BaseSettings):
         Returns:
             A frozenset of all allowed flags (built-in + user-specified).
         """
-        return frozenset(
-            _ANTHROPIC_BETA_BEDROCK_FLAGS
-            | set(
-                (flag for flag in (v.strip() for v in value.split(",")) if flag)
-                if isinstance(value, str)
-                else value
-            )
-        )
+        extra = cls._parse_comma_list(value) if isinstance(value, str) else value
+        return frozenset(_ANTHROPIC_BETA_BEDROCK_FLAGS | set(extra))
+
+    @field_validator(
+        "aws_bedrock_mantle_regions",
+        "aws_bedrock_mantle_preferred_models",
+        mode="before",
+    )
+    @classmethod
+    def _parse_comma_list(cls, value: str | list[str]) -> list[str]:
+        """Parse a comma-separated environment string into a list.
+
+        Args:
+            value: A comma-separated string or a pre-parsed list.
+
+        Returns:
+            List of stripped, non-empty items.
+        """
+        if isinstance(value, str):
+            value = [item for item in (v.strip() for v in value.split(",")) if item]
+        return value
 
     @field_validator("aws_bedrock_regions", mode="before")
     @classmethod
     def _parse_bedrock_regions(cls, value: str | list[str]) -> list[str]:
         """Parse AWS Bedrock regions from environment variable or list input.
 
-        Converts comma-separated region strings into a list of region identifiers,
-        stripping whitespace and filtering out empty values for robust parsing.
+        Falls back to the AWS SDK session region when no region is given.
 
         Args:
             value: Either a comma-separated string of regions (e.g., "us-east-1, us-west-2")
@@ -1215,13 +1289,10 @@ class _Settings(BaseSettings):
         Returns:
             List of AWS region identifiers with whitespace stripped.
 
-        Example:
-            "us-east-1, us-west-2 , eu-west-1" -> ["us-east-1", "us-west-2", "eu-west-1"]
+        Raises:
+            ValueError: When no region is given and none can be detected.
         """
-        if isinstance(value, str):
-            value = [
-                region for region in (v.strip() for v in value.split(",")) if region
-            ]
+        value = cls._parse_comma_list(value)
         if not value:
             # Let AWS SDK try to detect the region if not specified
             region = AWS_SESSION.get_config_variable("region")
@@ -1340,6 +1411,18 @@ class _Settings(BaseSettings):
             and not self.aws_bedrock_guardrail_version
         ):
             self.aws_bedrock_allow_guardrail_override = True
+
+        if self.aws_bedrock_mantle_service_header and (
+            self.aws_bedrock_guardrail_identifier or not self.aws_bedrock_mantle_enabled
+        ):
+            msg = (
+                "aws_bedrock_mantle_service_header requires aws_bedrock_mantle_enabled "
+                "and is incompatible with Amazon Bedrock Guardrails "
+                "(guardrails do not apply to Mantle-served requests)."
+            )
+            raise ValueError(msg)
+        if not self.aws_bedrock_mantle_regions:
+            self.aws_bedrock_mantle_regions = self.aws_bedrock_regions
 
         if not self.aws_transcribe_s3_bucket:
             self.aws_transcribe_s3_bucket = self.aws_s3_bucket

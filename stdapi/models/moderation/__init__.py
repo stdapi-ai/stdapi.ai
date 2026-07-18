@@ -72,7 +72,7 @@ async def initialize_moderation_models() -> None:
         id=GUARDRAIL_MODERATION_MODEL,
         name="Bedrock Guardrail",
         provider="Amazon",
-        service="AWS Bedrock",
+        service="AWS Bedrock Runtime",
         input_modalities=["TEXT", "IMAGE"],
         output_modalities=[MODERATION_MODALITY],
         regions=[guardrail_region(identifier)],

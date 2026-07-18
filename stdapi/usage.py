@@ -641,6 +641,7 @@ def record_transcribe_usage(audio_duration: float, *, region: str = "") -> int:
 def record_bedrock_usage(
     model: str,
     *,
+    service: Service = Service.BEDROCK,
     tier: str | None = None,
     region: str = "",
     routing: Routing | None = None,
@@ -663,6 +664,7 @@ def record_bedrock_usage(
 
     Args:
         model: Bedrock model ID.
+        service: Serving endpoint (bedrock-runtime or bedrock-mantle).
         tier: Service tier (standard, flex, priority, batch). Defaults to this
             model's invocation state (see :func:`get_model_state`).
         region: Region that served the call. Defaults to this model's
@@ -697,7 +699,7 @@ def record_bedrock_usage(
         (input_tokens or 0) + (cached_tokens or 0) + (cache_write_tokens or 0)
     )
     _record_usage(
-        Service.BEDROCK,
+        service,
         model,
         region,
         tier="standard" if effective_tier == "default" else effective_tier,

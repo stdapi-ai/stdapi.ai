@@ -5,6 +5,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, ClassVar
 
 from stdapi.config import SETTINGS
+from stdapi.models import MANTLE_SERVICE
 from stdapi.models.chat._default import ChatModel as _BaseChatModel
 from stdapi.monitoring import log_error_details
 
@@ -336,8 +337,12 @@ class AnthropicClaudeChatModel(_BaseChatModel):
                     newest[base] = (date, model_id)
 
         for base, (_, model_id) in newest.items():
-            aliases.setdefault(
-                f"{base}-latest" if base.startswith("claude-3-") else base, model_id
-            )
+            alias = f"{base}-latest" if base.startswith("claude-3-") else base
+            holder = aliases.get(alias)
+            # The Mantle catalog lists undated Claude IDs whose direct alias
+            # collides with the date-stripped one: bedrock-runtime dated
+            # variants keep priority over them.
+            if holder is None or all_models[holder].service == MANTLE_SERVICE:
+                aliases[alias] = model_id
 
         return aliases

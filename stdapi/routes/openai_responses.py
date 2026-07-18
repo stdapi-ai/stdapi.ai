@@ -8,23 +8,33 @@ The module provides:
     - POST /v1/responses/input_tokens — count input tokens without generating a response
     - POST /v1/responses/compact — compact a conversation into a reusable summary item
     - GET /v1/responses/{response_id} — retrieve a stored model response
-    - POST /v1/responses/{response_id}/cancel — cancel a background model response (always fails)
+    - POST /v1/responses/{response_id}/cancel — cancel a background model response
     - DELETE /v1/responses/{response_id} — delete a stored model response
     - GET /v1/responses/{response_id}/input_items — list a stored model response's input items
 """
 
 from functools import partial
-from typing import TYPE_CHECKING, Annotated, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal, get_args
 
 from fastapi import APIRouter, Depends, Path, Query
+from pydantic import TypeAdapter, ValidationError
 
 from stdapi.api_errors import ApiError
 from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
+from stdapi.aws_bedrock_mantle import (
+    MantleError,
+    cache_response_surface,
+    cached_response_surface,
+    decode_mantle_response_id,
+    encode_mantle_response_id,
+    request_json,
+    validate_pruning_extras,
+)
 from stdapi.config import SETTINGS
 from stdapi.models import validate_model
 from stdapi.models.capabilities import register_route_capability
-from stdapi.models.chat import get_chat_model
+from stdapi.models.chat import get_chat_model, serves_via_mantle
 from stdapi.models.chat._adapters._openai_responses import (
     count_input_tokens_via_bedrock,
     encode_compaction_content,
@@ -37,7 +47,6 @@ from stdapi.monitoring import (
     log_response_params,
 )
 from stdapi.responses_store import (
-    RESPONSE_ID_PATTERN,
     delete_stored_response,
     discard_stored_response_session,
     load_stored_response,
@@ -62,6 +71,7 @@ from stdapi.types.openai_responses import (
     ResponseCreateParams,
     ResponseDeleted,
     ResponseInputItem,
+    ResponseItem,
     ResponseItemList,
     ResponseOutputMessage,
     ResponseOutputText,
@@ -73,6 +83,9 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from sse_starlette import EventSourceResponse
+    from types_aiobotocore_bedrock.literals import RegionName
+
+    from stdapi.aws_bedrock_mantle import Surface
 
 register_route_capability(
     "openai_response", f"{SETTINGS.openai_routes_prefix}/v1/responses", "TEXT", "TEXT"
@@ -103,10 +116,83 @@ _COMPACTION_PROMPT = (
     "Reply with the summary only."
 )
 
+#: Accepts native stored IDs (``resp-``) and region-tagged Mantle IDs (``resp_``).
+_RESPONSE_ID_PATTERN = r"^resp[-_][A-Za-z0-9-]+$"
+
 #: Reusable path annotation for the ``response_id`` path parameter.
 _ResponseId = Annotated[
-    str, Path(description="The ID of the stored response.", pattern=RESPONSE_ID_PATTERN)
+    str,
+    Path(description="The ID of the stored response.", pattern=_RESPONSE_ID_PATTERN),
 ]
+
+
+def _decode_mantle_id(response_id: str) -> tuple[RegionName, str] | None:
+    """Decode a region-tagged Mantle response ID, gated on Mantle support.
+
+    Args:
+        response_id: Public response identifier.
+
+    Returns:
+        Tuple of (region, native Mantle response ID), or ``None`` when Mantle
+        support is disabled or the ID is not a region-tagged Mantle ID.
+    """
+    if not SETTINGS.aws_bedrock_mantle_enabled:
+        return None
+    return decode_mantle_response_id(response_id)
+
+
+def _require_local_response_id(response_id: str) -> None:
+    """Reject undecodable Mantle-form (``resp_``) IDs before the local store.
+
+    Local store IDs use ``resp-``; a ``resp_`` ID that failed Mantle decoding
+    can never exist locally and would be mangled into an invalid Bedrock
+    session identifier by the local-store lookup.
+
+    Args:
+        response_id: Public response identifier that failed Mantle decoding.
+
+    Raises:
+        ApiError: 404 when the ID has the Mantle ``resp_`` form.
+    """
+    if response_id.startswith("resp_"):
+        msg = f"Response '{response_id}' not found."
+        raise ApiError(msg, status=404)
+
+
+async def _apply_previous_response(
+    request: ResponseCreateParams, *, native_supported: bool
+) -> ResponseCreateParams:
+    """Resolve ``previous_response_id`` against the target model's storage.
+
+    Local store IDs get their stored conversation merged into the request;
+    Mantle-tagged IDs are kept for native upstream chaining, which requires a
+    model with native store support.
+
+    Args:
+        request: The incoming request.
+        native_supported: Whether the target model chains conversations
+            natively (Bedrock Mantle Responses API).
+
+    Returns:
+        The request, rebuilt with merged history for local store IDs.
+
+    Raises:
+        ApiError: 404 when the stored response does not exist or a Mantle
+            stored conversation is continued with a non-Mantle-native model.
+    """
+    previous_response_id = request.previous_response_id
+    if not previous_response_id:
+        return request
+    if _decode_mantle_id(previous_response_id) is None:
+        _require_local_response_id(previous_response_id)
+        return await _merge_previous_response(request, previous_response_id)
+    if not native_supported:
+        msg = (
+            "previous_response_id belongs to a Bedrock Mantle stored "
+            "conversation and cannot be continued with this model."
+        )
+        raise ApiError(msg, status=404)
+    return request
 
 
 async def _merge_previous_response(
@@ -128,7 +214,7 @@ async def _merge_previous_response(
     Raises:
         ApiError: 404 when the stored response does not exist.
     """
-    stored = await load_stored_response(previous_response_id)
+    stored = await load_stored_response(previous_response_id, "response")
     data = request.model_dump(mode="json", exclude_unset=True, by_alias=True)
     data.pop("previous_response_id", None)
     new_input = data.get("input") or []
@@ -178,6 +264,107 @@ def _normalized_input_items(stored_input: Any) -> list[dict[str, Any]]:  # noqa:
         item.setdefault("id", f"msg-{index}")
         items.append(item)
     return items
+
+
+#: Adapter validating a normalized input item against the listable ResponseItem union.
+_RESPONSE_ITEM_ADAPTER: TypeAdapter[ResponseItem] = TypeAdapter[ResponseItem](
+    ResponseItem
+)
+
+#: Safe default backfilled onto a stored item missing this field, keyed by field name.
+_ITEM_FIELD_DEFAULTS: dict[str, Any] = {"status": "completed", "summary": []}
+
+
+def _coercible_field_defaults() -> dict[str, dict[str, Any]]:
+    """Map each ResponseItem type literal to its coercible required-field defaults.
+
+    Derived from the ResponseItem union members: a field is coercible for a
+    given item type when it is required (no default) on the matching member
+    and has a known safe default in ``_ITEM_FIELD_DEFAULTS``. This lets
+    canonical shapes clients legitimately store (e.g. a ``function_call``
+    without ``status``) survive strict validation instead of being dropped.
+
+    Returns:
+        Item type literal to the ``{field: default}`` pairs safe to backfill.
+    """
+    defaults_by_type: dict[str, dict[str, Any]] = {}
+    for member in get_args(ResponseItem):
+        type_field = member.model_fields.get("type")
+        if type_field is None:
+            continue
+        type_args = get_args(type_field.annotation)
+        if len(type_args) != 1:
+            continue
+        defaults = {
+            name: default
+            for name, default in _ITEM_FIELD_DEFAULTS.items()
+            if (field := member.model_fields.get(name)) is not None
+            and field.is_required()
+        }
+        if defaults:
+            defaults_by_type.setdefault(type_args[0], {}).update(defaults)
+    return defaults_by_type
+
+
+#: Item type literal to required-field defaults, derived from the ResponseItem union.
+_COERCIBLE_FIELD_DEFAULTS: dict[str, dict[str, Any]] = _coercible_field_defaults()
+
+
+def _listable_input_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop stored input items whose type is not part of the ResponseItem union.
+
+    Mirrors the input's accepted-and-dropped semantics: an item type that
+    request creation accepts but never turns into conversation history
+    (e.g. ``item_reference``) is silently absent from the listing too.
+    Items missing a required field with a known safe default (e.g. a
+    ``function_call_output`` without ``status``) are backfilled before
+    validation so canonical stored shapes are not dropped.
+
+    Args:
+        items: Normalized input items, in listing order.
+
+    Returns:
+        The items (backfilled where applicable) that validate against the
+        ResponseItem union.
+    """
+    listable = []
+    for item in items:
+        candidate = item
+        item_type = item.get("type")
+        defaults = (
+            _COERCIBLE_FIELD_DEFAULTS.get(item_type)
+            if isinstance(item_type, str)
+            else None
+        )
+        if defaults and (
+            missing := {k: v for k, v in defaults.items() if k not in item}
+        ):
+            candidate = {**item, **missing}
+        try:
+            _RESPONSE_ITEM_ADAPTER.validate_python(candidate)
+        except ValidationError:
+            continue
+        listable.append(candidate)
+    return listable
+
+
+def _with_public_mantle_ids(
+    region: RegionName, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """Rewrite native Mantle response IDs to their public region-tagged form.
+
+    Args:
+        region: Region storing the Mantle response.
+        payload: Raw Mantle response payload.
+
+    Returns:
+        The payload with public ``id`` and ``previous_response_id`` values.
+    """
+    if native_id := payload.get("id"):
+        payload["id"] = encode_mantle_response_id(region, native_id)
+    if previous_id := payload.get("previous_response_id"):
+        payload["previous_response_id"] = encode_mantle_response_id(region, previous_id)
+    return payload
 
 
 def _compaction_user_messages(items: Sequence[Any]) -> list[CompactionUserMessage]:
@@ -258,33 +445,45 @@ async def create_response(
         - Response when stream is False.
         - EventSourceResponse streaming ResponseStreamEvent events when stream is True.
 
+    Note:
+        Mantle models without native Responses storage use the local response
+        store like classic models. On the Mantle native-store path, ``store``
+        is dropped with a logged warning when the model falls back
+        mid-request to an upstream API without storage (agent harnesses
+        request it unconditionally): the response is served but its ID is
+        not retrievable later.
+
     Raises:
-        ApiError: If the model is invalid or ``previous_response_id`` does
-            not exist (404).
+        ApiError: If the model is invalid, or ``previous_response_id`` does
+            not exist or cannot be continued with the target model (404).
     """
     log_request_params(request, user_id=request.safety_identifier or request.user)
     store = bool(request.store)
-    if store and request.stream:
-        log_error_details(
-            "'store' is not supported with streaming on this backend: ignored.",
-            level="warning",
-        )
-        store = False
     apply_request_moderation(request.moderation)
-    previous_response_id = request.previous_response_id
-    if previous_response_id:
-        request = await _merge_previous_response(request, previous_response_id)
     model_id = (
         await validate_model(
             request.model, input_modality="TEXT", output_modality="TEXT"
         )
     ).id
+    chat_model = get_chat_model(model_id)
+    previous_response_id = request.previous_response_id
+    native_supported = chat_model.native_store_supported()
+    request = await _apply_previous_response(request, native_supported=native_supported)
+    if native_supported:
+        # Mantle native storage handles store/previous_response_id upstream.
+        store = False
+    elif store and request.stream:
+        log_error_details(
+            "'store' is not supported with streaming on this backend: ignored.",
+            level="warning",
+        )
+        store = False
     session_id = await try_create_stored_response_session("response") if store else None
     store = session_id is not None
     response_id = f"resp-{session_id}" if store else f"resp-{REQUEST_ID.get()}"
     created_at = REQUEST_TIME.get().timestamp()
     try:
-        result = await get_chat_model(model_id).create_response(
+        result = await chat_model.create_response(
             request,
             response_id,
             created_at,
@@ -292,7 +491,7 @@ async def create_response(
         )
     except BaseException:
         if store:
-            await discard_stored_response_session(response_id)
+            await discard_stored_response_session(response_id, "response")
         raise
     if isinstance(result, Response):
         if previous_response_id:
@@ -314,7 +513,7 @@ async def create_response(
                     },
                 )
             except BaseException:
-                await discard_stored_response_session(response_id)
+                await discard_stored_response_session(response_id, "response")
                 raise
     return result
 
@@ -365,12 +564,19 @@ async def count_input_tokens(
         ResponseInputTokensCount with the input token count.
 
     Raises:
-        ApiError: If the model is invalid or the request is unsupported.
+        ApiError: If the model is invalid, the request is unsupported, or the
+            model is served by Bedrock Mantle (400).
     """
     log_request_params(request)
     model = await validate_model(
         request.model, input_modality="TEXT", output_modality="TEXT", error_status=400
     )
+    if serves_via_mantle(model.get_id()):
+        msg = (
+            "Token counting is not supported for Bedrock Mantle models "
+            "on this endpoint."
+        )
+        raise ApiError(msg, status=400)
     return log_response_params(
         InputTokenCountResponse(
             input_tokens=await count_input_tokens_via_bedrock(
@@ -421,10 +627,19 @@ async def compact_response(
         CompactedResponse holding the compaction item and token usage.
 
     Raises:
-        ApiError: If the model is invalid or ``previous_response_id`` does
-            not exist (404).
+        ApiError: If the model is invalid, ``previous_response_id`` does not
+            exist (404), or it references a Bedrock Mantle stored
+            conversation (400).
     """
     log_request_params(request)
+    if request.previous_response_id and (
+        _decode_mantle_id(request.previous_response_id) is not None
+    ):
+        msg = (
+            "Conversation compaction is not available for Bedrock Mantle "
+            "stored conversations."
+        )
+        raise ApiError(msg, status=400)
     model_id = (
         await validate_model(
             request.model, input_modality="TEXT", output_modality="TEXT"
@@ -447,6 +662,7 @@ async def compact_response(
         service_tier=request.service_tier,
     )
     if request.previous_response_id:
+        _require_local_response_id(request.previous_response_id)
         generation = await _merge_previous_response(
             generation, request.previous_response_id
         )
@@ -489,6 +705,59 @@ async def compact_response(
     )
 
 
+async def _mantle_stored_response(
+    region: RegionName,
+    method: str,
+    native_id: str,
+    suffix: str = "",
+    missing_msg: str | None = None,
+) -> dict[str, Any]:
+    """Proxy a stored-response operation to Mantle, probing both routing surfaces.
+
+    Stored responses live on the surface that served the model (``/v1`` or
+    ``/openai/v1``); a 404 on the first surface falls through to the second.
+    The working surface per response ID is seeded at creation and cached, so
+    the 404 probe only runs on unknown IDs (e.g. after a restart).
+
+    Args:
+        region: Region storing the response.
+        method: HTTP method (GET, POST or DELETE).
+        native_id: Native Mantle response identifier.
+        suffix: Optional sub-resource path (e.g. ``/input_items``).
+        missing_msg: Optional 404 message override.
+
+    Returns:
+        Parsed JSON response body.
+
+    Raises:
+        ApiError: 404 (with the public ID) when the response is missing on
+            both surfaces.
+        MantleError: On other upstream errors.
+    """
+    prefix: Surface = cached_response_surface(native_id) or "/openai/v1"
+    try:
+        payload = await request_json(
+            region, method, f"{prefix}/responses/{native_id}{suffix}"
+        )
+    except MantleError as error:
+        if error.status != 404:
+            raise
+        prefix = "/openai/v1" if prefix == "/v1" else "/v1"
+        try:
+            payload = await request_json(
+                region, method, f"{prefix}/responses/{native_id}{suffix}"
+            )
+        except MantleError as retry_error:
+            if retry_error.status != 404:
+                raise
+            # Normalize the upstream 404 to the public identifier.
+            public_id = encode_mantle_response_id(region, native_id)
+            msg = missing_msg or f"Response '{public_id}' not found."
+            raise ApiError(msg, status=404) from retry_error
+    cache_response_surface(native_id, prefix)
+    return payload
+
+
 @router.get(
     "/{response_id}",
     summary="Retrieve a stored model response (OpenAI format)",
@@ -512,6 +781,8 @@ async def retrieve_response(
 ) -> Response:
     """Retrieve a stored model response.
 
+    Region-tagged Mantle IDs are fetched from the Mantle native store.
+
     Args:
         response_id: Stored response identifier.
 
@@ -522,7 +793,14 @@ async def retrieve_response(
         ApiError: With 404 if the stored response does not exist.
     """
     log_request_params({"response_id": response_id})
-    stored = await load_stored_response(response_id)
+    if mantle := _decode_mantle_id(response_id):
+        region, native_id = mantle
+        payload = await _mantle_stored_response(region, "GET", native_id)
+        return log_response_params(
+            validate_pruning_extras(Response, _with_public_mantle_ids(region, payload))
+        )
+    _require_local_response_id(response_id)
+    stored = await load_stored_response(response_id, "response")
     return log_response_params(Response.model_validate(stored["response"]))
 
 
@@ -532,12 +810,14 @@ async def retrieve_response(
     operation_id="openai_response_cancel",
     description=(
         "Cancels a model response (OpenAI Responses API). Only responses "
-        "created with `background=true` can be cancelled, and background "
-        "responses are not supported on this backend, so this always fails "
+        "created with `background=true` can be cancelled. Responses stored "
+        "natively on AWS Bedrock Mantle are cancelled upstream; locally "
+        "stored responses are always synchronous, so cancelling them fails "
         "with the OpenAI error for synchronous responses."
     ),
-    response_description="Never returned; the request always fails.",
+    response_description="The cancelled response.",
     responses={
+        200: {"description": "The cancelled response."},
         400: {"description": "The response is synchronous and cannot be cancelled."},
         404: {"description": "Response not found."},
     },
@@ -548,18 +828,28 @@ async def cancel_response(
 ) -> Response:
     """Cancel a background model response.
 
+    Region-tagged Mantle IDs are proxied to the Mantle native store; local
+    responses are always synchronous and cannot be cancelled.
+
     Args:
         response_id: Stored response identifier.
 
     Returns:
-        Never; cancellation always fails on this backend.
+        The cancelled response (Mantle-stored responses only).
 
     Raises:
         ApiError: With 404 if the stored response does not exist, else with
-            400 since all responses are synchronous on this backend.
+            400 when the response is synchronous and cannot be cancelled.
     """
     log_request_params({"response_id": response_id})
-    await load_stored_response(response_id)
+    if mantle := _decode_mantle_id(response_id):
+        region, native_id = mantle
+        payload = await _mantle_stored_response(region, "POST", native_id, "/cancel")
+        return log_response_params(
+            validate_pruning_extras(Response, _with_public_mantle_ids(region, payload))
+        )
+    _require_local_response_id(response_id)
+    await load_stored_response(response_id, "response")
     msg = "Cannot cancel a synchronous response."
     raise ApiError(msg)
 
@@ -584,6 +874,8 @@ async def delete_response(
 ) -> ResponseDeleted:
     """Delete a stored model response.
 
+    Region-tagged Mantle IDs are deleted from the Mantle native store.
+
     Args:
         response_id: Stored response identifier.
 
@@ -594,7 +886,11 @@ async def delete_response(
         ApiError: With 404 if the stored response does not exist.
     """
     log_request_params({"response_id": response_id})
-    await delete_stored_response(response_id)
+    if mantle := _decode_mantle_id(response_id):
+        await _mantle_stored_response(mantle[0], "DELETE", mantle[1])
+    else:
+        _require_local_response_id(response_id)
+        await delete_stored_response(response_id, "response")
     return log_response_params(ResponseDeleted(id=response_id))
 
 
@@ -622,7 +918,7 @@ async def list_response_input_items(
                 "Cursor for pagination: the item ID to start after "
                 "(the last ID from a previous page)."
             ),
-            pattern=r"^msg-[0-9]+$",
+            max_length=255,
         ),
     ] = None,
     limit: Annotated[
@@ -637,6 +933,9 @@ async def list_response_input_items(
 ) -> ResponseItemList:
     """List the input items of a stored model response.
 
+    Region-tagged Mantle IDs are proxied to the Mantle native store; the
+    upstream list is returned as-is (pagination parameters are not forwarded).
+
     Args:
         response_id: Stored response identifier.
         after: Item ID cursor; only items strictly after it are returned.
@@ -647,20 +946,42 @@ async def list_response_input_items(
         Paginated list of input items.
 
     Raises:
-        ApiError: With 404 if the stored response does not exist.
+        ApiError: With 404 if the stored response does not exist, or if
+            ``after`` does not match any input item.
     """
     log_request_params(
         {"response_id": response_id, "after": after, "limit": limit, "order": order}
     )
-    stored = await load_stored_response(response_id)
-    items = _normalized_input_items(stored.get("input"))
+    if mantle := _decode_mantle_id(response_id):
+        region, native_id = mantle
+        # Bedrock Mantle does not currently serve input item listings.
+        missing = (
+            f"Input items for response '{response_id}' are not available: "
+            "Bedrock Mantle stored responses do not serve input item listings."
+        )
+        payload = await _mantle_stored_response(
+            region, "GET", native_id, "/input_items", missing_msg=missing
+        )
+        for entry in payload.get("data") or ():
+            # Only response IDs are region-tagged; message item IDs pass through.
+            if isinstance(entry, dict) and str(entry.get("id") or "").startswith(
+                "resp"
+            ):
+                _with_public_mantle_ids(region, entry)
+        return log_response_params(validate_pruning_extras(ResponseItemList, payload))
+    _require_local_response_id(response_id)
+    stored = await load_stored_response(response_id, "response")
+    items = _listable_input_items(_normalized_input_items(stored.get("input")))
     if order == "desc":
         items.reverse()
     if after is not None:
         index = next(
             (i for i, item in enumerate(items) if item.get("id") == after), None
         )
-        items = items[index + 1 :] if index is not None else []
+        if index is None:
+            msg = f"No input item with id '{after}'."
+            raise ApiError(msg, status=404)
+        items = items[index + 1 :]
     page, has_more = items[:limit], len(items) > limit
     return log_response_params(
         ResponseItemList.model_validate(

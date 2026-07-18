@@ -6,6 +6,7 @@ specification, ensuring compatibility with the official Anthropic API behavior.
 
 import base64
 import json as _json
+from unittest.mock import AsyncMock
 
 import pytest
 from anthropic import (
@@ -15,6 +16,11 @@ from anthropic import (
     BadRequestError,
     NotFoundError,
 )
+from starlette.testclient import TestClient
+
+import stdapi.models as _models_mod
+from stdapi.models import ModelDetails
+from stdapi.routes import anthropic_messages
 
 #: Non-Anthropic model used to validate that extended thinking is rejected for non-Claude models.
 NON_ANTHROPIC_THINKING = "amazon.nova-2-lite-v1:0"
@@ -2692,3 +2698,104 @@ class TestAnthropicCountTokens:
         )
 
         assert response_role.input_tokens == response_field.input_tokens
+
+
+class TestAnthropicCountTokensDispatch:
+    """Offline unit tests for count_tokens dispatch to the classic vs Mantle counter.
+
+    Registers fake models directly in the model registry so the real
+    `serves_via_mantle` dispatch condition runs unmocked; only the two
+    counting functions are replaced with recorders.
+    """
+
+    @pytest.fixture
+    def client(self, api_key: str) -> TestClient:
+        """Test client without lifespan (no AWS startup), pre-authenticated."""
+        from stdapi.main import app  # noqa: PLC0415
+
+        return TestClient(
+            app, headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"}
+        )
+
+    @pytest.fixture
+    def runtime_model(self, monkeypatch: pytest.MonkeyPatch) -> ModelDetails:
+        """Register a fake Bedrock Runtime model in the model registry."""
+        details = ModelDetails(
+            id="test.count-tokens-runtime-model",
+            name="Runtime Count Tokens Test",
+            provider="Vendor",
+            input_modalities=["TEXT"],
+            output_modalities=["TEXT"],
+            regions=["us-east-1"],
+        )
+        monkeypatch.setitem(_models_mod._MODELS, details.id, details)  # noqa: SLF001
+        monkeypatch.setitem(_models_mod._ALL_MODELS, details.id, details)  # noqa: SLF001
+        return details
+
+    @pytest.fixture
+    def mantle_model(self, monkeypatch: pytest.MonkeyPatch) -> ModelDetails:
+        """Register a fake Bedrock Mantle model in the model registry."""
+        details = ModelDetails(
+            id="test.count-tokens-mantle-model",
+            name="Mantle Count Tokens Test",
+            provider="Vendor",
+            service="AWS Bedrock Mantle",
+            input_modalities=["TEXT"],
+            output_modalities=["TEXT"],
+            regions=["us-east-1"],
+        )
+        monkeypatch.setitem(_models_mod._MODELS, details.id, details)  # noqa: SLF001
+        monkeypatch.setitem(_models_mod._ALL_MODELS, details.id, details)  # noqa: SLF001
+        return details
+
+    def test_runtime_model_uses_classic_bedrock_counter(
+        self,
+        client: TestClient,
+        runtime_model: ModelDetails,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A non-Mantle model routes count_tokens to the classic Bedrock counter."""
+        classic = AsyncMock(return_value=7)
+        mantle = AsyncMock(return_value=99)
+        monkeypatch.setattr(anthropic_messages, "count_tokens_via_bedrock", classic)
+        monkeypatch.setattr(anthropic_messages, "_count_tokens_via_mantle", mantle)
+
+        response = client.post(
+            "/anthropic/v1/messages/count_tokens",
+            json={
+                "model": runtime_model.id,
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["input_tokens"] == 7
+        classic.assert_awaited_once()
+        assert classic.await_args is not None
+        assert runtime_model.id in classic.await_args.args
+        mantle.assert_not_awaited()
+
+    def test_mantle_served_model_uses_mantle_counter(
+        self,
+        client: TestClient,
+        mantle_model: ModelDetails,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A Mantle-served model routes count_tokens to the Mantle counter."""
+        classic = AsyncMock(return_value=7)
+        mantle = AsyncMock(return_value=99)
+        monkeypatch.setattr(anthropic_messages, "count_tokens_via_bedrock", classic)
+        monkeypatch.setattr(anthropic_messages, "_count_tokens_via_mantle", mantle)
+
+        response = client.post(
+            "/anthropic/v1/messages/count_tokens",
+            json={
+                "model": mantle_model.id,
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["input_tokens"] == 99
+        mantle.assert_awaited_once()
+        assert mantle.await_args is not None
+        assert mantle_model.id in mantle.await_args.args
+        classic.assert_not_awaited()

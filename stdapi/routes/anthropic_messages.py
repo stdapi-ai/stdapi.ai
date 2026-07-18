@@ -8,17 +8,24 @@ Functions:
     create_message: Main FastAPI endpoint for Anthropic message creation.
 """
 
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, cast
 
 from fastapi import APIRouter, Depends
 
 from stdapi.api_providers.anthropic import TAG_ANTHROPIC
 from stdapi.auth import authenticate
+from stdapi.aws_bedrock_mantle import API_PATHS, MESSAGES_API_HEADERS, invoke
 from stdapi.config import SETTINGS
-from stdapi.models import validate_model
+from stdapi.models import (
+    MANTLE_MODELS,
+    route_and_execute,
+    set_effective_region,
+    validate_model,
+)
 from stdapi.models.capabilities import register_route_capability
-from stdapi.models.chat import get_chat_model
+from stdapi.models.chat import get_chat_model, serves_via_mantle
 from stdapi.models.chat._adapters._anthropic_message import count_tokens_via_bedrock
+from stdapi.models.chat._mantle._convert import messages_payload
 from stdapi.monitoring import REQUEST_ID, log_request_params, log_response_params
 from stdapi.types.anthropic_messages import (
     Message,
@@ -29,6 +36,7 @@ from stdapi.types.anthropic_messages import (
 
 if TYPE_CHECKING:
     from sse_starlette import EventSourceResponse
+    from types_aiobotocore_bedrock.literals import RegionName
 
 register_route_capability(
     "anthropic_message",
@@ -46,6 +54,51 @@ register_route_capability(
 router: APIRouter = APIRouter(
     prefix=f"{SETTINGS.anthropic_routes_prefix}/v1", tags=["Chat", TAG_ANTHROPIC]
 )
+
+#: Mantle path serving the Anthropic count_tokens API.
+_MANTLE_COUNT_TOKENS_PATH = API_PATHS["messages"] + "/count_tokens"
+
+
+async def _count_tokens_via_mantle(
+    request: MessageCountTokensParams, model_id: str
+) -> int:
+    """Count tokens via the Mantle Anthropic count_tokens API.
+
+    Mantle-only models are not reachable through the Bedrock Runtime
+    CountTokens API, so the count is proxied to the Mantle endpoint with
+    region routing and failover across the model's regions.
+
+    Args:
+        request: Count tokens request following Anthropic spec.
+        model_id: Mantle model identifier.
+
+    Returns:
+        The input token count.
+
+    Raises:
+        MantleError: When the Mantle upstream rejects the request.
+    """
+    # Reuse the Messages payload normalization (file inlining, system-role
+    # folding, extension stripping); drop its generation-only default.
+    payload = await messages_payload(cast("MessageCreateParams", request), model_id)
+    payload.pop("max_tokens", None)
+    model = MANTLE_MODELS.get(model_id)
+    regions = model.regions if model else SETTINGS.aws_bedrock_mantle_regions
+    single_region = len(regions) == 1
+
+    async def call(region: RegionName) -> int:
+        """Count the request's tokens via one region's Mantle endpoint."""
+        set_effective_region(model_id, region)
+        result = await invoke(
+            region,
+            _MANTLE_COUNT_TOKENS_PATH,
+            payload,
+            single_region=single_region,
+            headers=MESSAGES_API_HEADERS,
+        )
+        return int(result.get("input_tokens", 0))
+
+    return await route_and_execute(model_id, regions, call)
 
 
 @router.post(
@@ -255,6 +308,12 @@ async def count_tokens(
         request.model, input_modality="TEXT", output_modality="TEXT", error_status=400
     )
     model_id = model.get_id()
+    if serves_via_mantle(model_id):
+        return log_response_params(
+            MessageTokensCount(
+                input_tokens=await _count_tokens_via_mantle(request, model_id)
+            )
+        )
     return log_response_params(
         MessageTokensCount(
             input_tokens=await count_tokens_via_bedrock(
