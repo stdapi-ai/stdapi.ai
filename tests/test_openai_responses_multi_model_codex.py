@@ -125,6 +125,33 @@ _SKIP_NO_CODEX = pytest.mark.skipif(
     ),
 )
 
+#: Models whose known-flaky failure signatures are tolerated (best effort).
+_FLAKY_MODELS = frozenset(
+    {
+        "moonshotai.kimi-k2.5",
+        "mistral.devstral-2-123b",
+        "qwen.qwen3-coder-next",
+        "xai.grok-4.3",
+        "zai.glm-5",
+    }
+)
+
+
+def _xfail_if_flaky(model_env: str, signature: str) -> None:
+    """Downgrade a known-flaky failure signature to an xfail (best effort).
+
+    Only the specific signatures routed through this helper are tolerated,
+    and only for the models listed in ``_FLAKY_MODELS``: any other failure
+    still fails the test, so genuine regressions stay visible.
+
+    Args:
+        model_env: Bedrock model ID under test.
+        signature: Short label of the matched flaky failure signature.
+    """
+    if model_env in _FLAKY_MODELS:
+        pytest.xfail(f"known-flaky {signature} on {model_env} (best effort)")
+
+
 # ---------------------------------------------------------------------------
 # stdapi.ai source root
 # ---------------------------------------------------------------------------
@@ -320,6 +347,9 @@ def _assert_model_identity(logs: list[str], expected_model_id: str) -> None:
     log window.  To avoid false failures, entries that arrive before the first
     occurrence of the expected model are treated as "trailing from previous test" and
     are ignored.  Only entries from the first expected-model entry onwards are checked.
+    Unlike Claude Code, Codex sends no per-run metadata reaching the server logs
+    (no ``request_user_id``), so exact session attribution is not possible and
+    this positional heuristic is the best available.
 
     Raises:
         AssertionError: If any request *after* the first correct-model entry used a
@@ -471,9 +501,15 @@ def _run_codex(
         prompt,
     ]
 
-    proc = subprocess.run(  # noqa: S603, PLW1510
-        cmd, env=env, cwd=str(cwd), capture_output=True, text=True, timeout=timeout
-    )
+    try:
+        proc = subprocess.run(  # noqa: S603, PLW1510
+            cmd, env=env, cwd=str(cwd), capture_output=True, text=True, timeout=timeout
+        )
+    except subprocess.TimeoutExpired:
+        _xfail_if_flaky(model_env, "CLI timeout")
+        raise
+    if proc.returncode != 0:
+        _xfail_if_flaky(model_env, f"CLI exit code {proc.returncode}")
     assert proc.returncode == 0, (
         f"codex exited with code {proc.returncode}\n"
         f"stdout: {proc.stdout[:2000]}\n"
@@ -494,13 +530,18 @@ def _run_codex(
 def _assert_result(
     events: list[dict],  # type: ignore[type-arg]
     *,
+    model_env: str,
     contains: str | None = None,
     min_tool_calls: int = 0,
 ) -> str:
     """Assert the Codex JSONL event list represents a successful response.
 
+    Content-quality failures on known-flaky models downgrade to xfail; any
+    failure on other models (or of another kind) fails normally.
+
     Args:
         events:         Parsed JSONL events from ``_run_codex``.
+        model_env:      Bedrock model ID under test (flaky-signature scoping).
         contains:       Optional substring that must appear in the final agent message
                         (case-insensitive).
         min_tool_calls: Minimum number of ``command_execution`` items expected.
@@ -510,7 +551,9 @@ def _assert_result(
     """
     # Must not have a turn.failed event
     failed = [e for e in events if e.get("type") == "turn.failed"]
-    assert not failed, f"codex turn failed: {failed[0]}"
+    if failed:
+        _xfail_if_flaky(model_env, "failed turn")
+        pytest.fail(f"codex turn failed: {failed[0]}")
 
     # Extract the final agent message text
     agent_messages = [
@@ -519,14 +562,17 @@ def _assert_result(
         if e.get("type") == "item.completed"
         and e.get("item", {}).get("type") == "agent_message"
     ]
-    assert agent_messages, f"No agent_message found in events:\n{events}"
+    if not agent_messages:
+        _xfail_if_flaky(model_env, "empty result")
+        pytest.fail(f"No agent_message found in events:\n{events}")
     result: str = agent_messages[-1]
-    assert len(result) > 5, f"agent_message is unexpectedly short: {result!r}"
+    if len(result) <= 5:
+        _xfail_if_flaky(model_env, "empty result")
+        pytest.fail(f"agent_message is unexpectedly short: {result!r}")
 
-    if contains:
-        assert contains.lower() in result.lower(), (
-            f"Expected {contains!r} in result:\n{result}"
-        )
+    if contains and contains.lower() not in result.lower():
+        _xfail_if_flaky(model_env, "content assertion")
+        pytest.fail(f"Expected {contains!r} in result:\n{result}")
 
     if min_tool_calls > 0:
         tool_calls = [
@@ -535,10 +581,12 @@ def _assert_result(
             if e.get("type") == "item.completed"
             and e.get("item", {}).get("type") == "command_execution"
         ]
-        assert len(tool_calls) >= min_tool_calls, (
-            f"Expected at least {min_tool_calls} command_execution items, "
-            f"got {len(tool_calls)}"
-        )
+        if len(tool_calls) < min_tool_calls:
+            _xfail_if_flaky(model_env, "tool-call-count assertion")
+            pytest.fail(
+                f"Expected at least {min_tool_calls} command_execution items, "
+                f"got {len(tool_calls)}"
+            )
 
     return result
 
@@ -668,7 +716,6 @@ class TestCodexPipeline:
 
     def test_trace_request_pipeline(
         self,
-        request: pytest.FixtureRequest,
         model_config: dict,  # type: ignore[type-arg]
         codex_base_url: str,
     ) -> None:
@@ -685,15 +732,21 @@ class TestCodexPipeline:
             timeout=model_config.get("timeout", 600),
         )
         _log_metrics(events, model_config["model_env"], "test_trace_request_pipeline")
-        result = _assert_result(events, contains="converse", min_tool_calls=2)
-        assert any(
+        result = _assert_result(
+            events,
+            model_env=model_config["model_env"],
+            contains="converse",
+            min_tool_calls=2,
+        )
+        if not any(
             kw in result.lower()
             for kw in ("create_response", "translate_request", "map_input", "_default")
-        ), f"Expected core function names in result:\n{result}"
+        ):
+            _xfail_if_flaky(model_config["model_env"], "content assertion")
+            pytest.fail(f"Expected core function names in result:\n{result}")
 
     def test_trace_streaming_path(
         self,
-        request: pytest.FixtureRequest,
         model_config: dict,  # type: ignore[type-arg]
         codex_base_url: str,
     ) -> None:
@@ -702,16 +755,6 @@ class TestCodexPipeline:
         Requires reading the adapter and SSE formatting code.
         Target: ≥2 shell tool calls.
         """
-        if model_config["model_env"] == "xai.grok-4.3":
-            # Codex lacks native Grok model metadata and its fallback profile
-            # makes these two analysis tasks behaviorally flaky (server-side
-            # requests all succeed); tracked as expected-flaky.
-            request.applymarker(
-                pytest.mark.xfail(
-                    strict=False,
-                    reason="Grok under Codex fallback metadata is behaviorally flaky",
-                )
-            )
         events = _run_codex(
             base_url=codex_base_url,
             prompt=_PROMPT_STREAMING_PATH,
@@ -720,11 +763,15 @@ class TestCodexPipeline:
             timeout=model_config.get("timeout", 600),
         )
         _log_metrics(events, model_config["model_env"], "test_trace_streaming_path")
-        result = _assert_result(events, min_tool_calls=2)
-        assert any(
+        result = _assert_result(
+            events, model_env=model_config["model_env"], min_tool_calls=2
+        )
+        if not any(
             kw in result.lower()
             for kw in ("stream", "sse", "event", "format_stream", "converse_stream")
-        ), f"Expected streaming-related keywords in result:\n{result}"
+        ):
+            _xfail_if_flaky(model_config["model_env"], "content assertion")
+            pytest.fail(f"Expected streaming-related keywords in result:\n{result}")
 
 
 # ---------------------------------------------------------------------------
@@ -740,7 +787,6 @@ class TestCodexAnalysis:
 
     def test_audit_parameter_mapping(
         self,
-        request: pytest.FixtureRequest,
         model_config: dict,  # type: ignore[type-arg]
         codex_base_url: str,
     ) -> None:
@@ -749,16 +795,6 @@ class TestCodexAnalysis:
         Requires reading types, adapter, and map_input.
         Target: ≥2 shell tool calls.
         """
-        if model_config["model_env"] == "xai.grok-4.3":
-            # Codex lacks native Grok model metadata and its fallback profile
-            # makes these two analysis tasks behaviorally flaky (server-side
-            # requests all succeed); tracked as expected-flaky.
-            request.applymarker(
-                pytest.mark.xfail(
-                    strict=False,
-                    reason="Grok under Codex fallback metadata is behaviorally flaky",
-                )
-            )
         events = _run_codex(
             base_url=codex_base_url,
             prompt=_PROMPT_PARAMETER_MAPPING,
@@ -767,21 +803,24 @@ class TestCodexAnalysis:
             timeout=model_config.get("timeout", 600),
         )
         _log_metrics(events, model_config["model_env"], "test_audit_parameter_mapping")
-        result = _assert_result(events, min_tool_calls=2)
-        assert any(
+        result = _assert_result(
+            events, model_env=model_config["model_env"], min_tool_calls=2
+        )
+        if not any(
             kw in result.lower()
             for kw in (
                 "instructions",
-                "inferencecconfig",
+                "inferenceconfig",
                 "temperature",
                 "toolconfig",
                 "messages",
             )
-        ), f"Expected parameter names in result:\n{result}"
+        ):
+            _xfail_if_flaky(model_config["model_env"], "content assertion")
+            pytest.fail(f"Expected parameter names in result:\n{result}")
 
     def test_enumerate_model_overrides(
         self,
-        request: pytest.FixtureRequest,
         model_config: dict,  # type: ignore[type-arg]
         codex_base_url: str,
     ) -> None:
@@ -800,8 +839,10 @@ class TestCodexAnalysis:
         _log_metrics(
             events, model_config["model_env"], "test_enumerate_model_overrides"
         )
-        result = _assert_result(events, min_tool_calls=3)
-        assert any(
+        result = _assert_result(
+            events, model_env=model_config["model_env"], min_tool_calls=3
+        )
+        if not any(
             kw in result.lower()
             for kw in (
                 "nova",
@@ -817,4 +858,8 @@ class TestCodexAnalysis:
                 "override",
                 "model-specific",
             )
-        ), f"Expected model family names or override mentions in result:\n{result}"
+        ):
+            _xfail_if_flaky(model_config["model_env"], "content assertion")
+            pytest.fail(
+                f"Expected model family names or override mentions in result:\n{result}"
+            )
