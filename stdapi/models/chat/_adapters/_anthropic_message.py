@@ -490,6 +490,7 @@ async def _map_messages(
     messages: list[MessageParam],
     *,
     allow_explicit_caching: bool = False,
+    allow_tool_caching: bool = True,
     req_map_content_block: Callable[[ContentBlockParam], ContentBlockTypeDef | None]
     | None = None,
 ) -> list[MessageTypeDef]:
@@ -499,6 +500,8 @@ async def _map_messages(
         messages: Anthropic message params (system-role messages must already be
             extracted via ``_extract_system_messages`` before calling this).
         allow_explicit_caching: Whether to allow explicit prompt caching for messages.
+        allow_tool_caching: Whether cache points may follow tool-use or
+            tool-result blocks (some models reject them there).
         req_map_content_block: Optional model-specific callback for content block
             translation.  Called before the default mapper; return a
             ``ContentBlockTypeDef`` to use that result, or ``None`` to fall
@@ -534,6 +537,12 @@ async def _map_messages(
                         )
                     if (
                         allow_explicit_caching
+                        and (
+                            allow_tool_caching
+                            or not isinstance(
+                                block, (ToolResultBlockParam, ToolUseBlockParam)
+                            )
+                        )
                         and hasattr(block, "cache_control")
                         and (cache_control := block.cache_control)
                     ):
@@ -794,6 +803,7 @@ async def translate_request(
         await _map_messages(
             messages,
             allow_explicit_caching=allow_explicit_caching,
+            allow_tool_caching=prompt_caching_tool_supported,
             req_map_content_block=req_map_content_block,
         ),
         _map_system_blocks(
