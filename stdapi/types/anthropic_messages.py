@@ -1367,8 +1367,12 @@ class MessageParam(BaseModelRequest):
 
 # Ref: anthropic.types.tool_param.ToolParam.InputSchema
 # Ref: anthropic.types.tool_param.InputSchemaTyped
-class ToolInputSchema(BaseModelRequest):
-    """JSON schema for tool input parameters."""
+class ToolInputSchema(BaseModelRequestWithExtra):
+    """JSON schema for tool input parameters.
+
+    Arbitrary additional JSON Schema keywords (``$schema``, ``$defs``,
+    ``additionalProperties``, ...) are accepted and forwarded upstream.
+    """
 
     type: Literal["object"] = Field(description="Schema type.", default="object")
     properties: JsonMapping | None = Field(
@@ -2196,8 +2200,12 @@ class ThinkingConfigDisabledParam(BaseModelRequest):
 
 
 # Ref: anthropic.types.thinking_config_adaptive_param.ThinkingConfigAdaptiveParam
-class ThinkingConfigAdaptiveParam(BaseModelRequest):
-    """Adaptive thinking configuration."""
+class ThinkingConfigAdaptiveParam(BaseModelRequestWithExtra):
+    """Adaptive thinking configuration.
+
+    Newer client fields (e.g. ``display``) are accepted and ignored where the
+    backend does not support them.
+    """
 
     type: Literal["adaptive"] = Field(
         description="Thinking config type. Always `adaptive`."
