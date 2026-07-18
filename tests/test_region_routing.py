@@ -1088,9 +1088,7 @@ class TestRouteAndExecute:
         import stdapi.region_routing as _rr_mod  # noqa: PLC0415
         from stdapi.aws_bedrock_mantle import MantleError  # noqa: PLC0415
         from stdapi.config import SETTINGS  # noqa: PLC0415
-        from stdapi.monitoring import REQUEST_LOG  # noqa: PLC0415
 
-        REQUEST_LOG.set({"level": "info"})  # type: ignore[typeddict-item]
         router = _rr_mod.RegionRouter()
         original_mark_error = _rr_mod.RegionRouter.mark_error
         calls = 0
@@ -1135,9 +1133,7 @@ class TestRouteAndExecute:
         import stdapi.region_routing as _rr_mod  # noqa: PLC0415
         from stdapi.aws_bedrock_mantle import MantleError  # noqa: PLC0415
         from stdapi.config import SETTINGS  # noqa: PLC0415
-        from stdapi.monitoring import REQUEST_LOG  # noqa: PLC0415
 
-        REQUEST_LOG.set({"level": "info"})  # type: ignore[typeddict-item]
         router = _rr_mod.RegionRouter()
         original_mark_error = _rr_mod.RegionRouter.mark_error
         calls = 0
@@ -1219,6 +1215,16 @@ def _require_s3_bucket() -> None:
 
     if not SETTINGS.aws_s3_bucket:
         pytest.skip("aws_s3_bucket not configured — skipping S3 integration test")
+
+
+@pytest.fixture(autouse=True)
+def _request_log_context() -> Iterator[None]:
+    """Provide the request-log context required by logging outside request scope."""
+    from stdapi.monitoring import REQUEST_LOG  # noqa: PLC0415
+
+    token = REQUEST_LOG.set({"level": "info"})  # type: ignore[typeddict-item]
+    yield
+    REQUEST_LOG.reset(token)
 
 
 @dataclass
@@ -1713,18 +1719,27 @@ class TestFileSourceBaseMethodsS3:
 
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
 async def s3_presigned_url(s3_file: S3FileFixture) -> str:
-    """Generate a presigned GET URL for the s3_file object."""
+    """Generate a SigV4 presigned GET URL for the s3_file object."""
     _require_s3_bucket()
-    import stdapi.aws as _aws_mod  # noqa: PLC0415
+    from aiobotocore.config import AioConfig  # noqa: PLC0415
 
-    s3_client = _aws_mod._CLIENTS.get("s3", {}).get(s3_file.region)  # noqa: SLF001
-    if s3_client is None:
-        pytest.skip("S3 client not available for presigned URL generation")
-    url: str = await s3_client.generate_presigned_url(
-        "get_object",
-        Params={"Bucket": s3_file.bucket, "Key": s3_file.key},
-        ExpiresIn=3600,
-    )
+    from stdapi.config import AWS_SESSION  # noqa: PLC0415
+
+    # Resolve the bucket's physical region: the app's BUCKET_TO_REGION model
+    # assumes the default bucket lives in the primary Bedrock region, which a
+    # SigV4 presign (unlike redirect-following SDK calls) cannot tolerate.
+    async with AWS_SESSION.create_client("s3") as probe:
+        location = await probe.get_bucket_location(Bucket=s3_file.bucket)
+    bucket_region = location.get("LocationConstraint") or "us-east-1"
+    # Pin SigV4 explicitly: post-2014 regions reject SigV2 presigns with a 400.
+    async with AWS_SESSION.create_client(
+        "s3", region_name=bucket_region, config=AioConfig(signature_version="s3v4")
+    ) as s3_client:
+        url: str = await s3_client.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": s3_file.bucket, "Key": s3_file.key},
+            ExpiresIn=3600,
+        )
     return url
 
 
