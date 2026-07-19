@@ -217,12 +217,7 @@ async def edit_images(
         ),
     ] = "",
     model: Annotated[
-        str,
-        Form(
-            description="The model to use for image generation.",
-            min_length=1,
-            max_length=255,
-        ),
+        str, Form(description="The model to use for image generation.", max_length=255)
     ] = "",
     mask: Annotated[
         UploadFile | None,

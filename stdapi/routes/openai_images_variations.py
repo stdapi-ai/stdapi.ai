@@ -136,12 +136,7 @@ async def create_image_variations(
     ] = None,
     *,
     model: Annotated[
-        str,
-        Form(
-            description="The model to use for image generation.",
-            min_length=1,
-            max_length=255,
-        ),
+        str, Form(description="The model to use for image generation.", max_length=255)
     ] = "",
     response_format: Annotated[
         str,
