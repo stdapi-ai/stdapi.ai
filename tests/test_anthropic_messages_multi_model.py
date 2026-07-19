@@ -120,6 +120,9 @@ _STREAMING_TOOL_MODELS = pytest.mark.parametrize(
     ],
 )
 
+#: Models whose Bedrock stream drops the leading tool-input JSON fragment (upstream bug).
+_BROKEN_STREAMING_TOOL_INPUT_MODELS = frozenset({"qwen.qwen3-32b-v1:0"})
+
 #: Models to use for the full agentic loop (non-streaming; excludes models with
 #: known non-standard tool-output behaviour, e.g. llama3-3-70b outputs raw JSON).
 _AGENTIC_MODELS = pytest.mark.parametrize(
@@ -557,6 +560,17 @@ class TestMultiModelToolUse:
         except BadRequestError as exc:
             if "streaming mode" in str(exc).lower():
                 pytest.skip(f"Model does not support streaming with tools: {exc}")
+            raise
+        except ValueError as exc:
+            # The Anthropic SDK accumulator fails on the truncated tool input.
+            if (
+                "expected value" in str(exc)
+                and model in _BROKEN_STREAMING_TOOL_INPUT_MODELS
+            ):
+                pytest.xfail(
+                    f"Bedrock drops the leading tool-input JSON fragment "
+                    f"when streaming {model}: {exc}"
+                )
             raise
 
         assert len(tool_starts) >= 1, (
