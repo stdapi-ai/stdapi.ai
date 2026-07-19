@@ -189,6 +189,18 @@ def _track_current_input_files(file: InputFile) -> None:
     files.append(file)
 
 
+def reset_current_input_files() -> None:
+    """Start a fresh InputFile tracking list bound to the current context.
+
+    Called by the request middleware so each request only ever sees its own
+    input files: without an explicit rebind, the lazy set in
+    ``_track_current_input_files`` can bind the list in a longer-lived context
+    (e.g. a keep-alive connection task) and leak stale, already-cleaned-up
+    files into later requests.
+    """
+    _CURRENT_INPUT_FILES.set([])
+
+
 class _FileOrigin(IntEnum):
     """How the file was originally provided."""
 
