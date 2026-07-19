@@ -1595,6 +1595,7 @@ class TestAnthropicClaudeChatCompletions:
         except NotFoundError as exc:
             if "Legacy" in str(exc):
                 pytest.xfail(str(exc))
+            raise
 
         assert hasattr(resp, "choices")
         assert len(resp.choices) >= 1
@@ -1683,6 +1684,7 @@ class TestAnthropicClaudeChatCompletions:
         except NotFoundError as exc:
             if "Legacy" in str(exc):
                 pytest.xfail(str(exc))
+            raise
 
         assert hasattr(resp, "choices")
         assert len(resp.choices) >= 1

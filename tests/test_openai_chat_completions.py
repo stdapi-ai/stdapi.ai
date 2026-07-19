@@ -1841,6 +1841,7 @@ class TestChatCompletions:
         except InternalServerError as exc:
             if "Model produced invalid sequence as part of ToolUse" in str(exc):
                 pytest.xfail(str(exc))
+            raise
 
         assert hasattr(response1, "choices")
         assert len(response1.choices) == 1
@@ -1858,6 +1859,7 @@ class TestChatCompletions:
         except InternalServerError as exc:
             if "Model produced invalid sequence as part of ToolUse" in str(exc):
                 pytest.xfail(str(exc))
+            raise
 
         assert hasattr(response2, "choices")
         assert len(response2.choices) == 1
@@ -1933,6 +1935,7 @@ class TestChatCompletions:
         except (InternalServerError, APIError) as exc:
             if "Model produced invalid sequence as part of ToolUse" in str(exc):
                 pytest.xfail(str(exc))
+            raise
 
         # Validate first stream was successful
         assert last_chunk1 is not None
@@ -1959,6 +1962,7 @@ class TestChatCompletions:
         except (InternalServerError, APIError) as exc:
             if "Model produced invalid sequence as part of ToolUse" in str(exc):
                 pytest.xfail(str(exc))
+            raise
 
         # Validate second stream uses cache
         assert last_chunk2 is not None
