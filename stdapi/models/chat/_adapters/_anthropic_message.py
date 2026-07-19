@@ -1349,6 +1349,10 @@ class _StreamState:
         current_index: Index assigned to the block currently in
             progress, or ``None`` when no block is open.
         current_suppressed: ``True`` when the current block is being dropped.
+        current_tool_use: ``True`` when the open block is a ``tool_use`` /
+            ``server_tool_use`` block whose input the SDK accumulates.
+        current_tool_input_seen: ``True`` once an ``input_json_delta`` has been
+            emitted for the open tool-use block.
         pending_results: Buffered ``toolResult`` data keyed by Bedrock block
             index; filled from ``contentBlockDelta`` events and consumed on
             ``contentBlockStop``.
@@ -1357,6 +1361,8 @@ class _StreamState:
     next_index: int = 0
     current_index: int | None = None
     current_suppressed: bool = False
+    current_tool_use: bool = False
+    current_tool_input_seen: bool = False
     pending_results: dict[int, dict[str, Any]] = field(default_factory=dict)
 
 
@@ -1397,9 +1403,12 @@ def _process_content_block_start(
         state.current_suppressed = False
         state.current_index = state.next_index
         state.next_index += 1
+        state.current_tool_use = content_block.type in {"tool_use", "server_tool_use"}
+        state.current_tool_input_seen = False
         return [_make_block_start_event(state.current_index, content_block)]
     state.current_suppressed = True
     state.current_index = None
+    state.current_tool_use = False
     return []
 
 
@@ -1441,6 +1450,8 @@ def _process_content_block_delta(
         return []
     if state.current_index is not None:
         if delta_event := _map_delta(state.current_index, delta):
+            if "toolUse" in delta:
+                state.current_tool_input_seen = True
             return [delta_event]
         return []
     # Empty delta: stay suppressed (or start suppression). The block is only
@@ -1456,7 +1467,10 @@ def _process_content_block_delta(
         state.current_suppressed = False
     state.current_index = state.next_index
     state.next_index += 1
-    return _emit_synthesized_block(state.current_index, delta)
+    events = _emit_synthesized_block(state.current_index, delta)
+    state.current_tool_use = "toolUse" in delta
+    state.current_tool_input_seen = state.current_tool_use and len(events) > 1
+    return events
 
 
 def _process_content_block_stop(
@@ -1504,7 +1518,20 @@ def _process_content_block_stop(
     if state.current_index is not None:
         index = state.current_index
         state.current_index = None
-        return [_make_block_stop_event(index)]
+        events: list[JSONServerSentEvent] = []
+        if state.current_tool_use and not state.current_tool_input_seen:
+            # A tool_use block that received no input delta: emit an empty-object
+            # input delta so the Anthropic SDK's partial-JSON accumulator has a
+            # value to parse (it raises on an empty buffer at content_block_stop).
+            events.append(
+                _make_block_delta_event(
+                    index, InputJSONDelta(type="input_json_delta", partial_json="{}")
+                )
+            )
+        state.current_tool_use = False
+        state.current_tool_input_seen = False
+        events.append(_make_block_stop_event(index))
+        return events
     return []
 
 
