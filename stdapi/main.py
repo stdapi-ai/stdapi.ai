@@ -41,6 +41,7 @@ from stdapi.aws_bedrock import (
 from stdapi.cleanup import CLEANUPS, run_scheduled_cleanups
 from stdapi.config import SETTINGS
 from stdapi.exceptions import ServerError
+from stdapi.input_file import reset_current_input_files
 from stdapi.metering import EDITION_TITLE, LICENCE_INFO, SERVER_FULL_VERSION, register
 from stdapi.models import initialize_bedrock_models, update_unified_models_collections
 from stdapi.models.audio.amazon_polly import initialize_polly_models
@@ -282,6 +283,7 @@ async def _middleware(
         response = await call_next(request)
     else:
         CLEANUPS.set([])
+        reset_current_input_files()
         with log_request_event(request) as log:
             set_guardrail_configuration(request.headers)
             set_performance_configuration(request.headers)

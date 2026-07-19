@@ -2,16 +2,26 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from io import BytesIO
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from botocore.exceptions import ClientError
+from httpx import ASGITransport, AsyncClient
+from starlette.datastructures import UploadFile
 from starlette.requests import Request
 
+from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile
 from stdapi.main import _upstream_service_name, handle_exception_group
+from stdapi.models import ModelDetails
+from stdapi.routes import openai_chat_completions
+from stdapi.types.openai_chat_completions import ChatCompletion
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+#: All tests in this module exercise the local implementation in-process.
+pytestmark = pytest.mark.local
 
 
 @pytest.fixture(autouse=True)
@@ -90,6 +100,99 @@ class TestHandleExceptionGroup:
         group = ExceptionGroup("task group", [RuntimeError("boom")])
         with pytest.raises(ExceptionGroup):
             await handle_exception_group(_request(), group)
+
+
+async def _validate_model(model_id: str, *_args: object, **_kwargs: object) -> Any:  # noqa: ANN401
+    """Return canned model details without hitting AWS."""
+    return ModelDetails(
+        id=model_id,
+        name=model_id,
+        provider="Vendor",
+        input_modalities=["TEXT"],
+        output_modalities=["TEXT"],
+        regions=["us-east-1"],
+    )
+
+
+class _RecordingChatBackend:
+    """Stub chat backend that prefetches input files like the default backend."""
+
+    def __init__(self) -> None:
+        self.seen_input_files: list[InputFile] | None = None
+
+    def native_store_supported(self) -> bool:
+        """Local stub: no native storage."""
+        return False
+
+    async def create_completion(
+        self,
+        request: Any,  # noqa: ANN401
+        completion_id: str,
+        created: int,
+    ) -> ChatCompletion:
+        """Prefetch tracked input files, record them, return a canned completion."""
+        from stdapi.input_file import prefetch_all_content_types  # noqa: PLC0415
+
+        await prefetch_all_content_types()
+        self.seen_input_files = list(_CURRENT_INPUT_FILES.get(()))
+        return ChatCompletion.model_validate(
+            {
+                "id": completion_id,
+                "created": created,
+                "model": request.model,
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "hi"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            }
+        )
+
+
+class TestRequestScopedInputFiles:
+    """Input-file tracking must be scoped to each request context."""
+
+    async def test_stale_input_files_do_not_leak_into_requests(
+        self, monkeypatch: pytest.MonkeyPatch, api_key: str
+    ) -> None:
+        """A stale InputFile bound to an outer context must not reach a request.
+
+        Reproduces the cross-request leak: an ``InputFile`` tracked in a
+        longer-lived context (here, the test task; in production, a keep-alive
+        connection task) whose backing file is already closed used to make
+        every later request 500 during content-type prefetch.
+        """
+        from stdapi.main import app  # noqa: PLC0415
+
+        backend = _RecordingChatBackend()
+        monkeypatch.setattr(openai_chat_completions, "validate_model", _validate_model)
+        monkeypatch.setattr(
+            openai_chat_completions, "get_chat_model", lambda _model_id: backend
+        )
+
+        # Bind a stale, closed upload in the outer context the request inherits.
+        stale_file = BytesIO(b"stale upload content")
+        stale = InputFile(UploadFile(file=stale_file, filename="stale.bin"))
+        stale_file.close()
+        assert stale in _CURRENT_INPUT_FILES.get(())
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(
+            transport=transport, base_url="http://testserver"
+        ) as client:
+            response = await client.post(
+                "/v1/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={
+                    "model": "amazon.nova-micro-v1:0",
+                    "messages": [{"role": "user", "content": "hello"}],
+                },
+            )
+        assert response.status_code == 200, response.text
+        assert backend.seen_input_files == []
 
 
 class TestBotocoreConnectionErrorHandler:
