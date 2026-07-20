@@ -149,6 +149,8 @@ def _init_log_levels() -> set[LogLevel]:
         configured log level.
     """
     levels: set[LogLevel] = set()
+    if SETTINGS.log_level == "disabled":
+        return levels
     for level in reversed(_SORTED_LOG_LEVELS):
         levels.add(level)
         if level == SETTINGS.log_level:
