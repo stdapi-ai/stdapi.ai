@@ -172,6 +172,35 @@ When running behind a load balancer (ALB) or reverse proxy, stdapi.ai can be con
 
 -   **Security Warning**: Only enable `ENABLE_PROXY_HEADERS` when the service is deployed behind a **trusted proxy**. Enabling this in a publicly exposed environment without a proxy allows attackers to spoof their IP address by sending custom headers.
 
+### :material-resize: Request Size & Resource Limits
+
+Large or numerous inputs are a denial-of-service vector: a single request can carry hundreds of megabytes of inline base64 content, reference many remote files, or stream for a long time. stdapi.ai provides application-level controls, but the most effective size limit is enforced at the edge, before the request reaches the application.
+
+**Application-level controls:**
+
+-   **Inline & downloaded input size**: [`MAX_INPUT_FILE_SIZE`](operations_configuration.md#max-input-file-size) caps the bytes of any single file loaded into memory for model input (base64, `data:` URIs, and HTTP(S)/S3 sources read for the model). Requests over the limit are rejected with HTTP 413 before the content is fully decoded or downloaded — a spoofed `Content-Length` cannot bypass it. Disabled by default; set a value aligned with your largest expected input when exposed to untrusted clients.
+-   **Concurrent downloads**: [`MAX_CONCURRENT_INPUT_DOWNLOADS`](operations_configuration.md#max-concurrent-input-downloads) bounds how many remote inputs a single request fetches at once, preventing socket/memory exhaustion and SSRF amplification from a request carrying many URLs.
+
+!!! warning "Application limits do not cap the total request body"
+    `MAX_INPUT_FILE_SIZE` applies to individual **file** inputs. It does not bound the overall request body: a large prompt sent as plain text (for example a huge `messages` array rather than a file) is still received and parsed in full before any application limit applies. Cap the total body size at the edge (below).
+
+**Edge body-size limit (recommended):**
+
+The overall request body should be capped at the network edge, before it is buffered by the application — this is the primary protection against memory exhaustion from oversized bodies.
+
+-   **AWS WAF**: the mechanism for an ALB-fronted deployment. Add a rule with a `SizeConstraintStatement` on the request `BODY` and set **oversize handling to block**, so bodies larger than the inspectable size are rejected outright. The Terraform module's WAF (`alb_waf_enabled=true`) is the place to add this rule. AWS WAF inspects only a portion of the body (8 KB by default, up to 64 KB on ALB), so rely on the oversize-handling block action rather than attempting to inspect the full payload.
+-   **ALB**: does not enforce a request body size limit on its own — pair it with AWS WAF for that control.
+-   **Amazon API Gateway**: if you front the service with API Gateway instead of an ALB, note its hard **10 MB** payload limit, which may be too small for large multimodal or long-context requests.
+
+!!! note "Sizing the edge limit is inherently hard for AI workloads"
+    There is no universally correct body-size cap: legitimate prompts are large and keep growing as model context windows expand, and multimodal inputs (images, audio, documents) push request bodies higher still. Set the edge limit **generously** — large enough for your largest legitimate request, small enough to stop obvious abuse — and rely on the finer-grained controls below for cost and abuse management rather than a single tight byte limit.
+
+**Duration & throughput controls:**
+
+-   **Output length**: bound generated output with the API's `max_tokens` / `max_output_tokens` parameters; large client-supplied defaults can be constrained at your application or gateway layer.
+-   **Upstream timeout**: [`AI_RESPONSE_TIMEOUT`](operations_configuration.md#ai-response-timeout) closes stalled model connections so a slow or hung generation does not hold resources indefinitely.
+-   **Rate limiting & concurrency**: use WAF rate limiting (`alb_waf_rate_limit`, see [Security Best Practices](#security-best-practices)) to bound requests per client, complementing the per-request download concurrency cap above.
+
 ---
 
 ## :material-shield-star: AWS Security Hub, GuardDuty & DNS Firewall Integration
@@ -240,6 +269,7 @@ Key practices recommended by AWS:
 - :material-check: **Enable AWS WAF** — the Terraform module supports WAF via `alb_waf_enabled=true`. When enabled, it activates the AWS Managed Core Rule Set (SQLi, XSS, common exploits), Linux Rule Set, and IP Reputation List (known malicious IPs).
 - :material-check: **Configure rate limiting** — set `alb_waf_rate_limit` to limit the number of requests per IP per 5-minute window, protecting against abuse and quota exhaustion.
 - :material-check: **Block anonymous IPs** — set `alb_waf_block_anonymous_ips=true` to block known VPNs, open proxies, and Tor exit nodes.
+- :material-check: **Cap request body size** — add an AWS WAF `SizeConstraintStatement` on the request body (oversize handling set to block) to reject oversized bodies at the edge; see [Request Size & Resource Limits](#request-size-resource-limits).
 
 **Secrets Management:**
 
