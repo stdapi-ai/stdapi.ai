@@ -6,14 +6,16 @@ must never be summed across currencies -- records always surface a full
 per-currency breakdown instead of collapsing to a single cost/currency pair.
 """
 
+import asyncio
 from decimal import Decimal
 from json import dumps, loads
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from pydantic import ValidationError
 
 from stdapi import usage
-from stdapi.config import SETTINGS
+from stdapi.config import SETTINGS, _Settings
 from stdapi.pricing import Dimension, Service
 from stdapi.usage import (
     IMAGE_SPEC,
@@ -1050,3 +1052,84 @@ class TestFormatCost:
     def test_plain_decimal_rendering(self, amount: str, expected: str) -> None:
         """Every amount renders as plain decimal text."""
         assert usage.format_cost(Decimal(amount)) == expected
+
+
+class TestCloudWatchNamespaceValidation:
+    """cloudwatch_metrics_namespace must satisfy CloudWatch's namespace naming rules."""
+
+    @staticmethod
+    def _settings(namespace: str) -> _Settings:
+        return _Settings(
+            aws_bedrock_regions=["us-east-1"],
+            cloudwatch_metrics_namespace=namespace,  # type: ignore[call-arg]
+        )
+
+    @pytest.mark.parametrize(
+        "namespace", ["stdapi", "my-app_metrics.prod/v1#2:3", "a" * 255]
+    )
+    def test_valid_namespace_accepted(self, namespace: str) -> None:
+        """A namespace using only the allowed charset within the length limit is accepted."""
+        assert self._settings(namespace).cloudwatch_metrics_namespace == namespace
+
+    def test_invalid_character_rejected(self) -> None:
+        """A namespace containing a disallowed character (e.g. space) is rejected."""
+        with pytest.raises(ValidationError, match="cloudwatch_metrics_namespace"):
+            self._settings("invalid namespace")
+
+    def test_reserved_aws_prefix_rejected(self) -> None:
+        """A namespace starting with the reserved 'AWS/' prefix is rejected."""
+        with pytest.raises(ValidationError, match="reserved"):
+            self._settings("AWS/MyNamespace")
+
+    def test_too_long_namespace_rejected(self) -> None:
+        """A namespace longer than 255 characters is rejected."""
+        with pytest.raises(ValidationError, match="cloudwatch_metrics_namespace"):
+            self._settings("a" * 256)
+
+
+class TestConcurrentSameModelUsageAttribution:
+    """MODEL_STATE is a shared per-request dict.
+
+    Concurrent same-model calls must pass region/tier/routing explicitly to
+    avoid misattributing usage to a sibling call's value (see
+    ModelInvocationState).
+    """
+
+    async def test_concurrent_calls_with_explicit_region_attribute_correctly(
+        self,
+    ) -> None:
+        """Two concurrent same-model calls passing region explicitly stay race-free."""
+        usage.init_usage()
+
+        async def call(region: str, tokens: int) -> None:
+            # Simulate a sibling call's write to the shared model state.
+            get_model_state("concurrentmodel").region = region
+            await asyncio.sleep(0)
+            record_bedrock_usage("concurrentmodel", region=region, input_tokens=tokens)
+
+        await asyncio.gather(call("us-east-1", 1000), call("us-west-2", 2000))
+
+        by_region = {
+            key.region: record.quantities[Dimension.INPUT_TOKENS]
+            for key, record in usage.USAGE.get().items()
+        }
+        assert by_region == {"us-east-1": 1000, "us-west-2": 2000}
+
+    async def test_concurrent_calls_without_explicit_region_share_last_written_state(
+        self,
+    ) -> None:
+        """Documents the fallback's last-write-wins semantics when region is omitted."""
+        usage.init_usage()
+
+        async def call(region: str, tokens: int) -> None:
+            get_model_state("fallbackmodel").region = region
+            await asyncio.sleep(0)
+            record_bedrock_usage("fallbackmodel", input_tokens=tokens)
+
+        await asyncio.gather(call("us-east-1", 1000), call("us-west-2", 2000))
+
+        records = usage.USAGE.get()
+        assert len(records) == 1
+        key, record = next(iter(records.items()))
+        assert key.region == "us-west-2"  # Last write wins.
+        assert record.quantities[Dimension.INPUT_TOKENS] == 3000

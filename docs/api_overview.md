@@ -75,7 +75,9 @@ stdapi.ai provides multiple interfaces for exploring and testing the API—choos
 | Category          | Endpoint                 | Capability                                      | Documentation                     |
 |-------------------|--------------------------|-------------------------------------------------|-----------------------------------|
 | **🔀 Rerank**     | `POST /cohere/v2/rerank` | Rank documents by semantic relevance to a query | [Rerank →](api_cohere_rerank.md)  |
+|                   | `POST /cohere/v1/rerank` | Legacy v1 rerank for older SDKs and tools       | [Rerank →](api_cohere_rerank.md#cohere-v1-rerank-api-legacy) |
 | **🧠 Embeddings** | `POST /cohere/v2/embed`  | Vector embeddings for semantic search           | [Embed →](api_cohere_embed.md)    |
+|                   | `POST /cohere/v1/embed`  | Legacy v1 embed for older SDKs and tools        | [Embed →](api_cohere_embed.md#cohere-v1-embed-api-legacy) |
 
 ## :material-tools: MCP (Model Context Protocol)
 
@@ -134,7 +136,9 @@ When `ENABLE_MCP_STREAMABLE_HTTP=true` or `ENABLE_MCP_SSE=true` is configured, s
 | `anthropic_file_content`         | `GET /anthropic/v1/files/{file_id}/content` |
 | **Cohere Tools**                 |                                             |
 | `cohere_rerank`                  | `POST /cohere/v2/rerank`                    |
+| `cohere_rerank_v1`               | `POST /cohere/v1/rerank`                    |
 | `cohere_embed`                   | `POST /cohere/v2/embed`                     |
+| `cohere_embed_v1`                | `POST /cohere/v1/embed`                     |
 | **Native Extension Tools**       |                                             |
 | `search_models`                  | `GET /search_models`                        |
 | `model_pricing`                  | `GET /model_pricing`                        |

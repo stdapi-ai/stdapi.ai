@@ -9,6 +9,7 @@ from stdapi.api_errors import ApiError
 from stdapi.auth import authenticate
 from stdapi.config import SETTINGS
 from stdapi.models import (
+    MANTLE_SERVICE,
     ModelDetails,
     get_all_models_details,
     get_all_models_details_and_modalities,
@@ -490,7 +491,15 @@ async def model_pricing(
         Query(description="Only prices in this ISO currency code (e.g. USD, EUR)."),
     ] = None,
     routing: Annotated[
-        str | None, Query(description="Only this serving profile (global or latency).")
+        str | None,
+        Query(
+            description=(
+                "Only this published serving-profile price variant (global or "
+                "latency). Row `routing` values enriched for display -- "
+                "geography prefixes like eu/us, or AWS regions -- cannot be "
+                "filtered on; use `region` for those."
+            )
+        ),
     ] = None,
     context: Annotated[
         str | None, Query(description="Only this context-length bucket (long).")
@@ -580,6 +589,11 @@ async def model_pricing(
             routing=routing,  # type: ignore[arg-type]
             context=context,  # type: ignore[arg-type]
             variants=variants,
+            preferred_service=(
+                Service.BEDROCK_MANTLE
+                if details is not None and details.service == MANTLE_SERVICE
+                else Service.BEDROCK
+            ),
         )
         if not all_prices:
             rows = select_effective_rows(

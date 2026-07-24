@@ -5,17 +5,23 @@ validating functionality, error handling, and compliance with OpenAI API specifi
 """
 
 import base64
+import json
 import re
 import time
-from typing import TYPE_CHECKING
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, cast
 
 import pytest
 from openai import BadRequestError, OpenAI
 
+from stdapi.models.image import ImageGenerationJobBase, ImageGenerationResponse
+from stdapi.monitoring import REQUEST_LOG, REQUEST_TIME, EventLog
+from stdapi.routes._images_common import build_images_response
+from stdapi.routes.openai_images_generations import stream_generator
 from tests.conftest import logged_usage_entries
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import AsyncGenerator, Iterable
 
     from openai.types import ImageEditCompletedEvent, ImageEditPartialImageEvent
     from openai.types.image_gen_completed_event import ImageGenCompletedEvent
@@ -689,3 +695,61 @@ class TestImageGenerationUsage:
         )
         assert entries, "Expected a bedrock image usage log entry"
         assert entries[0]["output_images"] == 1
+
+
+class TestStreamGeneratorUsageMatchesNonStream:
+    """stream_generator: the final SSE usage matches the non-streaming path's."""
+
+    @pytest.mark.local
+    async def test_final_stream_event_usage_matches_non_streaming(self) -> None:
+        """The last completed SSE event reports the job's real billed tokens, like non-streaming."""
+        REQUEST_TIME.set(datetime.now(UTC))
+        log_token = REQUEST_LOG.set(cast("EventLog", {"level": "info"}))
+        try:
+            job = object.__new__(ImageGenerationJobBase)
+            job._count = 2  # noqa: SLF001
+            job._response_width = 512  # noqa: SLF001
+            job._response_height = 512  # noqa: SLF001
+            job._response_quality = "medium"  # noqa: SLF001
+            job._output_format = "png"  # noqa: SLF001
+            job._response_output_format = "png"  # noqa: SLF001
+            job._input_tokens = None  # noqa: SLF001
+            job._output_tokens = None  # noqa: SLF001
+
+            async def image_stream() -> AsyncGenerator[ImageGenerationResponse]:
+                """Simulate progressive per-image token accumulation (e.g. Stability fan-out)."""
+                job._input_tokens = 5  # noqa: SLF001
+                job._output_tokens = 1  # noqa: SLF001
+                yield ImageGenerationResponse(image="aaa", index=0)
+                job._input_tokens = 12  # noqa: SLF001
+                job._output_tokens = 2  # noqa: SLF001
+                yield ImageGenerationResponse(image="bbb", index=1)
+
+            events = [
+                json.loads(event.data)
+                async for event in stream_generator(image_stream(), job, created=0)
+            ]
+            completed = [e for e in events if e["type"] == "image_generation.completed"]
+
+            assert len(completed) == 2
+            # The first completed event reflects tokens billed so far, not a stale zero.
+            assert completed[0]["usage"]["input_tokens"] == 5
+            # The final event reports the job's fully accumulated total.
+            assert completed[-1]["usage"]["input_tokens"] == 12
+            assert completed[-1]["usage"]["output_tokens"] == 2
+
+            non_stream = await build_images_response(
+                job=job,
+                results=[ImageGenerationResponse(image="bbb", index=1)],
+                response_format="b64_json",
+                output_image_count=2,
+            )
+            assert (
+                completed[-1]["usage"]["input_tokens"] == non_stream.usage.input_tokens
+            )
+            assert (
+                completed[-1]["usage"]["output_tokens"]
+                == non_stream.usage.output_tokens
+            )
+        finally:
+            REQUEST_LOG.reset(log_token)

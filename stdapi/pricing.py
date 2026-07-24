@@ -30,6 +30,7 @@ import asyncio
 import json
 import math
 import re
+from contextvars import Context
 from dataclasses import dataclass, field, replace
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
@@ -109,24 +110,25 @@ def partition_of_region(region: str) -> str:
     return "aws"
 
 
-#: Parse scale from unit strings (e.g., "1K tokens" -> 1000).
-_UNIT_SCALE_PATTERN = re.compile(r"^(\d+)([KM])\s", re.IGNORECASE)
+#: Parse scale from unit strings: "1K tokens" -> 1000, "1M" -> 1e6, "1000 tokens" -> 1000.
+_UNIT_SCALE_PATTERN = re.compile(r"^(\d+)([KM])?(?:\s|$)", re.IGNORECASE)
 
 
 def parse_unit_scale(unit: str) -> int:
     """Parse the scale multiplier from a price dimension unit.
 
     Args:
-        unit: The unit string (e.g., "1K tokens", "1M Characters", "Tokens").
+        unit: The unit string (e.g., "1K tokens", "1M", "1000 tokens", "1 image").
 
     Returns:
-        Units the price is quoted per -- e.g. "10K tokens" -> 10000.
+        Units the price is quoted per -- e.g. "10K tokens" -> 10000, "1 image" -> 1.
     """
-    if match := _UNIT_SCALE_PATTERN.match(unit):
-        return int(match.group(1)) * (
-            1000 if match.group(2).upper() == "K" else 1_000_000
-        )
-    return 1
+    if not (match := _UNIT_SCALE_PATTERN.match(unit)):
+        return 1
+    count, multiplier = int(match.group(1)), match.group(2)
+    if not multiplier:
+        return count
+    return count * (1000 if multiplier.upper() == "K" else 1_000_000)
 
 
 #: Normalized inferenceType prefix to dimension (most specific first).
@@ -417,6 +419,23 @@ class _PriceCatalogState:
     refresh_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     # Background startup load task, owned here and cancelled at shutdown.
     load_task: asyncio.Task[None] | None = None
+    # (region, service_code) pairs still failing after the last load attempt,
+    # or None when the last attempt had nothing left to retry.
+    pending_fetch_specs: list[tuple[str, str]] | None = None
+    #: True once a _load_price_catalog call published a catalog with no failed fetch.
+    catalog_complete: bool = False
+    # Raw fetch results/claims accumulated across retry attempts for
+    # pending_fetch_specs (pre default-price/fallback/override backfill).
+    pending_index: dict[PriceKey, Price] = field(default_factory=dict)
+    pending_claims: dict[PriceKey, str] = field(default_factory=dict)
+    # Model ID to perf_counter_ns() expiry: models a completed reload still
+    # couldn't price, exempted from retriggering one until the cooldown lapses.
+    unpriced_cooldown: dict[str, int] = field(default_factory=dict)
+    # (indexed dict, its rows grouped by model): rebuilt when price_index is
+    # swapped; holding the indexed dict makes the identity check GC-safe.
+    rows_by_model: (
+        tuple[dict[PriceKey, Price], dict[str, list[tuple[PriceKey, Price]]]] | None
+    ) = None
 
 
 #: Module state. Swapping price_index wholesale keeps concurrent readers safe.
@@ -593,6 +612,9 @@ _SERVICE_CODE_TO_SERVICE: Final[dict[str, Service]] = {
     "AmazonComprehend": Service.COMPREHEND,
     "comprehend": Service.COMPREHEND,
 }
+
+#: Bounds concurrent Pricing API fetches -- the API enforces a very low request-rate quota.
+_MAX_CONCURRENT_FETCHES: Final[int] = 4
 
 #: Initial delay before retrying a failed background catalog load.
 _LOAD_RETRY_INITIAL_SECONDS: Final[int] = 60
@@ -1362,7 +1384,10 @@ def _apply_price_overrides(
     partition to resolve the override's currency (regions can span multiple
     AWS partitions -- aws, aws-eusc, aws-us-gov, aws-cn -- each with its own
     currency). Always applied at the standard tier -- there's no override
-    mechanism for flex/priority/batch pricing.
+    mechanism for flex/priority/batch pricing. Registered under both
+    ``Service.BEDROCK`` and ``Service.BEDROCK_MANTLE`` (mirroring
+    :func:`register_default_prices`) so overrides also win for Mantle-routed
+    requests.
 
     Args:
         index: Price index to update.
@@ -1395,11 +1420,12 @@ def _apply_price_overrides(
                 continue
             for region in regions:
                 currency = PARTITION_CURRENCY.get(partition_of_region(region), "USD")
-                index[
-                    PriceKey(
-                        Service.BEDROCK, normalized_model, region, dimension, "standard"
-                    )
-                ] = Price(Decimal(str(price)), currency)
+                for service in (Service.BEDROCK, Service.BEDROCK_MANTLE):
+                    index[
+                        PriceKey(
+                            service, normalized_model, region, dimension, "standard"
+                        )
+                    ] = Price(Decimal(str(price)), currency)
 
 
 #: Always-fetched last-resort fallback source regions, tried in this order.
@@ -1488,16 +1514,54 @@ def _apply_regional_fallback(index: dict[PriceKey, Price], regions: set[str]) ->
                 ]
 
 
+async def _fetch_or_capture(
+    semaphore: asyncio.Semaphore,
+    client: PricingClient,
+    service_code: str,
+    region: str,
+    diagnostics: list[str],
+) -> tuple[dict[PriceKey, Price], dict[PriceKey, str]] | BotoCoreError | ClientError:
+    """Fetch one (service_code, region) pair, bounded, capturing AWS errors instead of raising.
+
+    Args:
+        semaphore: Concurrency limiter shared across the whole load attempt.
+        client: An aiobotocore pricing client.
+        service_code: A ``_SERVICE_CODE_TO_SERVICE`` key (e.g., "AmazonBedrock").
+        region: The AWS region to filter by.
+        diagnostics: Intra-fetch collision descriptions, appended to in place.
+
+    Returns:
+        The fetch's (results, claims) pair, or the caught exception -- letting
+        the caller keep every sibling fetch's outcome instead of cancelling
+        them all on one failure.
+    """
+    async with semaphore:
+        try:
+            return await _fetch_service_pricing(
+                client, service_code, region, diagnostics
+            )
+        except (BotoCoreError, ClientError) as exception:
+            return exception
+
+
 async def _load_price_catalog(diagnostics: list[str]) -> None:
     """Fetch pricing for all configured regions/services and atomically swap the index.
 
-    AWS Pricing API errors propagate to the caller.
+    Concurrency is bounded by :data:`_MAX_CONCURRENT_FETCHES`. A fetch
+    failing (e.g. throttling) doesn't cancel or discard its siblings: every
+    successfully fetched (region, service_code) pair is merged and published
+    immediately, so a partial catalog is usable right away. Failed pairs are
+    recorded on ``_state.pending_fetch_specs`` and retried -- carrying the
+    accumulated successes forward -- the next time this function is called,
+    typically by :func:`_load_price_catalog_with_retry`'s backoff loop.
 
     Args:
         diagnostics: Collision and invalid-override descriptions for this
             load, appended to in place; the caller surfaces them as one
             warning on its own operation-level log event.
     """
+    regions = _catalog_regions()
+
     if (endpoint := pricing_endpoint_region()) is None:
         diagnostics.append(
             "The AWS Price List API has no endpoint in this partition;"
@@ -1505,43 +1569,48 @@ async def _load_price_catalog(diagnostics: list[str]) -> None:
         )
         # Overrides are local (no API): keep them as the sole price source.
         override_index: dict[PriceKey, Price] = {}
-        _apply_price_overrides(override_index, _catalog_regions(), diagnostics)
+        _apply_price_overrides(override_index, regions, diagnostics)
         _state.price_index = override_index
+        _state.pending_fetch_specs = None
+        _state.catalog_complete = True
         return
 
-    regions = _catalog_regions()
-    fetch_specs = [
-        (region, service_code)
-        for region in sorted(regions)
-        for service_code in _SERVICE_CODE_TO_SERVICE
-    ]
+    if _state.pending_fetch_specs is not None:
+        # Resume a previous partial failure: only the fetches that failed,
+        # carrying forward what already succeeded.
+        fetch_specs = _state.pending_fetch_specs
+        new_index = dict(_state.pending_index)
+        claims = dict(_state.pending_claims)
+    else:
+        fetch_specs = [
+            (region, service_code)
+            for region in sorted(regions)
+            for service_code in _SERVICE_CODE_TO_SERVICE
+        ]
+        new_index = {}
+        claims = {}
 
     # type-ignore: the RegionName stub Literal lags EUSC/China (works live).
     client = get_client("pricing", endpoint)  # type: ignore[arg-type]
-    # A TaskGroup cancels every sibling fetch as soon as one fails, instead of
-    # letting them run to completion against the low-quota Pricing API.
-    try:
-        async with asyncio.TaskGroup() as task_group:
-            tasks = [
-                task_group.create_task(
-                    _fetch_service_pricing(client, service_code, region, diagnostics)
-                )
-                for region, service_code in fetch_specs
-            ]
-    except* (BotoCoreError, ClientError) as group:
-        raise group.exceptions[0] from None
-    fetch_results = [task.result() for task in tasks]
+    semaphore = asyncio.Semaphore(_MAX_CONCURRENT_FETCHES)
+    outcomes = await asyncio.gather(
+        *(
+            _fetch_or_capture(semaphore, client, service_code, region, diagnostics)
+            for region, service_code in fetch_specs
+        )
+    )
 
-    # Merge in deterministic fetch_specs order (not completion order) via
-    # _store_price with one shared claims dict, so cross-fetch PriceKey
-    # collisions (e.g. the three Bedrock service codes) warn and resolve
-    # deterministically. Claims are tagged with the service code so equal
-    # usagetype text across fetches isn't mistaken for a repeated price band.
-    new_index: dict[PriceKey, Price] = {}
-    claims: dict[PriceKey, str] = {}
-    for (_region, service_code), (fetch_index, fetch_claims) in zip(
-        fetch_specs, fetch_results, strict=True
-    ):
+    # Merge in fetch_specs order (not completion order) via _store_price with
+    # one shared claims dict, so cross-fetch PriceKey collisions (e.g. the
+    # three Bedrock service codes) warn and resolve deterministically. Claims
+    # are tagged with the service code so equal usagetype text across fetches
+    # isn't mistaken for a repeated price band.
+    failed_specs: list[tuple[str, str]] = []
+    for (region, service_code), outcome in zip(fetch_specs, outcomes, strict=True):
+        if isinstance(outcome, BotoCoreError | ClientError):
+            failed_specs.append((region, service_code))
+            continue
+        fetch_index, fetch_claims = outcome
         for key, price in fetch_index.items():
             _store_price(
                 new_index,
@@ -1552,11 +1621,28 @@ async def _load_price_catalog(diagnostics: list[str]) -> None:
                 diagnostics,
             )
 
-    _apply_default_prices(new_index)
-    _apply_regional_fallback(new_index, regions)
-    _apply_price_overrides(new_index, regions, diagnostics)
+    # Backfill/override on a copy: pending_index/claims must stay the raw
+    # fetch results only, so a later retry's _store_price collision check
+    # isn't confused by keys these steps added without a claim.
+    published_index = dict(new_index)
+    _apply_default_prices(published_index)
+    _apply_regional_fallback(published_index, regions)
+    _apply_price_overrides(published_index, regions, diagnostics)
+    _state.price_index = published_index
 
-    _state.price_index = new_index
+    _state.catalog_complete = not failed_specs
+    if failed_specs:
+        diagnostics.append(
+            f"Price catalog load: {len(failed_specs)}/{len(fetch_specs)} fetch(es) "
+            "failed; a partial catalog was published and only those will be retried"
+        )
+        _state.pending_fetch_specs = failed_specs
+        _state.pending_index = new_index
+        _state.pending_claims = claims
+    else:
+        _state.pending_fetch_specs = None
+        _state.pending_index = {}
+        _state.pending_claims = {}
 
 
 def _all_models_priced(
@@ -1587,6 +1673,48 @@ def price_catalog_ready() -> bool:
     return bool(_state.price_index)
 
 
+def _rows_by_model() -> dict[str, list[tuple[PriceKey, Price]]]:
+    """Group the current price index by model, cached until the index is swapped.
+
+    Returns:
+        Mapping of model key to its (key, price) pairs.
+    """
+    index = _state.price_index
+    if _state.rows_by_model is None or _state.rows_by_model[0] is not index:
+        grouped: dict[str, list[tuple[PriceKey, Price]]] = {}
+        for key, price in index.items():
+            grouped.setdefault(key.model, []).append((key, price))
+        _state.rows_by_model = (index, grouped)
+    return _state.rows_by_model[1]
+
+
+def _dedupe_service_rows(
+    rows: list[tuple[PriceKey, Price]], preferred_service: Service
+) -> list[tuple[PriceKey, Price]]:
+    """Collapse rows identical apart from service, keeping *preferred_service*.
+
+    Default and override prices are registered under both Bedrock services;
+    without this, dual-service models would list every such row twice.
+
+    Args:
+        rows: (key, price) pairs to reduce.
+        preferred_service: The service whose row to keep when duplicated.
+
+    Returns:
+        The reduced (key, price) pairs.
+    """
+    groups: dict[PriceKey, tuple[PriceKey, Price]] = {}
+    for key, price in rows:
+        canonical = replace(key, service=Service.BEDROCK)
+        current = groups.get(canonical)
+        if current is None or (
+            key.service is preferred_service
+            and current[0].service is not preferred_service
+        ):
+            groups[canonical] = (key, price)
+    return list(groups.values())
+
+
 def model_prices(
     model_id: str,
     *,
@@ -1597,11 +1725,14 @@ def model_prices(
     routing: Routing | None = None,
     context: ContextLength | None = None,
     variants: bool = True,
+    preferred_service: Service = Service.BEDROCK,
 ) -> list[tuple[PriceKey, Price]]:
     """List the indexed price rows for one model, filtered and sorted.
 
     A pure in-memory read of the current price catalog (no AWS call), for
     the pricing API. Filters combine with AND; None means "no filter".
+    Rows identical apart from their Bedrock service (default/override prices
+    are registered under both) are collapsed to the *preferred_service* row.
 
     Args:
         model_id: The model ID or alias, resolved via :func:`resolve_model_key`.
@@ -1614,6 +1745,8 @@ def model_prices(
         variants: When False, keep only base rows (standard tier, no cache
             TTL, routing, or long-context variant); spec rows are kept
             because media buckets are distinct products, not variants.
+        preferred_service: The Bedrock service whose row to keep when a
+            price is registered under both (see :func:`_dedupe_service_rows`).
 
     Returns:
         Matching (key, price) pairs, sorted by region then remaining axes.
@@ -1621,9 +1754,8 @@ def model_prices(
     model_key = resolve_model_key(model_id)
     rows = [
         (key, price)
-        for key, price in _state.price_index.items()
-        if key.model == model_key
-        and (region is None or key.region == region)
+        for key, price in _rows_by_model().get(model_key, ())
+        if (region is None or key.region == region)
         and (tier is None or key.tier == tier)
         and (dimensions is None or key.dimension in dimensions)
         and (currency is None or price.currency == currency)
@@ -1639,6 +1771,7 @@ def model_prices(
             )
         )
     ]
+    rows = _dedupe_service_rows(rows, preferred_service)
     rows.sort(key=_row_sort_key)
     return rows
 
@@ -1737,34 +1870,48 @@ def is_model_priced(model_id: str, service: Service = Service.BEDROCK) -> bool:
     return _all_models_priced((model_id,), service)
 
 
+#: How long a model a completed reload still couldn't price is exempted from retriggering one.
+_UNPRICED_MODEL_COOLDOWN_NS: Final[int] = 15 * 60 * 1_000_000_000
+
+
 async def refresh_price_catalog_for_new_models(model_ids: Iterable[str]) -> None:
     """Reload the price catalog immediately if any of *model_ids* isn't priced yet.
 
     Blocking and awaited: called by ``initialize_bedrock_models()`` when its
     lazy on-demand refresh discovers unregistered Bedrock models, so the
     catalog self-heals for newly released models without a polling loop.
-    Diagnostics from the reload are discarded.
+    Diagnostics from the reload are discarded. A model a completed reload
+    still couldn't price is exempted from retriggering one for
+    :data:`_UNPRICED_MODEL_COOLDOWN_NS`, so a permanently-unpriced model
+    doesn't force a reload on every request; a genuinely new model is never
+    on cooldown and always triggers one.
 
     Args:
         model_ids: Bedrock model IDs to check. No-op when cost tracking is
-            disabled or every given model already has a price-catalog entry.
-
-    Raises:
-        BotoCoreError: Propagated from the AWS Pricing API reload.
-        ClientError: Same as above.
+            disabled, or every given model is on cooldown or already priced.
     """
     if not SETTINGS.cost_tracking:
         return
-    model_ids = list(model_ids)
-    if not model_ids or _all_models_priced(model_ids):
+    now = perf_counter_ns()
+    due_ids = [
+        model_id
+        for model_id in model_ids
+        if _state.unpriced_cooldown.get(model_id, 0) <= now
+    ]
+    if not due_ids or _all_models_priced(due_ids):
         return
 
     async with _state.refresh_lock:
         # Re-check under the lock: a concurrent caller may have already
         # refreshed the catalog while this one was waiting for it.
-        if _all_models_priced(model_ids):
+        if _all_models_priced(due_ids):
             return
         await _load_price_catalog([])
+        for model_id in due_ids:
+            if _all_models_priced((model_id,)):
+                _state.unpriced_cooldown.pop(model_id, None)
+            else:
+                _state.unpriced_cooldown[model_id] = now + _UNPRICED_MODEL_COOLDOWN_NS
 
 
 def start_price_catalog() -> None:
@@ -1780,10 +1927,16 @@ def start_price_catalog() -> None:
     current on demand by :func:`refresh_price_catalog_for_new_models`,
     triggered by ``initialize_bedrock_models()`` whenever its own lazy
     refresh discovers a model with no price-catalog entry.
+
+    Idempotent: a call while a load task already exists is a no-op, so a
+    duplicate startup never orphans a running task.
     """
-    if not SETTINGS.cost_tracking:
+    if not SETTINGS.cost_tracking or _state.load_task is not None:
         return
-    _state.load_task = asyncio.create_task(_load_price_catalog_with_retry())
+    # The task outlives the caller's span/request context: run it in a fresh one.
+    _state.load_task = asyncio.create_task(
+        _load_price_catalog_with_retry(), context=Context()
+    )
 
 
 async def stop_price_catalog() -> None:
@@ -1791,13 +1944,13 @@ async def stop_price_catalog() -> None:
 
     Never raises: any exception other than cancellation left in the task
     (e.g. an unexpected load error already logged where it occurred) is
-    logged again here and swallowed, so shutdown always completes cleanly.
+    logged again here and swallowed -- without an ``execution_time_ms``,
+    as no load duration applies -- so shutdown always completes cleanly.
     """
     if (task := _state.load_task) is None:
         return
     _state.load_task = None
     task.cancel()
-    start = perf_counter_ns()
     try:
         await task
     except asyncio.CancelledError:
@@ -1809,7 +1962,7 @@ async def stop_price_catalog() -> None:
                 "Price catalog load task raised during shutdown "
                 f"({type(exception).__name__}: {exception})"
             ],
-            start,
+            None,
         )
 
 
@@ -1820,6 +1973,11 @@ async def _load_price_catalog_with_retry() -> None:
     on the same backoff schedule as AWS errors, so a transient anomaly can
     self-heal and a deterministic bug produces a periodic error-log signal
     instead of permanently disabling cost tracking for the process lifetime.
+    A load that only partially failed keeps retrying too -- with each
+    ``_load_price_catalog`` call resuming from ``_state.pending_fetch_specs``
+    -- until every fetch has succeeded. If a concurrent on-demand refresh
+    already completed the catalog during a backoff, the loop exits without
+    another load.
     """
     delay = _LOAD_RETRY_INITIAL_SECONDS
     while True:
@@ -1830,6 +1988,16 @@ async def _load_price_catalog_with_retry() -> None:
             # low-quota Pricing API; _load_price_catalog never takes this lock
             # itself, so no deadlock risk from nesting.
             async with _state.refresh_lock:
+                if _state.catalog_complete:
+                    _log_price_catalog_event(
+                        "info",
+                        [
+                            "Price catalog load already completed by a "
+                            "concurrent on-demand refresh"
+                        ],
+                        start,
+                    )
+                    return
                 await _load_price_catalog(diagnostics)
         except (BotoCoreError, ClientError) as exception:
             diagnostics.append(
@@ -1844,23 +2012,27 @@ async def _load_price_catalog_with_retry() -> None:
             )
             _log_price_catalog_event("error", diagnostics, start)
         else:
-            _log_price_catalog_event(
-                "warning" if diagnostics else "info", diagnostics, start
-            )
-            return
+            if not _state.pending_fetch_specs:
+                _log_price_catalog_event(
+                    "warning" if diagnostics else "info", diagnostics, start
+                )
+                return
+            diagnostics.append(f"Price catalog load: retrying in {delay}s")
+            _log_price_catalog_event("warning", diagnostics, start)
         await asyncio.sleep(delay)
         delay = min(delay * 2, _LOAD_RETRY_MAX_SECONDS)
 
 
 def _log_price_catalog_event(
-    level: LogLevel, diagnostics: list[str], start_ns: int
+    level: LogLevel, diagnostics: list[str], start_ns: int | None
 ) -> None:
     """Write a ``background`` log event for one price-catalog load attempt.
 
     Args:
         level: Event severity.
         diagnostics: Load diagnostics, recorded as the event's error detail.
-        start_ns: ``perf_counter_ns()`` timestamp when the attempt started.
+        start_ns: ``perf_counter_ns()`` timestamp when the attempt started,
+            or None to omit ``execution_time_ms`` (no load attempt timed).
     """
     # Imported here: stdapi.monitoring transitively imports this module.
     from stdapi import server  # noqa: PLC0415
@@ -1874,8 +2046,9 @@ def _log_price_catalog_event(
         server_id=server.SERVER_NAME,
         server_version=SERVER_FULL_VERSION,
         event="price_catalog_load",
-        execution_time_ms=(perf_counter_ns() - start_ns) // 1000000,
     )
+    if start_ns is not None:
+        event["execution_time_ms"] = (perf_counter_ns() - start_ns) // 1000000
     if diagnostics:
         # list() copy: mypy needs a fresh list[JsonValue] (list is invariant).
         event["error_detail"] = list(diagnostics)

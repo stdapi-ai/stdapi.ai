@@ -188,7 +188,10 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                 date=SETTINGS.now(),
                 server_id=server.SERVER_NAME,
                 server_version=SERVER_FULL_VERSION,
-                error_detail=[f"{type(exception).__name__}: {exception}"],
+                error_detail=[
+                    f"{type(exception).__name__}: {exception}",
+                    *getattr(exception, "__notes__", []),
+                ],
             )
         )
         raise
@@ -376,9 +379,7 @@ async def handle_validation_exception(
         case _:
             message = "Validation error"
     log_error_details(message, level="warning")
-    return JSONResponse(
-        *format_http_error(request, 400, message, "invalid_request_error")
-    )
+    return JSONResponse(*format_http_error(request, 400, message))
 
 
 @app.exception_handler(ClientError)

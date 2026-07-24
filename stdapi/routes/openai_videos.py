@@ -476,10 +476,10 @@ async def get_video_content(
             yet; 400 when the variant is not available.
     """
     log_request_params({"video_id": video_id, "variant": variant})
+    job = await get_video_job(_decode_video_id(video_id)[0])
     if variant != "video":
         msg = "Only the 'video' variant is available on this implementation."
         raise ApiError(msg)
-    job = await get_video_job(_decode_video_id(video_id)[0])
     if job.status != "completed":
         # Upstream semantics: content of an unfinished job is a 404.
         msg = "Video is not ready yet, use GET /v1/videos/{video_id} to check status"

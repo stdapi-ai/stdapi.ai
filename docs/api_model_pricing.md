@@ -36,7 +36,7 @@ All parameters are optional and combine with **AND** logic.
 | `dimension` | `string`  | Repeatable. Only these billed dimensions (e.g. `input_tokens`, `output_tokens`, `output_images`)         |
 | `variants`  | `boolean` | `false` = base price card only: standard tier without cache-TTL, routing, or long-context rows (media spec rows are kept) |
 | `currency`  | `string`  | Only prices in this ISO currency code (e.g. `USD`, `EUR`)                                                |
-| `routing`   | `string`  | Only this serving profile: `global`, `latency`                                                           |
+| `routing`   | `string`  | Only this published serving-profile price variant: `global`, `latency`. Row `routing` values enriched for display (geography prefixes, AWS regions) cannot be filtered on — use `region` for those |
 | `context`   | `string`  | Only this context-length bucket: `long` (prompts beyond 200K tokens)                                     |
 | `all_prices` | `boolean` | `true` = the full published price table; `false` (default) = only the prices matching the server's configuration |
 

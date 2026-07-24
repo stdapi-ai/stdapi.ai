@@ -167,6 +167,30 @@ class TestCaptureStreamUsage:
 
         assert next(iter(usage.USAGE.get())).tier == "flex"
 
+    async def test_closing_stream_early_still_records_trailing_metadata_usage(
+        self,
+    ) -> None:
+        """Closing the wrapper before the metadata event still drains and records it."""
+
+        async def fake_stream() -> AsyncIterator[dict[str, Any]]:
+            yield {"contentBlockDelta": {"delta": {"text": "hello"}}}
+            yield {"contentBlockDelta": {"delta": {"text": " world"}}}
+            yield {
+                "metadata": {
+                    "usage": {"inputTokens": 3, "outputTokens": 4, "totalTokens": 7}
+                }
+            }
+
+        model: ModelBase[Any, Any] = ModelBase("disconnectmodel")
+        wrapped = model._capture_stream_usage(fake_stream())  # noqa: SLF001
+        # Simulate a client disconnect: only the first event is consumed.
+        await anext(wrapped)
+        await wrapped.aclose()
+
+        record = next(iter(usage.USAGE.get().values()))
+        assert record.quantities[Dimension.INPUT_TOKENS] == 3
+        assert record.quantities[Dimension.OUTPUT_TOKENS] == 4
+
 
 class TestIterInvokeStream:
     """_iter_invoke_stream: the usage callback fires only for metrics-carrying chunks."""
@@ -340,6 +364,26 @@ class TestRecordConverseUsageCacheDetails:
         assert record.cache_write_tokens_by_ttl == {"5m": 500, "1h": 200}
         # The breakdown exactly covers the flat total: no deficit top-up.
         assert record.quantities[Dimension.CACHE_WRITE_TOKENS] == 700
+
+    def test_malformed_cache_details_entries_are_skipped(self) -> None:
+        """Entries missing 'ttl' or 'inputTokens' are dropped, not KeyError'd."""
+        ModelBase("cachedetailmalformedmodel")._record_converse_usage(  # noqa: SLF001
+            {  # type: ignore[typeddict-item]
+                "usage": {
+                    "inputTokens": 10,
+                    "outputTokens": 1,
+                    "totalTokens": 11,
+                    "cacheWriteInputTokens": 500,
+                    "cacheDetails": [
+                        {"ttl": "5m", "inputTokens": 500},
+                        {"ttl": "1h"},
+                        {"inputTokens": 200},
+                    ],
+                }
+            }
+        )
+        record = next(iter(usage.USAGE.get().values()))
+        assert record.cache_write_tokens_by_ttl == {"5m": 500}
 
 
 class TestEffectiveTierPricing:

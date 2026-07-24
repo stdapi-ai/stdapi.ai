@@ -1,8 +1,9 @@
-"""Integration tests for error payload structure on OpenAI and Anthropic routes.
+"""Integration tests for error payload structure on OpenAI, Anthropic and Cohere routes.
 
 Verifies that error responses match the official API envelope formats:
 - OpenAI: ``{"error": {"message", "type", "param", "code"}}``
 - Anthropic: ``{"type": "error", "error": {"type", "message"}}``
+- Cohere: ``{"message": <str>}``
 """
 
 from typing import TYPE_CHECKING, Any
@@ -10,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from stdapi.api_providers.anthropic import _format_error as anthropic_format_error
+from stdapi.api_providers.cohere import _format_error as cohere_format_error
 from stdapi.api_providers.openai import _format_error as openai_format_error
 
 if TYPE_CHECKING:
@@ -22,6 +24,10 @@ def _openai_headers(api_key: str) -> dict[str, str]:
 
 def _anthropic_headers(api_key: str) -> dict[str, str]:
     return {"x-api-key": api_key, "anthropic-version": "2023-06-01"}
+
+
+def _cohere_headers(api_key: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {api_key}"}
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +99,24 @@ def _assert_anthropic_error_shape(body: dict[str, Any]) -> dict[str, Any]:
     return err  # type: ignore[no-any-return]
 
 
+def _assert_cohere_error_shape(body: dict[str, Any]) -> str:
+    """Assert the response body matches the Cohere error envelope and return the message.
+
+    The expected shape is::
+
+        {"message": <str>}
+
+    Args:
+        body: Parsed JSON response body.
+
+    Returns:
+        The ``message`` string for further assertions.
+    """
+    assert set(body.keys()) == {"message"}, f"Unexpected top-level keys: {body.keys()}"
+    assert isinstance(body["message"], str)
+    return body["message"]  # type: ignore[no-any-return]
+
+
 class TestFormatErrorFunctions:
     """Pure unit tests for the provider `_format_error` envelope builders.
 
@@ -137,6 +161,13 @@ class TestFormatErrorFunctions:
         err = _assert_anthropic_error_shape(body)
         assert err["type"] == expected_type
         assert returned_status == expected_status
+
+    @pytest.mark.parametrize("status", [400, 401, 404, 429, 500])
+    def test_cohere_format_error_returns_message_envelope(self, status: int) -> None:
+        """`_format_error` returns the flat Cohere envelope with the status unchanged."""
+        body, returned_status = cohere_format_error(status, "boom")
+        assert _assert_cohere_error_shape(body) == "boom"
+        assert returned_status == status
 
 
 class TestOpenaiErrorPayloads:
@@ -286,6 +317,84 @@ class TestAnthropicErrorPayloads:
         assert resp.status_code == 401
         err = _assert_anthropic_error_shape(resp.json())
         assert err["type"] == "authentication_error"
+
+
+class TestCohereErrorPayloads:
+    """Verify Cohere routes return the correct error envelope structure."""
+
+    @pytest.fixture(autouse=True)
+    def _skip_non_local(self, test_client: TestClient) -> None:
+        """Skip web search tests when running against the official Anthropic API."""
+        if not test_client:
+            pytest.skip("Unittest only for local tests.")
+
+    def test_invalid_model_returns_cohere_envelope(
+        self, test_client: TestClient, api_key: str
+    ) -> None:
+        """A non-existent model on a Cohere route must return 404 with the Cohere error shape.
+
+        Validates:
+            - HTTP 404 status code.
+            - ``{"message": <str>}`` envelope.
+            - The message mentions the model.
+        """
+        resp = test_client.post(
+            "/cohere/v2/rerank",
+            json={"model": "nonexistent-model-xyz", "query": "q", "documents": ["a"]},
+            headers=_cohere_headers(api_key),
+        )
+        assert resp.status_code == 404
+        message = _assert_cohere_error_shape(resp.json())
+        assert "model" in message.lower()
+
+    def test_validation_error_returns_cohere_envelope(
+        self, test_client: TestClient, api_key: str
+    ) -> None:
+        """A Pydantic validation error on a Cohere route must return 400 with the Cohere shape.
+
+        Validates:
+            - HTTP 400 status code.
+            - Correct Cohere error envelope structure.
+        """
+        resp = test_client.post(
+            "/cohere/v2/rerank",
+            json={"model": "x", "query": "q", "documents": "not-a-list"},
+            headers=_cohere_headers(api_key),
+        )
+        assert resp.status_code == 400
+        _assert_cohere_error_shape(resp.json())
+
+    def test_auth_error_returns_cohere_envelope(self, test_client: TestClient) -> None:
+        """A missing/invalid API key on a Cohere route must return 401 with the Cohere shape.
+
+        Validates:
+            - HTTP 401 status code.
+            - Correct Cohere error envelope structure.
+        """
+        resp = test_client.post(
+            "/cohere/v2/rerank",
+            json={"model": "x", "query": "q", "documents": ["a"]},
+            headers={"Authorization": "Bearer wrong-key"},
+        )
+        assert resp.status_code == 401
+        _assert_cohere_error_shape(resp.json())
+
+    def test_embed_auth_error_returns_cohere_envelope(
+        self, test_client: TestClient
+    ) -> None:
+        """A missing/invalid API key on the embed route must return 401 with the Cohere shape.
+
+        Validates:
+            - HTTP 401 status code.
+            - Correct Cohere error envelope structure.
+        """
+        resp = test_client.post(
+            "/cohere/v2/embed",
+            json={"model": "x", "texts": ["a"], "input_type": "search_document"},
+            headers={"Authorization": "Bearer wrong-key"},
+        )
+        assert resp.status_code == 401
+        _assert_cohere_error_shape(resp.json())
 
 
 class TestCrossRouteConsistency:

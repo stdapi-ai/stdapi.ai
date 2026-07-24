@@ -10,7 +10,7 @@ from pydantic_core import from_json
 from typing_extensions import TypedDict
 
 from stdapi.api_errors import ApiError, InvalidLanguageFormatError
-from stdapi.aws import call_with_region_failover, get_client, service_regions
+from stdapi.aws import call_with_region_failover, get_client
 from stdapi.aws_s3 import copy_s3_object, get_text_from_s3, track_temporary_s3_objects
 from stdapi.aws_translate import translate, translate_subtitle
 from stdapi.cleanup import schedule_cleanup
@@ -154,15 +154,19 @@ def transcribe_job_candidates() -> list[tuple[RegionName, str]]:
 
 
 async def initialize_transcribe_models() -> None:
-    """Initialize extra models."""
-    regions = [region for region, _ in transcribe_job_candidates()]
+    """Initialize extra models.
+
+    The advertised regions are the bucket-equipped serving candidates; the
+    model stays registered with an empty list when there is none (requests
+    then get the 404 guard's operator-actionable error message).
+    """
     EXTRA_MODELS_INPUT_MODALITY.setdefault("SPEECH", set()).add(AWS_TRANSCRIBE_MODEL_ID)
     EXTRA_MODELS_OUTPUT_MODALITY.setdefault("TEXT", set()).add(AWS_TRANSCRIBE_MODEL_ID)
     EXTRA_MODELS[AWS_TRANSCRIBE_MODEL_ID] = ModelDetails(
         id=AWS_TRANSCRIBE_MODEL_ID,
         name="Transcribe",
         provider="Amazon",
-        regions=regions or service_regions(SETTINGS.aws_transcribe_region),
+        regions=[region for region, _ in transcribe_job_candidates()],
         service="AWS Transcribe",
         input_modalities=["SPEECH"],
         output_modalities=["TEXT"],
@@ -179,7 +183,9 @@ async def _start_transcription_with_failover(
 
     The audio must already be uploaded to the first candidate's bucket;
     later attempts server-side copy it into their own region's bucket
-    (Transcribe requires the media bucket in the job's region).
+    (Transcribe requires the media bucket in the job's region). A failed
+    region gets a best-effort job deletion so no orphaned job keeps
+    running (and billing) there.
 
     Args:
         candidates: (region, bucket) pairs in priority order (at least one).
@@ -219,8 +225,17 @@ async def _start_transcription_with_failover(
             )
         return bucket
 
+    async def _cleanup(
+        transcribe: TranscribeServiceClient, _region: RegionName
+    ) -> None:
+        """Best-effort delete: the start may have been accepted despite the error."""
+        await transcribe.delete_transcription_job(TranscriptionJobName=job_id)
+
     bucket, region = await call_with_region_failover(
-        "transcribe", [region for region, _ in candidates], _attempt
+        "transcribe",
+        [region for region, _ in candidates],
+        _attempt,
+        on_failed_region=_cleanup,
     )
     return region, bucket
 

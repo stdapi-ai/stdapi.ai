@@ -171,7 +171,8 @@ Usage is reported as a nested `usage` list on `request` / `request_stream` event
     Fields are only populated when non-zero. Query for present fields rather than filtering by `> 0`. Missing fields = zero.
 
 !!! note "Client disconnect behavior"
-    If a stream is abandoned before the Converse `metadata.usage` event or final `invocationMetrics` chunk arrives, no usage is produced and logged.
+    - **Chat (Converse) streams**: if the client disconnects before the trailing `metadata.usage` event arrives, the wrapper keeps draining the already-open Bedrock stream (bounded) looking for it, so the usage already billed by AWS is still recorded.
+    - **InvokeModel streams and image generation jobs**: if a stream/job is abandoned before its final `invocationMetrics` chunk (or job completion) arrives, no usage is produced and logged.
 
 !!! note "No estimates"
     All values are real AWS-billed quantities. No estimation is performed — if AWS doesn't return a count, the field is absent (zero).
@@ -364,7 +365,7 @@ Multimodal embedding inputs are billed by AWS per media unit on top of (or inste
 - **Speech-modality tokens** (speech-to-speech models): AWS bills speech tokens at a higher rate than text tokens, but reported token usage doesn't distinguish modalities — all tokens are priced at the text rate, which underestimates speech-heavy calls.
 - **Asynchronous (segmented) embeddings**: AWS reports no token usage for this processing path (used automatically for large inputs), so segmented text embeddings report no token cost; audio/video durations are recovered from the AWS-reported segment timings and billed.
 - **Synchronous audio/video embedding inputs**: media duration is only available from AWS on the segmented (asynchronous) processing path — small audio/video inputs processed synchronously report no duration and no per-second cost. No estimate is substituted (this app only reports AWS-confirmed real usage).
-- **Client disconnect during streaming**: AWS bills the input tokens and everything generated up to the cancellation, but the stream's final usage report never arrives, so nothing is recorded for that call. No estimate is substituted.
+- **Client disconnect during streaming**: chat (Converse) streams drain the already-open Bedrock stream on disconnect to still capture the trailing usage event. For InvokeModel streams and image generation jobs, AWS bills the input tokens and everything generated up to the cancellation, but no final usage report arrives, so nothing is recorded for that call. No estimate is substituted.
 - **Rerank queries with more than 100 documents**: AWS bills one search unit per 100 documents; the document count isn't visible at recording time, so one unit per query is recorded.
 - **Reserved capacity pricing**: if a request explicitly asks for AWS's Reserved Capacity service tier, its cost is computed at the standard on-demand rate instead — Reserved Capacity uses a separate monthly-commitment pricing model this app doesn't ingest. Avoid relying on this app's cost figures for Reserved Capacity workloads.
 - Some very new or region-specific models may have no published price anywhere yet — AWS publishes pricing after model availability, sometimes with a delay.

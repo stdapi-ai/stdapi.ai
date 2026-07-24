@@ -157,7 +157,7 @@ Amazon Nova Reel requires a PNG or JPEG matching the video resolution (1280x720)
 </div>
 
 !!! note "Stateless job tracking"
-    The video ID encodes the AWS Bedrock async job reference, so any server instance can serve the retrieve/download/delete calls without shared state. Two consequences: the `prompt` is only echoed in the creation response (not when polling or listing), and a deleted video's job record remains visible until AWS expires it. Listing reads the AWS Bedrock async invocation records of every configured region, so it also needs no server state.
+    The video ID encodes the AWS Bedrock async job reference, so any server instance can serve the retrieve/download/delete calls without shared state. Two consequences: the `prompt` is only echoed in the creation response (not when polling or listing), and a deleted video's job record remains visible until AWS expires it. Listing reads the AWS Bedrock async invocation records of every configured region, so it also needs no server state. If a region is unreachable, listing skips it (logging a request warning) and still returns the jobs from the healthy regions.
 
 ## How It Works
 

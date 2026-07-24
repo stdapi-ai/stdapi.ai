@@ -184,6 +184,7 @@ This section provides a quick reference of all available configuration options. 
 | [`AWS_BEDROCK_REGION_ROUTING_QUOTA_STALE_FACTOR`](#bedrock-region-routing-quota-stale-factor)           | `2`       | Multiplier on max quota backoff to determine when the consecutive-error counter resets                                   |
 | [`AWS_BEDROCK_REGION_ROUTING_UNAVAILABLE_BACKOFF_SECONDS`](#bedrock-region-routing-unavailable-backoff) | `30`      | Seconds to avoid a region after unavailability errors                                                                    |
 | [`AWS_BEDROCK_MAX_RETRIES`](#bedrock-max-retries)                                                       | `9`       | Total retries across all regions per Bedrock invocation; retries cycle through regions in order                          |
+| [`AWS_FAILOVER_MAX_RETRIES`](#failover-max-retries)                                                     | `2`       | SDK retries per candidate region for the multi-region failover services (Polly, Transcribe, Translate, Comprehend)       |
 
 ### :material-layers-triple: Bedrock Mantle
 
@@ -583,6 +584,9 @@ export AWS_S3_FILES_PREFIX=
 :octicons-gear-24: **Default**
 :   `videos/`
 
+:octicons-alert-24: **Requirement**
+:   Must be non-empty, use only S3-safe characters (alphanumerics plus `! _ . * ' ( ) -` per path segment), and end with a trailing `/` — an empty value would widen the ownership check that scopes listing/retrieval to the whole bucket
+
 :octicons-check-circle-24: **Best Practice**
 :   Generated videos persist until deleted through the API — configure an S3 lifecycle rule on this prefix to cap storage costs
 
@@ -824,7 +828,7 @@ export AWS_BEDROCK_REGIONS=us-east-1,us-west-2,eu-west-1
     If any models in the configured regions fail availability checks (not enabled, unauthorized, or missing entitlement/agreement in your AWS account), a warning listing the affected models and per-region issues is logged at startup. Enable the required models in the [AWS Bedrock console](https://console.aws.amazon.com/bedrock/home#/modelaccess) for each configured region.
 
 !!! info "Unreachable Region Tolerance"
-    A configured region that cannot be reached (invalid region for the account, network issue, throttling) does not block startup: it is skipped with an `unreachable_bedrock_regions` warning and its models are served from the remaining regions. The skipped region is retried automatically on the next model list refresh (see [`MODEL_CACHE_SECONDS`](#model-cache-seconds)), so a recovered region rejoins without a restart. Startup only fails when **every** configured region fails — which indicates broken credentials or configuration rather than a regional outage.
+    A configured region that cannot be reached (invalid region for the account, network issue, throttling) does not block startup: it is skipped with an `unreachable_bedrock_regions` warning and its models are served from the remaining regions. The skipped region is retried automatically on the next model list refresh (see [`MODEL_CACHE_SECONDS`](#model-cache-seconds)), so a recovered region rejoins without a restart. Startup only fails when **every** configured region fails, or when **every** per-model availability check errors (e.g. the `bedrock:GetFoundationModelAvailability` permission is denied) — which indicates broken credentials or configuration rather than a regional outage.
 
 #### `AWS_BEDROCK_CROSS_REGION_INFERENCE` { #cross-region-inference }
 
@@ -1029,6 +1033,31 @@ export AWS_BEDROCK_MAX_RETRIES=18
 
 !!! tip "Related setting"
     See [`AWS_BEDROCK_REGION_ROUTING`](#bedrock-region-routing) and [Region Routing](operations_resilience.md) for the full retry and cycling behavior.
+
+#### `AWS_FAILOVER_MAX_RETRIES` { #failover-max-retries }
+
+:octicons-package-24: **Purpose**
+:   Maximum SDK retry attempts per candidate region for the multi-region failover services (Polly, Transcribe, Translate, Comprehend)
+
+:octicons-database-24: **Type**
+:   Integer (must be 0 or greater)
+
+:octicons-gear-24: **Default**
+:   `2`
+
+:octicons-workflow-24: **Behavior**
+:   Only applied when a service has several candidate regions (no explicit region setting): each region attempt uses this reduced retry budget (`2` retries = 3 attempts per region) before failing over, so failover across regions replaces deep in-region retrying. When a service is pinned to a single region, the standard retry budget from [`AWS_BEDROCK_MAX_RETRIES`](#bedrock-max-retries) applies instead.
+
+```bash
+# Default: 2 retries (3 attempts) per candidate region
+export AWS_FAILOVER_MAX_RETRIES=2
+
+# Fail over after a single attempt per region
+export AWS_FAILOVER_MAX_RETRIES=0
+```
+
+!!! tip "Related setting"
+    See [Other AWS Services Failover](operations_resilience.md#other-aws-services-failover) for the full multi-region failover behavior.
 
 #### `AWS_BEDROCK_MANTLE_ENABLED` { #bedrock-mantle-enabled }
 
@@ -2411,6 +2440,9 @@ Configure the base URL paths for OpenAI and Anthropic-compatible API routes.
 :octicons-gear-24: **Default**
 :   `` (empty, routes mounted at root)
 
+:octicons-alert-24: **Requirement**
+:   Empty, or a path starting with `/` with no trailing slash, using only alphanumeric characters and `. _ ~ -` per segment; must differ from `ANTHROPIC_ROUTES_PREFIX` and `COHERE_ROUTES_PREFIX`
+
 :octicons-workflow-24: **Effect**
 :   All OpenAI-compatible endpoints will be mounted under this prefix
 
@@ -2432,6 +2464,9 @@ export OPENAI_ROUTES_PREFIX=/api
 
 :octicons-gear-24: **Default**
 :   `/anthropic`
+
+:octicons-alert-24: **Requirement**
+:   A path starting with `/` with no trailing slash, using only alphanumeric characters and `. _ ~ -` per segment; must differ from `OPENAI_ROUTES_PREFIX` and `COHERE_ROUTES_PREFIX`
 
 :octicons-workflow-24: **Effect**
 :   All Anthropic-compatible endpoints will be mounted under this prefix
@@ -2461,6 +2496,9 @@ export ANTHROPIC_ROUTES_PREFIX=/anthropic
 
 :octicons-gear-24: **Default**
 :   `/cohere`
+
+:octicons-alert-24: **Requirement**
+:   A path starting with `/` with no trailing slash, using only alphanumeric characters and `. _ ~ -` per segment; must differ from `OPENAI_ROUTES_PREFIX` and `ANTHROPIC_ROUTES_PREFIX`
 
 :octicons-workflow-24: **Effect**
 :   All Cohere-compatible endpoints will be mounted under this prefix
@@ -3717,6 +3755,9 @@ export CLOUDWATCH_METRICS=true
 
 :octicons-gear-24: **Default**
 :   `stdapi`
+
+:octicons-alert-24: **Requirement**
+:   1-255 characters, alphanumeric plus `. - _ / # :`, must not start with the reserved `AWS/` prefix
 
 ```bash
 export CLOUDWATCH_METRICS_NAMESPACE=my-app-metrics

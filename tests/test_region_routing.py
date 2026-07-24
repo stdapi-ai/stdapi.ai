@@ -8,7 +8,7 @@ REGION_ROUTER copies, and inject fresh no-retry clients for AioStubber.
 from contextlib import AsyncExitStack, asynccontextmanager, contextmanager, suppress
 from dataclasses import dataclass
 from time import monotonic
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1202,6 +1202,101 @@ class TestRouteAndExecute:
 
         assert exc_info.value.status == 400
         assert calls == 1
+
+
+# ---------------------------------------------------------------------------
+# Group 10b — no-retry client warm-up (pure logic, no real AWS)
+# ---------------------------------------------------------------------------
+
+
+class TestNoRetryClientWarmUp:
+    """__aenter__ warms a single-attempt client pool per region-rotated Bedrock service."""
+
+    #: Client creation is fully stubbed: exercises the local implementation only.
+    pytestmark = pytest.mark.local
+
+    @staticmethod
+    def _stub_create_client(
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> dict[tuple[str, str], list[Any]]:
+        """Stub client creation and record the configs passed per (service, region)."""
+        import stdapi.aws as _aws_mod  # noqa: PLC0415
+        from stdapi.config import AWS_SESSION, SETTINGS  # noqa: PLC0415
+
+        monkeypatch.setattr(_aws_mod, "_CLIENTS", {})
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_mantle_enabled", False)
+        recorded: dict[tuple[str, str], list[Any]] = {}
+
+        class _FakeClientCM:
+            async def __aenter__(self) -> Self:
+                return self
+
+            async def __aexit__(self, *_exc: object) -> None:
+                return None
+
+        def _fake_create_client(
+            service: str,
+            *,
+            region_name: str,
+            config: Any,  # noqa: ANN401
+        ) -> _FakeClientCM:
+            recorded.setdefault((service, region_name), []).append(config)
+            return _FakeClientCM()
+
+        monkeypatch.setattr(AWS_SESSION, "create_client", _fake_create_client)
+        return recorded
+
+    @pytest.mark.parametrize("service", ["bedrock-runtime", "bedrock-agent-runtime"])
+    async def test_no_retry_pool_built_per_region(
+        self, monkeypatch: pytest.MonkeyPatch, service: str
+    ) -> None:
+        """With routing active, each region gets an extra single-attempt client."""
+        import stdapi.aws as _aws_mod  # noqa: PLC0415
+        from stdapi.config import SETTINGS  # noqa: PLC0415
+
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_region_routing", "ordered")
+        recorded = self._stub_create_client(monkeypatch)
+
+        manager = _aws_mod.AWSConnectionManager(
+            (service, ROUTING_PRIMARY), (service, ROUTING_SECONDARY)
+        )
+        await manager.__aenter__()
+        try:
+            pool = _aws_mod._CLIENTS[f"{service}.no-retry"]  # noqa: SLF001
+            assert set(pool) == set(_ROUTING_REGIONS)
+            for region in _ROUTING_REGIONS:
+                base_config, no_retry_config = recorded[(service, region)]
+                # Identity check: botocore may rewrite the shared retries dict
+                # in place (max_attempts -> total_max_attempts) once a real
+                # client is created with it elsewhere in the session.
+                assert base_config is _aws_mod.CONFIG
+                assert no_retry_config.retries["max_attempts"] == 1
+                base_client = _aws_mod._CLIENTS[service][region]  # noqa: SLF001
+                assert pool[region] is not base_client
+        finally:
+            await manager.__aexit__(None, None, None)
+
+    @pytest.mark.parametrize("service", ["bedrock-runtime", "bedrock-agent-runtime"])
+    async def test_disabled_routing_builds_no_pool(
+        self, monkeypatch: pytest.MonkeyPatch, service: str
+    ) -> None:
+        """With routing disabled, only the full-retry clients are created."""
+        import stdapi.aws as _aws_mod  # noqa: PLC0415
+        from stdapi.config import SETTINGS  # noqa: PLC0415
+
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_region_routing", "disabled")
+        recorded = self._stub_create_client(monkeypatch)
+
+        manager = _aws_mod.AWSConnectionManager(
+            (service, ROUTING_PRIMARY), (service, ROUTING_SECONDARY)
+        )
+        await manager.__aenter__()
+        try:
+            assert f"{service}.no-retry" not in _aws_mod._CLIENTS  # noqa: SLF001
+            for region in _ROUTING_REGIONS:
+                assert len(recorded[(service, region)]) == 1
+        finally:
+            await manager.__aexit__(None, None, None)
 
 
 # ---------------------------------------------------------------------------
