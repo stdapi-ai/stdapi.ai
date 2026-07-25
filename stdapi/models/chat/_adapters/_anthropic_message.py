@@ -547,7 +547,7 @@ async def _map_messages(
                         and (cache_control := block.cache_control)
                     ):
                         content.append(_build_cache_point(cache_control))
-        result.append({"role": msg.role, "content": content})  # type: ignore[typeddict-item]
+        result.append({"role": msg.role, "content": content})
     return result
 
 
