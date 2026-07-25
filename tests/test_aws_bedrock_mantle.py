@@ -21,18 +21,22 @@ from aiohttp import ClientError as AiohttpClientError
 from aiohttp.http_exceptions import LineTooLong
 from pydantic import BaseModel, ConfigDict, ValidationError
 from sse_starlette import EventSourceResponse, ServerSentEvent
+from starlette.datastructures import Headers
 
 from stdapi import aws_bedrock_mantle
 from stdapi import models as stdapi_models
 from stdapi.api_errors import ApiError
 from stdapi.aws_bedrock_mantle import (
     API_PATHS,
+    MANTLE_PROJECT_VAR,
     MantleApiUnsupportedError,
     MantleError,
     MantleSurfaceUnsupportedError,
     _map_error,
     decode_mantle_response_id,
     encode_mantle_response_id,
+    mantle_request_headers,
+    set_mantle_project,
     usage_from_chat_completion,
     usage_from_message,
     usage_from_response,
@@ -3167,3 +3171,83 @@ class TestServeValidatedBillingService:
         await model._serve_validated("chat_completions", {"messages": []})  # noqa: SLF001
         assert records[0]["service"] is Service.BEDROCK_MANTLE
         assert records[0]["tier"] == "priority"
+
+
+class TestMantleProject:
+    """Mantle project/workspace selection and outbound header injection (offline)."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_project(self) -> Iterator[None]:
+        """Reset the request-scoped Mantle project var around each test."""
+        token = MANTLE_PROJECT_VAR.set("")
+        yield
+        MANTLE_PROJECT_VAR.reset(token)
+
+    def test_headers_messages_keep_version_without_project(self) -> None:
+        """Messages headers keep anthropic-version and omit the project when unset."""
+        assert mantle_request_headers("messages") == {"anthropic-version": "2023-06-01"}
+
+    def test_headers_openai_none_without_project(self) -> None:
+        """OpenAI-compatible calls send no headers when no project is selected."""
+        assert mantle_request_headers("chat_completions") is None
+        assert mantle_request_headers("responses") is None
+
+    def test_headers_inject_project_per_api(self) -> None:
+        """The project is sent as anthropic-workspace on Messages, OpenAI-Project otherwise."""
+        MANTLE_PROJECT_VAR.set("proj_abc123")
+        assert mantle_request_headers("messages") == {
+            "anthropic-version": "2023-06-01",
+            "anthropic-workspace": "proj_abc123",
+        }
+        assert mantle_request_headers("responses") == {"OpenAI-Project": "proj_abc123"}
+        assert mantle_request_headers("chat_completions") == {
+            "OpenAI-Project": "proj_abc123"
+        }
+
+    def test_default_project_used_without_header(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The configured default project is selected when the request sends no header."""
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_mantle_project", "proj_default1")
+        set_mantle_project(Headers({}))
+        assert MANTLE_PROJECT_VAR.get() == "proj_default1"
+
+    def test_header_override_honored_when_allowed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A request header overrides the default project when override is enabled."""
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_mantle_project", "proj_default1")
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_allow_mantle_project_override", True)
+        set_mantle_project(Headers({"OpenAI-Project": "proj_req9"}))
+        assert MANTLE_PROJECT_VAR.get() == "proj_req9"
+
+    def test_header_ignored_when_override_disabled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A request header is ignored when override is disabled and a default is set."""
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_mantle_project", "proj_default1")
+        monkeypatch.setattr(
+            SETTINGS, "aws_bedrock_allow_mantle_project_override", False
+        )
+        set_mantle_project(Headers({"anthropic-workspace": "proj_req9"}))
+        assert MANTLE_PROJECT_VAR.get() == "proj_default1"
+
+    def test_header_honored_without_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A request header is always honored when no default project is configured."""
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_mantle_project", None)
+        monkeypatch.setattr(
+            SETTINGS, "aws_bedrock_allow_mantle_project_override", False
+        )
+        set_mantle_project(Headers({"anthropic-workspace": "proj_req9"}))
+        assert MANTLE_PROJECT_VAR.get() == "proj_req9"
+
+    def test_malformed_request_project_rejected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A malformed request-supplied project identifier raises a 400 error."""
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_mantle_project", None)
+        with pytest.raises(ApiError) as exc:
+            set_mantle_project(Headers({"OpenAI-Project": "bad id!"}))
+        assert exc.value.status == 400

@@ -195,6 +195,8 @@ This section provides a quick reference of all available configuration options. 
 | [`AWS_BEDROCK_MANTLE_ENDPOINT_URL`](#bedrock-mantle-endpoint-url)           | None                  | Override the Bedrock Mantle endpoint URL template (`{region}` placeholder)                           |
 | [`AWS_BEDROCK_MANTLE_PREFERRED_MODELS`](#bedrock-mantle-preferred-models)   | `[]`                  | Model IDs served via Mantle even when also available on the classic bedrock-runtime endpoint         |
 | [`AWS_BEDROCK_MANTLE_SERVICE_HEADER`](#bedrock-mantle-service-header)       | `false`               | Honor the `x-stdapi-service: bedrock-mantle` request header to route dual-homed models through Mantle per request |
+| [`AWS_BEDROCK_MANTLE_PROJECT`](#bedrock-mantle-project)                     | None                  | Default Bedrock Project/Workspace ID applied to Mantle requests for cost tracking and observability  |
+| [`AWS_BEDROCK_ALLOW_MANTLE_PROJECT_OVERRIDE`](#bedrock-allow-mantle-project-override) | `false`     | Allow requests to override the configured Mantle project via the `OpenAI-Project` / `anthropic-workspace` header |
 
 ### :material-shield-check: Bedrock Advanced
 
@@ -1160,6 +1162,48 @@ export AWS_BEDROCK_MANTLE_SERVICE_HEADER=true
 
 !!! warning "Incompatible with Bedrock Guardrails"
     Requires [`AWS_BEDROCK_MANTLE_ENABLED`](#bedrock-mantle-enabled) and cannot be enabled together with Amazon Bedrock Guardrails: guardrails do not apply to Mantle-served requests, so a per-request header would allow clients to bypass them.
+
+#### `AWS_BEDROCK_MANTLE_PROJECT` { #bedrock-mantle-project }
+
+:octicons-package-24: **Purpose**
+:   Default Amazon Bedrock Project/Workspace ID attributed to Bedrock Mantle inference requests for cost tracking and observability
+
+:octicons-database-24: **Type**
+:   String — a bare project ID (e.g. `proj_abc123` or `default`), not an ARN
+
+:octicons-gear-24: **Default**
+:   None (requests fall to the account's `default` project)
+
+:octicons-workflow-24: **Behavior**
+:   Bedrock Projects (OpenAI-compatible APIs) and Workspaces (Anthropic Messages API) are the same underlying resource; the value is sent as the `OpenAI-Project` header on the Chat Completions and Responses APIs, and as the `anthropic-workspace` header on the Anthropic Messages API. When unset, requests fall to the account's `default` project — no failure.
+
+```bash
+export AWS_BEDROCK_MANTLE_PROJECT=proj_abc123
+```
+
+!!! note "Bedrock Mantle only"
+    Project/Workspace attribution is honored **only** for models served by the Amazon Bedrock Mantle endpoint. Classic `bedrock-runtime` (non-Mantle) models ignore it and use application inference profiles instead.
+
+#### `AWS_BEDROCK_ALLOW_MANTLE_PROJECT_OVERRIDE` { #bedrock-allow-mantle-project-override }
+
+:octicons-package-24: **Purpose**
+:   Allow a request to override the configured Mantle project via the `OpenAI-Project` / `anthropic-workspace` header
+
+:octicons-database-24: **Type**
+:   Boolean
+
+:octicons-gear-24: **Default**
+:   `false`
+
+:octicons-workflow-24: **Behavior**
+:   When `true`, a request may set its own project through the `OpenAI-Project` (Chat Completions, Responses) or `anthropic-workspace` (Anthropic Messages) header. When `false` **and** [`AWS_BEDROCK_MANTLE_PROJECT`](#bedrock-mantle-project) is configured, the request header is ignored and the server default applies. When **no** default project is configured, the request header is always honored regardless of this flag. A malformed request-supplied project ID returns `400`.
+
+```bash
+export AWS_BEDROCK_ALLOW_MANTLE_PROJECT_OVERRIDE=true
+```
+
+!!! note "Bedrock Mantle only"
+    These headers apply **only** to models served by the Amazon Bedrock Mantle endpoint; classic `bedrock-runtime` models ignore them.
 
 #### `AWS_BEDROCK_MODEL_REGION_RESTRICT` { #bedrock-model-region-restrict }
 

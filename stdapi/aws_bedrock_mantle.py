@@ -18,6 +18,7 @@ from binascii import Error as Base32Error
 from binascii import crc32
 from collections.abc import Mapping
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from json import JSONDecodeError, dumps, loads
 from random import uniform
 from re import compile as compile_regex
@@ -41,6 +42,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
 
     from aiohttp import ClientResponse
+    from starlette.datastructures import Headers
     from types_aiobotocore_bedrock.literals import RegionName
 
 #: OpenAI-shaped routing surface: legacy catalog vs newer Mantle-only models.
@@ -72,6 +74,69 @@ API_PATHS: dict[MantleApi, str] = {
 
 #: Anthropic version header required by the Mantle Messages API.
 MESSAGES_API_HEADERS = {"anthropic-version": "2023-06-01"}
+
+#: OpenAI-compatible header selecting the Mantle project (cost/usage attribution).
+_OPENAI_PROJECT_HEADER = "OpenAI-Project"
+
+#: Anthropic Messages header selecting the Mantle workspace (same project ID).
+_ANTHROPIC_WORKSPACE_HEADER = "anthropic-workspace"
+
+#: Selected Mantle project/workspace ID for the current request.
+MANTLE_PROJECT_VAR: ContextVar[str] = ContextVar("mantle_project", default="")
+
+#: Valid Mantle project/workspace identifier ("default" or "proj_...").
+_PROJECT_ID_RE = compile_regex(r"^(?:default|proj_[A-Za-z0-9]+)$")
+
+
+def set_mantle_project(headers: Headers) -> None:
+    """Select the Mantle project/workspace for the current request.
+
+    A per-request ``OpenAI-Project`` or ``anthropic-workspace`` header is honored
+    when ``aws_bedrock_allow_mantle_project_override`` is enabled, or whenever no
+    default project is configured; otherwise the configured default is used. The
+    project applies only to models served by the Bedrock Mantle endpoint.
+
+    Args:
+        headers: Incoming request headers.
+
+    Raises:
+        ApiError: If a request-supplied project identifier is malformed.
+    """
+    default = SETTINGS.aws_bedrock_mantle_project
+    value = (
+        headers.get(_OPENAI_PROJECT_HEADER)
+        or headers.get(_ANTHROPIC_WORKSPACE_HEADER)
+        or ""
+    ).strip()
+    if value and (SETTINGS.aws_bedrock_allow_mantle_project_override or not default):
+        if not _PROJECT_ID_RE.match(value):
+            msg = f"Invalid Bedrock Mantle project identifier: {value!r}"
+            raise ApiError(msg)
+        MANTLE_PROJECT_VAR.set(value)
+    elif default:
+        MANTLE_PROJECT_VAR.set(default)
+
+
+def mantle_request_headers(api: MantleApi) -> dict[str, str] | None:
+    """Build outbound headers for a Mantle API call.
+
+    Combines the fixed Messages API version header with the selected project
+    header (``anthropic-workspace`` on Messages, ``OpenAI-Project`` otherwise).
+
+    Args:
+        api: Target Mantle API.
+
+    Returns:
+        Header mapping, or ``None`` when no headers are required.
+    """
+    headers = dict(MESSAGES_API_HEADERS) if api == "messages" else {}
+    if project := MANTLE_PROJECT_VAR.get():
+        header = (
+            _ANTHROPIC_WORKSPACE_HEADER if api == "messages" else _OPENAI_PROJECT_HEADER
+        )
+        headers[header] = project
+    return headers or None
+
 
 #: SigV4 service and host used to presign bearer tokens (shared with bedrock-runtime).
 _TOKEN_HOST = "bedrock.amazonaws.com"  # noqa: S105

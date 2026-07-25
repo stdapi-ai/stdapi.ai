@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends
 
 from stdapi.api_providers.anthropic import TAG_ANTHROPIC
 from stdapi.auth import authenticate
-from stdapi.aws_bedrock_mantle import API_PATHS, MESSAGES_API_HEADERS, invoke
+from stdapi.aws_bedrock_mantle import API_PATHS, invoke, mantle_request_headers
 from stdapi.config import SETTINGS
 from stdapi.models import (
     MANTLE_MODELS,
@@ -94,7 +94,7 @@ async def _count_tokens_via_mantle(
             _MANTLE_COUNT_TOKENS_PATH,
             payload,
             single_region=single_region,
-            headers=MESSAGES_API_HEADERS,
+            headers=mantle_request_headers("messages"),
         )
         return int(result.get("input_tokens", 0))
 

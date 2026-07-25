@@ -141,6 +141,9 @@ Mantle-served requests follow one of three paths, each with its own parameter fi
 | **Converted to Responses**  | OpenAI GPT frontier models; unknown models                                | Dropped silently: `stop`, `seed`, `frequency_penalty`, `presence_penalty`, `logit_bias`, `top_logprobs`, `audio`, `modalities`, `input_audio` content parts, legacy `functions`/`function_call`. Preserved: `metadata`, `safety_identifier`. `n > 1` rejected with `400`. `store` is handled by stdapi.ai only, never forwarded upstream |
 | **Converted to Messages**   | Mantle-only Anthropic Claude models                                       | Same drops and `n > 1` rejection as the Responses conversion, plus: `temperature` clamped to ≤ 1.0; `max_tokens` defaults to `4096` when unset; `reasoning_effort` mapped to Anthropic effort levels; `response_format` `json_object`/`json_schema` not available; `metadata`, `prompt_cache_key`, and `prompt_cache_retention` dropped; `service_tier` forwarded only when `auto` |
 
+!!! note "Project attribution (`OpenAI-Project`)"
+    Mantle requests can be attributed to a Bedrock Project for cost tracking and observability with the `OpenAI-Project: <project-id>` header (a bare project ID such as `proj_abc123`, not an ARN). It is honored per-request only when [`AWS_BEDROCK_ALLOW_MANTLE_PROJECT_OVERRIDE`](operations_configuration.md#bedrock-allow-mantle-project-override) is `true`; otherwise the server default ([`AWS_BEDROCK_MANTLE_PROJECT`](operations_configuration.md#bedrock-mantle-project)) applies. This applies **only** to models served by the Bedrock Mantle endpoint — classic `bedrock-runtime` models ignore the header.
+
 ### Model Name Aliases
 
 This API supports dynamic model name aliases matching official provider APIs. Models like OpenAI and Anthropic provide dynamic aliases in their official APIs—this gateway supports the same model names, automatically resolving them to AWS Bedrock model identifiers.

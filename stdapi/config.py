@@ -432,6 +432,31 @@ class _Settings(BaseSettings):
         ),
     )
 
+    aws_bedrock_mantle_project: str | None = Field(
+        default=None,
+        description=(
+            "Default Amazon Bedrock Mantle project (workspace) ID used to attribute "
+            "Mantle inference requests for cost tracking and observability. Applies "
+            "only to models served by the Bedrock Mantle endpoint.\n\n"
+            "The same project ID is sent as the 'OpenAI-Project' header on the "
+            "OpenAI-compatible APIs and as the 'anthropic-workspace' header on the "
+            "Anthropic Messages API. Use the bare project ID (e.g. 'proj_abc123' or "
+            "'default'), not the ARN. When unset, requests fall to the account's "
+            "default project."
+        ),
+    )
+
+    aws_bedrock_allow_mantle_project_override: bool = Field(
+        default=False,
+        description=(
+            "Allow users to override the configured Bedrock Mantle project at request "
+            "level using the 'OpenAI-Project' or 'anthropic-workspace' header. When "
+            "disabled and a default project is configured, request headers are ignored. "
+            "When no default project is configured, request headers are always honored "
+            "regardless of this setting. Defaults to False."
+        ),
+    )
+
     aws_s3_accepted_buckets: dict[str, RegionName] = Field(
         default={},
         description=(

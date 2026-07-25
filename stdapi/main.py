@@ -39,6 +39,7 @@ from stdapi.aws_bedrock import (
     set_guardrail_configuration,
     set_performance_configuration,
 )
+from stdapi.aws_bedrock_mantle import set_mantle_project
 from stdapi.cleanup import CLEANUPS, run_scheduled_cleanups
 from stdapi.config import SETTINGS
 from stdapi.exceptions import ServerError
@@ -291,6 +292,7 @@ async def _middleware(
         with log_request_event(request) as log:
             set_guardrail_configuration(request.headers)
             set_performance_configuration(request.headers)
+            set_mantle_project(request.headers)
             try:
                 response = await call_next(request)
             except RuntimeError as exc:

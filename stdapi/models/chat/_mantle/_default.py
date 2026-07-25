@@ -17,7 +17,6 @@ from sse_starlette import EventSourceResponse, ServerSentEvent
 from stdapi.api_errors import ApiError
 from stdapi.aws_bedrock_mantle import (
     API_PATHS,
-    MESSAGES_API_HEADERS,
     MantleApiUnsupportedError,
     MantleSurfaceUnsupportedError,
     cache_response_surface,
@@ -25,6 +24,7 @@ from stdapi.aws_bedrock_mantle import (
     encode_mantle_response_id,
     invoke,
     invoke_stream,
+    mantle_request_headers,
     usage_from_chat_completion,
     usage_from_message,
     usage_from_response,
@@ -184,7 +184,7 @@ class ChatModel(ChatModelBase[Any, Any]):
                 demotes the binding and retries with another API).
             MantleError: On other upstream errors.
         """
-        headers = MESSAGES_API_HEADERS if api == "messages" else None
+        headers = mantle_request_headers(api)
         regions = self._mantle_regions(region)
         # route_and_execute only retries across regions when the region
         # router is enabled and there is more than one candidate; otherwise
