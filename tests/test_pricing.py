@@ -40,6 +40,7 @@ from stdapi.pricing import (
     refresh_price_catalog_for_new_models,
     resolve_price,
 )
+from tests.conftest import set_test_price
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Generator, Mapping
@@ -49,6 +50,17 @@ if TYPE_CHECKING:
 
 #: All tests in this module exercise the local implementation in-process.
 pytestmark = pytest.mark.local
+
+
+@pytest.fixture(autouse=True)
+def _reset_catalog_load_carry_state() -> Generator[None]:
+    """Reset partial-load retry/cooldown state so one test can't leak into another."""
+    yield
+    pricing._state.pending_fetch_specs = None  # noqa: SLF001
+    pricing._state.pending_index = {}  # noqa: SLF001
+    pricing._state.pending_claims = {}  # noqa: SLF001
+    pricing._state.unpriced_cooldown = {}  # noqa: SLF001
+    pricing._state.catalog_complete = False  # noqa: SLF001
 
 
 _FIXTURES_DIR = Path(__file__).parent / "fixtures" / "pricing"
@@ -566,18 +578,42 @@ class TestCrossFetchCollisionDetection:
         assert index[self._KEY].amount == Decimal("0.002") / 1000
 
 
-class TestFetchCancellationOnFailure:
-    """One fetch failing must cancel its sibling fetches, not let them run to completion."""
+class TestPartialFetchFailureIsTolerated:
+    """One fetch failing must not cancel or discard its sibling fetches."""
 
-    async def test_sibling_fetch_is_cancelled_after_a_failure(
+    @staticmethod
+    def _bedrock_item(usagetype: str, price: str) -> dict[str, object]:
+        """Build one Bedrock price-list item resolving to a fixed PriceKey."""
+        return _price_item(
+            {
+                "regionCode": "us-east-1",
+                "usagetype": usagetype,
+                "inferenceType": "Input tokens",
+                "model": "Some Model",
+            },
+            unit="1K tokens",
+            price=price,
+        )
+
+    #: The PriceKey both service codes' items below resolve to.
+    _KEY = PriceKey(
+        Service.BEDROCK, "somemodel", "us-east-1", Dimension.INPUT_TOKENS, "standard"
+    )
+
+    async def test_sibling_fetch_completes_and_partial_catalog_is_published(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A slow sibling fetch must be cancelled before it completes."""
+        """A slow, throttled sibling must still complete and its price get published."""
         error_response = {"Error": {"Code": "ThrottlingException", "Message": "x"}}
         completed: list[str] = []
         client = _FakePricingClient(
-            {"AmazonBedrock": [], "AmazonBedrockService": []},
-            delay_by_service_code={"AmazonBedrockService": 0.2},
+            {
+                "AmazonBedrock": [],
+                "AmazonBedrockService": [
+                    self._bedrock_item("USE1-SomeModel-input-tokens", "0.001")
+                ],
+            },
+            delay_by_service_code={"AmazonBedrockService": 0.05},
             raise_by_service_code={
                 "AmazonBedrock": ClientError(error_response, "GetProducts")  # type: ignore[arg-type]
             },
@@ -588,10 +624,73 @@ class TestFetchCancellationOnFailure:
         monkeypatch.setattr(SETTINGS, "cost_price_overrides", {})
         monkeypatch.setattr(pricing._state, "price_index", {})  # noqa: SLF001
 
-        with pytest.raises(ClientError):
-            await pricing._load_price_catalog([])  # noqa: SLF001
+        await pricing._load_price_catalog([])  # noqa: SLF001
 
-        assert "AmazonBedrockService" not in completed
+        # The throttled fetch didn't cancel its slower sibling.
+        assert "AmazonBedrockService" in completed
+        # The sibling's price is published even though AmazonBedrock failed.
+        assert pricing._state.price_index[self._KEY].amount == Decimal("0.001") / 1000  # noqa: SLF001
+
+    async def test_retry_refetches_only_the_failed_pair(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """After a partial failure, only the failed (region, service_code) is queued to retry."""
+        error_response = {"Error": {"Code": "ThrottlingException", "Message": "x"}}
+        client = _FakePricingClient(
+            {"AmazonBedrock": [], "AmazonBedrockService": []},
+            raise_by_service_code={
+                "AmazonBedrock": ClientError(error_response, "GetProducts")  # type: ignore[arg-type]
+            },
+        )
+        monkeypatch.setattr(pricing, "get_client", lambda *_a, **_k: client)
+        monkeypatch.setattr(pricing, "_catalog_regions", lambda: {"us-east-1"})
+        monkeypatch.setattr(SETTINGS, "cost_price_overrides", {})
+        monkeypatch.setattr(pricing._state, "price_index", {})  # noqa: SLF001
+
+        await pricing._load_price_catalog([])  # noqa: SLF001
+
+        assert pricing._state.pending_fetch_specs == [("us-east-1", "AmazonBedrock")]  # noqa: SLF001
+
+    async def test_final_success_after_retry_merges_everything(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Once the previously-failed fetch succeeds, its prices join the earlier successes."""
+        error_response = {"Error": {"Code": "ThrottlingException", "Message": "x"}}
+        completed: list[str] = []
+        raises: dict[str, Exception] = {
+            "AmazonBedrock": ClientError(error_response, "GetProducts")  # type: ignore[arg-type]
+        }
+        client = _FakePricingClient(
+            {
+                "AmazonBedrock": [
+                    self._bedrock_item("USE1-SomeModel-input-tokens", "0.001")
+                ],
+                "AmazonBedrockService": [
+                    self._bedrock_item("USE1-SomeModel-input-tokens", "0.001")
+                ],
+            },
+            raise_by_service_code=raises,
+            completed=completed,
+        )
+        monkeypatch.setattr(pricing, "get_client", lambda *_a, **_k: client)
+        monkeypatch.setattr(pricing, "_catalog_regions", lambda: {"us-east-1"})
+        monkeypatch.setattr(SETTINGS, "cost_price_overrides", {})
+        monkeypatch.setattr(pricing._state, "price_index", {})  # noqa: SLF001
+
+        diagnostics: list[str] = []
+        await pricing._load_price_catalog(diagnostics)  # noqa: SLF001
+        assert pricing._state.pending_fetch_specs == [("us-east-1", "AmazonBedrock")]  # noqa: SLF001
+
+        completed.clear()
+        del raises["AmazonBedrock"]  # AWS throttling clears up.
+        diagnostics = []
+        await pricing._load_price_catalog(diagnostics)  # noqa: SLF001
+
+        # Only the previously-failed pair was refetched, not the already-succeeded one.
+        assert completed == ["AmazonBedrock"]
+        assert pricing._state.pending_fetch_specs is None  # noqa: SLF001
+        assert not any("collision" in d.lower() for d in diagnostics)
+        assert pricing._state.price_index[self._KEY].amount == Decimal("0.001") / 1000  # noqa: SLF001
 
 
 class TestNativeCacheTtl:
@@ -2361,6 +2460,22 @@ class TestParseUnitScale:
         """The leading digit run must multiply the K/M scale, not be discarded."""
         assert parse_unit_scale(unit) == expected_scale
 
+    @pytest.mark.parametrize(
+        ("unit", "expected_scale"),
+        [
+            ("1K tokens", 1000),
+            ("1M", 1_000_000),
+            ("1000 tokens", 1000),
+            ("1 image", 1),
+            ("not a real unit", 1),
+        ],
+    )
+    def test_scale_without_trailing_whitespace_or_km_multiplier(
+        self, unit: str, expected_scale: int
+    ) -> None:
+        """A bare "1M" and a plain numeric multiplier ("1000 tokens") must both parse."""
+        assert parse_unit_scale(unit) == expected_scale
+
 
 class TestNormalizeUsagetypeModel:
     """Model-key extraction from usagetype text for `model`-less price-list rows."""
@@ -2411,6 +2526,28 @@ class TestApplyPriceOverrides:
         assert index[us_key].amount == Decimal("0.000003")
         assert index[eusc_key].currency == "EUR"
         assert index[eusc_key].amount == Decimal("0.000003")
+
+    def test_override_also_resolves_under_bedrock_mantle(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An override must win for Mantle-routed requests too, not just bedrock-runtime."""
+        monkeypatch.setattr(
+            SETTINGS,
+            "cost_price_overrides",
+            {"some-mantle-model": {"input_tokens": 0.5}},
+        )
+        index: dict[PriceKey, Price] = {}
+        _apply_price_overrides(index, {"us-east-1"})
+        monkeypatch.setattr(pricing._state, "price_index", index)  # noqa: SLF001
+        price = resolve_price(
+            Service.BEDROCK_MANTLE,
+            "some-mantle-model",
+            "us-east-1",
+            Dimension.INPUT_TOKENS,
+        )
+        assert price is not None
+        assert price.amount == Decimal("0.5")
+        assert price.currency == "USD"
 
     @pytest.mark.parametrize("bad_price", [float("nan"), float("inf"), -1.0, 0.0])
     def test_non_finite_or_non_positive_price_is_rejected(
@@ -3380,6 +3517,29 @@ class TestRefreshPriceCatalogForNewModels:
         await refresh_price_catalog_for_new_models(["amazon.unreleased-model-v1:0"])
         assert calls == 1
 
+    async def test_no_reload_for_a_permanently_unpriced_model_within_the_cooldown(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A model a completed reload still couldn't price must not retrigger one right away."""
+        monkeypatch.setattr(SETTINGS, "cost_tracking", True)
+        calls = 0
+
+        async def _fake_load(_diagnostics: list[str]) -> None:
+            nonlocal calls
+            calls += 1  # Never actually prices the model -- simulates a dead model ID.
+
+        monkeypatch.setattr(pricing, "_load_price_catalog", _fake_load)
+        await refresh_price_catalog_for_new_models(["amazon.dead-model-v1:0"])
+        assert calls == 1
+
+        # Same permanently-unpriced model reappears -- must not reload again.
+        await refresh_price_catalog_for_new_models(["amazon.dead-model-v1:0"])
+        assert calls == 1
+
+        # A genuinely new, never-seen model must still trigger a reload.
+        await refresh_price_catalog_for_new_models(["amazon.another-new-model-v1:0"])
+        assert calls == 2
+
     async def test_no_reload_when_no_model_ids_given(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -3408,6 +3568,8 @@ class TestStartPriceCatalogBackgroundLoad:
         from stdapi import monitoring  # noqa: PLC0415
 
         written: list[EventLog] = []
+        # Works only because _log_price_catalog_event imports write_log_event at
+        # call time (circular-import workaround); an import move fails loudly here.
         monkeypatch.setattr(monitoring, "write_log_event", written.append)
         return written
 
@@ -3556,6 +3718,126 @@ class TestStartPriceCatalogBackgroundLoad:
         assert task.cancelled()
         (event,) = events
         assert event["level"] == "error"
+
+    async def test_second_start_keeps_the_first_task(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A duplicate start_price_catalog call must not replace the running task."""
+        monkeypatch.setattr(SETTINGS, "cost_tracking", True)
+        started = asyncio.Event()
+
+        async def _load(_diagnostics: list[str]) -> None:
+            started.set()
+            await asyncio.sleep(3600)
+
+        monkeypatch.setattr(pricing, "_load_price_catalog", _load)
+        pricing.start_price_catalog()
+        first = pricing._state.load_task  # noqa: SLF001
+        assert first is not None
+        await asyncio.wait_for(started.wait(), timeout=5)
+
+        pricing.start_price_catalog()
+
+        assert pricing._state.load_task is first  # noqa: SLF001
+
+    async def test_backoff_delays_double_and_cap_at_the_maximum(
+        self, monkeypatch: pytest.MonkeyPatch, events: list[EventLog]
+    ) -> None:
+        """Retry delays double from the initial value and cap at the maximum."""
+        monkeypatch.setattr(SETTINGS, "cost_tracking", True)
+        real_sleep = asyncio.sleep  # Captured before the monkeypatch below.
+        delays: list[float] = []
+
+        async def _sleep(delay: float) -> None:
+            delays.append(delay)
+            await real_sleep(0)
+
+        monkeypatch.setattr(asyncio, "sleep", _sleep)
+        attempts = 0
+
+        async def _load(_diagnostics: list[str]) -> None:
+            nonlocal attempts
+            attempts += 1
+            if attempts <= 6:
+                error_response = {"Error": {"Code": "Throttling", "Message": "x"}}
+                raise ClientError(error_response, "GetProducts")  # type: ignore[arg-type]
+
+        monkeypatch.setattr(pricing, "_load_price_catalog", _load)
+        pricing.start_price_catalog()
+        task = pricing._state.load_task  # noqa: SLF001
+        assert task is not None
+        await asyncio.wait_for(task, timeout=5)
+
+        assert delays == [60, 120, 240, 480, 900, 900]
+        assert attempts == 7
+        assert events[-1]["level"] == "info"
+
+    async def test_shutdown_error_event_has_no_execution_time(
+        self, events: list[EventLog]
+    ) -> None:
+        """A task that already failed is logged at shutdown without execution_time_ms."""
+
+        async def _boom() -> None:
+            msg = "boom"
+            raise RuntimeError(msg)
+
+        task = asyncio.get_running_loop().create_task(_boom())
+        await asyncio.sleep(0)  # Let the task finish before shutdown handles it.
+        assert task.done()
+        pricing._state.load_task = task  # noqa: SLF001
+
+        await pricing.stop_price_catalog()  # Must not raise.
+
+        assert pricing._state.load_task is None  # noqa: SLF001
+        (event,) = events
+        assert event["level"] == "error"
+        assert "raised during shutdown" in str(event["error_detail"])
+        assert "execution_time_ms" not in event
+
+    async def test_backoff_exits_when_a_refresh_completed_the_catalog(
+        self, monkeypatch: pytest.MonkeyPatch, events: list[EventLog]
+    ) -> None:
+        """The loop must not reload after an on-demand refresh completed the catalog."""
+        monkeypatch.setattr(SETTINGS, "cost_tracking", True)
+        error_response = {"Error": {"Code": "ThrottlingException", "Message": "x"}}
+        client = _FakePricingClient(
+            {"AmazonBedrock": [], "AmazonBedrockService": []},
+            raise_by_service_code={
+                "AmazonBedrock": ClientError(error_response, "GetProducts")  # type: ignore[arg-type]
+            },
+        )
+        monkeypatch.setattr(pricing, "get_client", lambda *_a, **_k: client)
+        monkeypatch.setattr(pricing, "_catalog_regions", lambda: {"us-east-1"})
+        monkeypatch.setattr(SETTINGS, "cost_price_overrides", {})
+        monkeypatch.setattr(pricing._state, "price_index", {})  # noqa: SLF001
+
+        real_load = pricing._load_price_catalog  # noqa: SLF001
+        load_calls = 0
+
+        async def _counting_load(diagnostics: list[str]) -> None:
+            nonlocal load_calls
+            load_calls += 1
+            await real_load(diagnostics)
+
+        monkeypatch.setattr(pricing, "_load_price_catalog", _counting_load)
+        real_sleep = asyncio.sleep  # Captured before the monkeypatch below.
+
+        async def _sleep(_delay: float) -> None:
+            # Simulate refresh_price_catalog_for_new_models finishing the
+            # pending fetches while the retry loop is backing off.
+            pricing._state.catalog_complete = True  # noqa: SLF001
+            pricing._state.pending_fetch_specs = None  # noqa: SLF001
+            await real_sleep(0)
+
+        monkeypatch.setattr(asyncio, "sleep", _sleep)
+        pricing.start_price_catalog()
+        task = pricing._state.load_task  # noqa: SLF001
+        assert task is not None
+        await asyncio.wait_for(task, timeout=5)
+
+        assert load_calls == 1  # The partial-failure load, never re-run.
+        assert [event["level"] for event in events] == ["warning", "info"]
+        assert "already completed" in str(events[-1]["error_detail"])
 
 
 @pytest.mark.expensive
@@ -3825,8 +4107,12 @@ class TestModelPrices:
                 "standard",
             ): Price(Decimal("0.5"), "USD"),
         }
-        for key, price in rows.items():
-            monkeypatch.setitem(pricing._state.price_index, key, price)  # noqa: SLF001
+        # Swap (don't mutate): model_prices caches a per-index grouping by identity.
+        monkeypatch.setattr(
+            pricing._state,  # noqa: SLF001
+            "price_index",
+            {**pricing._state.price_index, **rows},  # noqa: SLF001
+        )
         return rows
 
     def test_returns_only_the_requested_model_sorted(
@@ -3890,3 +4176,62 @@ class TestModelPrices:
         """A model with no indexed rows yields an empty list, not an error."""
         self._seed(monkeypatch)
         assert pricing.model_prices("vendor.unknown-v1:0") == []
+
+
+class TestModelPricesServiceDedupe:
+    """Rows registered under both Bedrock services collapse to one."""
+
+    @staticmethod
+    def _seed_dual(monkeypatch: pytest.MonkeyPatch) -> None:
+        """Seed one identical price under both Bedrock services."""
+        rows = {
+            PriceKey(
+                service, "dualmodel", "us-east-1", Dimension.INPUT_TOKENS, "standard"
+            ): Price(Decimal("0.000002"), "USD")
+            for service in (Service.BEDROCK, Service.BEDROCK_MANTLE)
+        }
+        # Swap (don't mutate): model_prices caches a per-index grouping by identity.
+        monkeypatch.setattr(
+            pricing._state,  # noqa: SLF001
+            "price_index",
+            {**pricing._state.price_index, **rows},  # noqa: SLF001
+        )
+
+    def test_dual_service_rows_collapse_to_one(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A price registered under both services yields a single row."""
+        self._seed_dual(monkeypatch)
+        (row,) = pricing.model_prices("dualmodel")
+        assert row[0].service is Service.BEDROCK
+
+    def test_preferred_service_row_is_kept(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """preferred_service selects which duplicate survives."""
+        self._seed_dual(monkeypatch)
+        (row,) = pricing.model_prices(
+            "dualmodel", preferred_service=Service.BEDROCK_MANTLE
+        )
+        assert row[0].service is Service.BEDROCK_MANTLE
+
+    def test_single_service_row_kept_regardless_of_preference(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A row published under one service only is never dropped."""
+        set_test_price("solomodel", "us-east-1", Dimension.INPUT_TOKENS, "0.01", "USD")
+        (row,) = pricing.model_prices(
+            "solomodel", preferred_service=Service.BEDROCK_MANTLE
+        )
+        assert row[0].service is Service.BEDROCK
+
+
+class TestModelPricesGroupingCache:
+    """The per-model row grouping tracks price-index swaps."""
+
+    def test_prices_seeded_after_a_read_are_visible(self) -> None:
+        """A price added (index swap) after a first read appears in the next."""
+        set_test_price("cachedmodel", "us-east-1", Dimension.INPUT_TOKENS, "1", "USD")
+        assert len(pricing.model_prices("cachedmodel")) == 1
+        set_test_price("cachedmodel", "us-east-1", Dimension.OUTPUT_TOKENS, "2", "USD")
+        assert len(pricing.model_prices("cachedmodel")) == 2

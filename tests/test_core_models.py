@@ -557,8 +557,12 @@ def priced_catalog(api_key: str, monkeypatch: pytest.MonkeyPatch) -> dict[str, s
             "5m",
         ): Price(Decimal("0.00000375"), "USD"),
     }
-    for key, price in rows.items():
-        monkeypatch.setitem(pricing._state.price_index, key, price)  # noqa: SLF001
+    # Swap (don't mutate): model_prices caches a per-index grouping by identity.
+    monkeypatch.setattr(
+        pricing._state,  # noqa: SLF001
+        "price_index",
+        {**pricing._state.price_index, **rows},  # noqa: SLF001
+    )
     return {"Authorization": f"Bearer {api_key}"}
 
 
@@ -892,6 +896,7 @@ class TestModelPricingEndpoint:
             ("dimension", "tokens"),
             ("routing", "fast"),
             ("context", "l"),
+            ("currency", "XXX"),
         ],
     )
     def test_invalid_enumerated_filter_returns_400(
@@ -905,3 +910,60 @@ class TestModelPricingEndpoint:
         )
         assert response.status_code == 400
         assert "Valid values" in str(response.json())
+
+    def test_currency_filter_is_case_insensitive(
+        self, client: TestClient, priced_catalog: dict[str, str]
+    ) -> None:
+        """A lowercase catalog currency is accepted and matches its prices."""
+        response = client.get(
+            "/model_pricing",
+            params={"model": "amazon.pricedmodel-v1:0", "currency": "usd"},
+            headers=priced_catalog,
+        )
+        assert response.status_code == 200
+        (card,) = response.json()
+        assert card["prices"]
+        assert all(row["currency"] == "USD" for row in card["prices"])
+
+    def test_mantle_model_prices_not_duplicated(
+        self,
+        client: TestClient,
+        priced_catalog: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A price registered under both Bedrock services yields one Mantle row."""
+        rows = {
+            PriceKey(
+                service, "mantlemodel", "us-east-1", Dimension.INPUT_TOKENS, "standard"
+            ): Price(Decimal("0.000002"), "USD")
+            for service in (Service.BEDROCK, Service.BEDROCK_MANTLE)
+        }
+        monkeypatch.setattr(
+            pricing._state,  # noqa: SLF001
+            "price_index",
+            {**pricing._state.price_index, **rows},  # noqa: SLF001
+        )
+
+        async def _models() -> dict[str, ModelDetails]:
+            return {
+                "amazon.mantlemodel-v1:0": ModelDetails(
+                    id="amazon.mantlemodel-v1:0",
+                    name="mantlemodel",
+                    provider="Amazon",
+                    service="AWS Bedrock Mantle",
+                    input_modalities=["TEXT"],
+                    output_modalities=["TEXT"],
+                    regions=["us-east-1"],
+                )
+            }
+
+        monkeypatch.setattr(core_models, "get_all_models_details", _models)
+        response = client.get(
+            "/model_pricing",
+            params={"model": "amazon.mantlemodel-v1:0"},
+            headers=priced_catalog,
+        )
+        assert response.status_code == 200
+        (card,) = response.json()
+        assert card["service"] == "bedrock-mantle"
+        assert len(card["prices"]) == 1
