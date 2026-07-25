@@ -45,6 +45,7 @@ import os
 import shutil
 import socket
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -336,10 +337,13 @@ def _stdapi_server_session(request: pytest.FixtureRequest) -> Generator[_ServerH
             del env[key]
     env["API_KEY"] = _STDAPI_TEST_API_KEY
 
+    # Run on this interpreter rather than through "uv run": the wrapper cannot
+    # forward the SIGKILL below to the server it spawned, leaking a listening
+    # process, and it serialises startup on the uv environment lock.
     proc = subprocess.Popen(  # noqa: S603
-        [  # noqa: S607
-            "uv",
-            "run",
+        [
+            sys.executable,
+            "-m",
             "uvicorn",
             "stdapi.main:app",
             "--host",
@@ -370,8 +374,9 @@ def _stdapi_server_session(request: pytest.FixtureRequest) -> Generator[_ServerH
     threading.Thread(target=_stdout_reader, daemon=True).start()
     threading.Thread(target=_stderr_reader, daemon=True).start()
 
-    # Wait up to 30 s for the /health endpoint to respond.
-    deadline = time.monotonic() + 30
+    # Wait for the /health endpoint to respond, allowing for an interpreter
+    # start and a full app init on a machine loaded by the other xdist workers.
+    deadline = time.monotonic() + 60
     healthy = False
     while time.monotonic() < deadline:
         try:
