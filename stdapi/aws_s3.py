@@ -35,13 +35,31 @@ _MULTIPART_COPY_PART_SIZE: Final[int] = 512 * 1024 * 1024
 #: Multipart upload chunk size (8 MiB).
 UPLOAD_CHUNK_SIZE: Final[int] = 8 * 1024 * 1024
 
-#: Reverse bucket → region mapping (includes the default bucket).
-BUCKET_TO_REGION: dict[str, RegionName] = {
-    bucket_name: region
-    for region, bucket_name in SETTINGS.aws_s3_regional_buckets.items()
-}
-if SETTINGS.aws_s3_bucket:
-    BUCKET_TO_REGION.setdefault(SETTINGS.aws_s3_bucket, SETTINGS.aws_bedrock_regions[0])
+
+def _bucket_to_region() -> dict[str, RegionName]:
+    """Build the reverse bucket → region mapping from the settings.
+
+    Returns:
+        Bucket name mapped to its region, covering the regional buckets, the
+        default bucket, and the Transcribe bucket.
+    """
+    mapping: dict[str, RegionName] = {
+        bucket_name: region
+        for region, bucket_name in SETTINGS.aws_s3_regional_buckets.items()
+    }
+    if SETTINGS.aws_s3_bucket:
+        mapping.setdefault(SETTINGS.aws_s3_bucket, SETTINGS.aws_bedrock_regions[0])
+    if SETTINGS.aws_transcribe_s3_bucket:
+        # Existing mappings win: a bucket shared with the above keeps its region.
+        mapping.setdefault(
+            SETTINGS.aws_transcribe_s3_bucket,
+            SETTINGS.aws_transcribe_region or SETTINGS.aws_bedrock_regions[0],
+        )
+    return mapping
+
+
+#: Reverse bucket → region mapping (includes the default and Transcribe buckets).
+BUCKET_TO_REGION: dict[str, RegionName] = _bucket_to_region()
 
 
 @dataclass(slots=True)
