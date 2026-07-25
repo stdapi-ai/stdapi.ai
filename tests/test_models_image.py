@@ -19,12 +19,15 @@ from stdapi.models.image._stability import (
     StabilityImageModelBase,
 )
 from stdapi.models.image.amazon_titan_image_generator import image_spec
+from stdapi.monitoring import REQUEST_ID, REQUEST_LOG
 from stdapi.pricing import Dimension, Price, PriceKey, Service, _state
 from stdapi.usage import IMAGE_SPEC, compute_costs
 from tests.conftest import set_test_price
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Generator
+
+    from stdapi.monitoring import EventLog
 
 
 #: All tests in this module exercise the local implementation in-process.
@@ -119,6 +122,15 @@ class _FakeBody:
 
 class TestInvokeImageBilling:
     """ImageModelBase.invoke(): a stubbed InvokeModel response drives image billing."""
+
+    @pytest.fixture(autouse=True)
+    def _request_context(self) -> Generator[None]:
+        """Provide the request ID and log the invoke request metadata is built from."""
+        id_token = REQUEST_ID.set("img1")
+        log_token = REQUEST_LOG.set(cast("EventLog", {"level": "info"}))
+        yield
+        REQUEST_LOG.reset(log_token)
+        REQUEST_ID.reset(id_token)
 
     async def test_stubbed_invoke_bills_images_by_spec_region_and_price(
         self, monkeypatch: pytest.MonkeyPatch

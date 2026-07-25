@@ -2327,6 +2327,9 @@ async def _build_invoke_kwargs(
         "contentType": "application/json",
         "accept": "application/json",
         "body": to_json(body),
+        # InvokeModel carries the metadata as a JSON string header, unlike
+        # Converse which takes a map.
+        "requestMetadata": to_json(build_metadata()).decode(),
     }
 
     if (guardrail := guardrail or GUARDRAIL_CONFIG_VAR.get(None)) is not None:

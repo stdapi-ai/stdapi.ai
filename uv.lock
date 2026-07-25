@@ -2439,7 +2439,7 @@ dev = [
     { name = "stdapi" },
     { name = "stdapi", extras = ["opentelemetry", "uvicorn"] },
     { name = "stdapi", extras = ["opentelemetry", "uvicorn", "granian", "mcp"] },
-    { name = "types-aiobotocore", extras = ["bedrock", "bedrock-agent-runtime", "bedrock-runtime", "polly", "comprehend", "meteringmarketplace", "pricing", "s3", "sts", "transcribe", "translate"] },
+    { name = "types-aiobotocore", extras = ["bedrock", "bedrock-agent-runtime", "bedrock-runtime", "polly", "comprehend", "meteringmarketplace", "pricing", "s3", "sts", "transcribe", "translate"], specifier = ">=3.8" },
     { name = "types-pyyaml" },
 ]
 docs = [
@@ -2451,7 +2451,7 @@ lint = [
     { name = "mypy" },
     { name = "ruff" },
     { name = "stdapi", extras = ["opentelemetry", "uvicorn"] },
-    { name = "types-aiobotocore", extras = ["bedrock", "bedrock-agent-runtime", "bedrock-runtime", "polly", "comprehend", "meteringmarketplace", "pricing", "s3", "sts", "transcribe", "translate"] },
+    { name = "types-aiobotocore", extras = ["bedrock", "bedrock-agent-runtime", "bedrock-runtime", "polly", "comprehend", "meteringmarketplace", "pricing", "s3", "sts", "transcribe", "translate"], specifier = ">=3.8" },
     { name = "types-pyyaml" },
 ]
 test = [
@@ -2549,14 +2549,14 @@ wheels = [
 
 [[package]]
 name = "types-aiobotocore"
-version = "3.7.0"
+version = "3.8.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "botocore-stubs" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/76/e8/ef1fcb876937dbdddc0f01b5df4ed53f33b166a6367d80a9014d5e5f091d/types_aiobotocore-3.7.0.tar.gz", hash = "sha256:fe35de52c12e5fdb89ca60b3989766e7fe827e3d2e95fcf4583e91581945205c", size = 87992, upload-time = "2026-05-10T03:19:32.353Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7d/45/c64306ebe691707718e5bd9c1ba399aa724f77fca0006ce41d2adfd61b50/types_aiobotocore-3.8.0.tar.gz", hash = "sha256:5caeea9c91a6c37a92aa0b642c318a4c9a746f537bd62fec55d0a3313742d265", size = 88508, upload-time = "2026-07-20T03:11:56.704Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f9/68/0cdfd7df415ee3e769c8e8f9bd8013c64c88cdd7306f72453a02123c58f9/types_aiobotocore-3.7.0-py3-none-any.whl", hash = "sha256:ff4139b3eae22d242b6b39ba56048344b2b86f67daeeca4680da1a6e191681fd", size = 54804, upload-time = "2026-05-10T03:19:29.487Z" },
+    { url = "https://files.pythonhosted.org/packages/e5/31/686c6838ac5564da34d0d76d937e2974b65b3ee0a6ebac6725d179f98e55/types_aiobotocore-3.8.0-py3-none-any.whl", hash = "sha256:6426020e35c3275899b0b3091780bb3f8f04bc79d519d0437ada57b9da5f3130", size = 55007, upload-time = "2026-07-20T03:11:53.262Z" },
 ]
 
 [package.optional-dependencies]
@@ -2596,101 +2596,101 @@ translate = [
 
 [[package]]
 name = "types-aiobotocore-bedrock"
-version = "3.7.0"
+version = "3.8.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/41/ac/258ad630310083369269983a5bcac1894a01429b93f4ecc8b7fcbd5b5deb/types_aiobotocore_bedrock-3.7.0.tar.gz", hash = "sha256:4fecf61969302b1f484d91f3621c0cf0e195631a62040bd16ff6b02596e6c317", size = 63974, upload-time = "2026-05-10T03:11:04.183Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/36/2b/f78b48813047e6c3179b7b5d483dedb89eb1dab9cccff01bb4aa9df29bf1/types_aiobotocore_bedrock-3.8.0.tar.gz", hash = "sha256:c5bc9fd41e4e5adbc4f7a3e67ab9f5cdc039e1cc0972f7923caa49512a4a9eed", size = 67763, upload-time = "2026-07-18T02:42:21.688Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/13/31/33ffe4fde310ff2458fa392f6d342df07ae925cb108451ee7932df05eed0/types_aiobotocore_bedrock-3.7.0-py3-none-any.whl", hash = "sha256:22d994d8561ff15ae451fda9ccd172dec555d72b1ece559feb09e387c3f998e1", size = 72210, upload-time = "2026-05-10T03:11:01.477Z" },
+    { url = "https://files.pythonhosted.org/packages/43/e1/a6a2da665977d86d2e9874f09e70d34f8fea07e1f0a3889818bf23f0a408/types_aiobotocore_bedrock-3.8.0-py3-none-any.whl", hash = "sha256:35e22ab17de4e837841f3bd43b4a36b0622f831de27f9ea1712e2298d7f34026", size = 74742, upload-time = "2026-07-18T02:42:19.534Z" },
 ]
 
 [[package]]
 name = "types-aiobotocore-bedrock-agent-runtime"
-version = "3.7.0"
+version = "3.8.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/4f/96/470857dea043b9f8fe2f55fa73fa0df76050a8a3e2258e57eeeab8d7d08d/types_aiobotocore_bedrock_agent_runtime-3.7.0.tar.gz", hash = "sha256:5c099447b644b04a8ca0f2f5b0f380a77470a29a7f329dba753dcd6869d753c9", size = 42283, upload-time = "2026-05-10T03:10:56.762Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/62/8c/b733a14b1e6c7a3ee5bc8203be96dee00d106f67568bd505e5584d88c33e/types_aiobotocore_bedrock_agent_runtime-3.8.0.tar.gz", hash = "sha256:5ea591cffeb21f23f3d12fa3463bc5b5a676f10a6ec3c92091cb3e4ea9e92e1a", size = 45355, upload-time = "2026-07-18T02:42:16.482Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f8/16/6a0982b0fc9e65606dffd8422f9cfd0fb0466d678bf652bf59e225889414/types_aiobotocore_bedrock_agent_runtime-3.7.0-py3-none-any.whl", hash = "sha256:fb419c88ea07152bd8f7ca71e426454de9edfa5e8c8eb879a922e121463e9ee4", size = 51616, upload-time = "2026-05-10T03:10:54.074Z" },
+    { url = "https://files.pythonhosted.org/packages/7f/be/e193a3b7d9020754e35d90c865ce1242c1d97d8363ef7a6452e9756b986a/types_aiobotocore_bedrock_agent_runtime-3.8.0-py3-none-any.whl", hash = "sha256:c9e08c1dd5abb6c4d1d5c1bfba910806bef954fd6a86b843f50a712a707ed951", size = 54963, upload-time = "2026-07-18T02:42:14.767Z" },
 ]
 
 [[package]]
 name = "types-aiobotocore-bedrock-runtime"
-version = "3.7.0"
+version = "3.8.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/b9/1b/dea1498767bb861fb3ba4f9e46b4ae01809899e38d93b3e5be15a0e27205/types_aiobotocore_bedrock_runtime-3.7.0.tar.gz", hash = "sha256:9ab951a42d223b104e1718030ecd915378985ed2b8ec33f964ccfd4a5437aae3", size = 30060, upload-time = "2026-05-10T03:11:03.572Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/eb/3c/9a91a7f30fd42e59fbe95e41b58ae17dbc5eaaf05cd270c0272173ab635c/types_aiobotocore_bedrock_runtime-3.8.0.tar.gz", hash = "sha256:d13ef9295b4c8e7bac7558098228c88549680f6bceee09ab5e1aa6276405a9d2", size = 31464, upload-time = "2026-07-18T02:42:23.777Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a4/dc/5c8d528b14ccdf1f34315c557d5fe544f99f69e76c518575cf71eea52813/types_aiobotocore_bedrock_runtime-3.7.0-py3-none-any.whl", hash = "sha256:28bd0f552aea01d361ea2b050b9d5335d89c93d879b43fefccb2236303054341", size = 36708, upload-time = "2026-05-10T03:11:02.02Z" },
+    { url = "https://files.pythonhosted.org/packages/30/f4/5cfe1b78b96d2077c196317188f42580a3e9b33371808a3ffe1195c04eae/types_aiobotocore_bedrock_runtime-3.8.0-py3-none-any.whl", hash = "sha256:616f47c73f8452941858c0f9cd6df3814b3cf7e602386881b2349da272018ce0", size = 38158, upload-time = "2026-07-18T02:42:22.103Z" },
 ]
 
 [[package]]
 name = "types-aiobotocore-comprehend"
-version = "3.7.0"
+version = "3.8.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/05/ad/04b85497aec94f0a691e1bccf9f4ca5f7ed88904bc1fc991b3366b15fc05/types_aiobotocore_comprehend-3.7.0.tar.gz", hash = "sha256:148a36abbedb3fbf3e9d3ca766210c94a690ecd31eb2b977db9523f564ed83bf", size = 43690, upload-time = "2026-05-10T03:12:02.355Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/26/54/1669765baca33518d53d85ed3d8af9915b9b810c1e1f8f6f5141307458e3/types_aiobotocore_comprehend-3.8.0.tar.gz", hash = "sha256:b1b1bfc6d21f897cf1efeaf1873885909c57a6cb9d5aa4733b1f47dac50ed9d2", size = 43712, upload-time = "2026-07-18T02:43:14.384Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/58/cc/78cb9bac058e814b973902e05d7c7aa7504da501b757e3389fb11fba56e9/types_aiobotocore_comprehend-3.7.0-py3-none-any.whl", hash = "sha256:7d356853dd8a74c81902b85b3b8e1bff121894db9622a3b75c314e5a6671309f", size = 49487, upload-time = "2026-05-10T03:12:00.011Z" },
+    { url = "https://files.pythonhosted.org/packages/b6/48/866e25caf98ca1705eca2ac44b91ca2183c4e6c04726c994dad68cb3e4b6/types_aiobotocore_comprehend-3.8.0-py3-none-any.whl", hash = "sha256:de102dbd985683b4e03fbf56e45d05d64e282772c5f1da958a322fe4867d8c57", size = 49520, upload-time = "2026-07-18T02:43:12.092Z" },
 ]
 
 [[package]]
 name = "types-aiobotocore-meteringmarketplace"
-version = "3.7.0"
+version = "3.8.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/cf/0f/b0c3a6b3d08406c001d949e84d6504a28e8f0d7bba2b6e57bbf5d8d37697/types_aiobotocore_meteringmarketplace-3.7.0.tar.gz", hash = "sha256:41f5a6912ca141a1af289533a2e563bafb8c64d288d390fdcfbd755fc257c2a0", size = 16273, upload-time = "2026-05-10T03:15:46.553Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e1/28/c50cf149f283ef041a582dd1a199c3377648f3137bad5dab40711f9b7720/types_aiobotocore_meteringmarketplace-3.8.0.tar.gz", hash = "sha256:8cbaa0b8ca158039b1a7b06071f1e42653880818df4349dcaff092b9ac8cbd42", size = 16296, upload-time = "2026-07-18T02:46:51.657Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/03/f8/dfae9c81c61adc63ab7c72723561e9414e71d0f71cf0ef712f9e8f0ea1b6/types_aiobotocore_meteringmarketplace-3.7.0-py3-none-any.whl", hash = "sha256:81150075aaed12170c3bd74301ea6e5e0e7eba95580e9c2b8b60393eaee24c76", size = 20622, upload-time = "2026-05-10T03:15:43.537Z" },
+    { url = "https://files.pythonhosted.org/packages/6a/9f/93dc23c68d30c31665a2b3141d83b3569da6a96b9c7ce74e29da20bcef2b/types_aiobotocore_meteringmarketplace-3.8.0-py3-none-any.whl", hash = "sha256:c39ccfb77e7b3bafb5e6c7a7957d1b84660010836a0fd5008684bac4e3aff82a", size = 20648, upload-time = "2026-07-18T02:46:50.29Z" },
 ]
 
 [[package]]
 name = "types-aiobotocore-polly"
-version = "3.7.0"
+version = "3.8.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/f9/91/f1aa4decfab91c138b35ebdde2b4a7a00974e1567bd79a4f102cf3c5dfcf/types_aiobotocore_polly-3.7.0.tar.gz", hash = "sha256:3ecfe0489c2800c5f534df7ad6e48ce52c5ede13107b0949827ec0db3c180a2b", size = 19823, upload-time = "2026-05-10T03:16:51.081Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/48/c0/eb5fc0af43a927f4fa9d28964700f89144615b72d05f8bd1ff42d7f96992/types_aiobotocore_polly-3.8.0.tar.gz", hash = "sha256:625b29fcc448c37a02876d50529d3ff13ceac0a9809a8ef1c5c541f2dee23424", size = 19850, upload-time = "2026-07-19T02:49:39.546Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/fc/fd/1ad1f9edfd19df3f58e350afdf44b14a006e1526d78d6145369ce21bd0bd/types_aiobotocore_polly-3.7.0-py3-none-any.whl", hash = "sha256:940514a2083ca48a1cb68187a89e5d44f42dd47fb7ffec5d6ac34660bfa2e1b4", size = 27539, upload-time = "2026-05-10T03:16:49.724Z" },
+    { url = "https://files.pythonhosted.org/packages/f6/44/c7c0129369246d55c067f1bf320fe15fb5bc6b45b9d65928ebb46f2ff669/types_aiobotocore_polly-3.8.0-py3-none-any.whl", hash = "sha256:3ba2475fa98c1a7191ac1032ff283940444576c394046e7f6eb6a2ccb80de9c6", size = 27572, upload-time = "2026-07-19T02:49:37.608Z" },
 ]
 
 [[package]]
 name = "types-aiobotocore-pricing"
-version = "3.7.0"
+version = "3.8.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/72/9e/4cb01b8ea4cde6bb70225cfc4eeb753b43412b7c5b13e0b84b1d048e78e0/types_aiobotocore_pricing-3.7.0.tar.gz", hash = "sha256:4bed37523bb183e3dd27379d07791b0c7c410b724aadd4d188e5ed718da46df4", size = 17367, upload-time = "2026-05-10T03:16:53.48Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/21/c7/5d8471755e63049cdf5f096664f4c7578c0a659bf92abe9d4a2cbee686ba/types_aiobotocore_pricing-3.8.0.tar.gz", hash = "sha256:d14602cf41dd5e4c9c624fb0d84e07fc056b196685a50f78bad5f20627a234ee", size = 17374, upload-time = "2026-07-19T02:49:41.637Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/16/18/65c95829604885b83766c644a3c1bf9555a10f85b003f5ead83e6903862c/types_aiobotocore_pricing-3.7.0-py3-none-any.whl", hash = "sha256:32a0ab459ad5fde19fd78c2ad382109ffed21c63d04c33fe3a298afb832cde71", size = 23087, upload-time = "2026-05-10T03:16:51.796Z" },
+    { url = "https://files.pythonhosted.org/packages/ed/8e/d77376482805a43ac5610fa9a564673a8526b4704279d39f37d6487c937f/types_aiobotocore_pricing-3.8.0-py3-none-any.whl", hash = "sha256:5ef87e12f237b1a5c7c6cd24d3c077c0ec3a92f4bac4514c6f36e77f4221ace0", size = 23117, upload-time = "2026-07-19T02:49:40.095Z" },
 ]
 
 [[package]]
 name = "types-aiobotocore-s3"
-version = "3.7.0"
+version = "3.8.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/94/ce/5b7baa06cde79ab5f083f56f060ccd2b60f6249127d70bbb8a37aafbdcd4/types_aiobotocore_s3-3.7.0.tar.gz", hash = "sha256:6ec738853dbba9133707991b98ea4dab19f7c62e02b3cca016e6cd8e3d684576", size = 77662, upload-time = "2026-05-10T03:17:35.088Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/92/ea/005410b12a6458a477b61f8ecf85ad6a4dfb52016f08d4ba320548baf10d/types_aiobotocore_s3-3.8.0.tar.gz", hash = "sha256:45d43768cf576cc7c11097db6c4806c3acc5da8dca0f0e0e13b7589dde8db89a", size = 79466, upload-time = "2026-07-19T02:50:28.092Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e9/ac/67240c3804a3e1c1e8f0f402155d7ed5351faf7a2085136083e5ca3f26b8/types_aiobotocore_s3-3.7.0-py3-none-any.whl", hash = "sha256:5dbb5479ece3e1aceaccac224fc3dd1ab7d912c4457419bd19e88a0a5b3844fc", size = 85450, upload-time = "2026-05-10T03:17:33.061Z" },
+    { url = "https://files.pythonhosted.org/packages/81/83/0d65da7a317e04daf5edf665f08838ec18ea4e5ae4a726a003be70fad693/types_aiobotocore_s3-3.8.0-py3-none-any.whl", hash = "sha256:26f429674644f55bb2d305704bcd9661da36e3a99bbd1015eec7ebc426918bc3", size = 87371, upload-time = "2026-07-19T02:50:26.737Z" },
 ]
 
 [[package]]
 name = "types-aiobotocore-sts"
-version = "3.7.0"
+version = "3.8.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/bd/3e/49ed22a274cb3864a34baaa9ded2858231e70e7a9c77eb62ed26cb08abcc/types_aiobotocore_sts-3.7.0.tar.gz", hash = "sha256:a57109e50ba1e355c25fe4392c5b818774a9883fdce3fd385126bb4144413b3b", size = 16931, upload-time = "2026-05-10T03:18:44.529Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b5/33/d1c27067180e097382aa2622ce4f6dc5455ecee90c4576fbf3b163ad7228/types_aiobotocore_sts-3.8.0.tar.gz", hash = "sha256:0d4d9f64c2f86e51852afca52aa65a6fe60c09b3369b2f38f486b1aa5aadc95b", size = 16962, upload-time = "2026-07-19T02:51:51.699Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d1/7f/9fd8ba04cd694c3ec5cb52c8d466ccb2d2d87590915cd7f561cb3522b398/types_aiobotocore_sts-3.7.0-py3-none-any.whl", hash = "sha256:87e595421844bb7d46fc47c1be6d7e39bb9a9bbbd1d15f0888f72661519657bf", size = 21315, upload-time = "2026-05-10T03:18:41.592Z" },
+    { url = "https://files.pythonhosted.org/packages/35/e3/654d521d79409d7f61ea028d2f70feb1bfcf189494a3775b5fec2b31d4db/types_aiobotocore_sts-3.8.0-py3-none-any.whl", hash = "sha256:efc9fb5117fcaf05c3bc828386ad424ef11599b707ae71f12fc794583c4d4545", size = 21342, upload-time = "2026-07-19T02:51:50.218Z" },
 ]
 
 [[package]]
 name = "types-aiobotocore-transcribe"
-version = "3.7.0"
+version = "3.8.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/8d/87/ba589430f03552c5ac837176395980b0a0a7aa7d8119b6d34de373d9e3de/types_aiobotocore_transcribe-3.7.0.tar.gz", hash = "sha256:bc7e6142fe80311c361db7dfb72d4c52335a0a4c45e6cd2c6ae646ffaf1775df", size = 31149, upload-time = "2026-05-10T03:19:00.468Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f2/0f/fe53099f0d189d5e558fd8e014425609f930491dd3c1e531046da17b9eec/types_aiobotocore_transcribe-3.8.0.tar.gz", hash = "sha256:d662030eb136d53b6038c25fc788f3ba4ec386634bbe14ec1ab56773712110de", size = 31250, upload-time = "2026-07-19T02:52:14.575Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/41/42/3f31a45b823c8fa160d1dac9ef5a186130e32f1b3d9b640b00fdf06ce92d/types_aiobotocore_transcribe-3.7.0-py3-none-any.whl", hash = "sha256:dc2ed60d908f6c6e70a5476e3a6f19e219d565d46e467a988ca71a8b978e9193", size = 36256, upload-time = "2026-05-10T03:18:58.506Z" },
+    { url = "https://files.pythonhosted.org/packages/35/39/9c20ed8d792e07d664d38634c221aa02033040669a48432efd7856a3427c/types_aiobotocore_transcribe-3.8.0-py3-none-any.whl", hash = "sha256:9b6d1fe28359f2e6e07f1a111514a9c25c2a1d21804161d6608114c4393c4907", size = 36383, upload-time = "2026-07-19T02:52:13.326Z" },
 ]
 
 [[package]]
 name = "types-aiobotocore-translate"
-version = "3.7.0"
+version = "3.8.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/0b/bd/27bf0bfeb665a9fc0b10f00521f8b7c85e69aac8336157e73f18d69f5cc0/types_aiobotocore_translate-3.7.0.tar.gz", hash = "sha256:cfa5a547f94d94a4a1cb7ac524e858660f17d0bb8a879e411f97a0336388e6f4", size = 19590, upload-time = "2026-05-10T03:19:03.428Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/3d/28/d71397d0350674cbd8b17ce3fef98d388cb6ba57c5a60a0fceedb4a304c8/types_aiobotocore_translate-3.8.0.tar.gz", hash = "sha256:8fe298e4f986588f9dc9e228e0c6773f66ebc8aa929a6ae851a11296dadc7e31", size = 19609, upload-time = "2026-07-19T02:52:18.692Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/54/8f/3aa4642ba2cfcd7659e2800605ba0398fc742727fc19aba7a3f88bac6ae0/types_aiobotocore_translate-3.7.0-py3-none-any.whl", hash = "sha256:d14bd590e82610d110d639295c16410c702ef6405144cebeb43795905990fb59", size = 27079, upload-time = "2026-05-10T03:19:01.783Z" },
+    { url = "https://files.pythonhosted.org/packages/9a/04/4cbb076e2570a51cd763a3f46b3ffb17a7cbce844ec93bcea575e9095552/types_aiobotocore_translate-3.8.0-py3-none-any.whl", hash = "sha256:dba797152cc889e0370ee7fa2c2051ce09ee92b060d1397c969f16991230fe3e", size = 27110, upload-time = "2026-07-19T02:52:15.73Z" },
 ]
 
 [[package]]
