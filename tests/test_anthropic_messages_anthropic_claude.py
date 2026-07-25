@@ -349,7 +349,8 @@ class TestTextEditorTool:
 
         Multi-turn flow: Claude may view the file one or more times before editing.
         Each view is answered with the file contents until Claude emits an edit command
-        (str_replace, create, or insert) or 5 turns are exhausted.
+        (str_replace, create, or insert) or 5 turns are exhausted.  Forces tool use with
+        ``tool_choice=any``, so a text-only answer cannot end the flow.
 
         Validates:
             - Edit block has ``command`` in ``("str_replace", "create", "insert")``
@@ -370,11 +371,12 @@ class TestTextEditorTool:
         messages: list[dict] = [{"role": "user", "content": user_prompt}]  # type: ignore[type-arg]
 
         for _ in range(5):
-            resp = anthropic_client.messages.create(
+            resp = anthropic_client.messages.create(  # type: ignore[call-overload]
                 model=anthropic_chat_model,
                 max_tokens=4096,
-                messages=messages,  # type: ignore[arg-type]
-                tools=tools,  # type: ignore[arg-type]
+                messages=messages,
+                tools=tools,
+                tool_choice={"type": "any"},
             )
             edit_blocks = [
                 b
@@ -388,10 +390,18 @@ class TestTextEditorTool:
                 assert block.id
                 assert block.name == "str_replace_based_edit_tool"
                 if block.input.get("command") == "str_replace":
-                    # The model may use old_str/new_str (classic) or old_text/new_text (newer)
-                    old_key = "old_str" if "old_str" in block.input else "old_text"
-                    new_key = "new_str" if "new_str" in block.input else "new_text"
-                    assert old_key in block.input
+                    # Naming of the replaced text differs per model generation:
+                    # old_str (classic), old_text or old_string.
+                    old_key = next(
+                        (
+                            key
+                            for key in ("old_str", "old_text", "old_string")
+                            if key in block.input
+                        ),
+                        "",
+                    )
+                    assert old_key, f"No replaced-text key in {block.input}"
+                    new_key = old_key.replace("old", "new", 1)
                     assert new_key in block.input
                     assert block.input[old_key] != block.input[new_key]
                 return
@@ -462,6 +472,7 @@ class TestTextEditorTool:
         """Claude uses the insert command when asked to prepend a line to a file.
 
         Two-turn flow: Claude views the file first, then inserts after receiving content.
+        Forces tool use with ``tool_choice=any``, so a text-only answer cannot end a turn.
 
         Validates:
             - An edit block is emitted with ``command`` in ``{insert, str_replace, create}``
@@ -470,11 +481,12 @@ class TestTextEditorTool:
         tools = [_TEXT_EDITOR_TOOL]
         user_prompt = "Add a module docstring at the top of /tmp/primes.py"
 
-        resp1 = anthropic_client.messages.create(
+        resp1 = anthropic_client.messages.create(  # type: ignore[call-overload]
             model=anthropic_chat_model,
             max_tokens=4096,
             messages=[{"role": "user", "content": user_prompt}],
-            tools=tools,  # type: ignore[arg-type]
+            tools=tools,
+            tool_choice={"type": "any"},
         )
 
         insert_direct = [
@@ -498,7 +510,7 @@ class TestTextEditorTool:
         assert isinstance(view_block, ToolUseBlock)
         assert view_block.id
 
-        resp2 = anthropic_client.messages.create(
+        resp2 = anthropic_client.messages.create(  # type: ignore[call-overload]
             model=anthropic_chat_model,
             max_tokens=4096,
             messages=[
@@ -515,7 +527,8 @@ class TestTextEditorTool:
                     ],
                 },
             ],
-            tools=tools,  # type: ignore[arg-type]
+            tools=tools,
+            tool_choice={"type": "any"},
         )
         edit_blocks = [b for b in resp2.content if isinstance(b, ToolUseBlock)]
         assert edit_blocks, "Claude should emit an edit command"
