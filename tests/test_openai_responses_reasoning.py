@@ -5,6 +5,12 @@ from base64 import urlsafe_b64encode
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 import pytest
+from openai.types.responses.response_content_part_added_event import (
+    ResponseContentPartAddedEvent as SDKResponseContentPartAddedEvent,
+)
+from openai.types.responses.response_content_part_done_event import (
+    ResponseContentPartDoneEvent as SDKResponseContentPartDoneEvent,
+)
 
 from stdapi.models.chat._adapters._openai_responses import (
     decode_reasoning_content,
@@ -283,9 +289,11 @@ class TestReasoningStreaming:
             "response.created",
             "response.in_progress",
             "response.output_item.added",
+            "response.content_part.added",
             "response.reasoning_text.delta",
             "response.reasoning_text.delta",
             "response.reasoning_text.done",
+            "response.content_part.done",
             "response.output_item.done",
             "response.output_item.added",
             "response.content_part.added",
@@ -296,7 +304,9 @@ class TestReasoningStreaming:
             "response.completed",
         ]
         payloads = [_payload(sse) for sse in sses]
-        added, delta_1, delta_2, done_text, done_item = payloads[2:7]
+        added, part_added, delta_1, delta_2, done_text, part_done, done_item = payloads[
+            2:9
+        ]
         assert added["item"] == {
             "id": "resp-1-rs-0",
             "summary": [],
@@ -305,6 +315,15 @@ class TestReasoningStreaming:
             "status": "in_progress",
         }
         assert added["output_index"] == 0
+        for part_event, text in ((part_added, ""), (part_done, "think")):
+            assert part_event["item_id"] == "resp-1-rs-0"
+            assert part_event["output_index"] == 0
+            assert part_event["content_index"] == 0
+            assert part_event["part"] == {"type": "reasoning_text", "text": text}
+        # The raw payloads validate against the openai SDK's own event models,
+        # confirming they match the upstream PartReasoningText content-part shape.
+        SDKResponseContentPartAddedEvent.model_validate(part_added)
+        SDKResponseContentPartDoneEvent.model_validate(part_done)
         for delta, text in ((delta_1, "thi"), (delta_2, "nk")):
             assert delta["item_id"] == "resp-1-rs-0"
             assert delta["output_index"] == 0
@@ -320,8 +339,8 @@ class TestReasoningStreaming:
             [],
         )
         # The message item takes the next output_index.
-        assert payloads[7]["output_index"] == 1
-        assert payloads[7]["item"]["id"] == "resp-1-msg-1"
+        assert payloads[9]["output_index"] == 1
+        assert payloads[9]["item"]["id"] == "resp-1-msg-1"
         # Sequence numbers are strictly increasing from zero.
         sequence_numbers = [payload["sequence_number"] for payload in payloads]
         assert sequence_numbers == list(range(len(payloads)))
@@ -366,9 +385,11 @@ class TestReasoningStreaming:
         sses = await self._collect(
             events, _request(include=["reasoning.encrypted_content"])
         )
-        added, done = _payload(sses[2]), _payload(sses[3])
+        added, done = _payload(sses[2]), _payload(sses[5])
         assert sses[2].event == "response.output_item.added"
-        assert sses[3].event == "response.output_item.done"
+        assert sses[3].event == "response.content_part.added"
+        assert sses[4].event == "response.content_part.done"
+        assert sses[5].event == "response.output_item.done"
         assert added["item"]["type"] == "reasoning"
         assert done["item"]["content"] == []
         assert decode_reasoning_content(done["item"]["encrypted_content"]) == (
@@ -383,8 +404,8 @@ class TestReasoningStreaming:
     async def test_no_encrypted_content_without_include(self) -> None:
         """Streaming omits encrypted_content when include does not ask for it."""
         sses = await self._collect(self._EVENTS, _request())
-        done_item = _payload(sses[6])
-        assert sses[6].event == "response.output_item.done"
+        done_item = _payload(sses[8])
+        assert sses[8].event == "response.output_item.done"
         assert "encrypted_content" not in done_item["item"]
 
 
@@ -498,6 +519,29 @@ class TestReasoningInputRoundTrip:
         item = ResponseReasoningItemInput(id="rs-1", summary=[], type="reasoning")
         messages, _ = await map_input(cast("list[ResponseInputItem]", [item]), None)
         assert messages == []
+
+    async def test_unsigned_replay_without_encrypted_content(self) -> None:
+        """An echoed item with no ``encrypted_content`` maps to an unsigned block.
+
+        Pins current behavior when a client replays a reasoning item that was
+        never requested with ``include=["reasoning.encrypted_content"]``: the
+        resulting ``reasoningText`` block carries no ``signature`` key.
+        Anthropic models may reject unsigned thinking blocks when they are
+        replayed as part of a tool-use continuation; clients should request
+        ``include=["reasoning.encrypted_content"]`` to avoid this.
+        """
+        item = ResponseReasoningItemInput(
+            id="rs-1",
+            summary=[],
+            type="reasoning",
+            content=[ReasoningItemContentInput(text="think", type="reasoning_text")],
+        )
+        messages, _ = await map_input(cast("list[ResponseInputItem]", [item]), None)
+        assert messages[0]["content"] == [
+            {"reasoningContent": {"reasoningText": {"text": "think"}}}
+        ]
+        content_block = messages[0]["content"][0]
+        assert "signature" not in content_block["reasoningContent"]["reasoningText"]
 
 
 #: Bedrock reasoning model used for live tests (Claude extended thinking).

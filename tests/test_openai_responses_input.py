@@ -14,9 +14,12 @@ from stdapi.models.chat._adapters._openai_responses import (
     map_input,
 )
 from stdapi.types.openai_responses import (
+    ApplyPatchCall,
+    ApplyPatchCallOutput,
     CodeInterpreterCallInput,
     CompactionTrigger,
     ComputerCallInput,
+    ComputerCallOutput,
     CustomToolCallInput,
     CustomToolCallOutput,
     FileSearchCallInput,
@@ -24,6 +27,11 @@ from stdapi.types.openai_responses import (
     FunctionCallOutput,
     ImageGenerationCallInput,
     InputTokenCountParams,
+    LocalShellCallInput,
+    LocalShellCallOutputInput,
+    McpApprovalRequestInput,
+    McpCallInput,
+    McpListToolsInput,
     Reasoning,
     ReasoningItemSummary,
     ResponseCreateParams,
@@ -36,8 +44,12 @@ from stdapi.types.openai_responses import (
     ResponseOutputRefusal,
     ResponseReasoningItem,
     ResponseReasoningItemInput,
+    ShellCall,
+    ShellCallOutput,
     ToolChoiceAllowed,
     ToolChoiceTypes,
+    ToolSearchCallInput,
+    ToolSearchOutputInput,
     WebSearchCallInput,
 )
 
@@ -109,6 +121,122 @@ class TestHostedToolItemsParseAndDrop:
                 ComputerCallInput,
             ),
             ({"type": "compaction_trigger"}, CompactionTrigger),
+            (
+                {
+                    "type": "tool_search_call",
+                    "id": "tsc_1",
+                    "arguments": {"query": "cats"},
+                },
+                ToolSearchCallInput,
+            ),
+            (
+                {
+                    "type": "tool_search_output",
+                    "id": "tso_1",
+                    "call_id": "call_1",
+                    "execution": "server",
+                    "status": "completed",
+                    "tools": [{"type": "function", "name": "search"}],
+                },
+                ToolSearchOutputInput,
+            ),
+            (
+                {
+                    "type": "local_shell_call",
+                    "id": "lsc_1",
+                    "call_id": "call_1",
+                    "status": "completed",
+                    "action": {"type": "exec", "command": ["ls"], "env": {}},
+                },
+                LocalShellCallInput,
+            ),
+            (
+                {"type": "local_shell_call_output", "id": "lsc_1", "output": "{}"},
+                LocalShellCallOutputInput,
+            ),
+            (
+                {
+                    "type": "shell_call",
+                    "call_id": "call_1",
+                    "action": {"commands": ["ls"]},
+                },
+                ShellCall,
+            ),
+            (
+                {
+                    "type": "shell_call_output",
+                    "call_id": "call_1",
+                    "output": [
+                        {
+                            "outcome": {"type": "exit", "exit_code": 0},
+                            "stderr": "",
+                            "stdout": "ok",
+                        }
+                    ],
+                },
+                ShellCallOutput,
+            ),
+            (
+                {
+                    "type": "apply_patch_call",
+                    "call_id": "call_1",
+                    "status": "completed",
+                    "operation": {
+                        "type": "create_file",
+                        "path": "a.txt",
+                        "diff": "diff",
+                    },
+                },
+                ApplyPatchCall,
+            ),
+            (
+                {
+                    "type": "apply_patch_call_output",
+                    "call_id": "call_1",
+                    "status": "completed",
+                },
+                ApplyPatchCallOutput,
+            ),
+            (
+                {
+                    "type": "mcp_call",
+                    "id": "mcp_1",
+                    "arguments": "{}",
+                    "name": "tool",
+                    "server_label": "srv",
+                },
+                McpCallInput,
+            ),
+            (
+                {
+                    "type": "mcp_list_tools",
+                    "id": "mlt_1",
+                    "server_label": "srv",
+                    "tools": [{"name": "tool", "input_schema": {}}],
+                },
+                McpListToolsInput,
+            ),
+            (
+                {
+                    "type": "mcp_approval_request",
+                    "id": "mar_1",
+                    "arguments": "{}",
+                    "name": "tool",
+                    "server_label": "srv",
+                },
+                McpApprovalRequestInput,
+            ),
+            (
+                {
+                    "type": "computer_call_output",
+                    "call_id": "call_1",
+                    "output": {
+                        "type": "computer_screenshot",
+                        "image_url": "https://example.com/a.png",
+                    },
+                },
+                ComputerCallOutput,
+            ),
         ],
     )
     async def test_parses_and_is_dropped(

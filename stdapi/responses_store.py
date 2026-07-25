@@ -13,7 +13,7 @@ listings can tell chat completions and responses apart. Sessions live in
 the primary Bedrock region.
 """
 
-from asyncio import gather
+from asyncio import Semaphore, gather
 from contextlib import contextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from operator import itemgetter
@@ -34,7 +34,11 @@ if TYPE_CHECKING:
     from types_aiobotocore_bedrock_agent_runtime.client import (
         AgentsforBedrockRuntimeClient,
     )
-    from types_aiobotocore_bedrock_agent_runtime.type_defs import SessionSummaryTypeDef
+    from types_aiobotocore_bedrock_agent_runtime.type_defs import (
+        InvocationStepSummaryTypeDef,
+        InvocationSummaryTypeDef,
+        SessionSummaryTypeDef,
+    )
 
 #: Regex pattern that a valid stored response ID must match.
 RESPONSE_ID_PATTERN: str = r"^resp-[A-Za-z0-9-]+$"
@@ -48,7 +52,7 @@ type StoredObjectKind = Literal["chat_completion", "response"]
 #: Session tag key holding the stored object kind.
 _KIND_TAG: str = "stdapi-ai.stored-object"
 
-#: Maximum characters per invocation step text block (stays under the payload quota).
+#: Maximum UTF-8 bytes per invocation step text block (stays under the payload quota).
 _CHUNK_SIZE: int = 200_000
 
 #: Maximum sessions scanned when listing stored objects.
@@ -57,14 +61,30 @@ _LIST_SCAN_LIMIT: int = 1_000
 #: Maximum sessions per ListSessions page.
 _LIST_PAGE_SIZE: int = 100
 
+#: Maximum concurrent tag lookups when resolving a page of sessions' kinds.
+_TAG_FETCH_CONCURRENCY: int = 16
+
 #: AWS error code surfaced as a stored-object 404.
 _NOT_FOUND_CODE: str = "ResourceNotFoundException"
+
+#: AWS error codes meaning the identifier cannot name a stored object.
+_IDENTIFIER_ERROR_CODES: frozenset[str] = frozenset(
+    {_NOT_FOUND_CODE, "ValidationException"}
+)
+
+#: EndSession error codes meaning the session need not or cannot be ended (no-op).
+_END_TOLERATED_CODES: frozenset[str] = frozenset(
+    {"ConflictException", "ValidationException"}
+)
 
 #: Cache of session ID to stored-object kind, avoiding repeated tag fetches.
 _KIND_CACHE: dict[str, str] = {}
 
 #: Cache size above which it is cleared, since the kind tag never changes.
 _KIND_CACHE_LIMIT: int = 4_096
+
+#: Sentinel cached value meaning the session has no kind tag (untagged/foreign).
+_UNTAGGED: str = ""
 
 #: AWS error code meaning session storage is not enabled on this server.
 _ACCESS_DENIED_CODE = "AccessDeniedException"
@@ -121,36 +141,37 @@ def _document_kind(document: Mapping[str, Any]) -> StoredObjectKind | None:
 
 
 def _kind_mismatches(document: Mapping[str, Any], kind: StoredObjectKind) -> bool:
-    """Whether *document* declares a stored object kind other than *kind*.
+    """Whether *document* lacks the minimal expected shape for *kind*.
 
-    A document without a recognizable declared kind is never a mismatch, so
-    older documents (from before the kind was tracked) remain loadable.
+    A valid document is a dict with a dict ``"response"`` field whose
+    ``"object"`` sub-field declares exactly *kind*; anything else (a foreign
+    or corrupt document, or one missing the field) is rejected.
 
     Args:
         document: Loaded stored document.
         kind: Expected stored object kind.
 
     Returns:
-        True only when the document declares a kind that differs from *kind*.
+        True unless the document declares exactly the expected kind.
     """
-    declared = _document_kind(document)
-    return declared is not None and declared != kind
+    return _document_kind(document) != kind
 
 
 @contextmanager
 def _not_found_as_404(response_id: str) -> Generator[None]:
-    """Map a ``ResourceNotFoundException`` to the stored-object 404 error.
+    """Map an identifier-lookup error to the stored-object 404 error.
 
     Args:
         response_id: Stored object ID reported in the 404 message.
 
     Raises:
-        ApiError: 404 when the backing Bedrock session does not exist.
+        ApiError: 404 when the backing Bedrock session does not exist or the
+            identifier cannot name one (e.g. it fails AWS's ID validation).
     """
     try:
         yield
     except ClientError as exc:
-        if exc.response["Error"]["Code"] == _NOT_FOUND_CODE:
+        if exc.response["Error"]["Code"] in _IDENTIFIER_ERROR_CODES:
             _not_found(response_id)
         raise
 
@@ -219,14 +240,13 @@ async def _cached_kind_tag(
     Returns:
         The session's kind tag value, or None when untagged.
     """
-    if (cached := _KIND_CACHE.get(session_id)) is not None:
-        return cached
+    if session_id in _KIND_CACHE:
+        return _KIND_CACHE[session_id] or None
     tags = await client.list_tags_for_resource(resourceArn=session_arn)
     session_kind = tags.get("tags", {}).get(_KIND_TAG)
-    if session_kind is not None:
-        if len(_KIND_CACHE) > _KIND_CACHE_LIMIT:
-            _KIND_CACHE.clear()
-        _KIND_CACHE[session_id] = session_kind
+    if len(_KIND_CACHE) > _KIND_CACHE_LIMIT:
+        _KIND_CACHE.clear()
+    _KIND_CACHE[session_id] = session_kind or _UNTAGGED
     return session_kind
 
 
@@ -240,8 +260,9 @@ async def _session_kind_tag_or_none(
         response_id: Stored object ID.
 
     Returns:
-        The session's kind tag, or None when untagged or the session does not
-        exist (the caller's own delete call then surfaces the 404).
+        The session's kind tag, or None when untagged, the session does not
+        exist, or the identifier cannot name one (the caller's own delete
+        call then surfaces the 404).
     """
     session_id = _session_id(response_id)
     with handle_bedrock_client_error():
@@ -249,7 +270,7 @@ async def _session_kind_tag_or_none(
             session = await client.get_session(sessionIdentifier=session_id)
             return await _cached_kind_tag(client, session_id, session["sessionArn"])
         except ClientError as exc:
-            if exc.response["Error"]["Code"] == _NOT_FOUND_CODE:
+            if exc.response["Error"]["Code"] in _IDENTIFIER_ERROR_CODES:
                 return None
             raise
 
@@ -267,12 +288,14 @@ async def list_stored_sessions(kind: StoredObjectKind) -> list[tuple[str, dateti
         Unordered ``(session ID, creation time)`` pairs.
     """
     client = _client()
+    semaphore = Semaphore(_TAG_FETCH_CONCURRENCY)
 
     async def _kind_tag(summary: SessionSummaryTypeDef) -> str | None:
-        """Return the session's cached (or fetched) kind tag value."""
-        return await _cached_kind_tag(
-            client, summary["sessionId"], summary["sessionArn"]
-        )
+        """Return the session's cached (or fetched) kind tag value, bounding concurrency."""
+        async with semaphore:
+            return await _cached_kind_tag(
+                client, summary["sessionId"], summary["sessionArn"]
+            )
 
     sessions: list[tuple[str, datetime]] = []
     scanned = 0
@@ -297,6 +320,29 @@ async def list_stored_sessions(kind: StoredObjectKind) -> list[tuple[str, dateti
     return sessions
 
 
+def _iter_utf8_chunks(data: bytes, limit: int) -> Generator[str]:
+    """Split *data* into UTF-8-decodable chunks of at most *limit* bytes.
+
+    Each boundary backtracks off a UTF-8 continuation byte (at most 3 bytes)
+    so a chunk never splits a multibyte code point.
+
+    Args:
+        data: UTF-8 encoded bytes to split.
+        limit: Maximum bytes per chunk.
+
+    Yields:
+        Each chunk, decoded back to text.
+    """
+    offset = 0
+    length = len(data)
+    while offset < length:
+        end = min(offset + limit, length)
+        while end > offset and end < length and data[end] & 0xC0 == 0x80:
+            end -= 1
+        yield data[offset:end].decode()
+        offset = end
+
+
 async def save_stored_response(response_id: str, document: Mapping[str, Any]) -> None:
     """Write the stored response document into its session.
 
@@ -307,23 +353,25 @@ async def save_stored_response(response_id: str, document: Mapping[str, Any]) ->
     Args:
         response_id: Stored response ID (its session must already exist).
         document: JSON-serializable document to persist.
+
+    Raises:
+        ApiError: Via ``handle_bedrock_client_error``, when the underlying
+            Bedrock call fails with a recognised error code.
     """
     client = _client()
     session_id = _session_id(response_id)
-    data = to_json(document).decode()
+    data = to_json(document)
     start = datetime.now(tz=UTC)
     with handle_bedrock_client_error():
         invocation_id = (await client.create_invocation(sessionIdentifier=session_id))[
             "invocationId"
         ]
-        for index, offset in enumerate(range(0, len(data), _CHUNK_SIZE)):
+        for index, chunk in enumerate(_iter_utf8_chunks(data, _CHUNK_SIZE)):
             await client.put_invocation_step(
                 sessionIdentifier=session_id,
                 invocationIdentifier=invocation_id,
                 invocationStepTime=start + timedelta(seconds=index),
-                payload={
-                    "contentBlocks": [{"text": data[offset : offset + _CHUNK_SIZE]}]
-                },
+                payload={"contentBlocks": [{"text": chunk}]},
             )
 
 
@@ -339,9 +387,10 @@ async def _load_invocation_document(
 
     Returns:
         The parsed document, or None when the invocation has no steps or its
-        payload does not parse as JSON (an interrupted or truncated write).
+        payload does not parse as a JSON object (an interrupted or truncated
+        write, or a foreign session storing something else entirely).
     """
-    steps: list[Any] = []
+    steps: list[InvocationStepSummaryTypeDef] = []
     token: str | None = None
     while True:
         steps_page = await client.list_invocation_steps(
@@ -375,10 +424,10 @@ async def _load_invocation_document(
     if not parts:
         return None
     try:
-        document: dict[str, Any] = from_json("".join(parts))
+        document = from_json("".join(parts))
     except ValueError:
         return None
-    return document
+    return document if isinstance(document, dict) else None
 
 
 async def _stored_document_or_none(response_id: str) -> dict[str, Any] | None:
@@ -395,11 +444,12 @@ async def _stored_document_or_none(response_id: str) -> dict[str, Any] | None:
 
     Returns:
         The persisted document, or None if the backing session does not
-        exist or holds no parseable document.
+        exist, holds no parseable document, or the identifier cannot name a
+        session (e.g. it fails AWS's ID validation).
     """
     client = _client()
     session_id = _session_id(response_id)
-    summaries: list[Any] = []
+    summaries: list[InvocationSummaryTypeDef] = []
     with handle_bedrock_client_error():
         try:
             token: str | None = None
@@ -421,7 +471,7 @@ async def _stored_document_or_none(response_id: str) -> dict[str, Any] | None:
                 if document is not None:
                     return document
         except ClientError as exc:
-            if exc.response["Error"]["Code"] == _NOT_FOUND_CODE:
+            if exc.response["Error"]["Code"] in _IDENTIFIER_ERROR_CODES:
                 return None
             raise
         else:
@@ -441,9 +491,9 @@ async def load_stored_response(
         The persisted document.
 
     Raises:
-        ApiError: 404 when the stored object does not exist, none of its
-            invocations hold a parseable document, or it was stored as a
-            different kind.
+        ApiError: 404 when the stored object does not exist, the identifier
+            is malformed, none of its invocations hold a parseable document,
+            or the document does not declare the expected kind.
     """
     document = await _stored_document_or_none(response_id)
     if document is None or _kind_mismatches(document, kind):
@@ -466,8 +516,8 @@ async def delete_stored_response(response_id: str, kind: StoredObjectKind) -> No
         kind: Expected stored object kind.
 
     Raises:
-        ApiError: 404 when the stored object does not exist or its session
-            is tagged with a different kind.
+        ApiError: 404 when the stored object does not exist, the identifier
+            is malformed, or its session is tagged with a different kind.
     """
     client = _client()
     session_kind = await _session_kind_tag_or_none(client, response_id)
@@ -475,9 +525,13 @@ async def delete_stored_response(response_id: str, kind: StoredObjectKind) -> No
         _not_found(response_id)
     session_id = _session_id(response_id)
     with _not_found_as_404(response_id):
-        with suppress(ClientError):
-            # Sessions must be ended before deletion; tolerate already-ended.
+        try:
+            # Sessions must be ended before deletion; tolerate already-ended
+            # (state errors defer to the delete call, which surfaces real issues).
             await client.end_session(sessionIdentifier=session_id)
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] not in _END_TOLERATED_CODES:
+                raise
         await client.delete_session(sessionIdentifier=session_id)
     _KIND_CACHE.pop(session_id, None)
 

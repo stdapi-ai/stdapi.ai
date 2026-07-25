@@ -1,9 +1,11 @@
 """Tests for the OpenAI-compatible POST /v1/responses/compact route (unit)."""
 
-from base64 import urlsafe_b64decode
+from base64 import urlsafe_b64decode, urlsafe_b64encode
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from openai._models import construct_type
+from openai.types.responses import CompactedResponse as SdkCompactedResponse
 from starlette.testclient import TestClient
 
 from stdapi.api_errors import ApiError
@@ -12,6 +14,7 @@ if TYPE_CHECKING:
     from openai import OpenAI
 from stdapi.models import ModelDetails
 from stdapi.models.chat._adapters._openai_responses import (
+    COMPACTION_CONTENT_PREFIX,
     encode_compaction_content,
     map_input,
 )
@@ -45,6 +48,7 @@ class _StubChatModel:
 
     def __init__(self) -> None:
         self.requests: list[ResponseCreateParams] = []
+        self.usage: ResponseUsage | None = _usage()
 
     async def create_response(
         self, request: ResponseCreateParams, response_id: str, created_at: float
@@ -72,7 +76,7 @@ class _StubChatModel:
             parallel_tool_calls=True,
             tool_choice="auto",
             tools=[],
-            usage=_usage(),
+            usage=self.usage,
         )
 
 
@@ -129,7 +133,9 @@ class TestResponsesCompactRoute:
             {"type": "input_text", "text": "a long conversation"}
         ]
         assert item["type"] == "compaction"
-        assert urlsafe_b64decode(item["encrypted_content"]) == b"THE SUMMARY"
+        assert item["encrypted_content"].startswith(COMPACTION_CONTENT_PREFIX)
+        encoded = item["encrypted_content"].removeprefix(COMPACTION_CONTENT_PREFIX)
+        assert urlsafe_b64decode(encoded) == b"THE SUMMARY"
         assert body["usage"]["total_tokens"] == 18
 
     def test_compact_echoes_only_user_messages_in_order(
@@ -215,7 +221,8 @@ class TestResponsesCompactRoute:
         )
         assert response.status_code == 200, response.text
         (request,) = chat_backend.requests
-        assert request.previous_response_id is None
+        # Restored after the merge, though CompactedResponse has no field to echo it.
+        assert request.previous_response_id == "resp-1"
         assert isinstance(request.input, list)
         first = request.input[0]
         assert isinstance(first, EasyInputMessage | InputMessage)
@@ -228,7 +235,105 @@ class TestResponsesCompactRoute:
         assert "Summarize the conversation" in str(last.content)
         *echoes, item = response.json()["output"]
         assert [echo["content"][0]["text"] for echo in echoes] == ["first", "second"]
+        stored_echo = echoes[0]
+        assert stored_echo["type"] == "message"
+        assert stored_echo["role"] == "user"
         assert item["type"] == "compaction"
+
+    @pytest.mark.parametrize("body_input", [None, []], ids=["omitted", "empty-list"])
+    def test_empty_input_is_rejected(
+        self,
+        client: TestClient,
+        chat_backend: _StubChatModel,
+        body_input: list[Any] | None,
+    ) -> None:
+        """An empty conversation is rejected with 400 before any generation."""
+        body: dict[str, Any] = {"model": "amazon.nova-pro-v1:0"}
+        if body_input is not None:
+            body["input"] = body_input
+        response = client.post("/v1/responses/compact", json=body)
+        assert response.status_code == 400, response.text
+        assert "no conversation to compact" in response.text
+        assert not chat_backend.requests
+
+    def test_generation_parameters_are_forwarded(
+        self, client: TestClient, chat_backend: _StubChatModel
+    ) -> None:
+        """Caching and service-tier parameters reach the generation request."""
+        response = client.post(
+            "/v1/responses/compact",
+            json={
+                "model": "amazon.nova-pro-v1:0",
+                "input": "x",
+                "service_tier": "flex",
+                "prompt_cache_key": "cache-key",
+                "prompt_cache_retention": "24h",
+            },
+        )
+        assert response.status_code == 200, response.text
+        (request,) = chat_backend.requests
+        assert request.service_tier == "flex"
+        assert request.prompt_cache_key == "cache-key"
+        assert request.prompt_cache_retention == "24h"
+
+    def test_missing_usage_falls_back_to_zeros(
+        self, client: TestClient, chat_backend: _StubChatModel
+    ) -> None:
+        """A backend response without usage yields a zeroed usage envelope."""
+        chat_backend.usage = None
+        response = client.post(
+            "/v1/responses/compact",
+            json={"model": "amazon.nova-pro-v1:0", "input": "x"},
+        )
+        assert response.status_code == 200, response.text
+        usage = response.json()["usage"]
+        assert usage["input_tokens"] == 0
+        assert usage["output_tokens"] == 0
+        assert usage["total_tokens"] == 0
+
+    def test_mantle_previous_response_id_is_not_found(
+        self,
+        client: TestClient,
+        chat_backend: _StubChatModel,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A Mantle-stored previous_response_id is rejected with 404."""
+        monkeypatch.setattr(
+            openai_responses,
+            "_decode_mantle_id",
+            lambda _response_id: ("us-east-1", "resp_native123"),
+        )
+        response = client.post(
+            "/v1/responses/compact",
+            json={
+                "model": "amazon.nova-pro-v1:0",
+                "input": "x",
+                "previous_response_id": "resp_native123",
+            },
+        )
+        assert response.status_code == 404, response.text
+        assert "cannot be continued with this model" in response.text
+        assert not chat_backend.requests
+
+    def test_sdk_parses_compaction_envelope(
+        self, client: TestClient, chat_backend: _StubChatModel
+    ) -> None:
+        """The response JSON survives the OpenAI SDK's lenient envelope parse."""
+        response = client.post(
+            "/v1/responses/compact",
+            json={
+                "model": "amazon.nova-pro-v1:0",
+                "input": [{"role": "user", "content": "hi"}],
+            },
+        )
+        assert response.status_code == 200, response.text
+        parsed = construct_type(type_=SdkCompactedResponse, value=response.json())
+        assert isinstance(parsed, SdkCompactedResponse)
+        item = next(part for part in parsed.output if part.type == "compaction")
+        assert item.id
+        assert item.encrypted_content.startswith(COMPACTION_CONTENT_PREFIX)
+        assert parsed.object == "response.compaction"
+        assert parsed.usage.total_tokens == 18
 
     def test_unknown_previous_response_id_is_not_found(
         self,
@@ -266,6 +371,7 @@ class TestCompactionItemRoundTrip:
         """
         summary = "Summary: \xff\xff\xff details preserved."
         encrypted_content = encode_compaction_content(summary)
+        assert encrypted_content.startswith(COMPACTION_CONTENT_PREFIX)
         assert "+" not in encrypted_content
         assert "/" not in encrypted_content
         assert "-" in encrypted_content or "_" in encrypted_content
@@ -280,8 +386,23 @@ class TestCompactionItemRoundTrip:
 
     async def test_invalid_compaction_content_is_rejected(self) -> None:
         """Undecodable compaction content raises a 400 error."""
-        item = CompactionItemParam(encrypted_content="!!!", type="compaction")
-        with pytest.raises(ApiError, match="compaction"):
+        item = CompactionItemParam(
+            encrypted_content=f"{COMPACTION_CONTENT_PREFIX}!!!", type="compaction"
+        )
+        with pytest.raises(ApiError, match="produced by this server"):
+            await map_input([item], None)
+
+    async def test_unmarked_content_is_rejected(self) -> None:
+        """Content without the local marker is rejected even when decodable.
+
+        Upstream ciphertext that happens to be valid base64url of UTF-8 text
+        must not be silently injected as a summary.
+        """
+        item = CompactionItemParam(
+            encrypted_content=urlsafe_b64encode(b"upstream ciphertext").decode(),
+            type="compaction",
+        )
+        with pytest.raises(ApiError, match="produced by this server"):
             await map_input([item], None)
 
 

@@ -1,16 +1,20 @@
 """Tests for stored responses routes and previous_response_id (unit)."""
 
 import contextlib
+from json import loads
 from typing import TYPE_CHECKING, Any
 
 import pytest
 from openai import NotFoundError
 from openai.types.responses import ResponseInputMessageItem, ResponseInputText
+from sse_starlette import EventSourceResponse
 from starlette.testclient import TestClient
 
 from stdapi.api_errors import ApiError
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
     from openai import OpenAI
 from stdapi.models import ModelDetails
 from stdapi.routes import openai_responses
@@ -24,6 +28,27 @@ from stdapi.types.openai_responses import (
     ResponseOutputText,
     ResponseUsage,
 )
+
+
+def _sse_events(text: str) -> list[dict[str, Any]]:
+    """Parse a raw SSE response body into its decoded ``data`` payloads.
+
+    Args:
+        text: Raw ``text/event-stream`` response body.
+
+    Returns:
+        The JSON-decoded payload of each event, in stream order.
+    """
+    events = []
+    for block in text.strip().split("\n\n"):
+        data = "".join(
+            line.removeprefix("data:").strip()
+            for line in block.splitlines()
+            if line.startswith("data:")
+        )
+        if data:
+            events.append(loads(data))
+    return events
 
 
 def _canned_response(response_id: str, model: str) -> Response:
@@ -74,10 +99,26 @@ class _StubChatBackend:
         response_id: str,
         created_at: float,
         moderation_builder: Any = None,  # noqa: ANN401
-    ) -> Response:
-        """Record the request and return a canned response."""
+    ) -> Response | EventSourceResponse:
+        """Record the request and return a canned response.
+
+        When ``request.stream`` is set, mirrors the real backend's behavior
+        of echoing ``request.previous_response_id`` on the SSE response
+        object instead of returning it directly.
+        """
         self.requests.append((request, response_id))
-        return _canned_response(response_id, request.model)
+        response = _canned_response(response_id, request.model)
+        response.previous_response_id = request.previous_response_id
+        if not request.stream:
+            return response
+
+        async def _events() -> AsyncIterator[dict[str, str]]:
+            yield {
+                "event": "response.created",
+                "data": response.model_dump_json(by_alias=True, exclude_none=True),
+            }
+
+        return EventSourceResponse(_events())
 
 
 #: Stored object kind declared by each document ``response.object`` field.
@@ -104,9 +145,9 @@ class _StubStore:
     def _document_or_not_found(self, response_id: str, kind: str) -> dict[str, Any]:
         """Return the stored document, 404ing when absent or of a different kind."""
         document = self.documents.get(response_id)
-        declared = document and _KIND_BY_OBJECT.get(
-            document.get("response", {}).get("object")
-        )
+        declared = None
+        if document is not None and isinstance(document.get("response"), dict):
+            declared = _KIND_BY_OBJECT.get(document["response"].get("object"))
         if document is None or (declared is not None and declared != kind):
             msg = f"Response with id '{response_id}' not found."
             raise ApiError(msg, status=404)
@@ -346,7 +387,8 @@ class TestPreviousResponseId:
         assert response.status_code == 200, response.text
         assert response.json()["previous_response_id"] == "resp-sess-1"
         ((request, _),) = backend.requests
-        assert request.previous_response_id is None
+        # Restored after the merge so streaming SSE events echo it too.
+        assert request.previous_response_id == "resp-sess-1"
         assert request.instructions is None
         assert isinstance(request.input, list)
         assert isinstance(request.input[0], EasyInputMessage)
@@ -358,7 +400,7 @@ class TestPreviousResponseId:
     def test_unknown_previous_response_is_not_found(
         self, client: TestClient, backend: _StubChatBackend, store: _StubStore
     ) -> None:
-        """An unknown previous_response_id surfaces as 404."""
+        """An unknown previous_response_id surfaces as 404 with the upstream wording."""
         response = client.post(
             "/v1/responses",
             json={
@@ -369,6 +411,93 @@ class TestPreviousResponseId:
         )
         assert response.status_code == 404
         assert not backend.requests
+        err = response.json()["error"]
+        assert err["message"] == "Previous response with id 'resp-zzz' not found."
+        assert err["param"] == "previous_response_id"
+
+    def test_arn_injection_previous_response_id_is_not_found(
+        self,
+        client: TestClient,
+        backend: _StubChatBackend,
+        store: _StubStore,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A session-ARN smuggled as previous_response_id is rejected before any store lookup."""
+        calls = 0
+
+        async def _counting_load(_response_id: str, _kind: str) -> dict[str, Any]:
+            nonlocal calls
+            calls += 1
+            return {}
+
+        monkeypatch.setattr(openai_responses, "load_stored_response", _counting_load)
+        arn_id = "resp-arn:aws:bedrock:eu-west-1:123456789012:session/x"
+        response = client.post(
+            "/v1/responses",
+            json={
+                "model": "amazon.nova-micro-v1:0",
+                "input": "x",
+                "previous_response_id": arn_id,
+            },
+        )
+        assert response.status_code == 404
+        assert calls == 0
+        assert not backend.requests
+        err = response.json()["error"]
+        assert err["message"].startswith("Previous response with id")
+        # The ARN is redacted from the client-facing message (defense in depth);
+        # what matters is the store was never asked to resolve it (calls == 0).
+        assert "123456789012" not in err["message"]
+        assert err["param"] == "previous_response_id"
+
+    def test_store_with_previous_response_id_saves_merged_history(
+        self, client: TestClient, backend: _StubChatBackend, store: _StubStore
+    ) -> None:
+        """store=true with previous_response_id saves the merged history and echoes the ID."""
+        store.documents["resp-old"] = {
+            "input": [{"role": "user", "content": "first"}],
+            "response": _canned_response("resp-old", "m").model_dump(
+                mode="json", by_alias=True, exclude_none=True
+            ),
+        }
+        response = client.post(
+            "/v1/responses",
+            json={
+                "model": "amazon.nova-micro-v1:0",
+                "input": "second",
+                "previous_response_id": "resp-old",
+                "store": True,
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["previous_response_id"] == "resp-old"
+        ((_, document),) = store.saved
+        contents = [item.get("content") for item in document["input"]]
+        assert "first" in contents
+        assert "second" in contents
+
+    def test_streaming_continuation_echoes_previous_response_id(
+        self, client: TestClient, backend: _StubChatBackend, store: _StubStore
+    ) -> None:
+        """A streamed continuation's response.created event carries previous_response_id."""
+        store.documents["resp-old"] = {
+            "input": [{"role": "user", "content": "first"}],
+            "response": _canned_response("resp-old", "m").model_dump(
+                mode="json", by_alias=True, exclude_none=True
+            ),
+        }
+        response = client.post(
+            "/v1/responses",
+            json={
+                "model": "amazon.nova-micro-v1:0",
+                "input": "second",
+                "previous_response_id": "resp-old",
+                "stream": True,
+            },
+        )
+        assert response.status_code == 200, response.text
+        (created_event,) = _sse_events(response.text)
+        assert created_event["previous_response_id"] == "resp-old"
 
 
 @pytest.mark.local
@@ -577,6 +706,79 @@ class TestStoredResponseRoutes:
         assert body["data"][0]["type"] == "message"
         assert "phase" not in body["data"][0]
 
+    @pytest.mark.parametrize(
+        "document", [{"response": None}, {}], ids=["null-response", "no-response-key"]
+    )
+    def test_retrieve_malformed_document_is_not_found(
+        self, client: TestClient, store: _StubStore, document: dict[str, Any]
+    ) -> None:
+        """A foreign or corrupt stored document 404s instead of 500ing."""
+        store.documents["resp-sess-1"] = document
+        response = client.get("/v1/responses/resp-sess-1")
+        assert response.status_code == 404
+
+    @pytest.mark.parametrize(
+        "document", [{"response": None}, {}], ids=["null-response", "no-response-key"]
+    )
+    def test_input_items_malformed_document_is_not_found(
+        self, client: TestClient, store: _StubStore, document: dict[str, Any]
+    ) -> None:
+        """A foreign or corrupt stored document 404s the input items listing too."""
+        store.documents["resp-sess-1"] = document
+        response = client.get("/v1/responses/resp-sess-1/input_items")
+        assert response.status_code == 404
+
+    def test_retrieve_rejects_stream_query_param(
+        self, client: TestClient, store: _StubStore
+    ) -> None:
+        """stream=true is rejected: retrieval is never served as an SSE stream."""
+        store.documents["resp-sess-1"] = {
+            "input": "hello",
+            "response": _canned_response("resp-sess-1", "m").model_dump(
+                mode="json", by_alias=True, exclude_none=True
+            ),
+        }
+        response = client.get("/v1/responses/resp-sess-1?stream=true")
+        assert response.status_code == 400
+        assert "stream" in response.json()["error"]["message"]
+
+    def test_retrieve_accepts_and_ignores_include_param(
+        self, client: TestClient, store: _StubStore
+    ) -> None:
+        """Include is accepted for compatibility and does not change the response."""
+        store.documents["resp-sess-1"] = {
+            "input": "hello",
+            "response": _canned_response("resp-sess-1", "m").model_dump(
+                mode="json", by_alias=True, exclude_none=True
+            ),
+        }
+        response = client.get(
+            "/v1/responses/resp-sess-1?include=reasoning.encrypted_content"
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["id"] == "resp-sess-1"
+
+
+@pytest.mark.local
+class TestInvalidResponseIdPattern:
+    """Malformed response IDs are rejected across every {response_id} route."""
+
+    @pytest.mark.parametrize(
+        ("method", "path"),
+        [
+            ("get", "/v1/responses/not-a-response-id"),
+            ("delete", "/v1/responses/not-a-response-id"),
+            ("get", "/v1/responses/not-a-response-id/input_items"),
+        ],
+        ids=["get", "delete", "input_items"],
+    )
+    def test_invalid_id_pattern_is_rejected(
+        self, method: str, path: str, client: TestClient, store: _StubStore
+    ) -> None:
+        """An ID not matching the stored response pattern is rejected with 400."""
+        response = getattr(client, method)(path)
+        assert response.status_code == 400
+
 
 @pytest.mark.local
 class TestCancelResponse:
@@ -666,6 +868,57 @@ class TestUndecodableMantleResponseId:
         assert response.status_code == 404
         assert not backend.requests
         assert not store.saved
+
+
+@pytest.mark.local
+class TestStoredResponseRoutesAuthRejection:
+    """A missing bearer token is rejected with a 401 OpenAI envelope, no store access.
+
+    Uses the session-wide ``test_client`` (lifespan-started, unlike the
+    lifespan-free ``client`` fixture) so the auth handler is actually
+    initialized and able to reject a missing token.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _skip_non_local(self, test_client: TestClient | None) -> None:
+        """Skip when running against a remote server instead of the in-process app."""
+        if not test_client:
+            pytest.skip("Unit test only for local, in-process runs.")
+
+    @pytest.mark.parametrize(
+        ("method", "path"),
+        [
+            ("get", "/v1/responses/resp-sess-1"),
+            ("delete", "/v1/responses/resp-sess-1"),
+            ("get", "/v1/responses/resp-sess-1/input_items"),
+            ("post", "/v1/responses/resp-sess-1/cancel"),
+        ],
+        ids=["retrieve", "delete", "input_items", "cancel"],
+    )
+    def test_missing_bearer_token_is_rejected(
+        self,
+        method: str,
+        path: str,
+        test_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No Authorization header yields 401 without reaching the store layer."""
+        calls: list[str] = []
+
+        async def _counting_load(response_id: str, _kind: str) -> dict[str, Any]:
+            calls.append(response_id)
+            return {"input": "x", "response": {}}
+
+        monkeypatch.setattr(openai_responses, "load_stored_response", _counting_load)
+        response = getattr(test_client, method)(path)
+
+        assert response.status_code == 401
+        body = response.json()
+        assert set(body.keys()) == {"error"}
+        err = body["error"]
+        assert set(err.keys()) == {"message", "type", "param", "code"}
+        assert err["type"] == "authentication_error"
+        assert not calls
 
 
 class TestStoredResponsesLive:

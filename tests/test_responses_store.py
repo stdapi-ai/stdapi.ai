@@ -20,6 +20,12 @@ _NOT_FOUND = ClientError(
     {"Error": {"Code": "ResourceNotFoundException", "Message": "missing"}}, "GetSession"
 )
 
+#: A ValidationException as raised by the AWS client for a malformed identifier.
+_VALIDATION_ERROR = ClientError(
+    {"Error": {"Code": "ValidationException", "Message": "invalid identifier"}},
+    "GetSession",
+)
+
 
 class _StubSessionClient:
     """Stub bedrock-agent-runtime client recording session API calls."""
@@ -211,11 +217,63 @@ class TestStoredResponseSessions:
     ) -> None:
         """A document larger than the chunk size round-trips across steps."""
         monkeypatch.setattr(responses_store, "_CHUNK_SIZE", 10)
-        document = {"response": {"id": "resp-sess-1"}, "input": "x" * 25}
+        document = {
+            "response": {"id": "resp-sess-1", "object": "response"},
+            "input": "x" * 25,
+        }
 
         await responses_store.save_stored_response("resp-sess-1", document)
         steps = [name for name, _ in stub.requests if name == "put_invocation_step"]
         assert len(steps) > 1
+
+        loaded = await responses_store.load_stored_response("resp-sess-1", "response")
+        assert loaded == document
+
+    async def test_save_chunks_by_utf8_bytes_not_characters(
+        self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Multibyte content is chunked by UTF-8 byte count, and round-trips exactly."""
+        monkeypatch.setattr(responses_store, "_CHUNK_SIZE", 10)
+        document = {
+            "response": {"id": "resp-sess-1", "object": "response"},
+            "input": "€" * 20 + "文" * 5,  # 3-byte UTF-8 characters
+        }
+
+        await responses_store.save_stored_response("resp-sess-1", document)
+        chunks = [
+            params["payload"]["contentBlocks"][0]["text"]
+            for name, params in stub.requests
+            if name == "put_invocation_step"
+        ]
+        assert len(chunks) > 1
+        assert all(len(chunk.encode()) <= 10 for chunk in chunks)
+        assert "".join(chunks) == to_json(document).decode()
+
+        loaded = await responses_store.load_stored_response("resp-sess-1", "response")
+        assert loaded == document
+
+    async def test_save_chunk_boundary_at_exact_multiple_of_chunk_size(
+        self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A document byte length that is an exact multiple of the chunk size has no empty trailing chunk."""
+        text = "x"
+        document: dict[str, Any] = {
+            "response": {"id": "resp-sess-1", "object": "response"},
+            "input": text,
+        }
+        while len(to_json(document)) % 3:
+            text += "x"
+            document["input"] = text
+        monkeypatch.setattr(responses_store, "_CHUNK_SIZE", len(to_json(document)) // 3)
+
+        await responses_store.save_stored_response("resp-sess-1", document)
+        chunks = [
+            params["payload"]["contentBlocks"][0]["text"]
+            for name, params in stub.requests
+            if name == "put_invocation_step"
+        ]
+        assert len(chunks) == 3
+        assert all(chunk for chunk in chunks)
 
         loaded = await responses_store.load_stored_response("resp-sess-1", "response")
         assert loaded == document
@@ -225,7 +283,10 @@ class TestStoredResponseSessions:
     ) -> None:
         """Steps from every nextToken page are loaded, in order."""
         monkeypatch.setattr(responses_store, "_CHUNK_SIZE", 10)
-        document = {"response": {"id": "resp-sess-1"}, "input": "z" * 35}
+        document = {
+            "response": {"id": "resp-sess-1", "object": "response"},
+            "input": "z" * 35,
+        }
         await responses_store.save_stored_response("resp-sess-1", document)
 
         real_list_invocation_steps = stub.list_invocation_steps
@@ -252,7 +313,7 @@ class TestStoredResponseSessions:
         self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A session deleted mid-read surfaces as a stored-response 404, not a raw ClientError."""
-        document = {"response": {"id": "resp-sess-1"}}
+        document = {"response": {"id": "resp-sess-1", "object": "response"}}
         await responses_store.save_stored_response("resp-sess-1", document)
 
         async def _vanished(**_params: Any) -> dict[str, Any]:  # noqa: ANN401
@@ -271,6 +332,19 @@ class TestStoredResponseSessions:
         monkeypatch.setattr(responses_store, "get_client", lambda *_: client)
         with pytest.raises(ApiError, match="not found") as exc_info:
             await responses_store.load_stored_response("resp-zzz", "response")
+        assert exc_info.value.status == 404
+
+    async def test_load_malformed_identifier_is_not_found(
+        self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A pattern-valid but AWS-invalid ID (ValidationException) 404s, not 400/500."""
+
+        async def _invalid(**_params: Any) -> dict[str, Any]:  # noqa: ANN401
+            raise _VALIDATION_ERROR
+
+        monkeypatch.setattr(stub, "list_invocations", _invalid)
+        with pytest.raises(ApiError, match="not found") as exc_info:
+            await responses_store.load_stored_response("resp-notauuid", "response")
         assert exc_info.value.status == 404
 
     async def test_load_empty_session_is_not_found(
@@ -297,6 +371,55 @@ class TestStoredResponseSessions:
             "delete_session",
         ]
         assert stub.requests[-1][1] == {"sessionIdentifier": "sess-1"}
+
+    @pytest.mark.parametrize("code", ["ConflictException", "ValidationException"])
+    async def test_delete_tolerates_already_ended_session(
+        self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch, code: str
+    ) -> None:
+        """A state error from EndSession (e.g. already ended) defers to the delete."""
+
+        async def _already_ended(**_params: Any) -> dict[str, Any]:  # noqa: ANN401
+            raise ClientError(
+                {"Error": {"Code": code, "Message": "already ended"}}, "EndSession"
+            )
+
+        monkeypatch.setattr(stub, "end_session", _already_ended)
+        await responses_store.delete_stored_response("resp-sess-1", "response")
+        assert "delete_session" in [name for name, _ in stub.requests]
+
+    async def test_delete_propagates_end_session_throttling(
+        self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A ThrottlingException from EndSession is not swallowed."""
+
+        async def _throttled(**_params: Any) -> dict[str, Any]:  # noqa: ANN401
+            raise ClientError(
+                {"Error": {"Code": "ThrottlingException", "Message": "slow down"}},
+                "EndSession",
+            )
+
+        monkeypatch.setattr(stub, "end_session", _throttled)
+        with pytest.raises(ClientError, match="slow down"):
+            await responses_store.delete_stored_response("resp-sess-1", "response")
+
+    async def test_delete_malformed_identifier_is_not_found(
+        self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A pattern-valid but AWS-invalid ID (ValidationException) 404s on delete.
+
+        The tag lookup tolerates it (as it does a missing session), the end
+        call defers it, and ``delete_session``'s own rejection maps to 404.
+        """
+
+        async def _invalid(**_params: Any) -> dict[str, Any]:  # noqa: ANN401
+            raise _VALIDATION_ERROR
+
+        monkeypatch.setattr(stub, "get_session", _invalid)
+        monkeypatch.setattr(stub, "end_session", _invalid)
+        monkeypatch.setattr(stub, "delete_session", _invalid)
+        with pytest.raises(ApiError, match="not found") as exc_info:
+            await responses_store.delete_stored_response("resp-notauuid", "response")
+        assert exc_info.value.status == 404
 
     async def test_delete_does_not_load_the_full_document(
         self, stub: _StubSessionClient
@@ -334,8 +457,8 @@ class TestStoredResponseSessions:
     ) -> None:
         """Reading picks the invocation with the latest createdAt."""
         documents = {
-            "inv-old": {"response": {"id": "stale"}},
-            "inv-new": {"response": {"id": "fresh"}},
+            "inv-old": {"response": {"id": "stale", "object": "response"}},
+            "inv-new": {"response": {"id": "fresh", "object": "response"}},
         }
 
         class _MultiInvocationClient:
@@ -385,8 +508,8 @@ class TestStoredResponseSessions:
     ) -> None:
         """A newer invocation on a later nextToken page beats a stale first-page one."""
         documents = {
-            "inv-old": {"response": {"id": "stale"}},
-            "inv-new": {"response": {"id": "fresh"}},
+            "inv-old": {"response": {"id": "stale", "object": "response"}},
+            "inv-new": {"response": {"id": "fresh", "object": "response"}},
         }
 
         class _PaginatedInvocationsClient:
@@ -441,7 +564,7 @@ class TestStoredResponseSessions:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """An interrupted update leaving the latest invocation stepless falls back."""
-        documents = {"inv-old": {"response": {"id": "stale"}}}
+        documents = {"inv-old": {"response": {"id": "stale", "object": "response"}}}
 
         class _EmptyLatestClient:
             async def list_invocations(self, **_params: Any) -> dict[str, Any]:  # noqa: ANN401
@@ -496,7 +619,7 @@ class TestStoredResponseSessions:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A truncated/unparsable latest invocation payload falls back to the previous one."""
-        documents = {"inv-old": {"response": {"id": "stale"}}}
+        documents = {"inv-old": {"response": {"id": "stale", "object": "response"}}}
 
         class _CorruptLatestClient:
             async def list_invocations(self, **_params: Any) -> dict[str, Any]:  # noqa: ANN401
@@ -572,14 +695,25 @@ class TestStoredResponseSessions:
             await responses_store.load_stored_response("resp-sess-1", "response")
         assert exc_info.value.status == 404
 
-    async def test_load_tolerates_null_response_field(
+    async def test_load_null_response_field_is_not_found(
         self, stub: _StubSessionClient
     ) -> None:
-        """A document with a null ``response`` field loads without error."""
+        """A document with a null ``response`` field lacks the expected shape and 404s."""
         document = {"response": None, "input": "hello"}
         await responses_store.save_stored_response("resp-sess-1", document)
-        loaded = await responses_store.load_stored_response("resp-sess-1", "response")
-        assert loaded == document
+        with pytest.raises(ApiError, match="not found") as exc_info:
+            await responses_store.load_stored_response("resp-sess-1", "response")
+        assert exc_info.value.status == 404
+
+    async def test_load_foreign_document_without_object_field_is_not_found(
+        self, stub: _StubSessionClient
+    ) -> None:
+        """A foreign session's step text that parses as an unrelated JSON dict 404s."""
+        document = {"unrelated": "data"}
+        await responses_store.save_stored_response("resp-sess-1", document)
+        with pytest.raises(ApiError, match="not found") as exc_info:
+            await responses_store.load_stored_response("resp-sess-1", "response")
+        assert exc_info.value.status == 404
 
     async def test_load_kind_mismatch_is_not_found(
         self, stub: _StubSessionClient
@@ -732,3 +866,91 @@ class TestListStoredSessions:
             name for name, _ in stub.requests if name == "list_tags_for_resource"
         ]
         assert len(tag_calls) == 1
+
+    async def test_second_list_call_does_not_refetch_tags_for_untagged_session(
+        self, stub: _StubSessionClient
+    ) -> None:
+        """A negatively-cached (untagged/foreign) session is not re-fetched either."""
+        stub.sessions = [
+            {
+                "sessionId": "untagged-1",
+                "sessionArn": "arn:untagged-1",
+                "createdAt": datetime(2024, 1, 1, tzinfo=UTC),
+            }
+        ]
+        # No tags configured for "arn:untagged-1": list_tags_for_resource returns {}.
+        await responses_store.list_stored_sessions("response")
+        await responses_store.list_stored_sessions("response")
+        tag_calls = [
+            name for name, _ in stub.requests if name == "list_tags_for_resource"
+        ]
+        assert len(tag_calls) == 1
+
+    async def test_bounded_concurrency_returns_correct_results(
+        self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Bounding concurrent tag lookups does not drop or misattribute any result."""
+        monkeypatch.setattr(responses_store, "_TAG_FETCH_CONCURRENCY", 4)
+        stub.sessions = [
+            {
+                "sessionId": f"sess-{i}",
+                "sessionArn": f"arn:sess-{i}",
+                "createdAt": datetime(2024, 1, 1, tzinfo=UTC),
+            }
+            for i in range(40)
+        ]
+        stub.tags = {
+            f"arn:sess-{i}": {
+                "stdapi-ai.stored-object": "response"
+                if i % 2 == 0
+                else "chat_completion"
+            }
+            for i in range(40)
+        }
+        sessions = await responses_store.list_stored_sessions("response")
+        assert {session_id for session_id, _ in sessions} == {
+            f"sess-{i}" for i in range(40) if i % 2 == 0
+        }
+
+    async def test_list_scan_limit_stops_scanning(
+        self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Scanning stops at `_LIST_SCAN_LIMIT` even when more sessions remain."""
+        monkeypatch.setattr(responses_store, "_LIST_SCAN_LIMIT", 5)
+        monkeypatch.setattr(responses_store, "_LIST_PAGE_SIZE", 2)
+        stub.sessions = [
+            {
+                "sessionId": f"sess-{i}",
+                "sessionArn": f"arn:sess-{i}",
+                "createdAt": datetime(2024, 1, 1, tzinfo=UTC),
+            }
+            for i in range(10)
+        ]
+        stub.tags = {
+            f"arn:sess-{i}": {"stdapi-ai.stored-object": "response"} for i in range(10)
+        }
+        sessions = await responses_store.list_stored_sessions("response")
+        assert sorted(session_id for session_id, _ in sessions) == [
+            f"sess-{i}" for i in range(5)
+        ]
+
+    async def test_kind_cache_clears_when_exceeding_limit(
+        self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The kind-tag cache is cleared once its size exceeds `_KIND_CACHE_LIMIT`."""
+        monkeypatch.setattr(responses_store, "_KIND_CACHE_LIMIT", 2)
+        cache = responses_store._KIND_CACHE  # noqa: SLF001 (isolated per-test by the stub fixture)
+        cache.update({"sess-0": "response", "sess-1": "response", "sess-2": "response"})
+
+        class _TagOnlyClient:
+            """Client stub exposing only the tag-lookup call."""
+
+            async def list_tags_for_resource(self, **_params: Any) -> dict[str, Any]:  # noqa: ANN401
+                return {"tags": {"stdapi-ai.stored-object": "response"}}
+
+        await responses_store._cached_kind_tag(  # noqa: SLF001
+            _TagOnlyClient(),  # type: ignore[arg-type]
+            "sess-3",
+            "arn:sess-3",
+        )
+        assert set(cache) == {"sess-3"}

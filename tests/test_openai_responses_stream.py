@@ -1,12 +1,27 @@
 """Unit tests for OpenAI Responses API output, streaming, and usage semantics."""
 
 import json
+from functools import partial
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 import pytest
+from openai.types.responses.response_completed_event import (
+    ResponseCompletedEvent as SDKResponseCompletedEvent,
+)
+from openai.types.responses.response_error_event import (
+    ResponseErrorEvent as SDKResponseErrorEvent,
+)
+from openai.types.responses.response_failed_event import (
+    ResponseFailedEvent as SDKResponseFailedEvent,
+)
+from openai.types.responses.response_incomplete_event import (
+    ResponseIncompleteEvent as SDKResponseIncompleteEvent,
+)
 from sse_starlette import JSONServerSentEvent
 
 from stdapi import monitoring
+from stdapi.aws_bedrock import GUARDRAIL_TRACE_VAR
+from stdapi.models import ModelBase
 from stdapi.models.chat._adapters import _openai_chat_completion as chat_adapter
 from stdapi.models.chat._adapters import _openai_responses as responses_adapter
 from stdapi.models.chat._adapters._openai_common import extract_stream_usage
@@ -16,7 +31,8 @@ from stdapi.models.chat._adapters._openai_responses import (
     format_stream,
 )
 from stdapi.monitoring import REQUEST_ID, REQUEST_LOG, SseHandledStreamError
-from stdapi.types.openai import ModerationResult, ResponseModeration
+from stdapi.routes._moderation import build_response_moderation
+from stdapi.types.openai import ModerationResult, RequestModeration, ResponseModeration
 from stdapi.types.openai_responses import (
     AnnotationURLCitation,
     ImageGeneration,
@@ -124,9 +140,17 @@ class TestTerminalEvents:
         payload = _payload(events[-1])
         assert payload["response"]["status"] == "completed"
         assert "error" not in payload["response"]
+        sdk_event = SDKResponseCompletedEvent.model_validate(payload)
+        assert sdk_event.sequence_number == payload["sequence_number"]
 
-    async def test_incomplete_on_max_tokens(self) -> None:
-        """Hitting max tokens ends with response.incomplete and no response.completed."""
+    async def test_incomplete_on_max_tokens(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Hitting max tokens ends with response.incomplete, no response.completed, and no warning."""
+        logged: list[object] = []
+        monkeypatch.setattr(
+            responses_adapter, "log_error_details", lambda *a, **_kw: logged.append(a)
+        )
         events = await _collect(
             format_stream(
                 "resp-1",
@@ -144,6 +168,9 @@ class TestTerminalEvents:
         assert payload["response"]["incomplete_details"] == {
             "reason": "max_output_tokens"
         }
+        assert logged == []
+        sdk_event = SDKResponseIncompleteEvent.model_validate(payload)
+        assert sdk_event.sequence_number == payload["sequence_number"]
 
     async def test_incomplete_on_guardrail(self) -> None:
         """A guardrail stop maps to incomplete_details.reason content_filter."""
@@ -159,6 +186,48 @@ class TestTerminalEvents:
         assert events[-1].event == "response.incomplete"
         payload = _payload(events[-1])
         assert payload["response"]["incomplete_details"] == {"reason": "content_filter"}
+
+    async def test_incomplete_on_content_filtered(self) -> None:
+        """A content_filtered stop maps to incomplete_details.reason content_filter."""
+        events = await _collect(
+            format_stream(
+                "resp-1",
+                1.0,
+                "model",
+                _stream(_text_stream_events(stop_reason="content_filtered")),
+                _request(),
+            )
+        )
+        assert events[-1].event == "response.incomplete"
+        payload = _payload(events[-1])
+        assert payload["response"]["incomplete_details"] == {"reason": "content_filter"}
+
+    async def test_incomplete_on_unknown_reason_logs_warning(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A genuinely unknown stop reason maps to max_output_tokens and logs a warning."""
+        logged: list[tuple[object, ...]] = []
+        monkeypatch.setattr(
+            responses_adapter, "log_error_details", lambda *a, **_kw: logged.append(a)
+        )
+        events = await _collect(
+            format_stream(
+                "resp-1",
+                1.0,
+                "model",
+                _stream(_text_stream_events(stop_reason="something_new")),
+                _request(),
+            )
+        )
+        assert events[-1].event == "response.incomplete"
+        payload = _payload(events[-1])
+        assert payload["response"]["incomplete_details"] == {
+            "reason": "max_output_tokens"
+        }
+        assert len(logged) == 1
+        message = logged[0][0]
+        assert isinstance(message, str)
+        assert "something_new" in message
 
     async def test_failed_on_malformed_output(self) -> None:
         """A malformed model output ends with response.failed carrying an error."""
@@ -178,6 +247,8 @@ class TestTerminalEvents:
         error = payload["response"]["error"]
         assert error["code"] == "server_error"
         assert "malformed_model_output" in error["message"]
+        sdk_event = SDKResponseFailedEvent.model_validate(payload)
+        assert sdk_event.sequence_number == payload["sequence_number"]
 
 
 class TestFailedResponseError:
@@ -259,11 +330,13 @@ class TestMidStreamErrors:
         assert error_payload["code"] == "server_error"
         assert error_payload["message"] == "Internal Server Error"
         assert "sequence_number" in error_payload
+        SDKResponseErrorEvent.model_validate(error_payload)
 
         failed_payload = _payload(events[-1])
         assert events[-1].event == "response.failed"
         assert failed_payload["response"]["status"] == "failed"
         assert failed_payload["response"]["error"]["code"] == "server_error"
+        SDKResponseFailedEvent.model_validate(failed_payload)
 
     async def test_api_error_carries_code_and_param(self) -> None:
         """An ApiError surfaces its message, code, and param in the error event."""
@@ -349,6 +422,8 @@ class TestUsageAccounting:
         assert response.usage.input_tokens_details.cached_tokens == 20
         assert response.usage.output_tokens == 5
         assert response.usage.total_tokens == 45
+        assert response.usage.output_tokens_details is not None
+        assert response.usage.output_tokens_details.reasoning_tokens == 0
 
     async def test_responses_stream_usage(self) -> None:
         """Streamed usage: the terminal event applies the same cache math."""
@@ -497,6 +572,67 @@ class TestAnnotations:
         assert part_done["part"]["annotations"][0]["url"] == "https://example.com"
         message = by_event["response.completed"]["response"]["output"][-1]
         assert message["content"][0]["annotations"][0]["url"] == "https://example.com"
+
+    async def test_streaming_two_citations_in_one_part(self) -> None:
+        """Two citations in one text part emit annotation_index 0 then 1."""
+        events = await _collect(
+            format_stream(
+                "resp-1",
+                1.0,
+                "model",
+                _stream(
+                    [
+                        {"contentBlockStart": {"start": {}}},
+                        {"contentBlockDelta": {"delta": {"text": "Hello "}}},
+                        {
+                            "contentBlockDelta": {
+                                "delta": {
+                                    "citation": {
+                                        "title": "First",
+                                        "location": {
+                                            "web": {"url": "https://example.com/1"}
+                                        },
+                                    }
+                                }
+                            }
+                        },
+                        {"contentBlockDelta": {"delta": {"text": "world"}}},
+                        {
+                            "contentBlockDelta": {
+                                "delta": {
+                                    "citation": {
+                                        "title": "Second",
+                                        "location": {
+                                            "web": {"url": "https://example.com/2"}
+                                        },
+                                    }
+                                }
+                            }
+                        },
+                        {"contentBlockStop": {}},
+                        {"messageStop": {"stopReason": "end_turn"}},
+                        {"metadata": {"usage": {"inputTokens": 1, "outputTokens": 1}}},
+                    ]
+                ),
+                _request(),
+            )
+        )
+        added_payloads = [
+            _payload(sse)
+            for sse in events
+            if sse.event == "response.output_text.annotation.added"
+        ]
+        assert len(added_payloads) == 2
+        assert [payload["annotation_index"] for payload in added_payloads] == [0, 1]
+        assert added_payloads[0]["annotation"]["url"] == "https://example.com/1"
+        assert added_payloads[1]["annotation"]["url"] == "https://example.com/2"
+
+        message = _payload(events[-1])["response"]["output"][-1]
+        annotations = message["content"][0]["annotations"]
+        assert [a["url"] for a in annotations] == [
+            "https://example.com/1",
+            "https://example.com/2",
+        ]
 
     async def test_streaming_citation_after_text_block(self) -> None:
         """A citation arriving after the text block is patched into the final message."""
@@ -743,6 +879,30 @@ class TestEchoFields:
 class TestStreamedModeration:
     """The streamed terminal event carries the moderation field."""
 
+    #: Guardrail trace carried by the trailing metadata event.
+    _TRACE: ClassVar[dict[str, Any]] = {
+        "inputAssessment": {
+            "gr123": {
+                "contentPolicy": {
+                    "filters": [
+                        {"type": "HATE", "confidence": "HIGH", "action": "BLOCKED"}
+                    ]
+                }
+            }
+        },
+        "outputAssessments": {
+            "gr123": [
+                {
+                    "contentPolicy": {
+                        "filters": [
+                            {"type": "VIOLENCE", "confidence": "LOW", "action": "NONE"}
+                        ]
+                    }
+                }
+            ]
+        },
+    }
+
     async def test_moderation_in_completed_event(self) -> None:
         """The moderation builder result lands on the response.completed payload."""
         result = ModerationResult(
@@ -766,6 +926,39 @@ class TestStreamedModeration:
         payload = _payload(events[-1])
         assert payload["response"]["moderation"]["input"]["model"] == "gr123"
         assert payload["response"]["moderation"]["output"]["flagged"] is False
+
+    async def test_moderation_built_from_captured_stream_trace(self) -> None:
+        """The real builder maps the trace captured from the metadata event."""
+        stream_events = _text_stream_events()
+        stream_events[-1]["metadata"]["trace"] = {"guardrail": self._TRACE}  # type: ignore[index]
+        holder: dict[str, Any] = {}
+        token = GUARDRAIL_TRACE_VAR.set(holder)
+        try:
+            events = await _collect(
+                format_stream(
+                    "resp-1",
+                    1.0,
+                    "model",
+                    ModelBase("model")._capture_stream_usage(  # noqa: SLF001
+                        _stream(stream_events)
+                    ),
+                    _request(),
+                    moderation_builder=partial(
+                        build_response_moderation, RequestModeration(model="gr123")
+                    ),
+                )
+            )
+        finally:
+            GUARDRAIL_TRACE_VAR.reset(token)
+        assert holder == self._TRACE
+        moderation = _payload(events[-1])["response"]["moderation"]
+        assert moderation["input"]["model"] == "gr123"
+        assert moderation["input"]["flagged"] is True
+        assert moderation["input"]["categories"] == {"hate": True}
+        assert moderation["input"]["category_scores"] == {"hate": 0.75}
+        assert moderation["output"]["flagged"] is False
+        assert moderation["output"]["categories"] == {"violence": False}
+        assert moderation["output"]["category_scores"] == {"violence": 0.25}
 
 
 class TestPolicySwitches:
