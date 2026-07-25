@@ -94,6 +94,14 @@ def _stub_client(
     )
 
 
+def _client_error() -> ClientError:
+    """Build a throttling ClientError for the availability API."""
+    return ClientError(
+        {"Error": {"Code": "ThrottlingException", "Message": "slow down"}},
+        "GetFoundationModelAvailability",
+    )
+
+
 class TestCheckModelAvailability:
     """_check_model_availability: issue labels per availability payload."""
 
@@ -123,18 +131,13 @@ class TestCheckModelAvailability:
             "unavailable",
         ]
 
-    async def test_aws_error_is_reported_as_issue_not_raised(
+    async def test_aws_error_propagates_to_the_caller(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """An AWS error during the check becomes an issue label, not an exception."""
-        error = ClientError(
-            {"Error": {"Code": "ThrottlingException", "Message": "slow down"}},
-            "GetFoundationModelAvailability",
-        )
-        _stub_client(monkeypatch, error)
-        assert await _check_model_availability(_make_model()) == [
-            "availability check failed: ClientError"
-        ]
+        """An AWS error during the check is raised; _check_candidates handles it."""
+        _stub_client(monkeypatch, _client_error())
+        with pytest.raises(ClientError):
+            await _check_model_availability(_make_model())
 
 
 class TestMergeCandidate:
@@ -165,14 +168,18 @@ class TestCheckCandidates:
 
     @staticmethod
     def _patch_availability(
-        monkeypatch: pytest.MonkeyPatch, issues_by_region: dict[str, list[str]]
+        monkeypatch: pytest.MonkeyPatch,
+        issues_by_region: dict[str, list[str] | Exception],
     ) -> list[str]:
         """Fake _check_model_availability with per-region issues; returns call log."""
         calls: list[str] = []
 
         async def _fake(model: ModelDetails) -> list[str]:
             calls.append(f"{model.id}@{model.regions[0]}")
-            return issues_by_region.get(model.regions[0], [])
+            result = issues_by_region.get(model.regions[0], [])
+            if isinstance(result, Exception):
+                raise result
+            return result
 
         monkeypatch.setattr(stdapi.models, "_check_model_availability", _fake)
         return calls
@@ -247,6 +254,50 @@ class TestCheckCandidates:
         await _check_candidates(candidates, {})
 
         assert sorted(calls) == ["m1@us-east-1", "m2@eu-west-1"]
+
+    async def test_all_checks_erroring_raises_the_first_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When every availability check errors, the refresh fails fast."""
+        self._patch_availability(
+            monkeypatch, {"us-east-1": _client_error(), "eu-west-1": _client_error()}
+        )
+        candidates = {
+            "m1": [_make_model("m1")],
+            "m2": [_make_model("m2", region="eu-west-1")],
+        }
+
+        with pytest.raises(ClientError):
+            await _check_candidates(candidates, {})
+
+    async def test_partial_check_errors_degrade_gracefully(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One erroring check is a per-region issue; the model retries elsewhere."""
+        calls = self._patch_availability(monkeypatch, {"us-east-1": _client_error()})
+        candidates = {
+            "m1": [_make_model("m1"), _make_model("m1", region="eu-west-1")],
+            "m2": [_make_model("m2", region="eu-west-1")],
+        }
+        unavailable: dict[str, dict[str, list[str]]] = {}
+
+        result = await _check_candidates(candidates, unavailable)
+
+        assert result["m1"].regions == ["eu-west-1"]
+        assert result["m2"].regions == ["eu-west-1"]
+        assert calls == ["m1@us-east-1", "m2@eu-west-1", "m1@eu-west-1"]
+        assert unavailable == {
+            "m1": {"us-east-1": ["availability check failed: ClientError"]}
+        }
+
+    async def test_non_aws_check_errors_propagate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Programming errors in a check are never swallowed as an issue."""
+        self._patch_availability(monkeypatch, {"us-east-1": ValueError("bug")})
+
+        with pytest.raises(ValueError, match="bug"):
+            await _check_candidates({"m1": [_make_model("m1")]}, {})
 
 
 def _patch_regions_and_fetch(
@@ -379,6 +430,48 @@ class TestInitializeBedrockModelsFaultIsolation:
             return []
 
         monkeypatch.setattr(stdapi.models, "_check_model_availability", _available)
+
+    @staticmethod
+    def _start_event() -> EventLog:
+        """Build a minimal startup event log."""
+        return EventLog(
+            type="start",
+            level="info",
+            date=datetime.now(UTC),
+            server_id="test",
+            server_version="0.0.0",
+        )
+
+    async def test_startup_fails_when_every_region_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Startup fails fast when no region listing succeeds."""
+        _patch_regions_and_fetch(
+            monkeypatch,
+            {
+                "us-east-1": EndpointConnectionError(endpoint_url="https://a.invalid"),
+                "eu-west-1": EndpointConnectionError(endpoint_url="https://b.invalid"),
+            },
+        )
+
+        with pytest.raises(EndpointConnectionError):
+            await stdapi.models.initialize_bedrock_models(self._start_event())
+
+    async def test_startup_fails_when_every_availability_check_errors(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Startup fails fast when every availability check raises an AWS error."""
+        _patch_regions_and_fetch(
+            monkeypatch, {"us-east-1": [_make_model("m1")], "eu-west-1": []}
+        )
+
+        async def _denied(_model: ModelDetails) -> list[str]:
+            raise _client_error()
+
+        monkeypatch.setattr(stdapi.models, "_check_model_availability", _denied)
+
+        with pytest.raises(ClientError):
+            await stdapi.models.initialize_bedrock_models(self._start_event())
 
     async def test_startup_survives_one_region_and_warns(
         self, monkeypatch: pytest.MonkeyPatch
