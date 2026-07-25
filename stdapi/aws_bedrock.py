@@ -172,7 +172,8 @@ AWS_ERROR_MAP: dict[str, tuple[int, str]] = {
     ),
     **dict.fromkeys({"ResourceNotFoundException"}, (404, "not_found_error")),
     **dict.fromkeys(
-        {"ValidationException", "BadRequestException"}, (400, "invalid_request_error")
+        {"ValidationException", "BadRequestException", "EntityTooSmall", "InvalidPart"},
+        (400, "invalid_request_error"),
     ),
     **dict.fromkeys(
         {

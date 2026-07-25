@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, File, Form, Path, Query, Request, Upload
 from fastapi.responses import StreamingResponse
 from pydantic import AliasChoices
 
+from stdapi.api_errors import ApiError
 from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
 from stdapi.config import SETTINGS
@@ -28,6 +29,11 @@ from stdapi.types.openai_files import (
     ListFilesResponse,
 )
 from stdapi.utils import missing_file_error, validation_error_handler
+
+#: Minimum accepted value (seconds) for ``expires_after[seconds]`` (1 hour).
+_EXPIRES_AFTER_SECONDS_MIN = 3600
+#: Maximum accepted value (seconds) for ``expires_after[seconds]`` (30 days).
+_EXPIRES_AFTER_SECONDS_MAX = 2592000
 
 
 def _strip(fid: str) -> str:
@@ -185,8 +191,8 @@ async def upload(
             validation_alias=AliasChoices(
                 "expires_after_seconds", "expires_after[seconds]"
             ),
-            ge=3600,
-            le=2592000,
+            ge=_EXPIRES_AFTER_SECONDS_MIN,
+            le=_EXPIRES_AFTER_SECONDS_MAX,
             description=(
                 "Seconds after the anchor time until the file expires (1 hour "
                 "to 30 days). By default, `purpose=batch` files expire after "
@@ -221,7 +227,21 @@ async def upload(
     if expires_after_seconds is None and (
         raw := (await http_request.form()).get("expires_after[seconds]")
     ):
-        expires_after_seconds = int(str(raw))
+        try:
+            expires_after_seconds = int(str(raw))
+        except ValueError:
+            msg = (
+                "Input should be a valid integer, unable to parse string as an integer"
+            )
+            raise ApiError(msg) from None
+        if expires_after_seconds < _EXPIRES_AFTER_SECONDS_MIN:
+            msg = (
+                f"Input should be greater than or equal to {_EXPIRES_AFTER_SECONDS_MIN}"
+            )
+            raise ApiError(msg)
+        if expires_after_seconds > _EXPIRES_AFTER_SECONDS_MAX:
+            msg = f"Input should be less than or equal to {_EXPIRES_AFTER_SECONDS_MAX}"
+            raise ApiError(msg)
     log_request_params({"purpose": purpose, "filename": file.filename})
     return log_response_params(
         _to_file_object(
