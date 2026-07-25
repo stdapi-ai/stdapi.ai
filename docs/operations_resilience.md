@@ -315,11 +315,13 @@ Amazon Polly, Transcribe, Translate, and Comprehend follow the same regional-fai
 - **Transcribe** — candidate regions are restricted to those with a co-located S3 bucket ([`AWS_TRANSCRIBE_S3_BUCKET`](operations_configuration.md#aws-transcribe-s3-bucket) or a regional bucket in [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets)); on a region-level error the audio is copied to the next candidate's bucket and the job restarts there.
 - **Translate** and **Comprehend** — calls try each candidate region in order and fail over on throttling, service unavailability, or network errors.
 
+When several regions are candidates, per-region SDK retries are capped by [`AWS_FAILOVER_MAX_RETRIES`](operations_configuration.md#failover-max-retries) so that failover across regions replaces deep in-region retrying.
+
 Setting an explicit region for any of these services pins it to that single region, disabling failover.
 
 ### :material-rocket-launch-outline: Fault-Tolerant Startup
 
-A Bedrock region that cannot be reached at startup (invalid region for the account, network issue, throttling) does not block the server from starting: it is skipped with an `unreachable_bedrock_regions` warning, its models are served from the remaining regions, and the region is retried automatically on the next model list refresh ([`MODEL_CACHE_SECONDS`](operations_configuration.md#model-cache-seconds)). Startup only fails when **every** configured region is unreachable — see [Unreachable Region Tolerance](operations_configuration.md#aws-bedrock-regions).
+A Bedrock region that cannot be reached at startup (invalid region for the account, network issue, throttling) does not block the server from starting: it is skipped with an `unreachable_bedrock_regions` warning, its models are served from the remaining regions, and the region is retried automatically on the next model list refresh ([`MODEL_CACHE_SECONDS`](operations_configuration.md#model-cache-seconds)). Startup only fails when **every** configured region is unreachable, or when **every** per-model availability check errors — see [Unreachable Region Tolerance](operations_configuration.md#aws-bedrock-regions).
 
 ---
 

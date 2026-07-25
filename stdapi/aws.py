@@ -1,7 +1,7 @@
 """AWS client management and connection pooling."""
 
 from asyncio import gather
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, suppress
 from logging import getLogger
 from os import environ
 from typing import TYPE_CHECKING, Any, Final, NotRequired, Self, TypedDict, TypeVar
@@ -32,6 +32,9 @@ AWS_ENVIRONMENT: AwsEnvironment = {}
 #: Cached AWS service clients keyed by (service, region)
 _CLIENTS: dict[str, dict[RegionName, Any]] = {}
 
+#: Region-rotated Bedrock services that get single-attempt ".no-retry" client pools
+_NO_RETRY_SERVICES: Final = ("bedrock-runtime", "bedrock-agent-runtime")
+
 #: Default retry configuration (configurable attempts and retry mode)
 _RETRIES = {
     "max_attempts": SETTINGS.aws_bedrock_max_retries + 1,
@@ -55,15 +58,25 @@ getLogger("aiobotocore").setLevel("CRITICAL")
 def raise_first_exception(results: Sequence[Any]) -> None:
     """Re-raise the first exception found in a ``gather(return_exceptions=True)`` result.
 
+    Any additional exceptions are recorded as a PEP 678 note on the first one so
+    concurrent sibling failures are not silently discarded.
+
     Args:
         results: Results from a ``gather(..., return_exceptions=True)`` call.
 
     Raises:
         BaseException: The first exception found in *results*, if any.
     """
-    for result in results:
-        if isinstance(result, BaseException):
-            raise result
+    exceptions = [result for result in results if isinstance(result, BaseException)]
+    if not exceptions:
+        return
+    first, *others = exceptions
+    if others:
+        first.add_note(
+            f"{len(others)} concurrent failure(s) suppressed: "
+            + "; ".join(f"{type(e).__name__}: {e}" for e in others)
+        )
+    raise first
 
 
 class AWSConnectionManager:
@@ -116,6 +129,31 @@ class AWSConnectionManager:
                     connect_timeout=SETTINGS.aws_connect_timeout,
                 ),
             }
+            # Failover services trade deep in-region retries for fast
+            # cross-region failover when several regions are candidates.
+            failover_config = AioConfig(
+                user_agent=server.USER_AGENT,
+                retries={
+                    "max_attempts": SETTINGS.aws_failover_max_retries + 1,
+                    "mode": "adaptive" if SETTINGS.aws_adaptive_retry else "standard",
+                },
+                max_pool_connections=SETTINGS.aws_max_pool_connections,
+                parameter_validation=False,
+                connect_timeout=SETTINGS.aws_connect_timeout,
+                read_timeout=SETTINGS.ai_response_timeout,
+            )
+            services_configs.update(
+                {
+                    service: failover_config
+                    for service, region_setting in (
+                        ("polly", SETTINGS.aws_polly_region),
+                        ("comprehend", SETTINGS.aws_comprehend_region),
+                        ("translate", SETTINGS.aws_translate_region),
+                        ("transcribe", SETTINGS.aws_transcribe_region),
+                    )
+                    if len(service_regions(region_setting)) > 1
+                }
+            )
 
             specs = [
                 *{
@@ -140,10 +178,7 @@ class AWSConnectionManager:
             for (service, region), client in zip(specs, results, strict=True):
                 _CLIENTS.setdefault(service, {})[region] = client
 
-            if (
-                SETTINGS.aws_bedrock_region_routing != "disabled"
-                and "bedrock-runtime" in _CLIENTS
-            ):
+            if SETTINGS.aws_bedrock_region_routing != "disabled":
                 no_retry = AioConfig(
                     user_agent=server.USER_AGENT,
                     retries={
@@ -157,30 +192,39 @@ class AWSConnectionManager:
                     connect_timeout=SETTINGS.aws_connect_timeout,
                     read_timeout=SETTINGS.ai_response_timeout,
                 )
-                regions = [*_CLIENTS["bedrock-runtime"]]
-                no_retry_results = await gather(
-                    *(
-                        self._exit_stack.enter_async_context(
-                            AWS_SESSION.create_client(
-                                "bedrock-runtime", region_name=region, config=no_retry
+                for service in _NO_RETRY_SERVICES:
+                    if service not in _CLIENTS:
+                        continue
+                    regions = [*_CLIENTS[service]]
+                    no_retry_results = await gather(
+                        *(
+                            self._exit_stack.enter_async_context(
+                                AWS_SESSION.create_client(  # type: ignore[call-overload]
+                                    service, region_name=region, config=no_retry
+                                )
                             )
-                        )
-                        for region in regions
-                    ),
-                    return_exceptions=True,
-                )
-                raise_first_exception(no_retry_results)
-                _CLIENTS["bedrock-runtime.no-retry"] = dict(
-                    zip(regions, no_retry_results, strict=True)
-                )
+                            for region in regions
+                        ),
+                        return_exceptions=True,
+                    )
+                    raise_first_exception(no_retry_results)
+                    _CLIENTS[f"{service}.no-retry"] = dict(
+                        zip(regions, no_retry_results, strict=True)
+                    )
 
             if SETTINGS.aws_bedrock_mantle_enabled:
                 await self._exit_stack.enter_async_context(mantle_http_session())
-        except BaseException:
+        except BaseException as exception:
             # __aenter__ raising skips __aexit__ under the context-manager
             # protocol: close whatever this attempt already entered so no
             # client leaks, then let the caller see the original error.
-            await self._exit_stack.aclose()
+            try:
+                await self._exit_stack.aclose()
+            except Exception as cleanup_error:  # noqa: BLE001
+                exception.add_note(
+                    "Client cleanup also failed: "
+                    f"{type(cleanup_error).__name__}: {cleanup_error}"
+                )
             _CLIENTS.clear()
             raise
         else:
@@ -214,9 +258,6 @@ _FAILOVER_ERROR_CODES: Final[frozenset[str]] = frozenset(
         # Transcribe's per-region concurrent-job quota: the reason multi-region
         # failover exists.
         "LimitExceededException",
-        # Not an auth failure here: Bedrock returns this when a service/model
-        # isn't opted in for the region, so failing over to the next region helps.
-        "NotAuthorizedException",
         "RequestTimeout",
         "ServiceQuotaExceededException",
         "ServiceUnavailable",
@@ -234,9 +275,9 @@ def service_regions(region: RegionName | None) -> list[RegionName]:
         region: The service-specific region setting, if configured.
 
     Returns:
-        The configured region alone, or every Bedrock region otherwise.
+        The configured region alone, or a copy of every Bedrock region otherwise.
     """
-    return [region] if region else SETTINGS.aws_bedrock_regions
+    return [region] if region else [*SETTINGS.aws_bedrock_regions]
 
 
 def is_failover_error(exception: BotoCoreError | ClientError) -> bool:
@@ -260,6 +301,7 @@ async def call_with_region_failover[ResultT](
     service: str,
     regions: Sequence[RegionName],
     call: Callable[[Any, RegionName], Awaitable[ResultT]],
+    on_failed_region: Callable[[Any, RegionName], Awaitable[None]] | None = None,
 ) -> tuple[ResultT, RegionName]:
     """Run an AWS call, failing over across candidate regions.
 
@@ -267,6 +309,10 @@ async def call_with_region_failover[ResultT](
         service: AWS service name (client pool key).
         regions: Candidate regions, in priority order (at least one).
         call: Coroutine factory receiving the region's client and the region.
+        on_failed_region: Optional best-effort cleanup run with the failed
+            region's client after a failover-class failure there (its own AWS
+            errors are ignored); for calls whose server-side effect may have
+            been applied even though the call errored.
 
     Returns:
         The first successful result and the region that served it.
@@ -283,6 +329,7 @@ async def call_with_region_failover[ResultT](
         except (BotoCoreError, ClientError) as exception:
             if not is_failover_error(exception):
                 raise
+            await _cleanup_failed_region(service, region, on_failed_region)
             # Imported here: stdapi.monitoring transitively imports this module.
             from stdapi.monitoring import (  # noqa: PLC0415
                 REQUEST_LOG,
@@ -295,7 +342,30 @@ async def call_with_region_failover[ResultT](
                     f"({type(exception).__name__}); failing over to the next region.",
                     level="warning",
                 )
-    return await call(get_client(service, last_region), last_region), last_region
+    try:
+        return await call(get_client(service, last_region), last_region), last_region
+    except (BotoCoreError, ClientError) as exception:
+        if is_failover_error(exception):
+            await _cleanup_failed_region(service, last_region, on_failed_region)
+        raise
+
+
+async def _cleanup_failed_region(
+    service: str,
+    region: RegionName,
+    on_failed_region: Callable[[Any, RegionName], Awaitable[None]] | None,
+) -> None:
+    """Run the failed-region cleanup hook, ignoring its own AWS errors.
+
+    Args:
+        service: AWS service name (client pool key).
+        region: The region whose call failed.
+        on_failed_region: The cleanup hook, if any.
+    """
+    if on_failed_region is None:
+        return
+    with suppress(BotoCoreError, ClientError):
+        await on_failed_region(get_client(service, region), region)
 
 
 def get_client(service: str, region_name: RegionName | None = None) -> Any:  # noqa:ANN401
