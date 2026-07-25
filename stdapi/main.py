@@ -188,7 +188,10 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                 date=SETTINGS.now(),
                 server_id=server.SERVER_NAME,
                 server_version=SERVER_FULL_VERSION,
-                error_detail=[f"{type(exception).__name__}: {exception}"],
+                error_detail=[
+                    f"{type(exception).__name__}: {exception}",
+                    *getattr(exception, "__notes__", []),
+                ],
             )
         )
         raise

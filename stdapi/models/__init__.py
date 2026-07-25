@@ -1,6 +1,6 @@
 """Models."""
 
-from asyncio import Lock, gather, sleep
+from asyncio import CancelledError, Lock, gather, sleep
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import timedelta
@@ -20,8 +20,8 @@ import stdapi.region_routing as _region_routing
 from stdapi.api_errors import ApiError, UnsupportedModelError
 from stdapi.aws import get_client
 from stdapi.aws_bedrock import (
+    GUARDRAIL_CONFIG_VAR,
     GUARDRAIL_TRACE_VAR,
-    GUARDTRAIL_CONFIG_VAR,
     PERFORMANCE_CONFIG_VAR,
     bedrock_client,
     check_stream_event,
@@ -84,6 +84,7 @@ if TYPE_CHECKING:
     from types_aiobotocore_bedrock_runtime.literals import ServiceTierTypeType
     from types_aiobotocore_bedrock_runtime.type_defs import (
         ConverseResponseTypeDef,
+        ConverseStreamOutputTypeDef,
         ConverseStreamResponseTypeDef,
         GuardrailStreamConfigurationTypeDef,
         InvokeModelRequestTypeDef,
@@ -131,6 +132,9 @@ _GLOBAL_INFERENCE_PROFILE_PREFIX: Final = "global."
 
 #: Built-in Bedrock tool names billed per invocation (counted from toolUse blocks).
 _BILLED_GROUNDING_TOOLS: Final[frozenset[str]] = frozenset({"nova_grounding"})
+
+#: Max upstream events drained after a client disconnect to still capture the trailing usage event.
+_DISCONNECT_DRAIN_MAX_EVENTS: Final[int] = 50
 
 #: Output modality advertised by rerank models (relevance rankings, not text).
 RERANKING_MODALITY: str = "RERANKING"
@@ -684,7 +688,9 @@ class ModelBase[RequestT, ResponseT]:
             cache_write_tokens=int(usage.get("cacheWriteInputTokens", 0)),
             grounding_requests=grounding_requests,
             cache_write_tokens_by_ttl={
-                d["ttl"]: int(d["inputTokens"]) for d in usage.get("cacheDetails") or ()
+                d["ttl"]: int(d["inputTokens"])
+                for d in usage.get("cacheDetails") or ()
+                if "ttl" in d and "inputTokens" in d
             },
         )
 
@@ -854,19 +860,73 @@ class ModelBase[RequestT, ResponseT]:
         )
         return response
 
+    def _handle_stream_event(
+        self,
+        event: Mapping[str, Any],
+        grounding_requests: int,
+        *,
+        region: str,
+        requested_tier: ServiceTierTypeType | None,
+        routing: Routing | None,
+    ) -> tuple[int, bool]:
+        """Count grounding-tool calls in *event* and record usage if it carries any.
+
+        Also captures the metadata event's guardrail trace into the request's
+        shared :data:`GUARDRAIL_TRACE_VAR` holder, like non-streaming
+        :meth:`converse`.
+
+        Args:
+            event: A single ConverseStream event.
+            grounding_requests: Grounding-tool calls counted so far.
+            region: Region that served the call.
+            requested_tier: The request's tier, used when the metadata event
+                doesn't report the tier that actually served the call.
+            routing: Serving profile of the call.
+
+        Returns:
+            Tuple of (updated grounding-tool count, whether usage was recorded).
+        """
+        if (block_start := event.get("contentBlockStart")) and (
+            block_start["start"].get("toolUse", {}).get("name")
+            in _BILLED_GROUNDING_TOOLS
+        ):
+            grounding_requests += 1
+        if metadata := event.get("metadata"):
+            if (trace_holder := GUARDRAIL_TRACE_VAR.get(None)) is not None and (
+                trace := metadata.get("trace", {}).get("guardrail")
+            ):
+                trace_holder.update(trace)
+            if metadata.get("usage"):
+                # The metadata event carries the same usage/serviceTier keys
+                # as a non-streaming Converse response.
+                self._record_converse_usage(
+                    metadata,
+                    grounding_requests=grounding_requests,
+                    region=region,
+                    requested_tier=requested_tier,
+                    routing=routing,
+                )
+                return 0, True
+        return grounding_requests, False
+
     async def _capture_stream_usage(
         self,
-        stream: AsyncIterable[Any],
+        stream: AsyncIterable[ConverseStreamOutputTypeDef],
         *,
         region: str = "",
         requested_tier: ServiceTierTypeType | None = None,
         routing: Routing | None = None,
-    ) -> AsyncGenerator[Any]:
+    ) -> AsyncGenerator[ConverseStreamOutputTypeDef]:
         """Yield ConverseStream events, recording billed usage from metadata events.
 
         Per-invocation-billed grounding-tool calls (``contentBlockStart``
         events naming a :data:`_BILLED_GROUNDING_TOOLS` tool) are counted
         and attached to the usage recorded at the trailing metadata event.
+
+        If the consumer disconnects (``GeneratorExit``/cancellation) before
+        that event arrives, the remaining upstream events are drained --
+        bounded by :data:`_DISCONNECT_DRAIN_MAX_EVENTS` -- so the trailing
+        usage event, already billed by Bedrock, is still recorded.
 
         Args:
             stream: Original Bedrock event stream.
@@ -879,24 +939,33 @@ class ModelBase[RequestT, ResponseT]:
             Unmodified stream events.
         """
         grounding_requests = 0
-        async for event in stream:
-            if (block_start := event.get("contentBlockStart")) and (
-                block_start["start"].get("toolUse", {}).get("name")
-                in _BILLED_GROUNDING_TOOLS
-            ):
-                grounding_requests += 1
-            if (metadata := event.get("metadata")) and metadata.get("usage"):
-                # The metadata event carries the same usage/serviceTier keys
-                # as a non-streaming Converse response.
-                self._record_converse_usage(
-                    metadata,
-                    grounding_requests=grounding_requests,
+        stream_iter = aiter(stream)
+        try:
+            async for event in stream_iter:
+                grounding_requests, _ = self._handle_stream_event(
+                    event,
+                    grounding_requests,
                     region=region,
                     requested_tier=requested_tier,
                     routing=routing,
                 )
-                grounding_requests = 0
-            yield event
+                yield event
+        except GeneratorExit, CancelledError:
+            for _ in range(_DISCONNECT_DRAIN_MAX_EVENTS):
+                try:
+                    event = await anext(stream_iter)
+                except StopAsyncIteration:
+                    break
+                grounding_requests, recorded = self._handle_stream_event(
+                    event,
+                    grounding_requests,
+                    region=region,
+                    requested_tier=requested_tier,
+                    routing=routing,
+                )
+                if recorded:
+                    break
+            raise
 
     async def converse(
         self, request: ConverseRequestBaseTypeDef
@@ -1484,7 +1553,7 @@ async def _collect_region_candidates(
             continue
         for model in result:
             candidates.setdefault(model.id, []).append(model)
-    if len(errors) == len(regions):
+    if errors and len(errors) == len(regions):
         raise errors[0]
     return candidates
 
@@ -1499,7 +1568,9 @@ async def _check_candidates(
     region, all models concurrently; nearly all resolve in the first round. A
     model failing in one region falls through to its next candidate region.
     Once a model passes, its remaining candidate regions are merged unchecked,
-    matching the long-standing "later regions are trusted" behavior.
+    matching the long-standing "later regions are trusted" behavior. A check
+    failing with an AWS error is recorded as an issue for that region, so one
+    degraded region cannot fail a whole refresh.
 
     Args:
         candidates: Per model ID, per-region candidates in priority order.
@@ -1507,20 +1578,35 @@ async def _check_candidates(
 
     Returns:
         Available models keyed by model ID, with region data merged.
+
+    Raises:
+        BotoCoreError: When every availability check errors (first error).
+        ClientError: When every availability check errors (first error).
     """
     all_models: dict[str, ModelDetails] = {}
     pending: dict[str, int] = dict.fromkeys(candidates, 0)
+    errors: list[BaseException] = []
+    checks = 0
     while pending:
         batch = list(pending.items())
         results = await gather(
             *(
                 _check_model_availability(candidates[model_id][index])
                 for model_id, index in batch
-            )
+            ),
+            return_exceptions=True,
         )
+        checks += len(batch)
         pending = {}
-        for (model_id, index), issues in zip(batch, results, strict=True):
+        for (model_id, index), result in zip(batch, results, strict=True):
             model = candidates[model_id][index]
+            if isinstance(result, BaseException):
+                if not isinstance(result, (BotoCoreError, ClientError)):
+                    raise result
+                errors.append(result)
+                issues = [f"availability check failed: {type(result).__name__}"]
+            else:
+                issues = result
             if not issues:
                 for later in candidates[model_id][index + 1 :]:
                     _merge_candidate(model, later)
@@ -1533,6 +1619,8 @@ async def _check_candidates(
                 unavailable_models.setdefault(model_id, {})[model.regions[0]] = issues
             if index + 1 < len(candidates[model_id]):
                 pending[model_id] = index + 1
+    if checks and len(errors) == checks:
+        raise errors[0]
     return all_models
 
 
@@ -1540,7 +1628,8 @@ async def initialize_bedrock_models(start_event: EventLog | None = None) -> bool
     """Refresh the Bedrock model cache from all configured regions if stale.
 
     Individual unreachable regions are tolerated (warned about, retried on
-    the next refresh); the refresh only fails when every region fails.
+    the next refresh); the refresh only fails when every region fails or
+    every availability check errors.
 
     When this is a lazy on-demand refresh (``start_event`` is None, i.e. not
     the initial startup call) and it discovers model IDs not previously
@@ -1845,17 +1934,16 @@ async def _check_model_availability(model: ModelDetails) -> list[str]:
         model: Candidate model from ``_get_bedrock_models_from_region``.
 
     Returns:
-        Issue labels; empty when the model is fully available. An AWS error
-        during the check is reported as an issue, not raised, so one degraded
-        region cannot fail a whole refresh.
+        Issue labels; empty when the model is fully available.
+
+    Raises:
+        BotoCoreError: When the availability call fails.
+        ClientError: When the availability call fails.
     """
     bedrock_client: BedrockClient = get_client("bedrock", model.regions[0])
-    try:
-        availability = await bedrock_client.get_foundation_model_availability(
-            modelId=model.id
-        )
-    except (BotoCoreError, ClientError) as exception:
-        return [f"availability check failed: {type(exception).__name__}"]
+    availability = await bedrock_client.get_foundation_model_availability(
+        modelId=model.id
+    )
     if (
         availability["authorizationStatus"] == "AUTHORIZED"
         and availability["entitlementAvailability"] == "AVAILABLE"
@@ -2241,7 +2329,7 @@ async def _build_invoke_kwargs(
         "body": to_json(body),
     }
 
-    if (guardrail := guardrail or GUARDTRAIL_CONFIG_VAR.get(None)) is not None:
+    if (guardrail := guardrail or GUARDRAIL_CONFIG_VAR.get(None)) is not None:
         kwargs["guardrailIdentifier"] = guardrail["guardrailIdentifier"]
         kwargs["guardrailVersion"] = guardrail["guardrailVersion"]
         if trace := guardrail.get("trace"):
