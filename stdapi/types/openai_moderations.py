@@ -31,17 +31,24 @@ class ModerationTextInput(BaseModelRequest):
 
 
 # Ref: openai.types.moderation_create_params.ModerationCreateParams
+#: Maximum inputs per request; each yields a separate billable AWS moderation call.
+_MAX_INPUT_ITEMS = 2048
+
+
 class ModerationCreateParams(BaseModelRequest):
     """Request body for POST /v1/moderations."""
 
     input: (
         str
-        | Annotated[list[str], Field(min_length=1)]
+        | Annotated[list[str], Field(min_length=1, max_length=_MAX_INPUT_ITEMS)]
         | Annotated[
-            list[ModerationImageURLInput | ModerationTextInput], Field(min_length=1)
+            list[ModerationImageURLInput | ModerationTextInput],
+            Field(min_length=1, max_length=_MAX_INPUT_ITEMS),
         ]
     ) = Field(
-        description="Text or image inputs to classify. Each element yields one result."
+        description="Text or image inputs to classify (at most "
+        f"{_MAX_INPUT_ITEMS}). Each element yields one result, classified by a "
+        "separate AWS call."
     )
     model: str | None = Field(
         default=None,
@@ -270,6 +277,6 @@ class ModerationCreateResponse(BaseModelResponse):
 
     id: str = Field(description="Unique identifier of the moderation request.")
     model: str = Field(
-        description="The guardrail or Comprehend model used to classify the inputs."
+        description="The moderation model as requested (aliases are echoed as sent)."
     )
     results: list[Moderation] = Field(description="One result per input element.")

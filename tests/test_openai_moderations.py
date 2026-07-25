@@ -5,10 +5,22 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 from starlette.testclient import TestClient
 
 from stdapi.config import SETTINGS
+from stdapi.models.moderation import (
+    ALL_CATEGORIES,
+    IMAGE_CATEGORIES,
+    amazon_bedrock_guardrail,
+    amazon_comprehend,
+)
 from stdapi.routes import openai_moderations
+from stdapi.types.openai_moderations import (
+    ModerationCategories,
+    ModerationCategoryAppliedInputTypes,
+    ModerationCreateParams,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -80,7 +92,7 @@ def _stub_client(
         regions.append(region)
         return stub
 
-    monkeypatch.setattr(openai_moderations, "get_client", _get_client)
+    monkeypatch.setattr(amazon_bedrock_guardrail, "get_client", _get_client)
     return stub, regions
 
 
@@ -118,6 +130,24 @@ class TestModerationsRoute:
         assert request["guardrailVersion"] == "1"
         assert request["source"] == "INPUT"
         assert request["content"] == [{"text": {"text": "some text"}}]
+
+    def test_response_round_trips_through_the_openai_sdk(
+        self,
+        client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        configured_guardrail: None,
+    ) -> None:
+        """A full response body validates against the installed openai SDK's response type."""
+        from openai.types.moderation_create_response import (  # noqa: PLC0415
+            ModerationCreateResponse as SdkModerationCreateResponse,
+        )
+
+        _stub_client(monkeypatch, _FLAGGED_RESPONSE)
+
+        response = client.post("/v1/moderations", json={"input": "some text"})
+
+        assert response.status_code == 200, response.text
+        SdkModerationCreateResponse.model_validate(response.json())
 
     def test_multiple_inputs_yield_one_result_each(
         self,
@@ -321,6 +351,229 @@ class TestModerationsRoute:
 
         assert response.status_code == 400
 
+    def test_non_content_policy_hits_flag_without_categories(
+        self,
+        client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        configured_guardrail: None,
+    ) -> None:
+        """Topic/word policy hits flag the input with all categories false."""
+        _stub_client(
+            monkeypatch,
+            {
+                "action": "NONE",
+                "assessments": [
+                    {
+                        "topicPolicy": {
+                            "topics": [{"name": "Politics", "action": "BLOCKED"}]
+                        },
+                        "wordPolicy": {
+                            "customWords": [{"match": "BLOCKWORD", "action": "BLOCKED"}]
+                        },
+                    }
+                ],
+            },
+        )
+
+        response = client.post("/v1/moderations", json={"input": "some text"})
+
+        assert response.status_code == 200, response.text
+        (result,) = response.json()["results"]
+        assert result["flagged"] is True
+        assert not any(result["categories"].values())
+        assert all(score == 0.0 for score in result["category_scores"].values())
+
+    def test_empty_string_input_is_clean_without_aws_call(
+        self,
+        client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        configured_guardrail: None,
+    ) -> None:
+        """An exactly-empty string yields an unflagged result and no AWS call."""
+        stub, _ = _stub_client(monkeypatch, _FLAGGED_RESPONSE)
+
+        response = client.post("/v1/moderations", json={"input": ""})
+
+        assert response.status_code == 200, response.text
+        (result,) = response.json()["results"]
+        assert result["flagged"] is False
+        assert not any(result["categories"].values())
+        assert all(score == 0.0 for score in result["category_scores"].values())
+        applied = result["category_applied_input_types"]
+        assert len(applied) == 13
+        assert all(value == ["text"] for value in applied.values())
+        assert not stub.requests
+
+    def test_empty_string_among_inputs_only_skips_itself(
+        self,
+        client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        configured_guardrail: None,
+    ) -> None:
+        """Non-empty siblings of an empty string are still classified."""
+        stub, _ = _stub_client(monkeypatch, _CLEAN_RESPONSE)
+
+        response = client.post("/v1/moderations", json={"input": ["", "hello"]})
+
+        assert response.status_code == 200, response.text
+        assert len(response.json()["results"]) == 2
+        (request,) = stub.requests
+        assert request["content"] == [{"text": {"text": "hello"}}]
+
+    def test_empty_text_part_is_clean_without_aws_call(
+        self,
+        client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        configured_guardrail: None,
+    ) -> None:
+        """An empty {"type": "text"} part short-circuits like a plain string."""
+        stub, _ = _stub_client(monkeypatch, _FLAGGED_RESPONSE)
+
+        response = client.post(
+            "/v1/moderations", json={"input": [{"type": "text", "text": ""}]}
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["results"][0]["flagged"] is False
+        assert not stub.requests
+
+    def test_missing_or_wrong_bearer_returns_401_envelope(
+        self, monkeypatch: pytest.MonkeyPatch, configured_guardrail: None
+    ) -> None:
+        """Unauthenticated requests get the OpenAI 401 error envelope."""
+        from asyncio import run  # noqa: PLC0415
+
+        from pydantic import SecretStr  # noqa: PLC0415
+
+        from stdapi import auth  # noqa: PLC0415
+        from stdapi.main import app  # noqa: PLC0415
+
+        stub, _ = _stub_client(monkeypatch, _CLEAN_RESPONSE)
+        # The lifespan-initialized handler is not set up here: install one.
+        monkeypatch.setattr(SETTINGS, "api_key", SecretStr("a-real-secret"))
+        monkeypatch.setattr(SETTINGS, "api_key_ssm_parameter", None)
+        monkeypatch.setattr(SETTINGS, "api_key_secretsmanager_secret", None)
+        handler = auth.AuthenticationHandler()
+        assert run(handler.initialize()) is True
+        monkeypatch.setattr(auth, "_auth_handler", handler)
+        anonymous = TestClient(app)
+
+        for headers in ({}, {"Authorization": "Bearer wrong-key"}):
+            response = anonymous.post(
+                "/v1/moderations", json={"input": "x"}, headers=headers
+            )
+            assert response.status_code == 401
+            error = response.json()["error"]
+            assert error["type"] == "authentication_error"
+            assert error["message"]
+        assert not stub.requests
+
+    def test_usage_records_text_units_and_model(
+        self,
+        client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        configured_guardrail: None,
+    ) -> None:
+        """Guardrail moderation records billed text units per input, summed."""
+        from stdapi import monitoring  # noqa: PLC0415
+
+        _stub_client(monkeypatch, _CLEAN_RESPONSE)
+        written: list[dict[str, Any]] = []
+        monkeypatch.setattr(monitoring, "write_log_event", written.append)
+
+        response = client.post(
+            "/v1/moderations", json={"input": ["a" * 1_500, "short"]}
+        )
+
+        assert response.status_code == 200, response.text
+        (request_log,) = [w for w in written if w.get("type") == "request"]
+        (entry,) = request_log["usage"]
+        assert entry["service"] == "bedrock-runtime"
+        assert entry["model"] == "gr123:1"
+        assert entry["region"] == SETTINGS.aws_bedrock_regions[0]
+        # ceil(1500 / 1000) + ceil(5 / 1000) = 2 + 1 text units.
+        assert entry["text_units"] == 3
+        assert "input_images" not in entry
+
+    def test_usage_records_images_per_image(
+        self,
+        client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        configured_guardrail: None,
+    ) -> None:
+        """Guardrail image moderation records one input image per input."""
+        from stdapi import monitoring  # noqa: PLC0415
+
+        _stub_client(monkeypatch, _CLEAN_RESPONSE)
+        written: list[dict[str, Any]] = []
+        monkeypatch.setattr(monitoring, "write_log_event", written.append)
+        data_uri = f"data:image/png;base64,{b64encode(_PNG).decode()}"
+
+        response = client.post(
+            "/v1/moderations",
+            json={"input": [{"type": "image_url", "image_url": {"url": data_uri}}]},
+        )
+
+        assert response.status_code == 200, response.text
+        (request_log,) = [w for w in written if w.get("type") == "request"]
+        (entry,) = request_log["usage"]
+        assert entry["model"] == "gr123:1"
+        assert entry["input_images"] == 1
+        assert "text_units" not in entry
+
+
+@pytest.mark.local
+class TestModerationsSdkParity:
+    """Pins against the installed openai SDK to catch upstream category drift."""
+
+    def test_category_json_keys_match_the_installed_sdk(self) -> None:
+        """Category and applied-input-type JSON keys match openai's Moderation submodels."""
+        from openai.types.moderation import Categories as SdkCategories  # noqa: PLC0415
+        from openai.types.moderation import (  # noqa: PLC0415
+            CategoryAppliedInputTypes as SdkCategoryAppliedInputTypes,
+        )
+
+        def _json_keys(fields: dict[str, Any]) -> set[str]:
+            return {info.alias or name for name, info in fields.items()}
+
+        sdk_categories = _json_keys(SdkCategories.model_fields)
+        assert set(ALL_CATEGORIES) == sdk_categories
+        assert _json_keys(ModerationCategories.model_fields) == sdk_categories
+        assert _json_keys(
+            ModerationCategoryAppliedInputTypes.model_fields
+        ) == _json_keys(SdkCategoryAppliedInputTypes.model_fields)
+
+    def test_image_capable_categories_match_the_installed_sdk(self) -> None:
+        """`IMAGE_CATEGORIES` matches the categories accepting "image" in the installed SDK."""
+        from typing import get_args  # noqa: PLC0415
+
+        from openai.types.moderation import (  # noqa: PLC0415
+            CategoryAppliedInputTypes as SdkCategoryAppliedInputTypes,
+        )
+
+        sdk_image_categories = {
+            info.alias or name
+            for name, info in SdkCategoryAppliedInputTypes.model_fields.items()
+            if "image" in get_args(get_args(info.annotation)[0])
+        }
+        assert sdk_image_categories == IMAGE_CATEGORIES
+
+
+@pytest.mark.local
+class TestModerationInputLimit:
+    """The input array is capped to bound per-element AWS moderation calls."""
+
+    def test_input_at_the_limit_is_accepted(self) -> None:
+        """An input array of exactly the maximum length validates."""
+        params = ModerationCreateParams.model_validate({"input": ["x"] * 2048})
+        assert isinstance(params.input, list)
+        assert len(params.input) == 2048
+
+    def test_input_over_the_limit_is_rejected(self) -> None:
+        """An input array beyond the maximum length is rejected."""
+        with pytest.raises(ValidationError):
+            ModerationCreateParams.model_validate({"input": ["x"] * 2049})
+
 
 #: A Comprehend toxicity result with violent-threat and profanity labels.
 _TOXIC_RESULT: dict[str, Any] = {
@@ -375,7 +628,7 @@ def _stub_toxicity(
         assert service == "comprehend"
         return await call(_StubComprehendClient(), regions[0]), regions[0]
 
-    monkeypatch.setattr(openai_moderations, "call_with_region_failover", _call)
+    monkeypatch.setattr(amazon_comprehend, "call_with_region_failover", _call)
     return batches
 
 
@@ -409,6 +662,92 @@ class TestComprehendModerationsRoute:
         assert len(applied) == 13
         assert all(value == ["text"] for value in applied.values())
         assert batches == [["threatening text"]]
+
+    def test_inputs_exceeding_batch_size_are_all_classified_in_order(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """More inputs than the concurrency batch size yield one correctly-mapped result each."""
+        count = 2 * openai_moderations._INPUT_BATCH_SIZE + 5  # noqa: SLF001
+        texts = [f"text-{i}" for i in range(count)]
+        toxic_indices = {2, 7, count - 1}
+
+        class _StubComprehendClient:
+            async def detect_toxic_content(
+                self,
+                *,
+                TextSegments: list[dict[str, str]],  # noqa: N803
+                LanguageCode: str,  # noqa: N803
+            ) -> dict[str, Any]:
+                assert LanguageCode == "en"
+                (segment,) = TextSegments
+                index = int(segment["Text"].removeprefix("text-"))
+                score = 0.9 if index in toxic_indices else 0.0
+                return {"ResultList": [{"Labels": [], "Toxicity": score}]}
+
+        async def _call(
+            service: str,
+            regions: list[str],
+            call: Any,  # noqa: ANN401
+        ) -> tuple[dict[str, Any], str]:
+            assert service == "comprehend"
+            return await call(_StubComprehendClient(), regions[0]), regions[0]
+
+        monkeypatch.setattr(amazon_comprehend, "call_with_region_failover", _call)
+
+        response = client.post("/v1/moderations", json={"input": texts})
+
+        assert response.status_code == 200, response.text
+        results = response.json()["results"]
+        assert len(results) == count
+        for index, result in enumerate(results):
+            assert result["flagged"] is (index in toxic_indices), index
+
+    def test_usage_records_comprehend_units_and_region(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Comprehend moderation records character-count units with the per-call minimum."""
+        from stdapi import monitoring  # noqa: PLC0415
+        from stdapi.aws import service_regions  # noqa: PLC0415
+
+        _stub_toxicity(monkeypatch, [[_CLEAN_RESULT]])
+        written: list[dict[str, Any]] = []
+        monkeypatch.setattr(monitoring, "write_log_event", written.append)
+
+        response = client.post("/v1/moderations", json={"input": "hi"})
+
+        assert response.status_code == 200, response.text
+        (request_log,) = [w for w in written if w.get("type") == "request"]
+        (entry,) = request_log["usage"]
+        assert entry["service"] == "comprehend"
+        assert entry["model"] == "amazon.comprehend-toxicity"
+        assert entry["region"] == service_regions(SETTINGS.aws_comprehend_region)[0]
+        # ceil(len("hi") / 100) = 1, below the 3-unit per-call minimum.
+        assert entry["comprehend_units"] == 3
+
+    def test_mixed_text_and_image_input_rejected_as_a_whole(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pinned current behavior: an image sibling fails the whole batch with 400.
+
+        Comprehend has no partial-success mode: the image element's
+        ``ApiError`` propagates out of the batch's ``gather``, so the
+        request is rejected even though its text sibling is valid.
+        """
+        _stub_toxicity(monkeypatch, [[_CLEAN_RESULT]])
+        data_uri = f"data:image/png;base64,{b64encode(_PNG).decode()}"
+
+        response = client.post(
+            "/v1/moderations",
+            json={
+                "input": [
+                    {"type": "text", "text": "hello"},
+                    {"type": "image_url", "image_url": {"url": data_uri}},
+                ]
+            },
+        )
+
+        assert response.status_code == 400
+        assert "guardrail" in response.json()["error"]["message"]
 
     @pytest.mark.parametrize(
         "model", ["omni-moderation-latest", "text-moderation-latest"]
@@ -458,6 +797,24 @@ class TestComprehendModerationsRoute:
         assert result["categories"]["violence"] is False
         assert result["category_scores"]["violence/graphic"] == 0.8
 
+    @pytest.mark.parametrize("label", ["HARASSMENT_OR_ABUSE", "INSULT"])
+    def test_harassment_labels_map_to_harassment_category(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, label: str
+    ) -> None:
+        """HARASSMENT_OR_ABUSE and INSULT both map to harassment, at the threshold."""
+        _stub_toxicity(
+            monkeypatch,
+            [[{"Labels": [{"Name": label, "Score": 0.5}], "Toxicity": 0.1}]],
+        )
+
+        response = client.post("/v1/moderations", json={"input": "x"})
+
+        assert response.status_code == 200, response.text
+        (result,) = response.json()["results"]
+        assert result["flagged"] is True
+        assert result["categories"]["harassment"] is True
+        assert result["category_scores"]["harassment"] == 0.5
+
     def test_text_object_input(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -476,8 +833,34 @@ class TestComprehendModerationsRoute:
     def test_each_input_gets_own_result(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Two inputs in one request yield two independent results."""
-        batches = _stub_toxicity(monkeypatch, [[_TOXIC_RESULT], [_CLEAN_RESULT]])
+        """Two inputs in one request yield two independent, correctly-mapped results.
+
+        The stub keys its canned result on the segment text rather than
+        call order, so the assertion holds regardless of how
+        ``asyncio.gather`` schedules the underlying Comprehend calls.
+        """
+        canned = {"bad": _TOXIC_RESULT, "ok": _CLEAN_RESULT}
+
+        class _StubComprehendClient:
+            async def detect_toxic_content(
+                self,
+                *,
+                TextSegments: list[dict[str, str]],  # noqa: N803
+                LanguageCode: str,  # noqa: N803
+            ) -> dict[str, Any]:
+                assert LanguageCode == "en"
+                (segment,) = TextSegments
+                return {"ResultList": [canned[segment["Text"]]]}
+
+        async def _call(
+            service: str,
+            regions: list[str],
+            call: Any,  # noqa: ANN401
+        ) -> tuple[dict[str, Any], str]:
+            assert service == "comprehend"
+            return await call(_StubComprehendClient(), regions[0]), regions[0]
+
+        monkeypatch.setattr(amazon_comprehend, "call_with_region_failover", _call)
 
         response = client.post("/v1/moderations", json={"input": ["bad", "ok"]})
 
@@ -485,7 +868,6 @@ class TestComprehendModerationsRoute:
         toxic, clean = response.json()["results"]
         assert toxic["flagged"] is True
         assert clean["flagged"] is False
-        assert batches == [["bad"], ["ok"]]
 
     def test_score_at_threshold_flags(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
@@ -568,7 +950,7 @@ class TestComprehendModerationsRoute:
     ) -> None:
         """Splitting counts UTF-8 bytes without breaking characters apart."""
         text = char * (1_200 // len(char.encode()))  # 1200 bytes total
-        segments = openai_moderations._split_toxicity_segments(text)  # noqa: SLF001
+        segments = amazon_comprehend._split_toxicity_segments(text)  # noqa: SLF001
         assert "".join(segments) == text
         assert [len(segment.encode()) for segment in segments] == sizes
 

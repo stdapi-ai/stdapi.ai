@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING, Literal
 
 from stdapi.api_errors import ApiError
 from stdapi.aws_bedrock import (
+    GUARDRAIL_CONFIG_VAR,
     GUARDRAIL_TRACE_VAR,
-    GUARDTRAIL_CONFIG_VAR,
     is_comprehend_moderation_model,
     map_guardrail_filters,
     resolve_guardrail_model,
@@ -49,7 +49,7 @@ def apply_request_moderation(moderation: RequestModeration | None) -> None:
         )
         raise ApiError(msg)
     identifier, version = resolve_guardrail_model(moderation.model)
-    GUARDTRAIL_CONFIG_VAR.set(
+    GUARDRAIL_CONFIG_VAR.set(
         {
             "guardrailIdentifier": identifier,
             "guardrailVersion": version,

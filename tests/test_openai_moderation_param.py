@@ -1,13 +1,17 @@
 """Tests for the request-level moderation parameter on chat and responses."""
 
-from typing import Any
+from json import loads
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from starlette.testclient import TestClient
 
-from stdapi.aws_bedrock import GUARDRAIL_TRACE_VAR, GUARDTRAIL_CONFIG_VAR
+import stdapi.models
+from stdapi.aws_bedrock import GUARDRAIL_CONFIG_VAR, GUARDRAIL_TRACE_VAR
 from stdapi.config import SETTINGS
-from stdapi.models import ModelDetails
+from stdapi.models import ModelBase, ModelDetails
+from stdapi.models.chat._adapters import _openai_chat_completion as chat_adapter
+from stdapi.monitoring import REQUEST_LOG
 from stdapi.routes import openai_chat_completions, openai_responses
 from stdapi.types.openai_chat_completions import ChatCompletion
 from stdapi.types.openai_responses import (
@@ -16,6 +20,11 @@ from stdapi.types.openai_responses import (
     Response,
     ResponseUsage,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
+    from types_aiobotocore_bedrock_runtime.type_defs import ConverseStreamOutputTypeDef
 
 #: All tests in this module exercise the local implementation in-process.
 pytestmark = pytest.mark.local
@@ -74,7 +83,7 @@ class _StubChatBackend:
         self.guardrail_configs: list[Any] = []
 
     def _capture(self) -> None:
-        self.guardrail_configs.append(GUARDTRAIL_CONFIG_VAR.get(None))
+        self.guardrail_configs.append(GUARDRAIL_CONFIG_VAR.get(None))
         if (holder := GUARDRAIL_TRACE_VAR.get(None)) is not None:
             holder.update(_TRACE)
 
@@ -360,3 +369,142 @@ class TestResponsesModerationParam:
         assert "guardrail" in message
         assert "aws_bedrock_guardrail_identifier" not in message.lower()
         assert not chat_backend.guardrail_configs
+
+
+async def _noop_prepare(_self: object, _request: object, _region: str) -> None:
+    """No-op stand-in for ModelBase._prepare_converse_request_for_region."""
+
+
+async def _events(events: list[dict[str, Any]]) -> AsyncGenerator[dict[str, Any]]:
+    """Yield fabricated Bedrock ConverseStream events."""
+    for event in events:
+        yield event
+
+
+class _StubTraceClient:
+    """Fake Bedrock client whose responses carry a guardrail trace."""
+
+    async def converse(self, **_kwargs: object) -> dict[str, Any]:
+        """Return a canned Converse response with trace.guardrail."""
+        return {
+            "output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            "trace": {"guardrail": _TRACE},
+        }
+
+    async def converse_stream(self, **_kwargs: object) -> dict[str, Any]:
+        """Return a canned ConverseStream response with a trailing trace."""
+        return {
+            "stream": _events(
+                [
+                    {"contentBlockDelta": {"delta": {"text": "hi"}}},
+                    {"messageStop": {"stopReason": "end_turn"}},
+                    {
+                        "metadata": {
+                            "usage": {
+                                "inputTokens": 1,
+                                "outputTokens": 1,
+                                "totalTokens": 2,
+                            },
+                            "trace": {"guardrail": _TRACE},
+                        }
+                    },
+                ]
+            )
+        }
+
+
+class TestGuardrailTraceCapture:
+    """converse()/converse_stream() capture trace.guardrail into the shared holder."""
+
+    @pytest.fixture(autouse=True)
+    def _stub_bedrock(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Route the real converse wrappers to the stub client in one region."""
+
+        async def _candidates(_model_id: str, **_kwargs: object) -> list[str]:
+            return ["us-east-1"]
+
+        monkeypatch.setattr(stdapi.models, "compute_candidate_regions", _candidates)
+        monkeypatch.setattr(
+            ModelBase, "_prepare_converse_request_for_region", _noop_prepare
+        )
+        monkeypatch.setattr(
+            stdapi.models,
+            "bedrock_client",
+            lambda _region, **_kwargs: _StubTraceClient(),
+        )
+
+    async def test_converse_updates_the_trace_holder(self) -> None:
+        """The non-streaming wrapper merges the response trace into the holder."""
+        holder: dict[str, Any] = {}
+        token = GUARDRAIL_TRACE_VAR.set(holder)
+        try:
+            await ModelBase("tracemodel").converse({"modelId": "tracemodel"})
+        finally:
+            GUARDRAIL_TRACE_VAR.reset(token)
+        assert holder == _TRACE
+
+    async def test_converse_stream_updates_the_trace_holder(self) -> None:
+        """Consuming the stream merges the metadata event trace into the holder."""
+        holder: dict[str, Any] = {}
+        token = GUARDRAIL_TRACE_VAR.set(holder)
+        try:
+            response = await ModelBase("tracemodel").converse_stream(
+                {"modelId": "tracemodel"}
+            )
+            assert holder == {}  # Nothing captured before the metadata event.
+            async for _ in response["stream"]:
+                pass
+        finally:
+            GUARDRAIL_TRACE_VAR.reset(token)
+        assert holder == _TRACE
+
+    async def test_converse_without_holder_is_a_no_op(self) -> None:
+        """Without an installed holder the trace is simply not captured."""
+        response = await ModelBase("tracemodel").converse({"modelId": "tracemodel"})
+        assert response["trace"]["guardrail"] == _TRACE
+        assert GUARDRAIL_TRACE_VAR.get(None) is None
+
+
+class TestChatStreamingModerationDrop:
+    """Streaming chat completions carry no moderation payload (documented drop)."""
+
+    async def test_no_moderation_on_any_chunk(self) -> None:
+        """Even with a captured trace, no streamed chunk carries moderation."""
+        events: list[dict[str, Any]] = [
+            {"contentBlockDelta": {"delta": {"text": "hi"}, "contentBlockIndex": 0}},
+            {"messageStop": {"stopReason": "end_turn"}},
+            {
+                "metadata": {
+                    "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+                    "trace": {"guardrail": _TRACE},
+                }
+            },
+        ]
+        holder: dict[str, Any] = {}
+        trace_token = GUARDRAIL_TRACE_VAR.set(holder)
+        legacy_token = chat_adapter._LEGACY_FUNCTION.set(False)  # noqa: SLF001
+        log_token = REQUEST_LOG.set({"level": "info"})  # type: ignore[typeddict-item]
+        try:
+            stream = ModelBase("tracemodel")._capture_stream_usage(  # noqa: SLF001
+                cast("AsyncGenerator[ConverseStreamOutputTypeDef]", _events(events))
+            )
+            chunks = [
+                sse.data
+                async for sse in chat_adapter.format_stream(
+                    "chatcmpl-1", 1, "tracemodel", stream, None
+                )
+            ]
+        finally:
+            REQUEST_LOG.reset(log_token)
+            chat_adapter._LEGACY_FUNCTION.reset(legacy_token)  # noqa: SLF001
+            GUARDRAIL_TRACE_VAR.reset(trace_token)
+        assert holder == _TRACE  # The trace was captured...
+        assert chunks
+        for chunk in chunks:
+            if chunk == "[DONE]":
+                continue
+            payload = loads(chunk) if isinstance(chunk, str) else chunk
+            assert isinstance(payload, dict)
+            assert "moderation" not in payload  # ...but never reported on chunks.
