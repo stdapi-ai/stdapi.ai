@@ -396,6 +396,29 @@ Ensure your IAM role includes pricing read access (the Price List API serves ide
 !!! note "Performance"
     EMF lines bypass log-level filtering and write directly to stdout. This ensures metrics are always available on ECS where CloudWatch Agent scrapes stdout.
 
+## :material-tag-multiple: AWS Cost Attribution
+
+Cost tracking prices **each request** as it happens. AWS-side attribution answers a different question — whose spend lands on the **AWS bill**, in [Cost Explorer](https://docs.aws.amazon.com/cost-management/latest/userguide/ce-what-is.html) and [CUR 2.0](https://docs.aws.amazon.com/cur/latest/userguide/what-is-cur.html). The two are complementary: request logs for granular analysis, AWS attribution for invoicing and chargeback.
+
+| Dimension               | Mechanism                                                                                                                                            | Reported in                          | Setup                                                             |
+|:------------------------|:-----------------------------------------------------------------------------------------------------------------------------------------------------|:-------------------------------------|:------------------------------------------------------------------|
+| **Service / gateway**   | [IAM principal attribution](https://docs.aws.amazon.com/bedrock/latest/userguide/cost-mgmt-iam-principal-tracking.html) — AWS captures the caller identity | Cost Explorer, CUR 2.0               | Automatic; tag the execution role for finer breakdowns            |
+| **Application / workload** | [Bedrock Project/Workspace](operations_configuration.md#bedrock-mantle-project) (Bedrock Mantle models)                                            | Cost Explorer, CUR 2.0               | Set `AWS_BEDROCK_MANTLE_PROJECT`                                  |
+| **End user**            | `stdapi-ai.user_id` request metadata and job tags                                                                                                     | stdapi.ai logs, Bedrock invocation logs | Clients send `user` (OpenAI) or `metadata.user_id` (Anthropic)    |
+
+### IAM Principal Attribution
+
+Amazon Bedrock records the IAM identity behind every `bedrock-runtime` inference call and forwards it to Cost Explorer and CUR 2.0. Nothing to configure in stdapi.ai, and no change to client requests.
+
+stdapi.ai calls AWS with a **single execution role** — the ECS task role — so all Bedrock spend is attributed to that one identity, the standard LLM-gateway pattern AWS documents. To break that total down, tag the execution role (for example `team` or `cost-center`), then activate those keys in the AWS Billing console under **Cost allocation tags**, filtering by type **IAM principal**.
+
+!!! note "Attribution grain"
+    IAM principal attribution aggregates per usage type per day — it never yields a per-request cost. Use the [request logs](#cost-tracking-real-time-aws-pricing) for that. It also covers `bedrock-runtime` only: Bedrock Mantle requests are attributed with Projects instead.
+
+### Per-User Attribution
+
+Because every call shares the gateway's execution role, AWS itself cannot split Cost Explorer costs per end user. stdapi.ai attributes users at the request level instead: the client-supplied identifier is recorded as `stdapi-ai.user_id` in the request log — alongside that request's computed cost — and forwarded to Bedrock as request metadata, so per-user spend is aggregated from the logs rather than from the AWS bill.
+
 ## :material-link-variant: Correlating Logs and Traces
 
 - Group events by `id` to reconstruct a full request lifecycle (request → stream(s) → background).
@@ -578,8 +601,9 @@ stdapi.ai attaches correlation identifiers to outgoing service calls, allowing y
 
 Coverage and how to use it varies by service:
 
-- **Bedrock — standard inference** (most chat and generation routes): identifiers are embedded in the invocation request and appear in Bedrock invocation log records when [model invocation logging](https://docs.aws.amazon.com/bedrock/latest/userguide/model-invocation-logging.html) is enabled. Coverage is limited to standard inference routes — some model-specific paths do not carry this metadata. Filter by `requestMetadata.stdapi-ai\.request_id` in CloudWatch Logs Insights to join a Bedrock record with its stdapi.ai event.
+- **Bedrock — synchronous inference** (every chat, embedding, image and audio route served by `bedrock-runtime`): identifiers are embedded in the invocation request — both the `Converse` and the `InvokeModel` families, streaming included — and appear in Bedrock invocation log records when [model invocation logging](https://docs.aws.amazon.com/bedrock/latest/userguide/model-invocation-logging.html) is enabled. Filter by `requestMetadata.stdapi-ai\.request_id` in CloudWatch Logs Insights to join a Bedrock record with its stdapi.ai event.
 - **Bedrock — asynchronous batch jobs**: identifiers are attached as resource tags on the job, visible in the AWS Console and searchable via the CLI/API.
+- **Bedrock Mantle**: the Mantle endpoint accepts no request metadata. Attribute those requests with a [Project/Workspace](operations_configuration.md#bedrock-mantle-project) instead.
 - **Transcribe — audio transcription**: identifiers are attached as job tags. stdapi.ai deletes completed transcription jobs automatically, so tags are only available while the job is still running.
 
 !!! note "Security"
