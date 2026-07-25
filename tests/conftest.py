@@ -27,7 +27,13 @@ if TYPE_CHECKING:
 
     from pluggy import Result as _PluggyResult
 
-    from stdapi.pricing import CacheTtlBucket, ContextLength, Dimension, Routing
+    from stdapi.pricing import (
+        CacheTtlBucket,
+        ContextLength,
+        Dimension,
+        Routing,
+        Service,
+    )
 
 
 def logged_usage_entries(
@@ -78,6 +84,7 @@ def set_test_price(
     routing: Routing = "",
     spec: str = "",
     context: ContextLength = "",
+    service: Service | None = None,
 ) -> None:
     """Seed the price index with one test price.
 
@@ -101,13 +108,14 @@ def set_test_price(
         routing: Serving profile ("global", "latency" or "").
         spec: Media/image spec bucket -- see ``PriceKey.spec``.
         context: Context-length bucket ("long" or "").
+        service: The priced service; defaults to ``Service.BEDROCK``.
     """
     from decimal import Decimal  # noqa: PLC0415
 
     from stdapi.pricing import Price, PriceKey, Service, _state  # noqa: PLC0415
 
     key = PriceKey(
-        Service.BEDROCK,
+        service or Service.BEDROCK,
         model,
         region,
         dimension,
@@ -117,7 +125,8 @@ def set_test_price(
         spec,
         context,
     )
-    _state.price_index[key] = Price(Decimal(amount), currency)
+    # Swap (don't mutate): model_prices caches a per-index grouping by identity.
+    _state.price_index = {**_state.price_index, key: Price(Decimal(amount), currency)}
 
 
 @pytest.fixture(autouse=True)
@@ -801,7 +810,7 @@ ANTHROPIC_MODEL_MAPPINGS: dict[str, dict[str, str]] = {
         "chat_vision": "claude-haiku-4-5-20251001",
         "chat_reasoning": "claude-sonnet-4-5-20250929",
         "chat_system_as_messages": "claude-sonnet-5",
-        "count_tokens": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+        "count_tokens": "claude-haiku-4-5-20251001",
     },
 }
 ANTHROPIC_MODEL_MAPPINGS["bedrock"] = {
@@ -876,7 +885,14 @@ def anthropic_client(
         )
     if request.config.getoption("--use-official-api"):
         if getenv("ANTHROPIC_API_KEY"):
-            return Anthropic(max_retries=5)
+            # AWS-hosted Anthropic endpoints scope requests to a workspace.
+            workspace_id = getenv("ANTHROPIC_WORKSPACE_ID")
+            return Anthropic(
+                max_retries=5,
+                default_headers=(
+                    {"anthropic-workspace-id": workspace_id} if workspace_id else None
+                ),
+            )
         return AnthropicBedrock(max_retries=5)
     return Anthropic(
         base_url=f"{request.config.getoption('--server-url').rstrip('/')}/anthropic/",

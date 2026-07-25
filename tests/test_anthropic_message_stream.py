@@ -122,3 +122,21 @@ async def test_text_block_is_not_given_a_tool_input_delta() -> None:
         data.get("delta", {}).get("type") == "input_json_delta"
         for _event, data in pairs
     )
+
+
+async def test_message_delta_always_carries_stop_sequence_key() -> None:
+    """``message_delta.delta`` always includes ``stop_sequence``, null when unused.
+
+    Converse-served (non-Claude) models never report a matched stop sequence,
+    but Anthropic's wire format always includes the key.
+    """
+    pairs = await _collect(
+        [
+            {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "hi"}}},
+            {"contentBlockStop": {"contentBlockIndex": 0}},
+            {"messageStop": {"stopReason": "end_turn"}},
+        ]
+    )
+    (delta_data,) = [data for event, data in pairs if event == "message_delta"]
+    assert "stop_sequence" in delta_data["delta"]
+    assert delta_data["delta"]["stop_sequence"] is None

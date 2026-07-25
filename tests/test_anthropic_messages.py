@@ -6,6 +6,7 @@ specification, ensuring compatibility with the official Anthropic API behavior.
 
 import base64
 import json as _json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -168,7 +169,10 @@ class TestAnthropicMessages:
         assert len(response.content) >= 1
 
     def test_system_role_in_messages(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
+        self,
+        anthropic_client: Anthropic,
+        anthropic_chat_model: str,
+        use_official_api: bool,
     ) -> None:
         """Test system prompt provided as a message with role='system'.
 
@@ -176,6 +180,8 @@ class TestAnthropicMessages:
             - A message with role='system' is extracted as the system prompt
             - The response is valid and the system instruction is honoured
         """
+        if use_official_api:
+            pytest.skip("system-role messages in `messages` are a stdapi extension")
         response = anthropic_client.messages.create(
             model=anthropic_chat_model,
             max_tokens=100,
@@ -193,7 +199,10 @@ class TestAnthropicMessages:
         assert response.content[0].type == "text"
 
     def test_system_role_merged_with_system_field(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
+        self,
+        anthropic_client: Anthropic,
+        anthropic_chat_model: str,
+        use_official_api: bool,
     ) -> None:
         """Test that system-role messages are merged with the top-level system field.
 
@@ -201,6 +210,8 @@ class TestAnthropicMessages:
             - Content from both sources is accepted without error
             - Response is valid
         """
+        if use_official_api:
+            pytest.skip("system-role messages in `messages` are a stdapi extension")
         response = anthropic_client.messages.create(
             model=anthropic_chat_model,
             max_tokens=100,
@@ -215,7 +226,10 @@ class TestAnthropicMessages:
         assert len(response.content) >= 1
 
     def test_system_role_list_content_in_messages(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
+        self,
+        anthropic_client: Anthropic,
+        anthropic_chat_model: str,
+        use_official_api: bool,
     ) -> None:
         """Test system-role message with list-of-blocks content is extracted correctly.
 
@@ -224,6 +238,8 @@ class TestAnthropicMessages:
             - Non-TextBlockParam blocks in the list are silently dropped without error
             - Response is valid
         """
+        if use_official_api:
+            pytest.skip("system-role messages in `messages` are a stdapi extension")
         response = anthropic_client.messages.create(
             model=anthropic_chat_model,
             max_tokens=100,
@@ -246,7 +262,10 @@ class TestAnthropicMessages:
         assert response.content[0].type == "text"
 
     def test_system_role_passthrough_as_message(
-        self, anthropic_client: Anthropic, anthropic_system_as_messages_model: str
+        self,
+        anthropic_client: Anthropic,
+        anthropic_system_as_messages_model: str,
+        use_official_api: bool,
     ) -> None:
         """Test a mid-conversation system message on Claude Opus 4.8+.
 
@@ -261,6 +280,8 @@ class TestAnthropicMessages:
             - A mid-conversation system message is accepted after the last user turn
             - Response is valid (the instruction is applied as a system instruction)
         """
+        if use_official_api:
+            pytest.skip("system-role messages in `messages` are a stdapi extension")
         response = anthropic_client.messages.create(
             model=anthropic_system_as_messages_model,
             max_tokens=100,
@@ -930,13 +951,18 @@ class TestAnthropicMessages:
             )
 
     def test_invalid_max_tokens_error(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
+        self,
+        anthropic_client: Anthropic,
+        anthropic_chat_model: str,
+        use_official_api: bool,
     ) -> None:
         """Test that invalid max_tokens value produces an error.
 
         Validates:
             - max_tokens of 0 is rejected
         """
+        if use_official_api:
+            pytest.skip("the AWS-hosted official endpoint accepts max_tokens=0")
         with pytest.raises(BadRequestError):
             anthropic_client.messages.create(
                 model=anthropic_chat_model,
@@ -2540,10 +2566,10 @@ class TestAnthropicCountTokens:
         """Test token counting with an invalid model returns an error.
 
         Validates:
-            - Invalid model ID raises BadRequestError (matching official Anthropic API).
+            - Invalid model ID raises NotFoundError (matching official Anthropic API).
         """
         try:
-            with pytest.raises(BadRequestError):
+            with pytest.raises(NotFoundError):
                 anthropic_client.messages.count_tokens(
                     model="nonexistent-model-xyz",
                     messages=[{"role": "user", "content": "Hello"}],
@@ -2586,7 +2612,10 @@ class TestAnthropicCountTokens:
         assert response.input_tokens > 0
 
     def test_count_tokens_web_search_tool_ignored(
-        self, anthropic_client: Anthropic, anthropic_count_tokens_model: str
+        self,
+        anthropic_client: Anthropic,
+        anthropic_count_tokens_model: str,
+        use_official_api: bool,
     ) -> None:
         """Test that web search tools are ignored during token counting.
 
@@ -2594,6 +2623,8 @@ class TestAnthropicCountTokens:
             - Token counting succeeds when web_search tool is present
             - The system tool does not cause an error
         """
+        if use_official_api:
+            pytest.skip("the official API rejects server tools in count_tokens")
         try:
             response = anthropic_client.messages.count_tokens(
                 model=anthropic_count_tokens_model,
@@ -2634,7 +2665,10 @@ class TestAnthropicCountTokens:
         assert response.input_tokens > 0
 
     def test_count_tokens_system_role_in_messages(
-        self, anthropic_client: Anthropic, anthropic_count_tokens_model: str
+        self,
+        anthropic_client: Anthropic,
+        anthropic_count_tokens_model: str,
+        use_official_api: bool,
     ) -> None:
         """Test that a system-role message contributes to the token count.
 
@@ -2642,6 +2676,8 @@ class TestAnthropicCountTokens:
             - System-role message content is counted (not silently dropped)
             - Token count with system-role message exceeds count without it
         """
+        if use_official_api:
+            pytest.skip("system-role messages in `messages` are a stdapi extension")
         try:
             response_without = anthropic_client.messages.count_tokens(
                 model=anthropic_count_tokens_model,
@@ -2668,13 +2704,18 @@ class TestAnthropicCountTokens:
         assert response_with.input_tokens > response_without.input_tokens
 
     def test_count_tokens_system_role_equivalent_to_system_field(
-        self, anthropic_client: Anthropic, anthropic_count_tokens_model: str
+        self,
+        anthropic_client: Anthropic,
+        anthropic_count_tokens_model: str,
+        use_official_api: bool,
     ) -> None:
         """Test that system-role message and top-level system field yield the same token count.
 
         Validates:
             - Both paths for providing a system prompt produce an equivalent token count
         """
+        if use_official_api:
+            pytest.skip("system-role messages in `messages` are a stdapi extension")
         system_text = "You are a helpful assistant."
         try:
             response_field = anthropic_client.messages.count_tokens(
@@ -2799,3 +2840,120 @@ class TestAnthropicCountTokensDispatch:
         assert mantle.await_args is not None
         assert mantle_model.id in mantle.await_args.args
         classic.assert_not_awaited()
+
+
+class TestAnthropicMessagesUnknownModel:
+    """Offline tests pinning the Anthropic-parity 404 for unknown models."""
+
+    pytestmark = pytest.mark.local
+
+    @pytest.fixture
+    def client(self, api_key: str) -> TestClient:
+        """Test client without lifespan (no AWS startup), pre-authenticated."""
+        from stdapi.main import app  # noqa: PLC0415
+
+        return TestClient(
+            app, headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"}
+        )
+
+    @pytest.fixture
+    def _offline_registry(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Seed one model and disable the AWS registry refresh on cache miss."""
+        details = ModelDetails(
+            id="test.some-registered-model",
+            name="Registered Test Model",
+            provider="Vendor",
+            input_modalities=["TEXT"],
+            output_modalities=["TEXT"],
+            regions=["us-east-1"],
+        )
+        monkeypatch.setitem(_models_mod._MODELS, details.id, details)  # noqa: SLF001
+        monkeypatch.setitem(_models_mod._ALL_MODELS, details.id, details)  # noqa: SLF001
+        monkeypatch.setattr(
+            _models_mod, "initialize_bedrock_models", AsyncMock(return_value=None)
+        )
+
+    @pytest.mark.usefixtures("_offline_registry")
+    def test_messages_unknown_model_returns_404(self, client: TestClient) -> None:
+        """An unknown model returns 404 not_found_error like the official API."""
+        response = client.post(
+            "/anthropic/v1/messages",
+            json={
+                "model": "nonexistent-model-xyz",
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "Hello"}],
+            },
+        )
+        assert response.status_code == 404, response.text
+        body = response.json()
+        assert body["type"] == "error"
+        assert body["error"]["type"] == "not_found_error"
+
+    @pytest.mark.usefixtures("_offline_registry")
+    def test_count_tokens_unknown_model_returns_404(self, client: TestClient) -> None:
+        """count_tokens with an unknown model returns 404 not_found_error."""
+        response = client.post(
+            "/anthropic/v1/messages/count_tokens",
+            json={
+                "model": "nonexistent-model-xyz",
+                "messages": [{"role": "user", "content": "Hello"}],
+            },
+        )
+        assert response.status_code == 404, response.text
+        assert response.json()["error"]["type"] == "not_found_error"
+
+
+class TestAnthropicMessagesMaxTokensOptional:
+    """Offline unit test pinning that ``max_tokens`` stays optional on /v1/messages.
+
+    Intentional divergence from the official Anthropic API (which requires
+    ``max_tokens``): when omitted here, the underlying model's default output
+    length applies. Validation and dispatch are exercised against an app
+    instance without the AWS-touching lifespan, with the model call stubbed.
+    """
+
+    pytestmark = pytest.mark.local
+
+    @pytest.fixture
+    def client(self, api_key: str) -> TestClient:
+        """Test client without lifespan (no AWS startup), pre-authenticated."""
+        from stdapi.main import app  # noqa: PLC0415
+
+        return TestClient(
+            app, headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"}
+        )
+
+    def test_missing_max_tokens_is_accepted(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A /v1/messages request without ``max_tokens`` is accepted (200)."""
+        details = ModelDetails(
+            id="test.max-tokens-optional-model",
+            name="Max Tokens Optional Test",
+            provider="Vendor",
+            input_modalities=["TEXT"],
+            output_modalities=["TEXT"],
+            regions=["us-east-1"],
+        )
+        monkeypatch.setitem(_models_mod._MODELS, details.id, details)  # noqa: SLF001
+        monkeypatch.setitem(_models_mod._ALL_MODELS, details.id, details)  # noqa: SLF001
+        fake_message = {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "hi"}],
+            "model": details.id,
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+        fake_model = SimpleNamespace(
+            create_message=AsyncMock(return_value=fake_message)
+        )
+        monkeypatch.setattr(anthropic_messages, "get_chat_model", lambda _: fake_model)
+
+        response = client.post(
+            "/anthropic/v1/messages",
+            json={"model": details.id, "messages": [{"role": "user", "content": "hi"}]},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["content"][0]["text"] == "hi"

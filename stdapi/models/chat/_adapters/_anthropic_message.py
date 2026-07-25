@@ -1277,19 +1277,19 @@ def _make_message_delta_event(
     Returns:
         JSON server-sent event.
     """
-    return JSONServerSentEvent(
-        data=RawMessageDeltaEvent(
-            type="message_delta",
-            delta=MessageDelta(stop_reason=stop_reason),
-            usage=MessageDeltaUsage(
-                output_tokens=usage_data.get("outputTokens", 0),
-                input_tokens=usage_data.get("inputTokens", 0),
-                cache_read_input_tokens=usage_data.get("cacheReadInputTokens"),
-                cache_creation_input_tokens=usage_data.get("cacheCreationInputTokens"),
-            ),
-        ).model_dump(mode="json", exclude_none=True),
-        event="message_delta",
-    )
+    data = RawMessageDeltaEvent(
+        type="message_delta",
+        delta=MessageDelta(stop_reason=stop_reason),
+        usage=MessageDeltaUsage(
+            output_tokens=usage_data.get("outputTokens", 0),
+            input_tokens=usage_data.get("inputTokens", 0),
+            cache_read_input_tokens=usage_data.get("cacheReadInputTokens"),
+            cache_creation_input_tokens=usage_data.get("cacheCreationInputTokens"),
+        ),
+    ).model_dump(mode="json", exclude_none=True)
+    # Anthropic always includes `stop_sequence` (null when unmatched); exclude_none drops it.
+    data["delta"].setdefault("stop_sequence", None)
+    return JSONServerSentEvent(data=data, event="message_delta")
 
 
 def _is_suppressed_tool(content_block: ContentBlock, forced_tool: str | None) -> bool:

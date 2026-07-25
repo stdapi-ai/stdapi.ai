@@ -220,10 +220,7 @@ async def create_message(
     return await get_chat_model(
         (
             await validate_model(
-                request.model,
-                input_modality="TEXT",
-                output_modality="TEXT",
-                error_status=400,
+                request.model, input_modality="TEXT", output_modality="TEXT"
             )
         ).id
     ).create_message(request, f"msg_{REQUEST_ID.get()}")
@@ -305,7 +302,7 @@ async def count_tokens(
     """
     log_request_params(request)
     model = await validate_model(
-        request.model, input_modality="TEXT", output_modality="TEXT", error_status=400
+        request.model, input_modality="TEXT", output_modality="TEXT"
     )
     model_id = model.get_id()
     if serves_via_mantle(model_id):

@@ -2087,8 +2087,10 @@ class MessageCreateParams(BaseModelRequestWithExtra):
         default=None,
         validation_alias=AliasChoices("stop_sequences", "stopSequences"),
         description="Custom sequences that stop generation when encountered. "
-        "The response `stop_reason` becomes `stop_sequence` and `stop_sequence` "
-        "holds the matched value.",
+        "The response `stop_reason` becomes `stop_sequence`. On native "
+        "passthrough models, the response `stop_sequence` holds the matched "
+        "value; on Converse-served models, Bedrock does not expose the "
+        "matched sequence, so it is `null`.",
     )
     stream: bool = Field(
         default=False,
@@ -2140,6 +2142,7 @@ class MessageCreateParams(BaseModelRequestWithExtra):
         default=None,
         validation_alias=AliasChoices("top_p", "topP"),
         ge=0.0,
+        le=1.0,
         description="Nucleus sampling: cuts off the cumulative token probability "
         "distribution at `top_p`. Use either `temperature` or `top_p`, not both. "
         "Advanced use only; prefer `temperature`.",
