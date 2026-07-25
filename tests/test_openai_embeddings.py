@@ -549,3 +549,96 @@ class TestEmbeddingsUsage:
         assert bedrock_entries, "Expected bedrock service in usage"
         bedrock_entry = bedrock_entries[0]
         assert bedrock_entry["input_tokens"] > 0
+
+
+class TestEmbeddingsEmptyInputRejected:
+    """Offline unit tests: an empty ``input`` array is rejected uniformly.
+
+    Validation happens before any model dispatch or AWS call, so these tests
+    run against an app instance without the AWS-touching lifespan.
+    """
+
+    pytestmark = pytest.mark.local
+
+    @pytest.fixture
+    def client(self, api_key: str) -> TestClientType:
+        """Test client without lifespan (no AWS startup), pre-authenticated."""
+        from starlette.testclient import TestClient  # noqa: PLC0415
+
+        from stdapi.main import app  # noqa: PLC0415
+
+        return TestClient(app, headers={"Authorization": f"Bearer {api_key}"})
+
+    @pytest.mark.parametrize(
+        "model_id", ["text-embedding-3-small", "cohere.embed-english-v3"]
+    )
+    def test_empty_input_array_is_rejected(
+        self, client: TestClientType, model_id: str
+    ) -> None:
+        """An empty ``input`` array returns 400 before reaching any backend."""
+        response = client.post("/v1/embeddings", json={"model": model_id, "input": []})
+        assert response.status_code == 400, response.text
+        error_body = response.json()
+        assert error_body["error"]["type"] == "invalid_request_error"
+
+
+class TestEmbeddingsCohereUnsupportedEmbeddingType:
+    """Offline unit test: non-``float`` Cohere ``embedding_types`` are rejected cleanly.
+
+    The Bedrock client is stubbed at the model layer (``EmbeddingModel.invoke``),
+    so no AWS call is made; ``validate_model`` is stubbed too, avoiding the
+    AWS-touching model-cache lookup.
+    """
+
+    pytestmark = pytest.mark.local
+
+    @pytest.fixture
+    def client(self, api_key: str, monkeypatch: pytest.MonkeyPatch) -> TestClientType:
+        """Test client with stubbed model validation and Bedrock invocation."""
+        from unittest.mock import AsyncMock  # noqa: PLC0415
+
+        from starlette.testclient import TestClient  # noqa: PLC0415
+
+        from stdapi.main import app  # noqa: PLC0415
+        from stdapi.models import InvokeResult  # noqa: PLC0415
+        from stdapi.models.embedding.cohere_embed import EmbeddingModel  # noqa: PLC0415
+
+        class _StubModelDetails:
+            """Minimal stand-in exposing only the ``id`` attribute the route reads."""
+
+            def __init__(self, model_id: str) -> None:
+                self.id = model_id
+
+        async def _stub_validate_model(
+            model_id: str, *_args: object, **_kwargs: object
+        ) -> object:
+            return _StubModelDetails(model_id)
+
+        monkeypatch.setattr(
+            "stdapi.routes.openai_embeddings.validate_model", _stub_validate_model
+        )
+        monkeypatch.setattr(
+            EmbeddingModel,
+            "invoke",
+            AsyncMock(
+                return_value=InvokeResult(
+                    response={"embeddings": {"int8": [[1, 2, 3]]}}
+                )
+            ),
+        )
+        return TestClient(app, headers={"Authorization": f"Bearer {api_key}"})
+
+    def test_non_float_embedding_type_returns_400(self, client: TestClientType) -> None:
+        """``embedding_types=["int8"]`` returns a 400 JSON envelope, not a 500."""
+        response = client.post(
+            "/v1/embeddings",
+            json={
+                "model": "cohere.embed-english-v3",
+                "input": "Hello world",
+                "embedding_types": ["int8"],
+            },
+        )
+        assert response.status_code == 400, response.text
+        error_body = response.json()
+        assert error_body["error"]["type"] == "invalid_request_error"
+        assert "float" in error_body["error"]["message"]

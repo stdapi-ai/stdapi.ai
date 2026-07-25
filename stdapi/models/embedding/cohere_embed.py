@@ -139,6 +139,9 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
 
         result = await self.invoke(request)
         resp = result.response["embeddings"]
+        if isinstance(resp, dict) and "float" not in resp:
+            msg = "Only `float` embeddings are supported on this backend."
+            raise ApiError(msg)
         input_tokens = result.input_tokens or 0
         return EmbeddingResponse(
             embeddings=resp["float"] if isinstance(resp, dict) else resp,
