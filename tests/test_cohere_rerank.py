@@ -141,6 +141,28 @@ class TestCohereRerankRoute:
         (call,) = rerank_backend.calls
         assert "priority" not in call["extra_params"]
 
+    @pytest.mark.parametrize("return_documents", [True, False])
+    def test_return_documents_is_ignored(
+        self,
+        client: TestClient,
+        rerank_backend: _StubRerankModel,
+        return_documents: bool,
+    ) -> None:
+        """The v1-only return_documents field is accepted but not forwarded to AWS."""
+        response = client.post(
+            "/cohere/v2/rerank",
+            json={
+                "model": "cohere.rerank-v3-5:0",
+                "query": "q",
+                "documents": ["a"],
+                "return_documents": return_documents,
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert "document" not in response.json()["results"][0]
+        (call,) = rerank_backend.calls
+        assert "return_documents" not in call["extra_params"]
+
     def test_unknown_model_returns_cohere_error_envelope(
         self, client: TestClient, rerank_backend: _StubRerankModel
     ) -> None:

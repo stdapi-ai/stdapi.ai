@@ -116,7 +116,9 @@ Your existing applications, SDKs, and tools work immediately — no plugins or c
 | Endpoint     | Capability                                   | AWS Backend                  |
 |--------------|----------------------------------------------|------------------------------|
 | [`/v2/rerank`](api_cohere_rerank.md) | Document reranking by relevance to a query   | AWS Bedrock Rerank API       |
+| [`/v1/rerank`](api_cohere_rerank.md#cohere-v1-rerank-api-legacy) | Legacy v1 document reranking                 | AWS Bedrock Rerank API       |
 | [`/v2/embed`](api_cohere_embed.md)  | Vector embeddings for search & RAG           | AWS Bedrock Embedding Models |
+| [`/v1/embed`](api_cohere_embed.md#cohere-v1-embed-api-legacy)  | Legacy v1 vector embeddings for search & RAG | AWS Bedrock Embedding Models |
 
 !!! note "Route prefix"
     Cohere-compatible routes are prefixed with `/cohere` by default (e.g., `/cohere/v2/rerank`). The prefix is configurable via `COHERE_ROUTES_PREFIX`.

@@ -39,6 +39,13 @@ class RerankRequest(BaseModelRequestWithExtra):
             "scheduling priority is not applicable on AWS Bedrock."
         ),
     )
+    return_documents: bool | None = Field(
+        default=None,
+        description=(
+            "Accepted for compatibility with the v1 API and ignored: v2 "
+            "results always reference the input documents by `index` only."
+        ),
+    )
 
 
 class RerankV1Document(BaseModelRequest):

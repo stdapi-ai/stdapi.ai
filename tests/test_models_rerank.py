@@ -4,9 +4,14 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from botocore.exceptions import ClientError
 
-import stdapi.main  # noqa: F401  (registers every route capability)
+import stdapi.aws
+import stdapi.main
+import stdapi.models
+import stdapi.region_routing
 from stdapi.api_errors import UnsupportedModelError
+from stdapi.config import SETTINGS
 from stdapi.models import (
     RERANKING_MODALITY,
     ModelDetails,
@@ -108,6 +113,14 @@ class _StubAgentRuntimeClient:
         return page
 
 
+def _throttling_error() -> ClientError:
+    response: Any = {
+        "Error": {"Code": "ThrottlingException", "Message": "Throttled"},
+        "ResponseMetadata": {"HTTPStatusCode": 429},
+    }
+    return ClientError(response, "Rerank")
+
+
 def _new_log() -> EventLog:
     return EventLog(
         type="request",
@@ -199,6 +212,66 @@ class TestRerankCall:
             for request in client.requests
         ]
         assert counts == [2, 2]
+
+    async def test_top_n_zero_requests_zero_results(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """top_n=0 is honoured literally; only None means all documents."""
+        client = _StubAgentRuntimeClient([{"results": []}])
+        self._patch_infra(monkeypatch, client)
+
+        await RerankModel(RERANK_MODELS[0]).rerank(
+            "q", ["a", "b"], top_n=0, extra_params={}
+        )
+
+        configuration = client.requests[0]["rerankingConfiguration"][
+            "bedrockRerankingConfiguration"
+        ]
+        assert configuration["numberOfResults"] == 0
+
+    async def test_throttled_region_fails_over_via_no_retry_client(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A throttled region escalates to the next one through the no-retry client pool."""
+        regions = ["us-east-1", "us-west-2"]
+        throttled = _StubAgentRuntimeClient([_throttling_error()])
+        serving = _StubAgentRuntimeClient(
+            [{"results": [{"index": 0, "relevanceScore": 0.7}]}]
+        )
+
+        async def _candidates(_model_id: str) -> list[RegionName]:
+            return list(regions)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(bedrock_rerank, "compute_candidate_regions", _candidates)
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_region_routing", "ordered")
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", regions)
+        monkeypatch.setattr(
+            stdapi.models, "REGION_ROUTER", stdapi.region_routing.RegionRouter()
+        )
+        # Same seam as the chat no-retry tests: clients resolve through the real
+        # get_client over injected _CLIENTS pools. The full-retry pool holds
+        # non-client sentinels so any use of it fails loudly.
+        monkeypatch.setitem(
+            stdapi.aws._CLIENTS,  # noqa: SLF001
+            "bedrock-agent-runtime",
+            dict.fromkeys(regions, object()),
+        )
+        monkeypatch.setitem(
+            stdapi.aws._CLIENTS,  # noqa: SLF001
+            "bedrock-agent-runtime.no-retry",
+            {"us-east-1": throttled, "us-west-2": serving},
+        )
+
+        response = await RerankModel(RERANK_MODELS[0]).rerank(
+            "q", ["a"], top_n=None, extra_params={}
+        )
+
+        assert [(r.index, r.relevance_score) for r in response.results] == [(0, 0.7)]
+        assert len(throttled.requests) == 1
+        assert len(serving.requests) == 1
+        (record,) = USAGE.get().values()
+        assert record.region == "us-west-2"
+        assert record.quantities == {Dimension.SEARCH_UNITS: 1}
 
     async def test_pagination_follows_next_token(
         self, monkeypatch: pytest.MonkeyPatch

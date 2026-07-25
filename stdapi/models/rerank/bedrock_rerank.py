@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 from stdapi.aws import get_client
 from stdapi.aws_bedrock import handle_bedrock_client_error
+from stdapi.config import SETTINGS
 from stdapi.models import (
     compute_candidate_regions,
     route_and_execute,
@@ -31,6 +32,28 @@ if TYPE_CHECKING:
     )
 
     from stdapi.types import JsonMapping
+
+
+def agent_runtime_client(
+    region: RegionName, *, single_region: bool
+) -> AgentsforBedrockRuntimeClient:
+    """Return the Bedrock agent runtime client appropriate for the routing mode.
+
+    Args:
+        region: AWS region to target.
+        single_region: Whether the call is locked to a single region for its lifetime.
+
+    Returns:
+        A botocore bedrock-agent-runtime async client.
+    """
+    return get_client(  # type: ignore[no-any-return]
+        (
+            "bedrock-agent-runtime"
+            if single_region or SETTINGS.aws_bedrock_region_routing == "disabled"
+            else "bedrock-agent-runtime.no-retry"
+        ),
+        region,
+    )
 
 
 class RerankModel(RerankModelBase):
@@ -58,10 +81,18 @@ class RerankModel(RerankModelBase):
         Returns:
             Rerank response with billed search units.
         """
+        candidates = await compute_candidate_regions(self._model_id)
         results, region = await route_and_execute(
             self._model_id,
-            await compute_candidate_regions(self._model_id),
-            partial(self._rerank_in_region, query, documents, top_n, extra_params),
+            candidates,
+            partial(
+                self._rerank_in_region,
+                query,
+                documents,
+                top_n,
+                extra_params,
+                single_region=len(candidates) == 1,
+            ),
         )
         search_units = (len(documents) + 99) // 100
         record_bedrock_usage(self._model_id, region=region, search_units=search_units)
@@ -82,6 +113,8 @@ class RerankModel(RerankModelBase):
         top_n: int | None,
         extra_params: JsonMapping,
         region: RegionName,
+        *,
+        single_region: bool,
     ) -> tuple[list[RerankResultTypeDef], RegionName]:
         """Run one Rerank API call in *region*, following result pagination.
 
@@ -91,13 +124,14 @@ class RerankModel(RerankModelBase):
             top_n: Maximum number of results to return, or None for all.
             extra_params: Extra model parameters.
             region: AWS region to target.
+            single_region: Selects the botocore client (see :func:`agent_runtime_client`).
 
         Returns:
             Tuple of (raw rerank results, region that served the call).
         """
         set_effective_region(self._model_id, region)
-        client: AgentsforBedrockRuntimeClient = get_client(
-            "bedrock-agent-runtime", region
+        client: AgentsforBedrockRuntimeClient = agent_runtime_client(
+            region, single_region=single_region
         )
         model_configuration: BedrockRerankingModelConfigurationTypeDef = {
             "modelArn": (
@@ -123,7 +157,9 @@ class RerankModel(RerankModelBase):
             "rerankingConfiguration": {
                 "type": "BEDROCK_RERANKING_MODEL",
                 "bedrockRerankingConfiguration": {
-                    "numberOfResults": min(top_n or len(documents), len(documents)),
+                    "numberOfResults": (
+                        len(documents) if top_n is None else min(top_n, len(documents))
+                    ),
                     "modelConfiguration": model_configuration,
                 },
             },
