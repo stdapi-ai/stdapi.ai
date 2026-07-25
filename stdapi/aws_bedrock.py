@@ -123,14 +123,14 @@ _BEDROCK_MODEL_ERROR_CODES = {
     "ModelTimeoutException",
 }
 
-#: Guardtrail configuration for the request.
-GUARDTRAIL_CONFIG_VAR: ContextVar[GuardrailStreamConfigurationTypeDef] = ContextVar(
-    "guardtrail_configuration"
+#: Guardrail configuration for the request.
+GUARDRAIL_CONFIG_VAR: ContextVar[GuardrailStreamConfigurationTypeDef] = ContextVar(
+    "guardrail_configuration"
 )
-_GUARDTRAIL_IDENTIFIER_HEADER = "X-Amzn-Bedrock-GuardrailIdentifier"
-_GUARDTRAIL_VERSION_HEADER = "X-Amzn-Bedrock-GuardrailVersion"
-_GUARDTRAIL_TRACE_HEADER = "X-Amzn-Bedrock-Trace"
-_GUARDTRAIL_TRACE_VALUES = {"disabled", "enabled", "enabled_full"}
+_GUARDRAIL_IDENTIFIER_HEADER = "X-Amzn-Bedrock-GuardrailIdentifier"
+_GUARDRAIL_VERSION_HEADER = "X-Amzn-Bedrock-GuardrailVersion"
+_GUARDRAIL_TRACE_HEADER = "X-Amzn-Bedrock-Trace"
+_GUARDRAIL_TRACE_VALUES = {"disabled", "enabled", "enabled_full"}
 
 #: Performance configuration for the request
 PERFORMANCE_CONFIG_VAR: ContextVar[
@@ -242,17 +242,17 @@ def set_guardrail_configuration(headers: Headers) -> None:
     """
     if (
         SETTINGS.aws_bedrock_allow_guardrail_override
-        and _GUARDTRAIL_IDENTIFIER_HEADER in headers
-        and _GUARDTRAIL_VERSION_HEADER in headers
+        and _GUARDRAIL_IDENTIFIER_HEADER in headers
+        and _GUARDRAIL_VERSION_HEADER in headers
     ):
         config: GuardrailStreamConfigurationTypeDef = {
-            "guardrailIdentifier": headers[_GUARDTRAIL_IDENTIFIER_HEADER].strip(),
-            "guardrailVersion": headers[_GUARDTRAIL_VERSION_HEADER].strip(),
+            "guardrailIdentifier": headers[_GUARDRAIL_IDENTIFIER_HEADER].strip(),
+            "guardrailVersion": headers[_GUARDRAIL_VERSION_HEADER].strip(),
         }
         trace: GuardrailTraceType = (
-            headers.get(_GUARDTRAIL_TRACE_HEADER, "").strip().lower()  # type: ignore[assignment]
+            headers.get(_GUARDRAIL_TRACE_HEADER, "").strip().lower()  # type: ignore[assignment]
         )
-        if trace in _GUARDTRAIL_TRACE_VALUES:
+        if trace in _GUARDRAIL_TRACE_VALUES:
             config["trace"] = trace
     elif (
         SETTINGS.aws_bedrock_guardrail_identifier
@@ -266,7 +266,7 @@ def set_guardrail_configuration(headers: Headers) -> None:
             config["trace"] = SETTINGS.aws_bedrock_guardrail_trace
     else:
         return
-    GUARDTRAIL_CONFIG_VAR.set(config)
+    GUARDRAIL_CONFIG_VAR.set(config)
 
 
 #: OpenAI moderation model name prefix aliasing the default guardrail model.
@@ -360,7 +360,7 @@ def resolve_guardrail_model(model: str | None) -> tuple[str, str]:
     Raises:
         ApiError: When no guardrail is configured or the override is not allowed.
     """
-    configured = GUARDTRAIL_CONFIG_VAR.get(None)
+    configured = GUARDRAIL_CONFIG_VAR.get(None)
     if model is None or _is_default_guardrail_model(model):
         if configured is None:
             # Imported here because stdapi.monitoring imports this module.
@@ -418,7 +418,7 @@ def resolve_moderation_model(model: str | None) -> tuple[str, str] | None:
         return None
     if (
         model is None or model.startswith(_OMNI_MODERATION_PREFIX)
-    ) and GUARDTRAIL_CONFIG_VAR.get(None) is None:
+    ) and GUARDRAIL_CONFIG_VAR.get(None) is None:
         return None
     return resolve_guardrail_model(model)
 

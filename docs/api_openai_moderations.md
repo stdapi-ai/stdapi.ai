@@ -70,11 +70,15 @@ curl -X POST "$BASE/v1/moderations" \
 | `input` string / array of strings |  :material-check-circle:{ .success }   | Each element yields one independent result                                |
 | `input` text parts               |   :material-check-circle:{ .success }   | `{"type": "text", "text": ...}`                                           |
 | `input` image parts              |      :material-cog:{ .model-dep }       | Guardrail models only; PNG and JPEG                                       |
+| Empty string input               |   :material-check-circle:{ .success }   | Returns an unflagged result without calling AWS (OpenAI parity); whitespace-only strings are **not** covered by this shortcut and are classified normally (billed Comprehend call) |
 | `model`                          |   :material-check-circle:{ .success }   | Guardrail, Comprehend, or an OpenAI moderation model alias (see below)    |
 | **Output**                       |                                         |                                                                           |
-| `flagged`                        |   :material-check-circle:{ .success }   | Also raised by guardrail policies without a mapped category               |
+| `flagged`                        |   :material-check-circle:{ .success }   | Also raised by guardrail policies without a mapped category, and on Comprehend by the overall toxicity score or unmapped labels such as profanity |
 | `categories` / `category_scores` |   :material-minus-circle:{ .partial }   | Mapped categories only; OpenAI categories without a counterpart stay `false` / `0.0` |
 | `category_applied_input_types`   |   :material-check-circle:{ .success }   | Reflects each classified element's modality                               |
+| **Usage tracking**               |                                         |                                                                           |
+| Guardrail text units / images    |   :material-check-circle:{ .success }   | Billing units (one text unit per 1,000 characters per input; one unit per image) |
+| Comprehend units                 |   :material-check-circle:{ .success }   | Billing unit (100 characters, minimum 3 per call)                         |
 | **Other**                        |                                         |                                                                           |
 | Model discovery                  | :material-plus-circle:{ .extra-feature } | Moderation models and their aliases appear in the [model listings](api_search_models.md) |
 | Long text inputs                 | :material-plus-circle:{ .extra-feature } | Comprehend inputs of any length are split into API-sized segments transparently |
@@ -142,7 +146,7 @@ The server guardrail comes from [`AWS_BEDROCK_GUARDRAIL_IDENTIFIER` / `AWS_BEDRO
 Guardrails are regional: a plain guardrail ID is applied in the primary Bedrock region, while an ARN selects its own region. Comprehend calls use [`AWS_COMPREHEND_REGION`](operations_configuration.md#aws-comprehend-region) (with multi-region failover otherwise).
 
 !!! tip "Moderating generations directly"
-    The guardrail selection and category mapping also power the `moderation` request parameter of the [Chat Completions](api_openai_chat_completions.md) and [Responses](api_openai_responses.md) APIs: the guardrail is applied to the generation itself, and the classification of the input and output is reported in the response's `moderation` field — for Chat Completions on non-streaming requests only, and for Responses also on the terminal event when streaming. The `moderation` parameter requires a guardrail — Comprehend is not available there.
+    The guardrail selection and category mapping also power the `moderation` request parameter of the [Chat Completions](api_openai_chat_completions.md) and [Responses](api_openai_responses.md) APIs: the guardrail is applied to the generation itself, and the classification of the input and output is reported in the response's `moderation` field — for Chat Completions on non-streaming requests only, and for Responses also on the terminal event when streaming. The `moderation` parameter requires a guardrail — Comprehend is not available there — and is rejected (`400`) on Bedrock Mantle-served models.
 
 ## Category Mapping
 
@@ -185,6 +189,8 @@ Each input element is classified independently and yields one entry in `results`
 - **`input` as an array of parts** — `{"type": "text", "text": ...}` and `{"type": "image_url", "image_url": {"url": ...}}` parts. Images must be PNG or JPEG, and require a guardrail model.
 
 Each result's `category_applied_input_types` reflects the classified element's modality: `["text"]` for every category on text inputs; on image inputs, `["image"]` for the categories that support images and `[]` for the text-only ones.
+
+An `input` array holds at most 2048 elements. Each element is classified — and billed — independently by a separate AWS call, so large arrays incur a proportional number of AWS calls.
 
 **MCP / AI agent usage:** `image_url.url` accepts an HTTPS URL, data URI (`data:<mime>;base64,<data>`), base64 string, or S3 URI — no binary upload needed.
 

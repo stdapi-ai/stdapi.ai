@@ -1,13 +1,14 @@
-"""Tests for stdapi.aws_bedrock.get_extra_model_parameters and resolve_guardrail_model."""
+"""Tests for stdapi.aws_bedrock: extra model parameters and guardrail helpers."""
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from stdapi.api_errors import ApiError
 from stdapi.aws_bedrock import (
-    GUARDTRAIL_CONFIG_VAR,
+    GUARDRAIL_CONFIG_VAR,
     get_extra_model_parameters,
+    map_guardrail_filters,
     resolve_guardrail_model,
 )
 from stdapi.config import SETTINGS
@@ -31,9 +32,9 @@ def configured_guardrail() -> Iterator[None]:
         "guardrailIdentifier": "gr123",
         "guardrailVersion": "1",
     }
-    token = GUARDTRAIL_CONFIG_VAR.set(config)
+    token = GUARDRAIL_CONFIG_VAR.set(config)
     yield
-    GUARDTRAIL_CONFIG_VAR.reset(token)
+    GUARDRAIL_CONFIG_VAR.reset(token)
 
 
 class _Request(BaseModelRequestWithExtra):
@@ -117,3 +118,54 @@ class TestResolveGuardrailModel:
         monkeypatch.setattr(SETTINGS, "aws_bedrock_allow_guardrail_override", False)
         with pytest.raises(ApiError, match="not allowed"):
             resolve_guardrail_model("gr123:2")
+
+
+def _content_filter_assessment(
+    filter_type: str, confidence: str, action: str = "BLOCKED"
+) -> dict[str, Any]:
+    """Build a guardrail assessment with one content policy filter entry."""
+    return {
+        "contentPolicy": {
+            "filters": [
+                {"type": filter_type, "confidence": confidence, "action": action}
+            ]
+        }
+    }
+
+
+class TestMapGuardrailFilters:
+    """map_guardrail_filters: pinned filter/category and confidence/score tables."""
+
+    @pytest.mark.parametrize(
+        ("filter_type", "category"),
+        [
+            ("HATE", "hate"),
+            ("INSULTS", "harassment"),
+            ("SEXUAL", "sexual"),
+            ("VIOLENCE", "violence"),
+            ("MISCONDUCT", "illicit"),
+        ],
+    )
+    def test_full_filter_to_category_mapping(
+        self, filter_type: str, category: str
+    ) -> None:
+        """Every guardrail content filter maps to its OpenAI category."""
+        categories, scores, intervened = map_guardrail_filters(
+            [_content_filter_assessment(filter_type, "HIGH")]
+        )
+        assert categories == {category: True}
+        assert scores == {category: 0.75}
+        assert intervened is True
+
+    @pytest.mark.parametrize(
+        ("confidence", "score"),
+        [("NONE", 0.0), ("LOW", 0.25), ("MEDIUM", 0.5), ("HIGH", 0.75)],
+    )
+    def test_full_confidence_to_score_mapping(
+        self, confidence: str, score: float
+    ) -> None:
+        """Every guardrail confidence level maps to its OpenAI-style score."""
+        _, scores, _ = map_guardrail_filters(
+            [_content_filter_assessment("HATE", confidence, action="NONE")]
+        )
+        assert scores == {"hate": score}

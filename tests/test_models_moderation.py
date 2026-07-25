@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from stdapi.aws import service_regions
 from stdapi.aws_bedrock import COMPREHEND_MODERATION_MODEL, GUARDRAIL_MODERATION_MODEL
 from stdapi.config import SETTINGS
 from stdapi.models import (
@@ -70,7 +71,18 @@ class TestInitializeModerationModels:
         assert model.supported_mcp_tools == ["openai_moderation"]
         assert model.input_modalities == ["TEXT"]
         assert model.output_modalities == ["MODERATION"]
+        assert model.regions == service_regions(SETTINGS.aws_comprehend_region)
         assert sorted(model.aliases or []) == sorted(_OMNI_ALIASES + _TEXT_ALIASES)
+
+    async def test_comprehend_region_setting_propagates(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An explicit aws_comprehend_region becomes the sole Comprehend model region."""
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_identifier", None)
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_version", None)
+        monkeypatch.setattr(SETTINGS, "aws_comprehend_region", "eu-west-1")
+        await initialize_moderation_models()
+        assert EXTRA_MODELS[COMPREHEND_MODERATION_MODEL].regions == ["eu-west-1"]
 
     async def test_with_guardrail(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The guardrail model is registered and takes the omni aliases."""
