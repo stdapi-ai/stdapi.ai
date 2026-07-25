@@ -65,7 +65,7 @@ Generate conversational AI responses with AWS Bedrock foundation models—includ
 | Web search tool (`web_search`)        |       :material-cog:{ .model-dep }       | Available on models with system tool support (e.g., Amazon Nova 2)                           |
 | Claude server tools                   |       :material-cog:{ .model-dep }       | Bash, text editor, computer use (Claude 3.5+), memory (Claude 3.7-4.5)                       |
 | **Generation Control**                |                                          |                                                                                              |
-| `max_tokens`                          |   :material-check-circle:{ .success }    | Output length limits (required)                                                              |
+| `max_tokens`                          |   :material-check-circle:{ .success }    | Output length limits. Optional on this gateway (divergence from the Anthropic API, which requires it): the model's default output limit applies when omitted |
 | `temperature`                         |       :material-cog:{ .model-dep }       | Mapped to Bedrock inference params                                                           |
 | `top_p`                               |       :material-cog:{ .model-dep }       | Nucleus sampling control                                                                     |
 | `top_k`                               |       :material-cog:{ .model-dep }       | Top-k sampling control                                                                       |

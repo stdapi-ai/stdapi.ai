@@ -175,12 +175,16 @@ class TestAnthropicFiles:
 
     # --- Content ---
 
-    def test_download_content(self, anthropic_client: Anthropic) -> None:
+    def test_download_content(
+        self, anthropic_client: Anthropic, use_official_api: bool
+    ) -> None:
         """Upload bytes and download via /content; assert byte equality.
 
         Validates:
             - Downloaded content matches uploaded content exactly
         """
+        if use_official_api:
+            pytest.skip("the official API only allows downloading API-created files")
         content = b"Anthropic Files API content test!"
         f = anthropic_client.beta.files.upload(
             file=("dl.txt", io.BytesIO(content), "text/plain")
@@ -220,7 +224,10 @@ class TestAnthropicFiles:
     # --- Chat integration ---
 
     def test_file_in_anthropic_message(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
+        self,
+        anthropic_client: Anthropic,
+        anthropic_chat_model: str,
+        use_official_api: bool,
     ) -> None:
         """Upload a PDF file and reference it in an Anthropic message document block.
 
@@ -228,6 +235,8 @@ class TestAnthropicFiles:
             - Message creation succeeds with a file reference
             - Response contains assistant content
         """
+        if use_official_api:
+            pytest.skip("this endpoint does not accept `file` document sources")
         f = anthropic_client.beta.files.upload(
             file=("doc.pdf", io.BytesIO(_MINIMAL_PDF), "application/pdf")
         )
