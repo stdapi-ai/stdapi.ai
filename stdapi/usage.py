@@ -72,6 +72,7 @@ _DIMENSION_INFO: Final[dict[Dimension, _DimensionInfo]] = {
     Dimension.SEARCH_UNITS: _DimensionInfo("search_units", "Count"),
     Dimension.INPUT_IMAGES: _DimensionInfo("input_images", "Count"),
     Dimension.OUTPUT_SECONDS: _DimensionInfo("output_seconds", "Seconds"),
+    Dimension.TEXT_UNITS: _DimensionInfo("text_units", "Count"),
 }
 
 #: Per-call prompt-token threshold (input + cache read/write) for long-context billing.
@@ -151,6 +152,7 @@ class UsageLogEntry(TypedDict, total=False):
     comprehend_units: int
     grounding_requests: int
     search_units: int
+    text_units: int
 
 
 #: Per-request usage records, keyed by every UsageKey axis.
@@ -162,14 +164,27 @@ OPERATION: ContextVar[str] = ContextVar("operation", default="")
 
 @dataclass(slots=True)
 class ModelInvocationState:
-    """Per-model invocation state for the current request (Bedrock only)."""
+    """Shared, best-effort default region/tier/routing for a model within the current request.
+
+    Mutated in place by models/__init__.py before each call, so it holds
+    the *last-written* value across every call to the same model within the
+    request -- not an isolated per-call value. Every current caller that
+    can invoke the same model concurrently with differing region/tier/
+    routing (Converse, InvokeModel) always passes those values explicitly
+    to :func:`record_bedrock_usage`, bypassing this shared state and
+    staying race-free; only callers without differentiated per-call values
+    (rerank, embeddings, video) rely on the fallback below. A future call
+    site that invokes a model concurrently with differing values without
+    passing them explicitly would risk misattributing usage to the wrong
+    region/tier/routing.
+    """
 
     region: str | None = None
     service_tier: ServiceTierTypeType = "default"
     routing: Routing | None = None
 
 
-#: Per-request invocation state keyed by model ID, set by models/__init__.py.
+#: Per-request default invocation state keyed by model ID, set by models/__init__.py.
 MODEL_STATE: ContextVar[dict[str, ModelInvocationState]] = ContextVar("model_state")
 
 #: Current image spec ("<resolution>:<quality>"), set by image jobs before invoking.
@@ -283,6 +298,8 @@ def _record_usage(
         return
     # MODEL_STATE region is Bedrock-only; using it for other services would
     # leak Bedrock's region into nested Polly/Transcribe/Translate calls.
+    # Race-free only because concurrent same-model callers pass `region`
+    # explicitly (see ModelInvocationState).
     effective_region = region or (
         (get_model_state(model).region or "") if service == Service.BEDROCK else ""
     )
@@ -574,6 +591,28 @@ def record_comprehend_usage(
     return billed_units
 
 
+def record_guardrail_usage(
+    model: str, *, text_units: int = 0, images: int = 0, region: str = ""
+) -> None:
+    """Record AWS Bedrock Guardrails (ApplyGuardrail) usage.
+
+    AWS bills guardrail policies per text unit (1,000 characters) for text
+    content and per image for image content.
+
+    Args:
+        model: Guardrail model ID reported in the moderation response.
+        text_units: Billed text units for text content.
+        images: Number of classified input images.
+        region: Region hosting the guardrail.
+    """
+    _record_usage(
+        Service.BEDROCK,
+        model,
+        region,
+        quantities={Dimension.TEXT_UNITS: text_units, Dimension.INPUT_IMAGES: images},
+    )
+
+
 def record_polly_usage(
     characters: int,
     engine: Literal["standard", "neural", "long-form", "generative"],
@@ -665,12 +704,16 @@ def record_bedrock_usage(
     Args:
         model: Bedrock model ID.
         service: Serving endpoint (bedrock-runtime or bedrock-mantle).
-        tier: Service tier (standard, flex, priority, batch). Defaults to this
-            model's invocation state (see :func:`get_model_state`).
-        region: Region that served the call. Defaults to this model's
-            invocation state -- pass it explicitly for concurrent same-model
-            calls, whose shared state may be overwritten by a sibling call.
-        routing: Serving profile of this call. Defaults like *region*.
+        tier: Service tier (standard, flex, priority, batch). Defaults to
+            this model's shared invocation state (see
+            :func:`get_model_state`) -- pass it explicitly for any call that
+            may run concurrently with a sibling call to the same model
+            using a different tier, or the shared state may be overwritten
+            first by the sibling.
+        region: Region that served the call. Defaults like *tier*: pass it
+            explicitly for concurrent same-model calls, whose shared state
+            may be overwritten by a sibling call.
+        routing: Serving profile of this call. Defaults like *tier*.
         input_tokens: Number of input tokens.
         output_tokens: Number of output tokens.
         total_tokens: Total tokens (when returned by Converse API).
@@ -692,6 +735,8 @@ def record_bedrock_usage(
     state = get_model_state(model)
     image_spec = IMAGE_SPEC.get("") if output_images else ""
     # "default" means no differentiated tier; normalize it (and unset) to "standard".
+    # Race-free only because concurrent same-model callers pass tier/routing
+    # explicitly (see ModelInvocationState).
     effective_tier = tier or state.service_tier
     # AWS bills the whole call at the long-context rate when the prompt
     # (fresh + cache read/write tokens) exceeds the threshold.
