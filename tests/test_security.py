@@ -63,11 +63,11 @@ async def test_validate_host_ssrf_allows_hostname_resolving_to_public_ip(
 async def test_validate_host_ssrf_fails_closed_on_unresolvable_host(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A host that resolves to no address is rejected (fail closed)."""
+    """A host that resolves to no address is rejected as a bad URL (400)."""
     _patch_resolution(monkeypatch, [])
     with pytest.raises(ApiError) as exc:
         await security.validate_host_ssrf("nonexistent.test")
-    assert exc.value.status == 403
+    assert exc.value.status == 400
 
 
 async def test_validate_host_ssrf_rejects_unparseable_resolved_address(
@@ -109,6 +109,17 @@ class TestSsrfSafeConnectorIntegration:
             with pytest.raises(ClientConnectorError) as exc:
                 await session.get("http://internal.test/")
         assert isinstance(exc.value.os_error, security.SsrfBlockedError)
+
+    async def test_unresolvable_hostname_maps_to_plain_fetch_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An unresolvable host surfaces as a DNS failure (400), not an SSRF block."""
+        _patch_resolution(monkeypatch, [])
+        async with ClientSession(connector=security.ssrf_safe_connector()) as session:
+            with pytest.raises(ClientConnectorError) as exc:
+                await session.get("http://unresolvable.test/")
+        assert not isinstance(exc.value.os_error, security.SsrfBlockedError)
+        assert security.ssrf_blocked_status(exc.value) == 400
 
     async def test_redirect_hop_to_unsafe_target_blocked(
         self, monkeypatch: pytest.MonkeyPatch
