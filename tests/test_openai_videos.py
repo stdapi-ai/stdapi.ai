@@ -13,6 +13,7 @@ from openai import BadRequestError
 from PIL import Image
 from starlette.testclient import TestClient
 
+from stdapi.api_errors import ApiError
 from stdapi.config import SETTINGS
 from stdapi.models import ModelDetails
 from stdapi.models.video import VideoGenerationStart, VideoJob, VideoListing
@@ -70,6 +71,10 @@ def _job(
         output_bucket="bucket",
         output_prefix="videos/abc123xyz",
     )
+
+
+#: A validly-encoded video ID, used where a path ID is required but must never resolve.
+_DUMMY_VIDEO_ID = openai_videos._encode_video_id(_ARN, 6, "1280x720")  # noqa: SLF001
 
 
 @pytest.fixture
@@ -261,6 +266,44 @@ class TestOpenAIVideoRoutes:
         assert response.status_code == 400, response.text
         assert not video_backend.calls
 
+    def test_create_then_retrieve_roundtrip(
+        self,
+        client: TestClient,
+        video_backend: _StubVideoModel,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The public id from a create response resolves through GET, seam-stubbed."""
+        create_response = client.post(
+            "/v1/videos", json={"model": "amazon.nova-reel-v1:0", "prompt": "a cat"}
+        )
+        assert create_response.status_code == 200, create_response.text
+        video_id = create_response.json()["id"]
+
+        _stub_job(monkeypatch, "completed")
+        retrieve_response = client.get(f"/v1/videos/{video_id}")
+
+        assert retrieve_response.status_code == 200, retrieve_response.text
+        body = retrieve_response.json()
+        assert body["id"] == video_id
+        assert body["status"] == "completed"
+
+    def test_retrieve_propagates_model_layer_not_found(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A 404 ApiError raised by get_video_job propagates as an OpenAI 404 envelope."""
+
+        async def _get_video_job(_invocation_arn: str) -> VideoJob:
+            msg = "Video not found."
+            raise ApiError(msg, status=404)
+
+        monkeypatch.setattr(openai_videos, "get_video_job", _get_video_job)
+        video_id = openai_videos._encode_video_id(_ARN, 6, "1280x720")  # noqa: SLF001
+        response = client.get(f"/v1/videos/{video_id}")
+        assert response.status_code == 404
+        err = response.json()["error"]
+        assert err["type"] == "invalid_request_error"
+        assert err["message"] == "Video not found."
+
     def test_retrieve_completed(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -372,11 +415,18 @@ class TestOpenAIVideoRoutes:
     def test_content_variant_not_available(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Only the video variant is available."""
+        """A resolvable job with an unsupported variant is a 400 (variant checked after ID resolution)."""
         _stub_job(monkeypatch, "completed")
         video_id = openai_videos._encode_video_id(_ARN, 6, "1280x720")  # noqa: SLF001
         response = client.get(f"/v1/videos/{video_id}/content?variant=thumbnail")
         assert response.status_code == 400
+
+    def test_content_unknown_id_with_variant_is_not_found(
+        self, client: TestClient
+    ) -> None:
+        """An unresolvable video ID with variant=thumbnail is a 404, not the variant 400."""
+        response = client.get("/v1/videos/video_bogus/content?variant=thumbnail")
+        assert response.status_code == 404
 
     def test_delete_completed(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
@@ -408,6 +458,73 @@ class TestOpenAIVideoRoutes:
         response = client.delete(f"/v1/videos/{video_id}")
         assert response.status_code == 400
         assert "still being processed" in response.json()["error"]["message"]
+
+
+@pytest.mark.local
+class TestOpenAIVideoAuthRejection:
+    """A wrong bearer token is rejected with a 401 OpenAI envelope before any model call.
+
+    Uses the session-wide ``test_client`` (lifespan-started, unlike the
+    lifespan-free ``client`` fixture) so the auth handler is actually
+    initialized and able to reject a bad token.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _skip_non_local(self, test_client: TestClient | None) -> None:
+        """Skip when running against a remote server instead of the in-process app."""
+        if not test_client:
+            pytest.skip("Unit test only for local, in-process runs.")
+
+    @pytest.mark.parametrize(
+        ("method", "path"),
+        [
+            ("post", "/v1/videos"),
+            ("get", f"/v1/videos/{_DUMMY_VIDEO_ID}"),
+            ("get", "/v1/videos"),
+            ("get", f"/v1/videos/{_DUMMY_VIDEO_ID}/content"),
+            ("delete", f"/v1/videos/{_DUMMY_VIDEO_ID}"),
+        ],
+        ids=["create", "retrieve", "list", "content", "delete"],
+    )
+    def test_wrong_bearer_token_is_rejected(
+        self,
+        test_client: TestClient,
+        video_backend: _StubVideoModel,
+        monkeypatch: pytest.MonkeyPatch,
+        method: str,
+        path: str,
+    ) -> None:
+        """A wrong bearer token yields 401 without reaching the model layer."""
+        model_calls: list[object] = []
+
+        async def _get_video_job(invocation_arn: str) -> VideoJob:
+            model_calls.append(invocation_arn)
+            return _job("completed")
+
+        async def _list_video_jobs(**kwargs: Any) -> tuple[list[VideoListing], bool]:  # noqa: ANN401
+            model_calls.append(kwargs)
+            return [], False
+
+        monkeypatch.setattr(openai_videos, "get_video_job", _get_video_job)
+        monkeypatch.setattr(openai_videos, "list_video_jobs", _list_video_jobs)
+
+        kwargs: dict[str, Any] = (
+            {"json": {"model": "amazon.nova-reel-v1:0", "prompt": "a cat"}}
+            if method == "post"
+            else {}
+        )
+        response = getattr(test_client, method)(
+            path, headers={"Authorization": "Bearer wrong-key"}, **kwargs
+        )
+
+        assert response.status_code == 401
+        body = response.json()
+        assert set(body.keys()) == {"error"}
+        err = body["error"]
+        assert set(err.keys()) == {"message", "type", "param", "code"}
+        assert err["type"] == "authentication_error"
+        assert not model_calls
+        assert not video_backend.calls
 
 
 def _wait_for_completion(
