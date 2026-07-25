@@ -121,6 +121,9 @@ Mantle-only Claude models are passed through to the upstream Anthropic Messages 
 | `metadata.user_id` | Forwarded | Forwarded, SHA-256-hashed when over 64 characters |
 | `service_tier` | Forwarded | Only `auto` is forwarded |
 
+!!! note "Workspace attribution (`anthropic-workspace`)"
+    Mantle requests can be attributed to a Bedrock Workspace for cost tracking and observability with the `anthropic-workspace: <project-id>` header (a bare project ID such as `proj_abc123`, not an ARN). It is honored per-request only when [`AWS_BEDROCK_ALLOW_MANTLE_PROJECT_OVERRIDE`](operations_configuration.md#bedrock-allow-mantle-project-override) is `true`; otherwise the server default ([`AWS_BEDROCK_MANTLE_PROJECT`](operations_configuration.md#bedrock-mantle-project)) applies. This applies **only** to models served by the Bedrock Mantle endpoint — classic `bedrock-runtime` models ignore the header.
+
 ### ![Claude](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Claude Models Name Aliases
 
 This API supports dynamic model name aliases matching the official Anthropic API. You can use Claude model names exactly as they appear in [Anthropic's documentation](https://docs.anthropic.com/en/docs/about-claude/models), and they will be automatically resolved to the corresponding AWS Bedrock model identifiers.
