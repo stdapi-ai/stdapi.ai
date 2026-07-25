@@ -13,10 +13,11 @@ from urllib.parse import urlparse
 
 from botocore.exceptions import BotoCoreError, ClientError, HTTPClientError
 from botocore.exceptions import ConnectionError as BotocoreConnectionError
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from starlette.background import BackgroundTask
+from starlette.exceptions import HTTPException
 
 from stdapi import server
 from stdapi.api_errors import ApiError
@@ -310,11 +311,15 @@ async def _middleware(
 
 @app.exception_handler(HTTPException)
 async def handle_http_exception(request: Request, exc: HTTPException) -> JSONResponse:
-    """Convert standard FastAPI HTTPException to the correct API error envelope.
+    """Convert HTTPException to the correct API error envelope.
+
+    Registered on the base ``starlette.exceptions.HTTPException`` so it also
+    catches the router's no-route/method-not-allowed errors, which raise that
+    base class directly instead of FastAPI's subclass.
 
     Args:
         request: The current request.
-        exc: The HTTPException raised by a route or dependency.
+        exc: The HTTPException raised by the router, a route, or a dependency.
 
     Returns:
         JSONResponse formatted in the appropriate error schema.
@@ -379,9 +384,7 @@ async def handle_validation_exception(
         case _:
             message = "Validation error"
     log_error_details(message, level="warning")
-    return JSONResponse(
-        *format_http_error(request, 400, message, "invalid_request_error")
-    )
+    return JSONResponse(*format_http_error(request, 400, message))
 
 
 @app.exception_handler(ClientError)
@@ -402,14 +405,13 @@ async def handle_botocore_client_error(
     """
     error = exc.response["Error"]
     aws_code = error["Code"]
-    status, err_type = AWS_ERROR_MAP.get(aws_code, (502, "server_error"))
+    status = AWS_ERROR_MAP.get(aws_code, (502, "server_error"))[0]
     log_error_details(error["Message"], status=status)
     return JSONResponse(
         *format_http_error(
             request,
             status,
             hide_security_details(status, error["Message"]),
-            err_type,
             code=aws_code,
         )
     )
