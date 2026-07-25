@@ -7,10 +7,12 @@ the Mantle configuration validation — all without any AWS call.
 
 from __future__ import annotations
 
-from base64 import b32encode
+from base64 import b32encode, urlsafe_b64encode
 from binascii import crc32
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from gc import collect as gc_collect
 from json import JSONDecodeError, dumps, loads
 from typing import TYPE_CHECKING, Any, NoReturn, cast
 
@@ -39,11 +41,16 @@ from stdapi.aws_bedrock_mantle import (
 from stdapi.config import AWS_SESSION, SETTINGS, _Settings
 from stdapi.models import MANTLE_MODELS, MANTLE_SERVICE, ModelDetails
 from stdapi.models.chat import get_chat_model, serves_via_mantle
+from stdapi.models.chat._adapters._openai_responses import encode_compaction_content
 from stdapi.models.chat._anthropic_claude import AnthropicClaudeChatModel
 from stdapi.models.chat._mantle import _convert as mantle_convert
 from stdapi.models.chat._mantle import _default as mantle_default
+from stdapi.models.chat._mantle import get_mantle_chat_model
 from stdapi.models.chat._mantle._default import _scrub_error_event
+from stdapi.models.chat._mantle.google_gemma4 import ChatModel as GemmaChatModel
 from stdapi.models.chat._mantle.open_weight import ChatModel as OpenWeightChatModel
+from stdapi.models.chat._mantle.openai_gpt5 import ChatModel as GptChatModel
+from stdapi.models.chat._mantle.openai_gpt_oss import ChatModel as GptOssChatModel
 from stdapi.models.chat.openai_gpt import ChatModel as OpenAiGptChatModel
 from stdapi.monitoring import REQUEST, REQUEST_LOG, EventLog
 from stdapi.pricing import Service
@@ -123,6 +130,32 @@ class TestMantleResponseIdCodec:
         payload = crc32(_mantle_region().encode()).to_bytes(4, "big") + b"\xff\xfe"
         public_id = "resp_" + b32encode(payload).decode("ascii").lower().rstrip("=")
         assert decode_mantle_response_id(public_id) is None
+
+    @pytest.mark.parametrize(
+        "native_id",
+        [
+            "resp_abc/../../secret",
+            "resp_abc?x=y",
+            "resp_abc#frag",
+            "resp_abc def",
+            "resp_abc\x00null",
+        ],
+    )
+    def test_hostile_native_id_returns_none(self, native_id: str) -> None:
+        """A native ID outside the safe charset does not decode.
+
+        Prevents a crafted public ID from steering upstream request URLs
+        (path traversal, injected query/fragment) via the interpolated ID.
+        """
+        public_id = encode_mantle_response_id(_mantle_region(), native_id)
+        assert decode_mantle_response_id(public_id) is None
+
+    def test_legitimate_native_id_round_trips(self) -> None:
+        """A realistic hex-shaped native response ID still round-trips."""
+        region = _mantle_region()
+        native_id = "resp_" + "0123456789abcdef" * 2
+        public_id = encode_mantle_response_id(region, native_id)
+        assert decode_mantle_response_id(public_id) == (region, native_id)
 
 
 class TestMantleUsageExtractors:
@@ -255,7 +288,7 @@ class TestMapError:
     @pytest.mark.parametrize("status", [429, 500, 503])
     def test_throttling_and_5xx_are_failover(self, status: int) -> None:
         """Throttling and server errors are retryable in another region."""
-        error = _map_error(status, _error_body("Too busy"))
+        error = _map_error(status, _error_body("Too busy"), "us-east-1")
         assert type(error) is MantleError
         assert error.failover is True
         assert error.status == status
@@ -264,7 +297,9 @@ class TestMapError:
     def test_unsupported_api_marker(self) -> None:
         """The quoted API binding mismatch phrase maps to the demotion error."""
         error = _map_error(
-            400, _error_body("The model does not support the 'responses' API.")
+            400,
+            _error_body("The model does not support the 'responses' API."),
+            "us-east-1",
         )
         assert isinstance(error, MantleApiUnsupportedError)
         assert error.status == 400
@@ -273,7 +308,9 @@ class TestMapError:
     def test_parameter_error_not_misclassified_as_unsupported_api(self) -> None:
         """A parameter-support message must not demote the model's API binding."""
         error = _map_error(
-            400, _error_body("This model does not support the 'temperature' parameter.")
+            400,
+            _error_body("This model does not support the 'temperature' parameter."),
+            "us-east-1",
         )
         assert type(error) is MantleError
         assert error.status == 400
@@ -289,13 +326,13 @@ class TestMapError:
                 }
             }
         )
-        error = _map_error(400, body)
+        error = _map_error(400, body, "us-east-1")
         assert error.code == "unsupported_value"
         assert error.param == "temperature"
 
     def test_structured_fields_absent_stay_none(self) -> None:
         """Errors without ``code``/``param`` keep the class defaults."""
-        error = _map_error(400, _error_body("max_tokens is too large"))
+        error = _map_error(400, _error_body("max_tokens is too large"), "us-east-1")
         assert error.code is None
         assert error.param is None
 
@@ -309,28 +346,47 @@ class TestMapError:
     )
     def test_unsupported_surface_markers(self, status: int, message: str) -> None:
         """Surface routing mismatch markers map to the surface error."""
-        error = _map_error(status, _error_body(message))
+        error = _map_error(status, _error_body(message), "us-east-1")
         assert isinstance(error, MantleSurfaceUnsupportedError)
         assert error.status == 400
         assert error.failover is False
 
     def test_permission_error_is_not_a_surface_mismatch(self) -> None:
         """A 403 'is not enabled' permission error maps to a 500, not a 400."""
-        error = _map_error(403, _error_body("Model access is not enabled."))
+        error = _map_error(
+            403, _error_body("Model access is not enabled."), "us-east-1"
+        )
         assert type(error) is MantleError
         assert error.status == 500
 
     @pytest.mark.parametrize("status", [401, 403])
     def test_credential_errors_map_to_server_error(self, status: int) -> None:
         """Upstream auth failures are never the caller's fault (500, no failover)."""
-        error = _map_error(status, _error_body("Invalid bearer token"))
+        error = _map_error(status, _error_body("Invalid bearer token"), "us-east-1")
         assert type(error) is MantleError
         assert error.status == 500
         assert error.failover is False
 
+    @pytest.mark.parametrize("status", [401, 403])
+    def test_credential_errors_evict_cached_token(
+        self, monkeypatch: pytest.MonkeyPatch, status: int
+    ) -> None:
+        """A mapped 401/403 evicts the region's cached bearer token."""
+        monkeypatch.setitem(aws_bedrock_mantle._TOKENS, "us-east-1", ("stale", 1e18))  # noqa: SLF001
+        _map_error(status, _error_body("Invalid bearer token"), "us-east-1")
+        assert "us-east-1" not in aws_bedrock_mantle._TOKENS  # noqa: SLF001
+
+    @pytest.mark.parametrize("status", [401, 403])
+    def test_credential_error_message_is_generic(self, status: int) -> None:
+        """The raw upstream credential message is not forwarded to the client."""
+        message = "User: arn:aws:iam::123456789012:role/x is not authorized"
+        error = _map_error(status, _error_body(message), "us-east-1")
+        assert "arn:aws:iam" not in str(error)
+        assert "123456789012" not in str(error)
+
     def test_client_error_passthrough(self) -> None:
         """Plain 4xx errors keep their status and message without failover."""
-        error = _map_error(400, _error_body("max_tokens is too large"))
+        error = _map_error(400, _error_body("max_tokens is too large"), "us-east-1")
         assert type(error) is MantleError
         assert error.status == 400
         assert error.failover is False
@@ -338,13 +394,13 @@ class TestMapError:
     @pytest.mark.parametrize("body", ["not json at all", "[1, 2, 3]", "null"])
     def test_unparsable_body_uses_default_message(self, body: str) -> None:
         """Non-JSON or non-object bodies fall back to a generic message."""
-        error = _map_error(418, body)
+        error = _map_error(418, body, "us-east-1")
         assert "HTTP 418" in str(error)
         assert error.status == 418
 
     def test_string_error_body_preserves_message(self) -> None:
         """A bare-string ``error`` field maps cleanly, keeping the message."""
-        error = _map_error(500, '{"error":"backend exploded"}')
+        error = _map_error(500, '{"error":"backend exploded"}', "us-east-1")
         assert type(error) is MantleError
         assert error.failover is True
         assert error.status == 500
@@ -422,6 +478,40 @@ def _message_payload() -> dict[str, Any]:
         "stop_reason": "tool_use",
         "usage": {"input_tokens": 3, "output_tokens": 2},
     }
+
+
+class TestMantleModelClassResolution:
+    """Model IDs, including future versions, bind to the right Mantle class."""
+
+    @pytest.mark.parametrize(
+        "model_id", ["openai.gpt-5.6-sol", "openai.gpt-6-nova", "openai.gpt-10.1-vega"]
+    )
+    def test_numbered_gpt_versions_use_the_gpt_class(self, model_id: str) -> None:
+        """GPT-5 and future numbered GPT versions resolve to the GPT class."""
+        assert isinstance(get_mantle_chat_model(model_id), GptChatModel)
+
+    def test_gpt_oss_is_not_matched_by_the_numbered_gpt_class(self) -> None:
+        """gpt-oss models keep resolving to their own class."""
+        model = get_mantle_chat_model("openai.gpt-oss-120b")
+        assert isinstance(model, GptOssChatModel)
+        assert not isinstance(model, GptChatModel)
+
+    @pytest.mark.parametrize(
+        "model_id",
+        ["google.gemma-4-e2b", "google.gemma-5-e4b", "google.gemma-12-large"],
+    )
+    def test_gemma_4_and_later_use_the_gemma_class(self, model_id: str) -> None:
+        """Gemma 4 and future Gemma versions resolve to the Gemma class."""
+        assert isinstance(get_mantle_chat_model(model_id), GemmaChatModel)
+
+    @pytest.mark.parametrize(
+        "model_id", ["google.gemma-3-4b-it", "google.gemma-3n-e2b"]
+    )
+    def test_gemma_3_stays_on_the_open_weight_class(self, model_id: str) -> None:
+        """Gemma 3 (including 3n) keeps resolving to the open-weight class."""
+        model = get_mantle_chat_model(model_id)
+        assert isinstance(model, OpenWeightChatModel)
+        assert not isinstance(model, GemmaChatModel)
 
 
 class TestValidatePruningExtras:
@@ -1117,6 +1207,84 @@ class TestNonStreamResponseLogging:
         assert calls == [result]
 
 
+def _failed_response_raw(
+    message: str = "The model produced an invalid tool call.",
+) -> dict[str, Any]:
+    """Build a terminal ``status="failed"`` Responses payload with empty output."""
+    return {
+        "id": "resp_1",
+        "object": "response",
+        "created_at": 123,
+        "model": "test.failed-response-model",
+        "status": "failed",
+        "error": {"code": "server_error", "message": message},
+        "output": [],
+        "parallel_tool_calls": True,
+        "tool_choice": "auto",
+        "tools": [],
+        "usage": {
+            "input_tokens": 1,
+            "output_tokens": 0,
+            "total_tokens": 1,
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens_details": {"reasoning_tokens": 0},
+        },
+    }
+
+
+class TestSyncResponseFailureSurfaced:
+    """A synchronous Responses failure surfaces as an error, not a 200 empty body."""
+
+    async def test_failed_status_raises_for_synchronous_request(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A ``status="failed"`` upstream result raises a 502 instead of relaying it."""
+        raw = _failed_response_raw()
+
+        async def fake_invoke_api(
+            self: mantle_default.ChatModel,  # noqa: ARG001
+            api: str,  # noqa: ARG001
+            payload: dict[str, Any],  # noqa: ARG001
+            *,
+            stream: bool,  # noqa: ARG001
+            region: str | None = None,  # noqa: ARG001
+        ) -> tuple[str, Any]:
+            return "us-east-1", raw
+
+        monkeypatch.setattr(mantle_default.ChatModel, "_invoke_api", fake_invoke_api)
+        model = mantle_default.ChatModel("test.failed-response-model")
+        request = ResponseCreateParams(model="test.failed-response-model", input="hi")
+        with pytest.raises(ApiError) as exc_info:
+            await model.create_response(request, "resp_public", 0.0)
+        assert exc_info.value.status == 502
+        assert "invalid tool call" in str(exc_info.value)
+
+    async def test_failed_status_relayed_for_background_request(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A background request keeps its failed terminal state (200) for polling."""
+        raw = _failed_response_raw()
+
+        async def fake_invoke_api(
+            self: mantle_default.ChatModel,  # noqa: ARG001
+            api: str,  # noqa: ARG001
+            payload: dict[str, Any],  # noqa: ARG001
+            *,
+            stream: bool,  # noqa: ARG001
+            region: str | None = None,  # noqa: ARG001
+        ) -> tuple[str, Any]:
+            return "us-east-1", raw
+
+        monkeypatch.setattr(mantle_default.ChatModel, "_invoke_api", fake_invoke_api)
+        model = mantle_default.ChatModel("test.failed-response-model")
+        request = ResponseCreateParams(
+            model="test.failed-response-model", input="hi", background=True
+        )
+        response = await model.create_response(request, "resp_public", 0.0)
+        assert isinstance(response, Response)
+        assert response.status == "failed"
+
+
 async def _fake_invoke_api_demoting_responses(
     self: mantle_default.ChatModel,  # noqa: ARG001
     api: str,
@@ -1209,6 +1377,78 @@ class TestResponsesRouteGuards:
         assert _decode_mantle_id(public_id) is None
 
 
+class TestMantleCompactionItemGuard:
+    """Compaction input items on the Mantle Responses passthrough payload."""
+
+    async def test_local_marker_prefixed_item_is_rejected(self) -> None:
+        """A locally-produced compaction item fails with 400 before upstream."""
+        request = ResponseCreateParams.model_validate(
+            {
+                "model": "ignored",
+                "input": [
+                    {
+                        "type": "compaction",
+                        "encrypted_content": encode_compaction_content("summary"),
+                    },
+                    {"role": "user", "content": "next question"},
+                ],
+            }
+        )
+        with pytest.raises(ApiError, match="compact the conversation again") as exc:
+            await mantle_convert.responses_payload(request, "model-id")
+        assert exc.value.status == 400
+
+    async def test_unmarked_item_passes_through_verbatim(self) -> None:
+        """An upstream-produced compaction item is forwarded unchanged."""
+        content = urlsafe_b64encode(b"opaque upstream ciphertext").decode()
+        request = ResponseCreateParams.model_validate(
+            {
+                "model": "ignored",
+                "input": [{"type": "compaction", "encrypted_content": content}],
+            }
+        )
+        payload, region = await mantle_convert.responses_payload(request, "model-id")
+        assert region is None
+        (item,) = payload["input"]
+        assert item["type"] == "compaction"
+        assert item["encrypted_content"] == content
+
+
+class TestMantleModerationParamGuard:
+    """The stdapi ``moderation`` parameter on Mantle passthrough payloads."""
+
+    async def test_chat_moderation_param_is_rejected(self) -> None:
+        """A Chat Completions request with ``moderation`` fails with 400."""
+        request = ChatCompletionCreateParams.model_validate(
+            {
+                "model": "ignored",
+                "messages": [{"role": "user", "content": "hi"}],
+                "moderation": {"model": "gr123"},
+            }
+        )
+        with pytest.raises(ApiError, match="not available on Bedrock") as exc:
+            await mantle_convert.chat_completions_payload(request, "model-id")
+        assert exc.value.status == 400
+
+    async def test_responses_moderation_param_is_rejected(self) -> None:
+        """A Responses request with ``moderation`` fails with 400."""
+        request = ResponseCreateParams.model_validate(
+            {"model": "ignored", "input": "hi", "moderation": {"model": "gr123"}}
+        )
+        with pytest.raises(ApiError, match="not available on Bedrock") as exc:
+            await mantle_convert.responses_payload(request, "model-id")
+        assert exc.value.status == 400
+
+    async def test_chat_without_moderation_builds_the_payload(self) -> None:
+        """Without ``moderation`` the chat payload still builds normally."""
+        request = ChatCompletionCreateParams.model_validate(
+            {"model": "ignored", "messages": [{"role": "user", "content": "hi"}]}
+        )
+        payload = await mantle_convert.chat_completions_payload(request, "model-id")
+        assert payload["model"] == "model-id"
+        assert "moderation" not in payload
+
+
 class TestStreamErrorEvents:
     """In-band upstream stream errors raise a shaped 502 during conversion."""
 
@@ -1294,6 +1534,58 @@ class TestStreamErrorEvents:
         stream = mantle_convert.convert_stream("responses", "chat_completions", events)
         chunks = [loads(data) async for _, data in stream]
         assert len(chunks) == 2
+
+    async def test_malformed_responses_frame_is_skipped_not_fatal(self) -> None:
+        """A malformed frame interleaved in a converted Responses stream is skipped."""
+        events = _fake_stream(
+            [
+                ("response.created", dumps({"response": {"id": "resp_1"}})),
+                (None, "not json at all"),
+                ("response.output_text.delta", dumps({"delta": "hi"})),
+            ]
+        )
+        stream = mantle_convert.convert_stream("responses", "chat_completions", events)
+        chunks = [loads(data) async for _, data in stream]
+        assert len(chunks) == 2
+        assert chunks[-1]["choices"][0]["delta"]["content"] == "hi"
+
+    async def test_malformed_messages_frame_is_skipped_not_fatal(self) -> None:
+        """A malformed frame interleaved in a converted Messages stream is skipped."""
+        events = _fake_stream(
+            [
+                ("message_start", dumps({"message": {"id": "msg_1"}})),
+                (None, "not json at all"),
+                (
+                    "content_block_delta",
+                    dumps({"delta": {"type": "text_delta", "text": "hi"}}),
+                ),
+            ]
+        )
+        stream = mantle_convert.convert_stream("messages", "chat_completions", events)
+        chunks = [loads(data) async for _, data in stream]
+        assert len(chunks) == 2
+        assert chunks[-1]["choices"][0]["delta"]["content"] == "hi"
+
+    async def test_response_incomplete_event_emits_finish_and_usage(self) -> None:
+        """A named ``response.incomplete`` event ends the converted stream like completed."""
+        response = {
+            "id": "resp_1",
+            "status": "incomplete",
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "usage": {"input_tokens": 3, "output_tokens": 7, "total_tokens": 10},
+        }
+        events = _fake_stream(
+            [
+                ("response.created", dumps({"response": {"id": "resp_1"}})),
+                ("response.incomplete", dumps({"response": response})),
+            ]
+        )
+        stream = mantle_convert.convert_stream("responses", "chat_completions", events)
+        chunks = [loads(data) async for _, data in stream]
+        finish_chunk = next(c for c in chunks if c["choices"][0].get("finish_reason"))
+        assert finish_chunk["choices"][0]["finish_reason"] == "length"
+        usage_chunk = next(c for c in chunks if c.get("usage"))
+        assert usage_chunk["usage"]["completion_tokens"] == 7
 
 
 class TestConversionFieldLists:
@@ -1563,7 +1855,7 @@ def test_claude_alias_uses_mantle_id_without_runtime_competitor() -> None:
 
 def test_map_error_nonstring_message_coerced() -> None:
     """A structured (non-string) upstream message maps without raising."""
-    error = _map_error(400, '{"error": {"message": {"detail": "nested"}}}')
+    error = _map_error(400, '{"error": {"message": {"detail": "nested"}}}', "us-east-1")
     assert error.status == 400
     assert "nested" in str(error)
 
@@ -1871,6 +2163,103 @@ class TestRouteAndExecuteMantleFailover:
         assert len(calls) == 1
 
 
+class TestInvokeApiSurfaceLearningWritePath:
+    """The learned-surface cache self-heals and is then reused on later calls."""
+
+    async def test_first_surface_fails_second_succeeds_and_is_learned(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A rejected first surface self-heals via the alternate, learning it."""
+        model_id = "test.surface-write-model"
+        calls: list[str] = []
+
+        async def fake_invoke(
+            region: RegionName,  # noqa: ARG001
+            path: str,
+            payload: Mapping[str, Any],  # noqa: ARG001
+            *,
+            single_region: bool,  # noqa: ARG001
+            headers: Mapping[str, str] | None = None,  # noqa: ARG001
+        ) -> dict[str, Any]:
+            calls.append(path)
+            if path.startswith("/openai/v1"):
+                msg = "This model isn't supported on this route."
+                raise MantleSurfaceUnsupportedError(msg, status=400)
+            return {"id": "chatcmpl-1", "choices": [], "usage": None}
+
+        monkeypatch.setattr(mantle_default, "invoke", fake_invoke)
+        model = mantle_default.ChatModel(model_id)
+        try:
+            _region, result = await model._invoke_api(  # noqa: SLF001
+                "chat_completions", {"model": model_id, "messages": []}, stream=False
+            )
+            assert result == {"id": "chatcmpl-1", "choices": [], "usage": None}
+            assert calls == ["/openai/v1/chat/completions", "/v1/chat/completions"]
+            assert mantle_default._LEARNED_SURFACE[model_id] == "/v1"  # noqa: SLF001
+
+            # The learned surface is tried first on the next call and
+            # succeeds immediately: the previously-failing surface is
+            # skipped rather than probed again.
+            calls.clear()
+            await model._invoke_api(  # noqa: SLF001
+                "chat_completions", {"model": model_id, "messages": []}, stream=False
+            )
+            assert calls == ["/v1/chat/completions"]
+        finally:
+            mantle_default._LEARNED_SURFACE.pop(model_id, None)  # noqa: SLF001
+
+
+class TestInvokeApiRetriesWhenRouterDisabled:
+    """Router-disabled multi-region calls still get in-region retries (see F5)."""
+
+    async def test_router_disabled_multi_region_retries_in_region(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With the region router disabled and >1 candidate, failures are retried.
+
+        ``route_and_execute`` calls only the first candidate region once when
+        the router is disabled, so the in-region retry in
+        ``_request_with_retry`` must cover it instead of silently returning
+        zero retries.
+        """
+        monkeypatch.setattr(mantle_default, "REGION_ROUTER", None)
+        monkeypatch.setattr(stdapi_models, "REGION_ROUTER", None)
+        regions: list[RegionName] = ["us-east-1", "us-west-2"]
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_mantle_regions", regions)
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_max_retries", 2)
+        calls = 0
+
+        async def fake_request(
+            region: RegionName,  # noqa: ARG001
+            path: str,  # noqa: ARG001
+            body: bytes | None,  # noqa: ARG001
+            headers: Mapping[str, str] | None,  # noqa: ARG001
+            method: str = "POST",  # noqa: ARG001
+        ) -> ClientResponse:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                msg = "busy"
+                raise MantleError(msg, status=503, failover=True)
+            return cast("ClientResponse", "ok")
+
+        async def fake_sleep(delay: float) -> None:
+            pass
+
+        async def fake_read_json(response: ClientResponse) -> dict[str, Any]:  # noqa: ARG001
+            return {"id": "chatcmpl-1", "choices": [], "usage": None}
+
+        monkeypatch.setattr(aws_bedrock_mantle, "_request", fake_request)
+        monkeypatch.setattr(aws_bedrock_mantle, "sleep", fake_sleep)
+        monkeypatch.setattr(aws_bedrock_mantle, "_read_json", fake_read_json)
+        model = mantle_default.ChatModel("test.router-disabled-model")
+        _region, result = await model._invoke_api(  # noqa: SLF001
+            "chat_completions", {"model": "m", "messages": []}, stream=False
+        )
+        assert result == {"id": "chatcmpl-1", "choices": [], "usage": None}
+        assert calls == 2
+
+
 class TestInvokeApiSurfaceLearning:
     """Surface-learning side effects of ``_invoke_api``."""
 
@@ -2017,6 +2406,53 @@ class TestCreateResponseConvertedId:
         assert isinstance(response, Response)
         assert response.id == "resp-localstore1"
 
+    async def test_local_previous_response_id_stripped_for_converted_serving(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A restored local previous_response_id does not block chat-served models.
+
+        The route merges a local store ID's conversation inline and restores
+        the ID on the request only for response echoing: it must be stripped
+        before the payload build instead of being rejected as non-Mantle.
+        """
+        raw = {
+            "id": "chatcmpl-upstream",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "m",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "hi"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+
+        async def fake_invoke_api(
+            self: mantle_default.ChatModel,  # noqa: ARG001
+            api: str,
+            payload: dict[str, Any],
+            *,
+            stream: bool,  # noqa: ARG001
+            region: str | None = None,  # noqa: ARG001
+        ) -> tuple[str, Any]:
+            assert api == "chat_completions"
+            assert "previous_response_id" not in payload
+            return "us-east-1", raw
+
+        monkeypatch.setattr(OpenWeightChatModel, "_invoke_api", fake_invoke_api)
+        model = OpenWeightChatModel("qwen.converted-id-model")
+        request = ResponseCreateParams(
+            model="qwen.converted-id-model",
+            input="What number did I ask you to remember?",
+            previous_response_id="resp-abc123def",
+        )
+        response = await model.create_response(request, "resp-localstore2", 0.0)
+        assert isinstance(response, Response)
+        assert response.id == "resp-localstore2"
+
 
 class TestStreamWrapBranches:
     """Streaming legacy-completion and message routes reach their wrap branch."""
@@ -2143,6 +2579,65 @@ class TestEventUsageMessagesAccumulation:
         )
 
 
+class TestEventUsageResponsesTerminalEvents:
+    """``_event_usage`` extracts usage from every terminal Responses event."""
+
+    @pytest.mark.parametrize(
+        "event", ["response.completed", "response.incomplete", "response.failed"]
+    )
+    def test_terminal_event_returns_usage(self, event: str) -> None:
+        """A streamed Responses call ending on any terminal event is billed."""
+        parsed = {"response": {"usage": {"input_tokens": 4, "output_tokens": 6}}}
+        assert mantle_default._event_usage("responses", event, parsed, {}) == {  # noqa: SLF001
+            "input_tokens": 4,
+            "output_tokens": 6,
+        }
+
+    def test_non_terminal_event_returns_none(self) -> None:
+        """A non-terminal Responses event (e.g. a delta) carries no usage."""
+        parsed = {"response": {"usage": {"input_tokens": 4, "output_tokens": 6}}}
+        assert (
+            mantle_default._event_usage(  # noqa: SLF001
+                "responses", "response.output_text.delta", parsed, {}
+            )
+            is None
+        )
+
+
+class TestObserveStreamResponsesIncompleteBilling:
+    """A native Responses stream truncated at max_output_tokens is still billed."""
+
+    async def test_incomplete_terminal_event_bills_usage(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``response.incomplete`` triggers billing like ``response.completed`` does."""
+        records = _capture_usage_records(monkeypatch)
+        model = mantle_default.ChatModel("test.incomplete-stream-model")
+        response = {
+            "id": "resp_incomplete1",
+            "status": "incomplete",
+            "usage": {"input_tokens": 4, "output_tokens": 6, "total_tokens": 10},
+        }
+        events: list[SseEvent] = [
+            ("response.created", dumps({"response": {"id": "resp_incomplete1"}})),
+            ("response.incomplete", dumps({"response": response})),
+        ]
+        events_out = [
+            event
+            async for event in model._relay_stream(  # noqa: SLF001
+                "responses",
+                "responses",
+                _fake_stream(events),
+                "us-east-1",
+                strip_usage_chunk=False,
+            )
+        ]
+        assert len(events_out) == len(events)
+        assert len(records) == 1
+        assert records[0]["input_tokens"] == 4
+        assert records[0]["output_tokens"] == 6
+
+
 class TestRelayStreamErrorScrubbing:
     """``_relay_stream`` scrubs security details from error-named events."""
 
@@ -2220,6 +2715,76 @@ class TestBearerTokenNoCredentials:
         with pytest.raises(ApiError) as exc_info:
             await aws_bedrock_mantle.bearer_token("us-east-1")
         assert exc_info.value.status == 500
+
+
+@dataclass(slots=True)
+class _FakeFrozenCredentials:
+    """Minimal frozen-credentials stand-in for ``bearer_token``."""
+
+    access_key: str
+    secret_key: str
+    token: str | None = None
+
+
+class _FakeCredentials:
+    """Minimal credentials stand-in exposing ``get_frozen_credentials``."""
+
+    def __init__(self, frozen: _FakeFrozenCredentials) -> None:
+        self._frozen = frozen
+
+    async def get_frozen_credentials(self) -> _FakeFrozenCredentials:
+        """Return the stand-in frozen credentials."""
+        return self._frozen
+
+
+class TestBearerTokenMintingAndCaching:
+    """Bearer token minting shape, caching, and TTL-based refresh."""
+
+    def _install_fake_credentials(self, monkeypatch: pytest.MonkeyPatch) -> list[int]:
+        """Install fake AWS credentials; returns a mutable mint-call counter."""
+        mint_calls = [0]
+
+        async def fake_get_credentials() -> _FakeCredentials:
+            mint_calls[0] += 1
+            return _FakeCredentials(
+                _FakeFrozenCredentials(
+                    "AKIAFAKEACCESSKEY", "fakesecretkey", "session-tok"
+                )
+            )
+
+        monkeypatch.setattr(AWS_SESSION, "get_credentials", fake_get_credentials)
+        monkeypatch.setattr(aws_bedrock_mantle, "_TOKENS", {})
+        return mint_calls
+
+    async def test_token_has_expected_prefix_shape(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A minted token carries the Bedrock API-key prefix."""
+        self._install_fake_credentials(monkeypatch)
+        token = await aws_bedrock_mantle.bearer_token("us-east-1")
+        assert token.startswith("bedrock-api-key-")
+
+    async def test_cached_token_reused_without_reminting(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A second call within the cache TTL reuses the token without re-minting."""
+        mint_calls = self._install_fake_credentials(monkeypatch)
+        first = await aws_bedrock_mantle.bearer_token("us-east-1")
+        second = await aws_bedrock_mantle.bearer_token("us-east-1")
+        assert first == second
+        assert mint_calls[0] == 1
+
+    async def test_token_reminted_after_ttl_expiry(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A call after the cache TTL elapses mints a fresh token."""
+        mint_calls = self._install_fake_credentials(monkeypatch)
+        clock = [1_000.0]
+        monkeypatch.setattr(aws_bedrock_mantle, "monotonic", lambda: clock[0])
+        await aws_bedrock_mantle.bearer_token("us-east-1")
+        clock[0] += aws_bedrock_mantle._TOKEN_TTL + 1  # noqa: SLF001
+        await aws_bedrock_mantle.bearer_token("us-east-1")
+        assert mint_calls[0] == 2
 
 
 class TestRequestConnectionFailure:
@@ -2421,6 +2986,61 @@ class TestIterSseParsing:
             )
         ]
         assert events == [("message", "hello")]
+
+    async def test_non_utf8_line_maps_to_502(self) -> None:
+        """A non-UTF-8 line mid-stream maps to the shaped 502, not a raw crash."""
+        lines = [b"data: ok\n", b"\n", b"data: \xff\xfe bad\n"]
+        with pytest.raises(MantleError) as exc_info:
+            async for _ in aws_bedrock_mantle._iter_sse(  # noqa: SLF001
+                cast("ClientResponse", _LinesResponse(lines))
+            ):
+                pass
+        assert exc_info.value.status == 502
+
+
+class TestInvokeStreamAbandonedGenerator:
+    """``invoke_stream`` releases the upstream connection even if never iterated."""
+
+    async def test_unstarted_generator_gc_closes_response(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A generator garbage-collected before its first iteration closes the response.
+
+        The ``async with`` guarding the response only runs once the generator
+        body starts executing, so an abandoned, never-iterated generator
+        would otherwise leave the connection open until the response's own
+        ``__del__`` eventually reclaims it.
+        """
+        closed = False
+
+        class _FakeResponse:
+            content = _LinesContent([b"data: hi\n", b"\n"])
+
+            def close(self) -> None:
+                nonlocal closed
+                closed = True
+
+            async def __aenter__(self) -> Self:
+                return self
+
+            async def __aexit__(self, *exc_info: object) -> bool:
+                return False
+
+        async def fake_request_with_retry(
+            *args: object,  # noqa: ARG001
+            **kwargs: object,  # noqa: ARG001
+        ) -> ClientResponse:
+            return cast("ClientResponse", _FakeResponse())
+
+        monkeypatch.setattr(
+            aws_bedrock_mantle, "_request_with_retry", fake_request_with_retry
+        )
+        generator = await aws_bedrock_mantle.invoke_stream(
+            "us-east-1", "/v1/chat/completions", {}, single_region=True
+        )
+        del generator
+        gc_collect()
+        assert closed is True
 
 
 class TestResolveErrorLocResidual:

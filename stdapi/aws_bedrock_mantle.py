@@ -23,6 +23,7 @@ from random import uniform
 from re import compile as compile_regex
 from time import monotonic
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
+from weakref import finalize
 
 from aiohttp import ClientError as AiohttpClientError
 from aiohttp import ClientSession, ClientTimeout
@@ -98,6 +99,9 @@ _UNSUPPORTED_SURFACE_MARKER = "isn't supported on this route"
 
 #: Misleading upstream 401 message returned when hitting the wrong surface.
 _UNSUPPORTED_SURFACE_MARKER_401 = "is not enabled"
+
+#: Safe charset for a decoded native Mantle response ID (interpolated into request URLs).
+_NATIVE_RESPONSE_ID_RE = compile_regex(r"[A-Za-z0-9._-]+")
 
 
 class MantleError(ApiError):
@@ -217,12 +221,13 @@ async def mantle_http_session() -> AsyncGenerator[ClientSession]:
         await session.close()
 
 
-def _map_error(status: int, body: str) -> MantleError:
+def _map_error(status: int, body: str, region: RegionName) -> MantleError:
     """Map a Mantle HTTP error response to a :class:`MantleError`.
 
     Args:
         status: HTTP status code.
         body: Raw response body.
+        region: Region the request was sent to.
 
     Returns:
         The mapped error, ready to raise.
@@ -252,7 +257,19 @@ def _map_error(status: int, body: str) -> MantleError:
         error = MantleError(message, status=status, failover=True)
     elif status in (401, 403):
         # Server-side credential/permission issue: never the caller's fault.
-        error = MantleError(message, status=500)
+        # Evict the cached bearer token so a rotated/expired credential
+        # self-heals on the next request instead of failing for up to
+        # _TOKEN_TTL seconds; the raw upstream message may disclose IAM
+        # ARNs/permission details, so log it and forward a generic message.
+        _TOKENS.pop(region, None)
+        # Imported here: stdapi.monitoring imports stdapi.aws_bedrock, which
+        # imports stdapi.aws, which imports this module (import cycle).
+        from stdapi.monitoring import log_error_details  # noqa: PLC0415
+
+        log_error_details(message, level="warning")
+        error = MantleError(
+            "Bedrock Mantle credential or permission error.", status=500
+        )
     else:
         error = MantleError(message, status=status)
     if code := details.get("code"):
@@ -308,7 +325,7 @@ async def _request(
             error_body = ""
         finally:
             response.release()
-        raise _map_error(response.status, error_body)
+        raise _map_error(response.status, error_body, region)
     return response
 
 
@@ -447,7 +464,11 @@ async def invoke_stream(
 
     Returns:
         Async generator of ``(event name or None, raw data)`` tuples,
-        terminating before any ``[DONE]`` sentinel.
+        terminating before any ``[DONE]`` sentinel. A generator that is
+        garbage-collected without ever being iterated (e.g. an immediate
+        client disconnect) still releases the upstream connection: the
+        ``async with`` inside the generator body only runs once iteration
+        starts, so a GC-tied fallback closes the response directly.
 
     Raises:
         MantleError: On upstream errors before the stream opens.
@@ -455,7 +476,9 @@ async def invoke_stream(
     response = await _request_with_retry(
         region, path, payload, headers, single_region=single_region
     )
-    return _iter_sse(response)
+    generator = _iter_sse(response)
+    finalize(generator, response.close)
+    return generator
 
 
 async def _iter_sse(response: ClientResponse) -> AsyncGenerator[SseEvent]:
@@ -488,9 +511,15 @@ async def _iter_sse(response: ClientResponse) -> AsyncGenerator[SseEvent]:
                         pass  # Comments and unknown fields are ignored.
         if data and (joined := "\n".join(data)) != "[DONE]":  # pragma: no cover
             yield event, joined
-    except (AiohttpClientError, TimeoutError, HttpProcessingError) as error:
+    except (
+        AiohttpClientError,
+        TimeoutError,
+        HttpProcessingError,
+        UnicodeDecodeError,
+    ) as error:
         # HttpProcessingError covers LineTooLong, which aiohttp raises
         # outside its ClientError hierarchy for oversized SSE lines.
+        # UnicodeDecodeError covers a non-UTF-8 line mid-stream.
         msg = "The Bedrock Mantle response stream was interrupted."
         raise MantleError(msg, status=502) from error
 
@@ -599,7 +628,8 @@ def decode_mantle_response_id(public_id: str) -> tuple[RegionName, str] | None:
 
     Returns:
         Tuple of (region, native Mantle response ID), or ``None`` when the ID
-        is not a region-tagged Mantle ID (e.g. a native stdapi stored ID).
+        is not a region-tagged Mantle ID (e.g. a native stdapi stored ID) or
+        decodes to a native ID unsafe to interpolate into a request URL.
     """
     if not public_id.startswith("resp_"):
         return None
@@ -620,9 +650,14 @@ def decode_mantle_response_id(public_id: str) -> tuple[RegionName, str] | None:
     if region is None:
         return None
     try:
-        return region, raw[4:].decode("ascii")
+        native_id = raw[4:].decode("ascii")
     except UnicodeDecodeError:
         return None
+    # The native ID is interpolated verbatim into upstream request URLs: reject
+    # anything outside a safe charset to prevent path/query/fragment injection.
+    if not _NATIVE_RESPONSE_ID_RE.fullmatch(native_id):
+        return None
+    return region, native_id
 
 
 def _openai_usage(

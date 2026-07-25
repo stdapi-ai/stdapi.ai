@@ -25,6 +25,7 @@ from sse_starlette import ServerSentEvent
 from stdapi.api_errors import ApiError
 from stdapi.aws_bedrock_mantle import MantleError, decode_mantle_response_id
 from stdapi.input_file import FileIdInputFile, InputFile, prefetch_all_content_types
+from stdapi.models.chat._adapters._openai_responses import COMPACTION_CONTENT_PREFIX
 from stdapi.types.anthropic_messages import (
     Base64ImageSource,
     Base64PDFSource,
@@ -422,7 +423,11 @@ async def chat_completions_payload(
 
     Returns:
         JSON-ready request payload.
+
+    Raises:
+        ApiError: When the request sets the ``moderation`` parameter.
     """
+    _reject_moderation_param(request.moderation)
     await prefetch_all_content_types()
     payload = request.model_dump(mode="json", by_alias=True, exclude_unset=True)
     payload["model"] = model_id
@@ -618,12 +623,16 @@ async def responses_payload(
         Tuple of (JSON-ready request payload, pinned region or ``None``).
 
     Raises:
-        ApiError: When ``previous_response_id`` is not a Mantle-tagged ID.
+        ApiError: When the request sets the ``moderation`` parameter, when
+            ``previous_response_id`` is not a Mantle-tagged ID, or when the
+            input contains a locally-produced ``compaction`` item.
     """
+    _reject_moderation_param(request.moderation)
     payload = request.model_dump(mode="json", by_alias=True, exclude_unset=True)
     payload["model"] = model_id
     for name in _RESPONSES_EXTENSION_FIELDS:
         payload.pop(name, None)
+    _reject_local_compaction_items(payload.get("input"))
     region = _pin_previous_response(payload)
     for tool in payload.get("tools") or ():
         # Mantle's server-side web_search only runs in cache-only mode; live
@@ -638,8 +647,65 @@ async def responses_payload(
     return payload, region
 
 
+def _reject_moderation_param(moderation: object) -> None:
+    """Reject the stdapi ``moderation`` extension on Mantle passthrough requests.
+
+    Mantle passthrough requests bypass the Bedrock Converse API, so
+    moderation guardrails cannot be applied or reported.
+
+    Args:
+        moderation: The request ``moderation`` field value, if any.
+
+    Raises:
+        ApiError: When the field is set.
+    """
+    if moderation is not None:
+        msg = (
+            "The 'moderation' parameter is not available on Bedrock "
+            "Mantle-served models: guardrails cannot be applied to "
+            "passthrough requests. Remove the parameter or use a "
+            "Bedrock-served model."
+        )
+        raise ApiError(msg, status=400)
+
+
+def _reject_local_compaction_items(input_value: object) -> None:
+    """Reject ``compaction`` items carrying this server's local marker.
+
+    Locally-produced compaction content is Bedrock-specific encoding that the
+    Mantle upstream cannot decrypt; unmarked items (produced by the upstream
+    itself) pass through verbatim.
+
+    Args:
+        input_value: Dumped ``input`` payload value.
+
+    Raises:
+        ApiError: When a locally-produced compaction item is present.
+    """
+    if not isinstance(input_value, list):
+        return
+    for item in input_value:
+        if (
+            isinstance(item, dict)
+            and item.get("type") == "compaction"
+            and str(item.get("encrypted_content") or "").startswith(
+                COMPACTION_CONTENT_PREFIX
+            )
+        ):
+            msg = (
+                "Locally-produced compaction items cannot be continued on a "
+                "Bedrock Mantle-served model: compact the conversation again "
+                "with a Bedrock-served model, or use a compaction item "
+                "produced upstream."
+            )
+            raise ApiError(msg, status=400)
+
+
 def _pin_previous_response(payload: dict[str, Any]) -> RegionName | None:
     """Decode a region-tagged ``previous_response_id`` in place.
+
+    A falsy value (absent, ``None``, empty) is removed from the payload so
+    it is never forwarded upstream as an explicit ``null``.
 
     Args:
         payload: Responses request payload, updated in place.
@@ -650,7 +716,7 @@ def _pin_previous_response(payload: dict[str, Any]) -> RegionName | None:
     Raises:
         ApiError: When the ID is not a region-tagged Mantle response ID.
     """
-    if not (previous_id := payload.get("previous_response_id")):
+    if not (previous_id := payload.pop("previous_response_id", None)):
         return None
     if (decoded := decode_mantle_response_id(previous_id)) is None:
         msg = (
@@ -2107,9 +2173,11 @@ async def _responses_stream_to_chat(
 ) -> AsyncGenerator[SseEvent]:
     """Convert a Responses SSE stream to Chat Completions chunks.
 
-    Reasoning events are dropped. A final usage chunk is always emitted
-    from ``response.completed``. Event payloads are only parsed for the
-    event names that contribute chunks.
+    Reasoning events are dropped. A final usage chunk is always emitted from
+    ``response.completed``/``response.incomplete``. Event payloads are only
+    parsed once per event, and only for the event names that contribute
+    chunks; a malformed data payload is skipped rather than aborting the
+    stream (mirroring the passthrough path's tolerance).
 
     Args:
         events: Upstream Responses SSE events.
@@ -2123,9 +2191,10 @@ async def _responses_stream_to_chat(
     template = _chunk_template(None, None, None)
     tool_index = -1
     async for event, data in events:
-        match event or loads(data).get("type"):
+        parsed = _parsed_chunk(data)
+        match event or (parsed or {}).get("type"):
             case "response.created":
-                response = loads(data).get("response") or {}
+                response = (parsed or {}).get("response") or {}
                 template = _chunk_template(
                     response.get("id"),
                     response.get("created_at"),
@@ -2134,10 +2203,10 @@ async def _responses_stream_to_chat(
                 yield _chat_chunk(template, delta={"role": "assistant", "content": ""})
             case "response.output_text.delta":
                 yield _chat_chunk(
-                    template, delta={"content": loads(data).get("delta") or ""}
+                    template, delta={"content": (parsed or {}).get("delta") or ""}
                 )
             case "response.output_item.added" if (
-                item := loads(data).get("item") or {}
+                item := (parsed or {}).get("item") or {}
             ).get("type") == "function_call":
                 tool_index += 1
                 yield _chat_chunk(
@@ -2164,14 +2233,14 @@ async def _responses_stream_to_chat(
                             {
                                 "index": tool_index,
                                 "function": {
-                                    "arguments": loads(data).get("delta") or ""
+                                    "arguments": (parsed or {}).get("delta") or ""
                                 },
                             }
                         ]
                     },
                 )
-            case "response.completed":
-                response = loads(data).get("response") or {}
+            case "response.completed" | "response.incomplete":
+                response = (parsed or {}).get("response") or {}
                 yield _chat_chunk(
                     template,
                     finish_reason=_finish_from_response(
@@ -2199,7 +2268,9 @@ async def _messages_stream_to_chat(
 
     Thinking deltas are dropped. A final usage chunk is always emitted,
     combining ``message_start`` input usage with ``message_delta`` usage.
-    Event payloads are only parsed for the event names that contribute chunks.
+    Event payloads are only parsed once per event, and only for the event
+    names that contribute chunks; a malformed data payload is skipped rather
+    than aborting the stream (mirroring the passthrough path's tolerance).
 
     Args:
         events: Upstream Anthropic SSE events.
@@ -2215,16 +2286,17 @@ async def _messages_stream_to_chat(
     tool_index = -1
     tool_block = False
     async for event, data in events:
-        match event or loads(data).get("type"):
+        parsed = _parsed_chunk(data)
+        match event or (parsed or {}).get("type"):
             case "message_start":
-                message = loads(data).get("message") or {}
+                message = (parsed or {}).get("message") or {}
                 template = _chunk_template(
                     message.get("id"), None, message.get("model")
                 )
                 input_usage = message.get("usage") or {}
                 yield _chat_chunk(template, delta={"role": "assistant", "content": ""})
             case "content_block_start":
-                block = loads(data).get("content_block") or {}
+                block = (parsed or {}).get("content_block") or {}
                 tool_block = block.get("type") == "tool_use"
                 if tool_block:
                     tool_index += 1
@@ -2246,22 +2318,21 @@ async def _messages_stream_to_chat(
                     )
             case "content_block_delta":
                 delta = _chat_delta_from_messages(
-                    loads(data).get("delta") or {},
+                    (parsed or {}).get("delta") or {},
                     tool_block=tool_block,
                     tool_index=tool_index,
                 )
                 if delta is not None:
                     yield _chat_chunk(template, delta=delta)
             case "message_delta":
-                parsed = loads(data)
-                stop = (parsed.get("delta") or {}).get("stop_reason")
+                stop = ((parsed or {}).get("delta") or {}).get("stop_reason")
                 yield _chat_chunk(
                     template, finish_reason=_STOP_TO_FINISH.get(stop or "", "stop")
                 )
                 yield _chat_chunk(
                     template,
                     usage=_chat_usage_from_messages(
-                        {**input_usage, **(parsed.get("usage") or {})}
+                        {**input_usage, **((parsed or {}).get("usage") or {})}
                     ),
                 )
             case "error":
@@ -2624,25 +2695,31 @@ def _close_responses_tool(state: _ResponsesStreamState) -> list[SseEvent]:
 
 
 def _responses_completed(state: _ResponsesStreamState) -> SseEvent:
-    """Build the terminal ``response.completed`` event.
+    """Build the terminal ``response.completed``/``response.incomplete`` event.
+
+    Matches the sibling Converse adapter's wire grammar: a truncated
+    response is announced as ``response.incomplete``, not as a
+    ``response.completed`` event carrying ``status: "incomplete"``.
 
     Args:
         state: Mutable stream state.
 
     Returns:
-        The ``response.completed`` SSE event, carrying the final usage.
+        The terminal SSE event, carrying the final usage.
     """
     state.completed = True
     finish = state.finish_reason or "stop"
+    incomplete = finish in _FINISH_TO_INCOMPLETE
     response = {
         **state.response,
-        "status": "incomplete" if finish in _FINISH_TO_INCOMPLETE else "completed",
+        "status": "incomplete" if incomplete else "completed",
         "output": state.output,
         "usage": _responses_usage_from_chat(state.usage or {}),
     }
     if reason := _FINISH_TO_INCOMPLETE.get(finish):
         response["incomplete_details"] = {"reason": reason}
-    return _responses_event(state, "response.completed", {"response": response})
+    event_name = "response.incomplete" if incomplete else "response.completed"
+    return _responses_event(state, event_name, {"response": response})
 
 
 def _responses_stream_tail(state: _ResponsesStreamState) -> list[SseEvent]:
