@@ -130,7 +130,7 @@ This API supports dynamic model name aliases matching the official Anthropic API
 
 **Examples:**
 
-- `claude-opus-4-8` → `anthropic.claude-opus-4-8`
+- `claude-opus-5` → `anthropic.claude-opus-5`
 - `claude-sonnet-5` → `anthropic.claude-sonnet-5`
 - `claude-haiku-4-5-20251001` → `anthropic.claude-haiku-4-5-20251001-v1:0`
 
