@@ -94,7 +94,7 @@ Generate model responses with AWS Bedrock foundation models through an OpenAI Re
 | `prompt` (template reference)                                         | :material-close-circle:{ .unsupported } | Returns `400`; not supported                                                 |
 | `safety_identifier`                                                   | :material-close-circle:{ .unsupported } | Accepted but ignored by generation; recorded in request logs                 |
 | `client_metadata`                                                     | :material-close-circle:{ .unsupported } | Accepted but ignored (sent by newer OpenAI clients such as Codex)            |
-| `moderation`                                                          |   :material-check-circle:{ .success }   | Applies an AWS Bedrock guardrail; results in the response `moderation` field (on the terminal event when streaming) |
+| `moderation`                                                          |   :material-check-circle:{ .success }   | Applies an AWS Bedrock guardrail; results in the response `moderation` field (on the terminal event when streaming) — rejected (`400`) on Mantle-served models |
 | **Output Format**                                                     |                                         |                                                                              |
 | `text.format: "text"`                                                 |   :material-check-circle:{ .success }   | Plain text output                                                            |
 | `text.format: "json_object"`                                          |      :material-cog:{ .model-dep }       | JSON object output via Bedrock outputConfig                                  |
@@ -193,6 +193,10 @@ curl -X POST "$BASE/v1/responses" \
 
 **Step 2 — Submit the tool result:**
 
+Without `previous_response_id`, each request is stateless: replay the full
+history, including the `function_call` item from step 1's output alongside
+its matching `function_call_output`.
+
 ```bash
 curl -X POST "$BASE/v1/responses" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
@@ -200,6 +204,16 @@ curl -X POST "$BASE/v1/responses" \
   -d '{
     "model": "amazon.nova-micro-v1:0",
     "input": [
+      {
+        "role": "user",
+        "content": "What'\''s the weather in Paris?"
+      },
+      {
+        "type": "function_call",
+        "call_id": "<call_id from step 1>",
+        "name": "get_weather",
+        "arguments": "{\"city\": \"Paris\"}"
+      },
       {
         "type": "function_call_output",
         "call_id": "<call_id from step 1>",
@@ -236,7 +250,7 @@ curl -N -X POST "$BASE/v1/responses" \
   }'
 ```
 
-The stream emits events in order: `response.created` → `response.in_progress` → `response.output_text.delta` (repeated) → `response.output_text.done` → a terminal event.
+The stream emits events in order: `response.created` → `response.in_progress` → `response.output_item.added` → `response.content_part.added` → `response.output_text.delta` (repeated) → `response.output_text.done` → `response.content_part.done` → `response.output_item.done` → a terminal event.
 
 The terminal event matches the outcome, exactly like the OpenAI API:
 
@@ -305,9 +319,9 @@ curl -X POST "$BASE/v1/responses" \
   }'
 ```
 
-The chain of thought is returned as a `reasoning` output item preceding the assistant message, with the text in `content` parts of type `reasoning_text`. When streaming, the item is delivered through `response.output_item.added`, `response.reasoning_text.delta` / `.done`, and `response.output_item.done` events before the message events.
+The chain of thought is returned as a `reasoning` output item preceding the assistant message, with the text in `content` parts of type `reasoning_text`. When streaming on Converse-served models, the item is delivered through `response.output_item.added`, `response.reasoning_text.delta` / `.done`, and `response.output_item.done` events before the message events. Mantle-native models instead return the reasoning as an encrypted-content item with no plaintext `reasoning_text.delta` events — only `response.output_item.added` / `.done` bracket it. Bedrock does not split reasoning tokens out of `outputTokens`, so `usage.output_tokens_details.reasoning_tokens` is always `0`; reasoning tokens are still billed inside `output_tokens`.
 
-Add `"include": ["reasoning.encrypted_content"]` to attach an `encrypted_content` envelope to each reasoning item. Echo the item back in the `input` of the next request to carry the model's reasoning state (including signatures and redacted content) across turns with no server-side storage — reasoning items from the official OpenAI API are accepted too, with their encrypted content safely ignored.
+Add `"include": ["reasoning.encrypted_content"]` to attach an `encrypted_content` envelope to each reasoning item. Echo the item back in the `input` of the next request to carry the model's reasoning state (including signatures and redacted content) across turns with no server-side storage — reasoning items from the official OpenAI API are accepted too, with their encrypted content safely ignored. Echoing a reasoning item back **without** its `encrypted_content` replays it unsigned; Anthropic models may reject it in tool-use continuation turns.
 
 ### Prompt Caching
 
@@ -707,7 +721,8 @@ The returned `id` then works with:
     - `store` defaults to **false** on this implementation (the OpenAI API defaults to true).
     - On AWS Bedrock session storage, `store=true` is ignored with `stream=true` (a warning is recorded in the request log). [Mantle](features.md#bedrock-mantle-models) models persist responses in Mantle native storage instead, where `store` works with streaming too.
     - Mantle models without native Responses storage (Messages- or Chat-Completions-bound) use AWS Bedrock session storage like classic models. Only a `store=true` request answered through a mid-request API fallback (away from the upstream Responses API) is served without storage, with a warning recorded in the request log (agent harnesses request `store` unconditionally); its ID cannot be retrieved later. `previous_response_id` on such a fallback returns `400` instead — conversation history is never silently dropped.
-    - Sessions are created in the primary Bedrock region and persist until deleted through the API.
+    - Sessions are created in the primary Bedrock region and persist until deleted through the API — see [operator guidance on cleaning up stale sessions](operations_configuration.md#bedrock-session-storage-optional).
+    - `GET /v1/responses/{response_id}` rejects `stream=true` with `400`; `include` and `starting_after` are accepted and ignored.
     - Requires the AWS Bedrock session management IAM permissions (`bedrock:CreateSession`, `bedrock:CreateInvocation`, `bedrock:PutInvocationStep`, `bedrock:GetInvocationStep`, `bedrock:ListInvocationSteps`, `bedrock:ListInvocations`, `bedrock:ListSessions`, `bedrock:ListTagsForResource`, `bedrock:EndSession`, `bedrock:DeleteSession`, `bedrock:TagResource`). Without them, `store=true` is ignored (with a request-log warning) and the response is not persisted.
 
 ## Conversation Compaction
@@ -727,7 +742,7 @@ curl -X POST "$BASE/v1/responses/compact" \
   }'
 ```
 
-**Response:**
+**Response** (trimmed to the compaction item; `output` also echoes the conversation's message items before it):
 
 ```json
 {
@@ -754,7 +769,7 @@ Continue the conversation by sending the compaction item back, followed by new m
 ```
 
 !!! note "Stateless compaction"
-    The compaction content is fully self-contained (encoded, not encrypted): no conversation state is needed, and any server instance can expand it. `previous_response_id` may reference a [stored response](#stored-responses) to include its conversation in the compaction.
+    The compaction content is fully self-contained (marker-prefixed and encoded, not encrypted): no conversation state is needed, and any server instance can expand it. Only compaction items produced by this server can be expanded — items encrypted by the upstream OpenAI API are rejected with `400`, and locally-produced items cannot be continued on a [Mantle](features.md#bedrock-mantle-models)-served model. `previous_response_id` may reference a [stored response](#stored-responses) to include its conversation in the compaction.
 
 ---
 

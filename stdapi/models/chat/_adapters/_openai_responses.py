@@ -40,6 +40,7 @@ from stdapi.types.openai_responses import (
     AnnotationURLCitation,
     CodeInterpreter,
     CompactionItemParam,
+    ContentPartReasoningText,
     CustomToolCallInput,
     CustomToolCallOutput,
     EasyInputMessage,
@@ -1101,11 +1102,15 @@ async def _map_input_item(
             _map_compaction_item(item, bedrock_messages)
 
 
+#: Marker identifying locally-encoded compaction content; ":" is outside the base64url alphabet, so upstream ciphertext can never collide with it.
+COMPACTION_CONTENT_PREFIX = "v1:"
+
+
 def encode_compaction_content(summary: str) -> str:
     """Encode a conversation summary as opaque compaction item content.
 
     The content is self-contained so that compaction round-trips work without
-    any server-side state; it is encoded, not encrypted.
+    any server-side state; it is marker-prefixed and encoded, not encrypted.
 
     Args:
         summary: Conversation summary text.
@@ -1113,7 +1118,7 @@ def encode_compaction_content(summary: str) -> str:
     Returns:
         Opaque content for a ``compaction`` item.
     """
-    return urlsafe_b64encode(summary.encode()).decode()
+    return f"{COMPACTION_CONTENT_PREFIX}{urlsafe_b64encode(summary.encode()).decode()}"
 
 
 def _map_compaction_item(
@@ -1126,14 +1131,19 @@ def _map_compaction_item(
         bedrock_messages: Mutable Bedrock messages list to append to.
 
     Raises:
-        ApiError: When the compaction content cannot be decoded.
+        ApiError: When the content lacks the local marker (e.g. an item
+            produced by the upstream OpenAI API) or cannot be decoded.
     """
+    msg = (
+        "Invalid compaction item content: only compaction items produced "
+        "by this server can be expanded."
+    )
+    encoded = item.encrypted_content.removeprefix(COMPACTION_CONTENT_PREFIX)
+    if encoded == item.encrypted_content:
+        raise ApiError(msg)
     try:
-        summary = b64decode(
-            item.encrypted_content, altchars=b"-_", validate=True
-        ).decode()
+        summary = b64decode(encoded, altchars=b"-_", validate=True).decode()
     except (ValueError, UnicodeDecodeError) as exc:
-        msg = "Invalid compaction item content."
         raise ApiError(msg) from exc
     _append_or_merge(
         bedrock_messages,
@@ -1630,6 +1640,7 @@ def _extract_output_items(
 _INCOMPLETE_REASONS: dict[str, Literal["max_output_tokens", "content_filter"]] = {
     "content_filtered": "content_filter",
     "guardrail_intervened": "content_filter",
+    "max_tokens": "max_output_tokens",
 }
 
 
@@ -2068,8 +2079,9 @@ def _handle_reasoning_delta(
     """Emit reasoning SSE events for a Bedrock ``reasoningContent`` delta.
 
     The first delta of a reasoning block opens a ``reasoning`` output item
-    (``response.output_item.added`` with empty content).  Text deltas emit
-    ``response.reasoning_text.delta``; signature and redacted deltas are
+    (``response.output_item.added`` with empty content) followed by
+    ``response.content_part.added`` for the reasoning-text part.  Text deltas
+    emit ``response.reasoning_text.delta``; signature and redacted deltas are
     accumulated silently for the ``encrypted_content`` envelope.
 
     Args:
@@ -2098,6 +2110,17 @@ def _handle_reasoning_delta(
                 type="response.output_item.added",
             ),
         )
+        yield json_sse(
+            "response.content_part.added",
+            ResponseContentPartAddedEvent(
+                item_id=state.current_item_id,
+                output_index=state.output_index,
+                content_index=0,
+                part=ContentPartReasoningText(text="", type="reasoning_text"),
+                sequence_number=state.next_seq(),
+                type="response.content_part.added",
+            ),
+        )
     if signature := reasoning_delta.get("signature"):
         state.reasoning_signatures.append(signature)
     if (data := reasoning_delta.get("redactedContent")) is not None:
@@ -2121,6 +2144,7 @@ def _close_reasoning_block(state: _StreamState) -> Generator[JSONServerSentEvent
     """Close an open reasoning block, if any.
 
     Emits ``response.reasoning_text.done`` (when text was streamed) followed by
+    ``response.content_part.done`` for the reasoning-text part and
     ``response.output_item.done`` with the completed reasoning item, records the
     item, and resets the per-block state.  No-op outside a reasoning block.
 
@@ -2144,6 +2168,17 @@ def _close_reasoning_block(state: _StreamState) -> Generator[JSONServerSentEvent
                 type="response.reasoning_text.done",
             ),
         )
+    yield json_sse(
+        "response.content_part.done",
+        ResponseContentPartDoneEvent(
+            item_id=state.current_item_id,
+            output_index=state.output_index,
+            content_index=0,
+            part=ContentPartReasoningText(text=reasoning_text, type="reasoning_text"),
+            sequence_number=state.next_seq(),
+            type="response.content_part.done",
+        ),
+    )
     done_item = _build_reasoning_item(
         state.current_item_id,
         reasoning_text,
