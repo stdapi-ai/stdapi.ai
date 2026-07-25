@@ -5,11 +5,14 @@ from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 import pytest
+from sse_starlette import EventSourceResponse
 from starlette.testclient import TestClient
 
 from stdapi.api_errors import ApiError
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
     from openai import OpenAI
 from stdapi.models import ModelDetails
 from stdapi.routes import openai_chat_completions
@@ -39,13 +42,27 @@ class _StubChatBackend:
 
     def __init__(self) -> None:
         self.requests: list[tuple[CompletionCreateParams, str]] = []
+        #: Overrides the returned completion ID, mimicking Mantle passthrough.
+        self.upstream_id: str | None = None
 
     async def create_completion(
         self, request: CompletionCreateParams, completion_id: str, created: int
-    ) -> ChatCompletion:
-        """Record the request and return a canned completion."""
+    ) -> ChatCompletion | EventSourceResponse:
+        """Record the request and return a canned completion, or a stream when requested."""
         self.requests.append((request, completion_id))
-        return _canned_completion(completion_id, request.model)
+        completion = _canned_completion(
+            self.upstream_id or completion_id, request.model
+        )
+        if not request.stream:
+            return completion
+
+        async def _events() -> AsyncIterator[dict[str, str]]:
+            yield {
+                "event": "chat.completion.chunk",
+                "data": completion.model_dump_json(by_alias=True, exclude_none=True),
+            }
+
+        return EventSourceResponse(_events())
 
 
 #: Stored object kind declared by each document ``response.object`` field.
@@ -66,6 +83,8 @@ class _StubStore:
         self.list_sessions_kinds: list[str] = []
         #: Errors to raise from ``load`` for specific completion IDs.
         self.load_errors: dict[str, Exception] = {}
+        #: Completion IDs passed to ``load``, in call order.
+        self.load_calls: list[str] = []
 
     async def create_session(self, kind: str) -> str:
         self.created_kinds.append(kind)
@@ -79,15 +98,16 @@ class _StubStore:
         if completion_id in self.load_errors:
             raise self.load_errors[completion_id]
         document = self.documents.get(completion_id)
-        declared = document and _KIND_BY_OBJECT.get(
-            document.get("response", {}).get("object")
-        )
+        declared = None
+        if document is not None and isinstance(document.get("response"), dict):
+            declared = _KIND_BY_OBJECT.get(document["response"].get("object"))
         if document is None or (declared is not None and declared != kind):
             msg = f"Chat completion with id '{completion_id}' not found."
             raise ApiError(msg, status=404)
         return document
 
     async def load(self, completion_id: str, kind: str) -> dict[str, Any]:
+        self.load_calls.append(completion_id)
         return self._document_or_not_found(completion_id, kind)
 
     async def delete(self, completion_id: str, kind: str) -> None:
@@ -200,6 +220,41 @@ class TestStoreOnChatCreate:
         assert document["messages"][0]["content"] == "hello"
         assert document["response"]["id"] == "chatcmpl-sess-1"
         assert document["response"]["metadata"] == {"team": "x"}
+
+    def test_store_rewrites_upstream_backend_id(
+        self, client: TestClient, backend: _StubChatBackend, store: _StubStore
+    ) -> None:
+        """A backend that ignores completion_id (e.g. Mantle passthrough) is rewritten when stored."""
+        backend.upstream_id = "chatcmpl-upstream-xyz"
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "amazon.nova-micro-v1:0",
+                "messages": [{"role": "user", "content": "hello"}],
+                "store": True,
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["id"] == "chatcmpl-sess-1"
+        ((completion_id, document),) = store.saved
+        assert completion_id == "chatcmpl-sess-1"
+        assert document["response"]["id"] == "chatcmpl-sess-1"
+
+    def test_without_store_upstream_backend_id_passes_through(
+        self, client: TestClient, backend: _StubChatBackend, store: _StubStore
+    ) -> None:
+        """Without store=true, the backend's own upstream ID is returned untouched."""
+        backend.upstream_id = "chatcmpl-upstream-xyz"
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "amazon.nova-micro-v1:0",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["id"] == "chatcmpl-upstream-xyz"
+        assert not store.saved
 
     def test_store_with_stream_is_ignored(
         self, client: TestClient, backend: _StubChatBackend, store: _StubStore
@@ -376,6 +431,17 @@ class TestStoredChatCompletionRoutes:
         assert response.status_code == 404
         assert not store.deleted
 
+    @pytest.mark.parametrize(
+        "document", [{"response": None}, {}], ids=["null-response", "no-response-key"]
+    )
+    def test_retrieve_malformed_document_is_not_found(
+        self, client: TestClient, store: _StubStore, document: dict[str, Any]
+    ) -> None:
+        """A foreign or corrupt stored document 404s instead of 500ing."""
+        store.documents["chatcmpl-sess-1"] = document
+        response = client.get("/v1/chat/completions/chatcmpl-sess-1")
+        assert response.status_code == 404
+
     def test_messages_listing_with_cursor(
         self, client: TestClient, store: _StubStore
     ) -> None:
@@ -467,6 +533,125 @@ class TestStoredChatCompletionRoutes:
         body = response.json()
         assert [message["id"] for message in body["data"]] == ["msg-1", "msg-0"]
 
+    def test_messages_listing_after_combined_with_desc_order(
+        self, client: TestClient, store: _StubStore
+    ) -> None:
+        """After applies to the already-reversed sequence when order=desc."""
+        store.documents["chatcmpl-sess-1"] = {
+            "messages": [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "u1"},
+                {"role": "assistant", "content": "a1"},
+            ],
+            "response": {},
+        }
+        response = client.get(
+            "/v1/chat/completions/chatcmpl-sess-1/messages?order=desc&after=msg-2"
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        # desc reverses to [msg-2, msg-1, msg-0]; after msg-2 leaves [msg-1, msg-0].
+        assert [message["id"] for message in body["data"]] == ["msg-1", "msg-0"]
+
+    def test_messages_listing_truncates_and_reports_has_more(
+        self, client: TestClient, store: _StubStore
+    ) -> None:
+        """A limit smaller than the remaining messages truncates the page and sets has_more."""
+        store.documents["chatcmpl-sess-1"] = {
+            "messages": [{"role": "user", "content": f"m{i}"} for i in range(5)],
+            "response": {},
+        }
+        response = client.get("/v1/chat/completions/chatcmpl-sess-1/messages?limit=2")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert [message["id"] for message in body["data"]] == ["msg-0", "msg-1"]
+        assert body["has_more"] is True
+
+    def test_messages_listing_cursor_at_last_message_returns_empty_page(
+        self, client: TestClient, store: _StubStore
+    ) -> None:
+        """An after cursor matching the last message returns an empty page, not a 404."""
+        store.documents["chatcmpl-sess-1"] = {
+            "messages": [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "hello"},
+            ],
+            "response": {},
+        }
+        response = client.get(
+            "/v1/chat/completions/chatcmpl-sess-1/messages?after=msg-1"
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["data"] == []
+        assert body["has_more"] is False
+
+    def test_messages_listing_non_dict_message_entry_is_not_found(
+        self, client: TestClient, store: _StubStore
+    ) -> None:
+        """A non-dict entry in the stored messages 404s instead of 500ing."""
+        store.documents["chatcmpl-sess-1"] = {
+            "messages": ["not-a-dict"],
+            "response": {},
+        }
+        response = client.get("/v1/chat/completions/chatcmpl-sess-1/messages")
+        assert response.status_code == 404
+
+    def test_store_round_trip_preserves_multipart_and_tool_messages(
+        self, client: TestClient, backend: _StubChatBackend, store: _StubStore
+    ) -> None:
+        """A store request with multi-part and tool messages round-trips through /messages."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": "https://x/img.png"}},
+                    {"type": "text", "text": "describe this"},
+                ],
+            },
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "result data"},
+        ]
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "amazon.nova-micro-v1:0",
+                "messages": messages,
+                "store": True,
+            },
+        )
+        assert response.status_code == 200, response.text
+        completion_id = response.json()["id"]
+        ((_, document),) = store.saved
+        assert document["messages"][0]["content"][0]["type"] == "image_url"
+        assert document["messages"][1]["tool_calls"][0]["id"] == "call_1"
+        assert document["messages"][2]["tool_call_id"] == "call_1"
+        # The stub's save() doesn't feed load(): register the saved document.
+        store.documents[completion_id] = document
+
+        messages_response = client.get(f"/v1/chat/completions/{completion_id}/messages")
+        assert messages_response.status_code == 200, messages_response.text
+        body = messages_response.json()
+        array_message, tool_call_message, tool_message = body["data"]
+        assert array_message["content"] == "describe this"
+        assert [part["type"] for part in array_message["content_parts"]] == [
+            "image_url",
+            "text",
+        ]
+        assert "content_parts" not in tool_call_message
+        assert tool_call_message["tool_calls"][0]["id"] == "call_1"
+        assert "content_parts" not in tool_message
+        assert tool_message["content"] == "result data"
+
 
 @pytest.mark.local
 class TestListChatCompletions:
@@ -518,19 +703,15 @@ class TestListChatCompletions:
         body = response.json()
         assert [item["id"] for item in body["data"]] == ["chatcmpl-s2", "chatcmpl-s3"]
 
-    def test_after_unknown_cursor_returns_empty_page(
+    def test_after_unknown_cursor_is_not_found(
         self, client: TestClient, store: _StubStore
     ) -> None:
-        """An unknown after cursor yields an empty page."""
+        """An unknown after cursor 404s instead of stranding pagination on an empty page."""
         store.sessions = [("s1", datetime(2024, 1, 1, tzinfo=UTC))]
         _store_completion(store, "s1")
         response = client.get("/v1/chat/completions?after=chatcmpl-zzz")
-        assert response.status_code == 200, response.text
-        body = response.json()
-        assert body["data"] == []
-        # response_model_exclude_none drops null first_id/last_id from the wire payload.
-        assert body.get("first_id") is None
-        assert body.get("last_id") is None
+        assert response.status_code == 404
+        assert "chatcmpl-zzz" in response.json()["error"]["message"]
 
     def test_limit_reports_has_more(
         self, client: TestClient, store: _StubStore
@@ -546,6 +727,20 @@ class TestListChatCompletions:
         body = response.json()
         assert len(body["data"]) == 2
         assert body["has_more"] is True
+
+    def test_unfiltered_has_more_skips_probe_load(
+        self, client: TestClient, store: _StubStore
+    ) -> None:
+        """Without model/metadata filters, has_more is answered without loading the limit+1'th document."""
+        store.sessions = [
+            (f"s{i}", datetime(2024, 1, i + 1, tzinfo=UTC)) for i in range(3)
+        ]
+        for i in range(3):
+            _store_completion(store, f"s{i}")
+        response = client.get("/v1/chat/completions?limit=2")
+        assert response.status_code == 200, response.text
+        assert response.json()["has_more"] is True
+        assert store.load_calls == ["chatcmpl-s0", "chatcmpl-s1"]
 
     def test_model_filter(self, client: TestClient, store: _StubStore) -> None:
         """Only completions generated by the given model are returned."""
@@ -604,6 +799,23 @@ class TestListChatCompletions:
         store.load_errors["chatcmpl-s1"] = ApiError("throttled", status=429)
         response = client.get("/v1/chat/completions")
         assert response.status_code == 429
+
+    def test_list_scans_multiple_batches_and_stops_early(
+        self, client: TestClient, store: _StubStore
+    ) -> None:
+        """More than one load batch is scanned, stopping once the limit is reached."""
+        store.sessions = [
+            (f"s{i}", datetime(2024, 1, i + 1, tzinfo=UTC)) for i in range(15)
+        ]
+        for i in range(15):
+            _store_completion(store, f"s{i}")
+        response = client.get("/v1/chat/completions?limit=12")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert [item["id"] for item in body["data"]] == [
+            f"chatcmpl-s{i}" for i in range(12)
+        ]
+        assert body["has_more"] is True
 
     def test_corrupt_stored_completion_is_skipped(
         self, client: TestClient, store: _StubStore
@@ -666,6 +878,127 @@ class TestUpdateChatCompletion:
             "/v1/chat/completions/chatcmpl-zzz", json={"metadata": {"k": "v"}}
         )
         assert response.status_code == 404
+
+    @pytest.mark.parametrize(
+        "document", [{"response": None}, {}], ids=["null-response", "no-response-key"]
+    )
+    def test_update_malformed_document_is_not_found(
+        self, client: TestClient, store: _StubStore, document: dict[str, Any]
+    ) -> None:
+        """A foreign or corrupt stored document 404s instead of 500ing."""
+        store.documents["chatcmpl-sess-1"] = document
+        response = client.post(
+            "/v1/chat/completions/chatcmpl-sess-1", json={"metadata": {"k": "v"}}
+        )
+        assert response.status_code == 404
+
+
+@pytest.mark.local
+class TestStoredChatCompletionRoutesAuthRejection:
+    """A missing bearer token is rejected with a 401 OpenAI envelope, no store access.
+
+    Uses the session-wide ``test_client`` (lifespan-started, unlike the
+    lifespan-free ``client`` fixture) so the auth handler is actually
+    initialized and able to reject a missing token.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _skip_non_local(self, test_client: TestClient | None) -> None:
+        """Skip when running against a remote server instead of the in-process app."""
+        if not test_client:
+            pytest.skip("Unit test only for local, in-process runs.")
+
+    @pytest.mark.parametrize(
+        ("method", "path", "json_body"),
+        [
+            ("get", "/v1/chat/completions/chatcmpl-sess-1", None),
+            ("delete", "/v1/chat/completions/chatcmpl-sess-1", None),
+            ("get", "/v1/chat/completions/chatcmpl-sess-1/messages", None),
+            ("get", "/v1/chat/completions", None),
+            ("post", "/v1/chat/completions/chatcmpl-sess-1", {"metadata": {"k": "v"}}),
+        ],
+        ids=["retrieve", "delete", "messages", "list", "update"],
+    )
+    def test_missing_bearer_token_is_rejected(
+        self,
+        method: str,
+        path: str,
+        json_body: dict[str, Any] | None,
+        test_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No Authorization header yields 401 without reaching the store layer."""
+        calls: list[str] = []
+
+        async def _counting_load(completion_id: str, _kind: str) -> dict[str, Any]:
+            calls.append(completion_id)
+            return {"messages": [], "response": {}}
+
+        async def _counting_list_sessions(_kind: str) -> list[tuple[str, Any]]:
+            calls.append("list_sessions")
+            return []
+
+        monkeypatch.setattr(
+            openai_chat_completions, "load_stored_response", _counting_load
+        )
+        monkeypatch.setattr(
+            openai_chat_completions, "list_stored_sessions", _counting_list_sessions
+        )
+        response = test_client.request(method.upper(), path, json=json_body)
+
+        assert response.status_code == 401
+        body = response.json()
+        assert set(body.keys()) == {"error"}
+        err = body["error"]
+        assert set(err.keys()) == {"message", "type", "param", "code"}
+        assert err["type"] == "authentication_error"
+        assert not calls
+
+
+@pytest.mark.local
+class TestInvalidCompletionIdPattern:
+    """A completion ID that fails the path pattern is rejected before the store layer.
+
+    Pins the current OpenAI-shaped 400 ``invalid_request_error`` envelope
+    produced by FastAPI/Pydantic path validation (see ``main.py``'s
+    ``RequestValidationError`` handler).
+    """
+
+    @pytest.mark.parametrize(
+        ("method", "path", "json_body"),
+        [
+            ("get", "/v1/chat/completions/resp_x", None),
+            ("delete", "/v1/chat/completions/resp_x", None),
+            ("get", "/v1/chat/completions/resp_x/messages", None),
+            ("post", "/v1/chat/completions/resp_x", {"metadata": {"k": "v"}}),
+            ("get", "/v1/chat/completions/chatcmpl_x!", None),
+            ("get", "/v1/chat/completions/x", None),
+        ],
+        ids=[
+            "retrieve-resp-prefix",
+            "delete-resp-prefix",
+            "messages-resp-prefix",
+            "update-resp-prefix",
+            "retrieve-bad-char",
+            "retrieve-too-short",
+        ],
+    )
+    def test_invalid_id_pattern_is_rejected(
+        self,
+        client: TestClient,
+        store: _StubStore,
+        method: str,
+        path: str,
+        json_body: dict[str, Any] | None,
+    ) -> None:
+        """A path-pattern-invalid completion ID 400s with an OpenAI invalid_request_error envelope."""
+        response = client.request(method.upper(), path, json=json_body)
+        assert response.status_code == 400, response.text
+        body = response.json()
+        assert set(body.keys()) == {"error"}
+        err = body["error"]
+        assert set(err.keys()) == {"message", "type", "param", "code"}
+        assert err["type"] == "invalid_request_error"
 
 
 class TestStoredChatCompletionsLive:

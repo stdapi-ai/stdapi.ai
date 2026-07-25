@@ -5,9 +5,13 @@ ensuring compatibility with OpenAI SDK clients and the stdapi-specific extension
 """
 
 import io
+from typing import TYPE_CHECKING
 
 import pytest
 from openai import BadRequestError, NotFoundError, OpenAI
+
+if TYPE_CHECKING:
+    from starlette.testclient import TestClient as TestClientType
 
 
 class TestCompletions:
@@ -341,6 +345,7 @@ class TestCompletions:
         openai_client: OpenAI,
         chat_vision_model: str,
         sample_image_file_base64: str,
+        use_official_api: bool,
     ) -> None:
         """One text + one image data URI collapse into a single multimodal request.
 
@@ -350,6 +355,11 @@ class TestCompletions:
         and returns exactly one completion choice — the natural "analyse this
         image" workflow.
         """
+        if use_official_api:
+            pytest.skip(
+                "multimodal input on v1/completions is a stdapi extension; "
+                "the official legacy Completions API rejects chat/vision models"
+            )
         response = openai_client.completions.create(
             model=chat_vision_model,
             prompt=[
@@ -368,12 +378,18 @@ class TestCompletions:
         openai_client: OpenAI,
         chat_vision_model: str,
         sample_image_file_base64: str,
+        use_official_api: bool,
     ) -> None:
         """A lone image data URI is sent as a single multimodal request.
 
         With no accompanying text instruction, the image is forwarded to the
         model as an ``image`` block; the model decides how to respond.
         """
+        if use_official_api:
+            pytest.skip(
+                "multimodal input on v1/completions is a stdapi extension; "
+                "the official legacy Completions API rejects chat/vision models"
+            )
         response = openai_client.completions.create(
             model=chat_vision_model, prompt=sample_image_file_base64, max_tokens=80
         )
@@ -381,3 +397,38 @@ class TestCompletions:
         assert response.choices[0].index == 0
         assert response.choices[0].text
         assert response.choices[0].finish_reason in {"stop", "length"}
+
+
+class TestStopSequenceValidation:
+    """Offline unit tests: whitespace-only stop sequences are rejected before dispatch.
+
+    AWS Bedrock rejects a blank ``stopSequences`` entry with a raw
+    ``ValidationException``; this backend surfaces a clean 400 instead.
+    Validation happens before any model dispatch or AWS call, so the
+    rejection test runs against an app instance without the AWS-touching
+    lifespan.
+    """
+
+    pytestmark = pytest.mark.local
+
+    @pytest.fixture
+    def client(self, api_key: str) -> TestClientType:
+        """Test client without lifespan (no AWS startup), pre-authenticated."""
+        from starlette.testclient import TestClient  # noqa: PLC0415
+
+        from stdapi.main import app  # noqa: PLC0415
+
+        return TestClient(app, headers={"Authorization": f"Bearer {api_key}"})
+
+    def test_whitespace_only_stop_sequence_is_rejected(
+        self, client: TestClientType
+    ) -> None:
+        r"""stop=["\n"] is rejected with a clean 400 (Bedrock cannot honor blank stops)."""
+        response = client.post(
+            "/v1/completions",
+            json={"model": "test-model", "prompt": "hi", "stop": ["\n"]},
+        )
+        assert response.status_code == 400, response.text
+        error_body = response.json()
+        assert error_body["error"]["type"] == "invalid_request_error"
+        assert "whitespace" in error_body["error"]["message"].lower()

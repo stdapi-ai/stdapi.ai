@@ -20,12 +20,14 @@ from stdapi.config import SETTINGS
 from stdapi.models.chat._adapters._openai_chat_completion import (
     _LEGACY_FUNCTION,
     format_response,
+    format_stream,
 )
 from stdapi.models.chat._adapters._openai_common import extract_stream_usage
+from stdapi.types.openai_chat_completions import CompletionCreateParams
 from tests.conftest import logged_usage_entries
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import AsyncIterator, Iterable
 
     from starlette.testclient import TestClient as TestClientType
 
@@ -2219,9 +2221,13 @@ class TestChatCompletions:
         assert msg.role == "assistant"
 
     def test_tool_choice_none_no_tool_calls(
-        self, openai_client: OpenAI, chat_vision_model: str, use_official_api: bool
+        self, openai_client: OpenAI, chat_vision_model: str
     ) -> None:
-        """With tools provided but tool_choice='none', expect assistant text and no tool_calls."""
+        """With tools provided but tool_choice='none', expect assistant text and no tool_calls.
+
+        OpenAI ``none`` semantics: behave as if no tools were passed. The backend
+        omits the Bedrock toolConfig and returns a normal assistant message.
+        """
         tools = [
             {
                 "type": "function",
@@ -2235,22 +2241,6 @@ class TestChatCompletions:
                 },
             }
         ]
-        if not use_official_api:
-            with pytest.raises(BadRequestError) as exc_info:
-                openai_client.chat.completions.create(  # type: ignore[call-overload]
-                    model=chat_vision_model,
-                    messages=[{"role": "user", "content": "Hello"}],
-                    tools=tools,
-                    tool_choice="none",
-                )
-            error = exc_info.value
-            assert error.status_code == 400
-            body = error.body
-            assert isinstance(body, dict)
-            assert body["type"] == "invalid_request_error"
-            assert "none" in body["message"].lower()
-            return
-
         resp = openai_client.chat.completions.create(  # type: ignore[call-overload]
             model=chat_vision_model,
             messages=[{"role": "user", "content": "Hello"}],
@@ -2996,3 +2986,145 @@ class TestPromptTokensDetailsGate:
         assert usage is not None
         assert usage.prompt_tokens_details is not None
         assert usage.prompt_tokens_details.cached_tokens == 4
+
+
+#: Stubbed Bedrock Converse stream for one text turn: a delta, the stop, then usage metadata.
+_STUB_STREAM_EVENTS: list[dict[str, Any]] = [
+    {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "Hi"}}},
+    {"messageStop": {"stopReason": "end_turn"}},
+    {"metadata": {"usage": {"inputTokens": 10, "outputTokens": 5}}},
+]
+
+
+async def _stub_converse_stream(
+    events: list[dict[str, Any]],
+) -> AsyncIterator[dict[str, Any]]:
+    """Yield the given Bedrock Converse stream event dicts one by one.
+
+    Args:
+        events: Converse stream event dicts to replay.
+
+    Yields:
+        Each event dict, in order.
+    """
+    for event in events:
+        yield event
+
+
+class TestFormatStreamSentinelAndUsage:
+    """format_stream terminates with [DONE] and reports usage in its own chunk (unit)."""
+
+    pytestmark = pytest.mark.local
+
+    @staticmethod
+    async def _run(
+        monkeypatch: pytest.MonkeyPatch, *, include_usage: bool
+    ) -> list[Any]:
+        """Drive format_stream over the stub events and collect every SSE event.
+
+        Args:
+            monkeypatch: Pytest monkeypatch fixture.
+            include_usage: Value forwarded to format_stream's include_usage.
+
+        Returns:
+            All SSE events yielded by format_stream, in order.
+        """
+        monkeypatch.setattr(SETTINGS, "log_request_params", False)
+        token = _LEGACY_FUNCTION.set(False)
+        try:
+            return [
+                event
+                async for event in format_stream(
+                    completion_id="chatcmpl-1",
+                    created=0,
+                    model_id="model",
+                    stream=_stub_converse_stream(_STUB_STREAM_EVENTS),  # type: ignore[arg-type]
+                    service_tier=None,
+                    include_usage=include_usage,
+                )
+            ]
+        finally:
+            _LEGACY_FUNCTION.reset(token)
+
+    async def test_stream_ends_with_done_sentinel(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The raw SSE body has exactly one data: [DONE] event, positioned last."""
+        events = await self._run(monkeypatch, include_usage=False)
+        raw = "".join(event.encode().decode() for event in events)
+        assert raw.count("data: [DONE]") == 1
+        assert raw.rstrip("\r\n").endswith("data: [DONE]")
+
+    async def test_stream_usage_in_separate_final_chunk(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With include_usage, usage arrives in its own empty-choices chunk after the finish chunk."""
+        events = await self._run(monkeypatch, include_usage=True)
+        assert events[-1].data == "[DONE]"
+
+        usage_chunk = _json.loads(events[-2].data)
+        assert usage_chunk["choices"] == []
+        assert usage_chunk["usage"] is not None
+
+        finish_chunk = _json.loads(events[-3].data)
+        assert finish_chunk["choices"][0]["finish_reason"] == "stop"
+        assert "usage" not in finish_chunk
+
+    async def test_stream_without_include_usage_omits_usage(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Without include_usage, no chunk carries usage and the stream still ends with [DONE]."""
+        events = await self._run(monkeypatch, include_usage=False)
+        assert events[-1].data == "[DONE]"
+        for event in events[:-1]:
+            assert "usage" not in _json.loads(event.data)
+
+
+class TestStopSequenceValidation:
+    """Offline unit tests: whitespace-only stop sequences are rejected before dispatch.
+
+    AWS Bedrock rejects a blank ``stopSequences`` entry with a raw
+    ``ValidationException``; this backend surfaces a clean 400 instead.
+    Validation happens before any model dispatch or AWS call, so the
+    rejection test runs against an app instance without the AWS-touching
+    lifespan.
+    """
+
+    pytestmark = pytest.mark.local
+
+    @pytest.fixture
+    def client(self, api_key: str) -> TestClientType:
+        """Test client without lifespan (no AWS startup), pre-authenticated."""
+        from starlette.testclient import TestClient  # noqa: PLC0415
+
+        from stdapi.main import app  # noqa: PLC0415
+
+        return TestClient(app, headers={"Authorization": f"Bearer {api_key}"})
+
+    def test_whitespace_only_stop_sequence_is_rejected(
+        self, client: TestClientType
+    ) -> None:
+        r"""stop=["\n"] is rejected with a clean 400 (Bedrock cannot honor blank stops)."""
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stop": ["\n"],
+            },
+        )
+        assert response.status_code == 400, response.text
+        error_body = response.json()
+        assert error_body["error"]["type"] == "invalid_request_error"
+        assert "whitespace" in error_body["error"]["message"].lower()
+
+    def test_non_blank_stop_sequence_is_still_accepted(self) -> None:
+        """stop=["5"] (a valid, non-blank sequence) is still accepted (regression)."""
+        request = CompletionCreateParams.model_validate(
+            {
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stop": ["5"],
+            }
+        )
+        assert request.stop == ["5"]

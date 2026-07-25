@@ -56,13 +56,13 @@ Generate conversational AI responses with AWS Bedrock foundation models—includ
 | Function calling (`tools`)               |       :material-cog:{ .model-dep }       | Full OpenAI-compatible schema                                   |
 | Legacy `function_call`                   |       :material-cog:{ .model-dep }       | Backward compatibility maintained                               |
 | Parallel tool calls                      |       :material-cog:{ .model-dep }       | Multiple tools in one turn                                      |
-| Disable Parallel tool calls              | :material-close-circle:{ .unsupported }  | Parallel tool calls are always on                               |
+| Disable Parallel tool calls              | :material-close-circle:{ .unsupported }  | `parallel_tool_calls: false` returns `400`; not supported        |
 | Server tools                             | :material-plus-circle:{ .extra-feature } | Provider system tools and Claude server tools                   |
 | **Generation Control**                   |                                          |                                                                 |
 | `max_tokens` / `max_completion_tokens`   |   :material-check-circle:{ .success }    | Output length limits                                            |
 | `temperature`                            |       :material-cog:{ .model-dep }       | Mapped to Bedrock inference params                              |
 | `top_p`                                  |       :material-cog:{ .model-dep }       | Nucleus sampling control                                        |
-| `stop` sequences                         |       :material-cog:{ .model-dep }       | Custom stop strings                                             |
+| `stop` sequences                         |       :material-cog:{ .model-dep }       | Custom stop strings. Whitespace-only sequences are rejected with `400` (AWS Bedrock limitation) |
 | `frequency_penalty` / `presence_penalty` |       :material-cog:{ .model-dep }       | Repetition control                                              |
 | `seed`                                   |       :material-cog:{ .model-dep }       | Deterministic generation                                        |
 | `logit_bias`                             |       :material-cog:{ .model-dep }       | Not all models support biasing                                  |
@@ -94,12 +94,12 @@ Generate conversational AI responses with AWS Bedrock foundation models—includ
 | Reasoning tokens                         |   :material-minus-circle:{ .partial }    | Estimated                                                       |
 | **Other**                                |                                          |                                                                 |
 | Service tiers                            |   :material-check-circle:{ .success }    | Mapped to Bedrock service tiers and latency options             |
-| `metadata`                               |   :material-check-circle:{ .success }    | Echoed in the response, updatable on stored completions, and usable to filter the Bedrock invocation log |
+| `metadata`                               |   :material-check-circle:{ .success }    | Echoed in the response, updatable on stored completions, and usable to filter the Bedrock invocation log. Also forwarded to Bedrock `requestMetadata`, whose limits apply: max 16 pairs, values ≤256 characters, restricted character set |
 | `store`                                  |   :material-check-circle:{ .success }    | Persists the completion in AWS Bedrock session storage (non-streaming) |
 | List / update stored completions         |   :material-check-circle:{ .success }    | List with `model`/`metadata` filters; metadata update            |
 | `safety_identifier` / `user`             |   :material-minus-circle:{ .partial }    | Logged                                                          |
 | Bedrock Guardrails                       | :material-plus-circle:{ .extra-feature } | Content safety policies — not applied to Mantle-served requests |
-| `moderation`                             |   :material-check-circle:{ .success }    | Applies an AWS Bedrock guardrail; results in the response (non-streaming) — not applied to Mantle-served requests |
+| `moderation`                             |   :material-check-circle:{ .success }    | Applies an AWS Bedrock guardrail; results in the response (non-streaming) — rejected (`400`) on Mantle-served models |
 
 </div>
 
@@ -113,11 +113,7 @@ Set `store: true` to persist a chat completion in [AWS Bedrock session storage](
 - `GET /v1/chat/completions/{completion_id}/messages` — list its input messages.
 - `DELETE /v1/chat/completions/{completion_id}` — delete it and its backing session.
 
-`store` defaults to **false** on this implementation and is ignored with `stream=true` or when the server lacks the [session storage IAM permissions](operations_configuration.md#bedrock-session-storage-optional) (a warning is recorded in the request log). Listings scan the most recent sessions of the primary Bedrock region.
-
-<div class="feature-table" markdown>
-
-</div>
+`store` defaults to **false** on this implementation and is ignored with `stream=true` or when the server lacks the [session storage IAM permissions](operations_configuration.md#bedrock-session-storage-optional) (a warning is recorded in the request log). Listings scan a capped number of sessions (1,000) in the primary Bedrock region; accounts beyond the cap may see incomplete listings.
 
 <div class="feature-table" markdown>
 

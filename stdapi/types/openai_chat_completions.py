@@ -1291,6 +1291,7 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
         self._validate_tool_choice()
         self._validate_thinking_options()
         self._validate_no_custom_tools()
+        self._validate_stop_sequences()
         for key in self._UNSUPPORTED & self.model_fields_set:
             raise UnsupportedParameterError(key)
         return self
@@ -1309,13 +1310,14 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
                 raise ValueError(msg)
 
     def _validate_tool_choice(self) -> None:
-        """Validate tool_choice parameter restrictions."""
+        """Validate tool_choice parameter restrictions.
+
+        ``tool_choice='none'`` is accepted: the adapter omits the tool config so
+        the model behaves as if no tools were passed (OpenAI ``none`` semantics).
+        """
         if isinstance(self.tool_choice, ChatCompletionAllowedToolChoiceParam):
             msg = "`allowed_tools` tool_choice is not supported on this backend."
             raise ValueError(msg)  # noqa: TRY004
-        if self.tool_choice == "none":
-            msg = "`none` tool_choice is not supported on this backend."
-            raise ValueError(msg)
 
     def _validate_thinking_options(self) -> None:
         """Validate thinking budget and reasoning effort options."""
@@ -1345,6 +1347,16 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
             )
         ):
             msg = "`custom` tools are not supported on this backend."
+            raise ValueError(msg)
+
+    def _validate_stop_sequences(self) -> None:
+        """Validate stop sequences are not whitespace-only (AWS Bedrock rejects blank ones)."""
+        sequences = [self.stop] if isinstance(self.stop, str) else self.stop or []
+        if any(not sequence.strip() for sequence in sequences):
+            msg = (
+                "Stop sequences must contain at least one non-whitespace "
+                "character (not supported by AWS Bedrock)."
+            )
             raise ValueError(msg)
 
 

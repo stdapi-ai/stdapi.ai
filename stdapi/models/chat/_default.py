@@ -14,12 +14,13 @@ from sse_starlette import EventSourceResponse, JSONServerSentEvent
 
 from stdapi.api_errors import ApiError
 from stdapi.aws_bedrock import (
-    GUARDTRAIL_CONFIG_VAR,
+    GUARDRAIL_CONFIG_VAR,
     PROMPT_CACHING_DEFAULT,
     PromptCaching,
 )
 from stdapi.config import SETTINGS
 from stdapi.input_file import prefetch_all_content_types
+from stdapi.models.capabilities import Capability
 from stdapi.models.chat import ChatModelBase
 from stdapi.models.chat._adapters import _anthropic_message as anthropic_adapter
 from stdapi.models.chat._adapters import _openai_chat_completion as openai_adapter
@@ -72,6 +73,43 @@ if TYPE_CHECKING:
     from stdapi.types.openai_responses import Response, ResponseCreateParams
 
 
+def _synthesize_tool_config_from_history(
+    messages: list[MessageTypeDef],
+) -> ToolConfigurationTypeDef | None:
+    """Synthesize a permissive tool config from ``toolUse`` blocks in history.
+
+    Bedrock Converse rejects a request that carries ``toolUse``/``toolResult``
+    content blocks without a ``toolConfig``.  OpenAI clients routinely omit
+    ``tools`` on the final round-trip turn (and ``tool_choice='none'`` drops the
+    config entirely), so when no config is otherwise present a minimal one is
+    built: one ``toolSpec`` per distinct tool name found in history, each with a
+    permissive ``{"type": "object"}`` input schema and no ``toolChoice``.
+
+    Args:
+        messages: Converted Bedrock message history.
+
+    Returns:
+        A synthesized tool configuration, or ``None`` if history contains no
+        ``toolUse`` blocks.
+    """
+    names = sorted(
+        {
+            block["toolUse"]["name"]
+            for message in messages
+            for block in message.get("content", ())
+            if "toolUse" in block
+        }
+    )
+    if not names:
+        return None
+    return {
+        "tools": [
+            {"toolSpec": {"name": name, "inputSchema": {"json": {"type": "object"}}}}
+            for name in names
+        ]
+    }
+
+
 class ChatModel(ChatModelBase[Any, Any]):
     """Default chat model using AWS Bedrock Converse API."""
 
@@ -102,6 +140,16 @@ class ChatModel(ChatModelBase[Any, Any]):
     CANONICAL_TO_BEDROCK_TOOL_MAP: ClassVar[MappingProxyType[ServerTools, str]] = (
         MappingProxyType({})
     )
+
+    @classmethod
+    def get_supported_operations(cls) -> Capability:
+        """Return capability flags for route-based model matching.
+
+        Returns:
+            Capability flags. Converse models support token counting via the
+            Bedrock CountTokens API (unavailable on Bedrock Mantle models).
+        """
+        return Capability.COUNT_TOKENS
 
     async def create_completion(
         self, request: ChatCompletionCreateParams, completion_id: str, created: int
@@ -573,6 +621,10 @@ class ChatModel(ChatModelBase[Any, Any]):
             request["system"] = system_blocks
         if tool_config:
             request["toolConfig"] = tool_config
+        elif synthesized_tool_config := _synthesize_tool_config_from_history(
+            bedrock_messages
+        ):
+            request["toolConfig"] = synthesized_tool_config
         if additional_request_fields := self._prepare_additional_request_fields(
             additional_request_fields
         ):
@@ -590,7 +642,7 @@ class ChatModel(ChatModelBase[Any, Any]):
         if request_metadata:
             request["requestMetadata"] = request_metadata
         with suppress(LookupError):
-            request["guardrailConfig"] = GUARDTRAIL_CONFIG_VAR.get()
+            request["guardrailConfig"] = GUARDRAIL_CONFIG_VAR.get()
         return request
 
     def _get_passthrough_header_fields(self) -> dict[str, Any]:
