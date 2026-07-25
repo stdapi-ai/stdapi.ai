@@ -1326,6 +1326,44 @@ class TestChatToResponsesStream:
         completed = _payloads(events)[-1]
         assert completed["response"]["usage"]["output_tokens"] == 0
 
+    async def test_length_finish_reason_emits_incomplete_event_not_completed(
+        self,
+    ) -> None:
+        """A "length" finish reason terminates with response.incomplete.
+
+        Matches the sibling Converse adapter's wire grammar: the event name
+        itself (not just the nested ``status``) marks a truncated response.
+        """
+        chunk = dumps(
+            {
+                "id": "chatcmpl-1",
+                "created": 1,
+                "model": "m",
+                "choices": [
+                    {"index": 0, "delta": {"content": "hi"}, "finish_reason": "length"}
+                ],
+                "usage": {
+                    "prompt_tokens": 3,
+                    "completion_tokens": 7,
+                    "total_tokens": 10,
+                },
+            }
+        )
+        events = await _collect(
+            mantle_convert.convert_stream(
+                "chat_completions", "responses", _agen([(None, chunk)])
+            )
+        )
+        assert "response.completed" not in _names(events)
+        assert events[-1][0] == "response.incomplete"
+        terminal = _payloads(events)[-1]
+        assert terminal["type"] == "response.incomplete"
+        assert terminal["response"]["status"] == "incomplete"
+        assert (
+            terminal["response"]["incomplete_details"]["reason"] == "max_output_tokens"
+        )
+        assert terminal["response"]["usage"]["output_tokens"] == 7
+
     async def test_error_chunk_raises_mantle_error_without_fabricated_tail(
         self,
     ) -> None:
@@ -1746,6 +1784,46 @@ class TestResponsesToChatStreamExtension:
             "prompt_tokens_details": {"cached_tokens": 0},
         }
 
+    async def test_response_incomplete_event_emits_finish_and_usage(self) -> None:
+        """A named ``response.incomplete`` event ends the stream like ``response.completed``.
+
+        Without this, a truncated Responses stream converted to Chat
+        Completions would end with neither a finish reason nor billed usage.
+        """
+        events_in: list[SseEvent] = [
+            (
+                "response.created",
+                dumps({"response": {"id": "resp_1", "created_at": 100, "model": "m"}}),
+            ),
+            ("response.output_text.delta", dumps({"delta": "hi"})),
+            (
+                "response.incomplete",
+                dumps(
+                    {
+                        "response": {
+                            "id": "resp_1",
+                            "status": "incomplete",
+                            "incomplete_details": {"reason": "max_output_tokens"},
+                            "output": [],
+                            "usage": {
+                                "input_tokens": 3,
+                                "output_tokens": 7,
+                                "total_tokens": 10,
+                            },
+                        }
+                    }
+                ),
+            ),
+        ]
+        events = await _collect(
+            mantle_convert.convert_stream(
+                "responses", "chat_completions", _agen(events_in)
+            )
+        )
+        chunks = _payloads(events)
+        assert chunks[-2]["choices"][0]["finish_reason"] == "length"
+        assert chunks[-1]["usage"]["completion_tokens"] == 7
+
 
 # ---------------------------------------------------------------------------
 # 7. Passthrough payload builders
@@ -1812,6 +1890,25 @@ class TestChatCompletionsPayloadBuilder:
         assert "propertyNames" not in parameters["properties"]["a"]
         # sanitize_tool_schema only strips "propertyNames": "$schema" is left as-is.
         assert parameters["$schema"] == "http://json-schema.org/draft-07/schema#"
+
+    async def test_named_tool_choice_forwarded_verbatim(self) -> None:
+        """A named-function ``tool_choice`` reaches the upstream payload unchanged."""
+        request = ChatCompletionCreateParams.model_validate(
+            {
+                "model": "ignored",
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [{"type": "function", "function": {"name": "get_weather"}}],
+                "tool_choice": {
+                    "type": "function",
+                    "function": {"name": "get_weather"},
+                },
+            }
+        )
+        payload = await mantle_convert.chat_completions_payload(request, "model-id")
+        assert payload["tool_choice"] == {
+            "type": "function",
+            "function": {"name": "get_weather"},
+        }
 
 
 class TestMessagesPayloadBuilder:
@@ -1939,6 +2036,30 @@ class TestResponsesPayloadBuilder:
         with pytest.raises(ApiError) as exc_info:
             await mantle_convert.responses_payload(request, "model-id")
         assert exc_info.value.status == 400
+
+    async def test_null_previous_response_id_removed_from_payload(self) -> None:
+        """An explicitly-null ``previous_response_id`` is dropped, not forwarded."""
+        request = ResponseCreateParams.model_validate(
+            {"model": "ignored", "previous_response_id": "resp-local", "input": "hi"}
+        ).model_copy(update={"previous_response_id": None})
+        payload, pinned_region = await mantle_convert.responses_payload(
+            request, "model-id"
+        )
+        assert "previous_response_id" not in payload
+        assert pinned_region is None
+
+    async def test_named_tool_choice_forwarded_verbatim(self) -> None:
+        """A named-function ``tool_choice`` reaches the upstream payload unchanged."""
+        request = ResponseCreateParams.model_validate(
+            {
+                "model": "ignored",
+                "input": "hi",
+                "tools": [{"type": "function", "name": "get_weather"}],
+                "tool_choice": {"type": "function", "name": "get_weather"},
+            }
+        )
+        payload, _region = await mantle_convert.responses_payload(request, "model-id")
+        assert payload["tool_choice"] == {"type": "function", "name": "get_weather"}
 
 
 class TestEnableStreamUsage:

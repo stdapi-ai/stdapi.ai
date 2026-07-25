@@ -43,8 +43,10 @@ Each item in the returned list is a `ModelDetails` object:
 | `id` | AWS Bedrock model ID — pass this to other endpoints |
 | `name` | Human-readable model name |
 | `provider` | Model provider (e.g. `Anthropic`, `Amazon`, `Meta`) |
+| `service` | AWS service serving the model (e.g. `AWS Bedrock Runtime`, `AWS Bedrock Mantle`, `AWS Comprehend`) |
 | `input_modalities` | List of accepted input types |
 | `output_modalities` | List of produced output types |
+| `aliases` | Alternate model names accepted by the `model` parameter of the other endpoints (if any) |
 | `supported_routes` | API routes this model can be used with |
 | `supported_mcp_tools` | MCP tool names this model supports |
 | `regions` | AWS regions where this model is available |

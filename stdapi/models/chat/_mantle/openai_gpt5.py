@@ -1,5 +1,7 @@
-"""OpenAI GPT-5.x models on Amazon Bedrock Mantle (Responses API only)."""
+"""OpenAI numbered GPT models on Amazon Bedrock Mantle (Responses API only)."""
 
+from re import Pattern
+from re import compile as re_compile
 from typing import TYPE_CHECKING, ClassVar
 
 from stdapi.models.chat._mantle._default import ChatModel as MantleChatModel
@@ -9,12 +11,12 @@ if TYPE_CHECKING:
 
 
 class ChatModel(MantleChatModel):
-    """OpenAI GPT-5.x chat model (e.g. ``openai.gpt-5.6-sol``)."""
+    """OpenAI numbered GPT chat model (e.g. ``openai.gpt-5.6-sol``), GPT-5 and later."""
 
-    #: Model ID matcher, regex pattern or string prefix
-    MATCHER: ClassVar[str] = "openai.gpt-5"
+    #: Matches GPT-5 and future numbered versions, not the gpt-oss family.
+    MATCHER: ClassVar[Pattern[str]] = re_compile(r"^openai\.gpt-\d")
 
-    #: GPT-5.x models are served exclusively by the Responses API.
+    #: Numbered GPT models are served exclusively by the Responses API.
     NATIVE_APIS: ClassVar[frozenset[MantleApi]] = frozenset({"responses"})
 
     #: Newer Mantle-only models answer on the /openai/v1 surface.

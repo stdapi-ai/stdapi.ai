@@ -21,6 +21,7 @@ from stdapi.aws_bedrock_mantle import (
     MantleApiUnsupportedError,
     MantleSurfaceUnsupportedError,
     cache_response_surface,
+    decode_mantle_response_id,
     encode_mantle_response_id,
     invoke,
     invoke_stream,
@@ -39,6 +40,7 @@ from stdapi.monitoring import (
     log_response_params,
 )
 from stdapi.pricing import Service
+from stdapi.region_routing import REGION_ROUTER
 from stdapi.types.anthropic_messages import Message
 from stdapi.types.openai_chat_completions import ChatCompletion
 from stdapi.types.openai_responses import Response
@@ -184,7 +186,11 @@ class ChatModel(ChatModelBase[Any, Any]):
         """
         headers = MESSAGES_API_HEADERS if api == "messages" else None
         regions = self._mantle_regions(region)
-        single_region = len(regions) == 1
+        # route_and_execute only retries across regions when the region
+        # router is enabled and there is more than one candidate; otherwise
+        # it calls the first candidate exactly once, so the in-region retry
+        # below must cover it instead.
+        single_region = len(regions) == 1 or REGION_ROUTER is None
         paths = self._api_paths(api)
         last_surface_error: MantleSurfaceUnsupportedError | None = None
         for path in paths:
@@ -634,6 +640,13 @@ class ChatModel(ChatModelBase[Any, Any]):
         Returns:
             Completed response or streaming ``EventSourceResponse``.
         """
+        if (previous_id := request.previous_response_id) and (
+            decode_mantle_response_id(previous_id) is None
+        ):
+            # A local-store ID: the route already merged its conversation
+            # inline and restored the ID only for response echoing; only
+            # Mantle-tagged IDs can chain upstream.
+            request = request.model_copy(update={"previous_response_id": None})
         payload, pinned_region = await convert.responses_payload(
             request, self._model_id
         )
@@ -654,6 +667,11 @@ class ChatModel(ChatModelBase[Any, Any]):
         api, region, raw = await self._serve_validated(
             "responses", payload, region=pinned_region
         )
+        if not request.background and raw.get("status") == "failed":
+            # A synchronous request must not swallow an upstream failure into a
+            # 200 with empty output; background requests keep the failed
+            # terminal state so the client can poll it.
+            raise _failed_response_error(raw)
         if request.previous_response_id and raw.get("previous_response_id"):
             raw["previous_response_id"] = request.previous_response_id
         if api == "responses" and (native_id := raw.get("id")):
@@ -670,6 +688,27 @@ class ChatModel(ChatModelBase[Any, Any]):
         if moderation_builder is not None:
             response.moderation = moderation_builder()
         return log_response_params(response)
+
+
+def _failed_response_error(raw: dict[str, Any]) -> ApiError:
+    """Build the error raised for a synchronous terminal ``failed`` Response.
+
+    A ``status="failed"`` Response carries the upstream failure in its ``error``
+    field and no usable output. The upstream message is scrubbed of security
+    details and surfaced as a 502 so a synchronous request reports the failure
+    instead of returning an empty 200 body.
+
+    Args:
+        raw: Upstream Responses-shaped result with ``status == "failed"``.
+
+    Returns:
+        The ``ApiError`` to raise for the failed response.
+    """
+    error = raw.get("error")
+    message = error.get("message") if isinstance(error, dict) else error
+    if not isinstance(message, str) or not message:
+        message = "The upstream model response failed."
+    return ApiError(hide_security_details(502, message), status=502)
 
 
 def _scrub_error_event(data: str) -> str:
@@ -819,7 +858,11 @@ def _event_usage(
     match api:
         case "chat_completions":
             return parsed.get("usage") or None
-        case "responses" if event == "response.completed":
+        case "responses" if event in (
+            "response.completed",
+            "response.incomplete",
+            "response.failed",
+        ):
             return (parsed.get("response") or {}).get("usage") or None
         case "messages" if event == "message_start":
             input_usage.update((parsed.get("message") or {}).get("usage") or {})

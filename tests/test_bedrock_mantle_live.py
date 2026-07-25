@@ -50,7 +50,6 @@ def listed_model_ids(openai_client: OpenAI) -> set[str]:
     return {model.id for model in openai_client.models.list()}
 
 
-@pytest.mark.local
 class TestMantleModelDiscovery:
     """Mantle model discovery and registry merge behavior."""
 
