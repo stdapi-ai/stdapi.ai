@@ -41,8 +41,9 @@ async def validate_host_ssrf(hostname: str) -> list[str]:
         The validated IP addresses the host is allowed to connect to.
 
     Raises:
-        ApiError: If the host is an unsafe IP or resolves to one, or cannot be
-            resolved at all (403).
+        ApiError: If the host is an unsafe IP or resolves to one (403), or
+            cannot be resolved at all (400, an invalid URL rather than a
+            policy block).
     """
     if (literal := _parse_ip_literal(hostname)) is not None:
         if _is_unsafe_ip(str(literal)):
@@ -52,7 +53,7 @@ async def validate_host_ssrf(hostname: str) -> list[str]:
 
     if not (addresses := await _resolve_hostname(hostname)):
         msg = f"Cannot resolve host in URL: {hostname}."
-        raise ApiError(msg, status=403)
+        raise ApiError(msg, status=400)
     for address in addresses:
         if _is_unsafe_ip(address):
             msg = f"Forbidden host in URL: {hostname}."
@@ -159,12 +160,16 @@ class _SsrfSafeResolver(AbstractResolver):
             Resolved results limited to validated addresses.
 
         Raises:
-            SsrfBlockedError: When *host* is an unsafe or unresolvable SSRF target.
+            SsrfBlockedError: When *host* is an unsafe SSRF target.
+            OSError: When *host* cannot be resolved (a plain DNS failure,
+                surfaced as a connection error rather than a policy block).
         """
         try:
             addresses = await validate_host_ssrf(host)
         except ApiError as exc:
-            raise SsrfBlockedError(exc.args[0]) from exc
+            if exc.status == 403:
+                raise SsrfBlockedError(exc.args[0]) from exc
+            raise OSError(exc.args[0]) from exc
         results: list[ResolveResult] = []
         for ip in addresses:
             ip_family = AF_INET6 if ip_address(ip).version == 6 else AF_INET
