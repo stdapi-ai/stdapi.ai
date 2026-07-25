@@ -238,19 +238,25 @@ class TestLumaRayInput:
         with pytest.raises(ApiError, match="'seconds'"):
             self._build(seconds=seconds)
 
-    def test_reference_image_becomes_first_keyframe(self) -> None:
-        """A reference image becomes the frame0 keyframe."""
-        body = self._build(reference_image=ReferenceImage("image/png", "aGVsbG8="))
+    @pytest.mark.parametrize("media_type", ["image/png", "image/jpeg"])
+    def test_reference_image_becomes_first_keyframe(self, media_type: str) -> None:
+        """A PNG or JPEG reference image becomes the frame0 keyframe."""
+        body = self._build(reference_image=ReferenceImage(media_type, "aGVsbG8="))
         assert body["keyframes"] == {
             "frame0": {
                 "type": "image",
                 "source": {
                     "type": "base64",
-                    "media_type": "image/png",
+                    "media_type": media_type,
                     "data": "aGVsbG8=",
                 },
             }
         }
+
+    def test_unsupported_reference_image_format(self) -> None:
+        """Non PNG/JPEG reference images are rejected."""
+        with pytest.raises(ApiError, match="PNG or JPEG"):
+            self._build(reference_image=ReferenceImage("image/webp", "aGVsbG8="))
 
     def test_extra_params_extend_payload(self) -> None:
         """Extra parameters land in the payload without overriding it."""
@@ -262,9 +268,14 @@ class TestLumaRayInput:
 class _StubRuntimeClient:
     """Stub bedrock-runtime client recording async invoke calls."""
 
-    def __init__(self, get_response: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        get_response: dict[str, Any] | None = None,
+        get_error: Exception | None = None,
+    ) -> None:
         self.requests: list[dict[str, Any]] = []
         self._get_response = get_response or {}
+        self._get_error = get_error
 
     async def start_async_invoke(self, **params: Any) -> dict[str, Any]:  # noqa: ANN401
         """Record the request and return a fixed invocation ARN."""
@@ -272,8 +283,10 @@ class _StubRuntimeClient:
         return {"invocationArn": _ARN}
 
     async def get_async_invoke(self, **params: Any) -> dict[str, Any]:  # noqa: ANN401
-        """Record the request and return the pre-defined job state."""
+        """Record the request and raise or return the pre-defined job state."""
         self.requests.append(params)
+        if self._get_error is not None:
+            raise self._get_error
         return self._get_response
 
 
@@ -288,24 +301,39 @@ class _StubStreamingBody:
 class _StubS3Client:
     """Stub S3 client recording object listing, download and deletion calls."""
 
-    def __init__(self, keys: list[str] | None = None, *, missing: bool = False) -> None:
+    def __init__(
+        self,
+        keys: list[str] | None = None,
+        *,
+        missing: bool = False,
+        get_error: Exception | None = None,
+        list_pages: list[dict[str, Any]] | None = None,
+        delete_response: dict[str, Any] | None = None,
+    ) -> None:
         self.requests: list[tuple[str, dict[str, Any]]] = []
         self._keys = keys or []
         self._missing = missing
+        self._get_error = get_error
+        self._list_pages = list_pages
+        self._delete_response = delete_response or {}
 
     async def list_objects_v2(self, **params: Any) -> dict[str, Any]:  # noqa: ANN401
-        """Return the pre-defined object keys."""
+        """Serve the next pre-defined page, or the pre-defined object keys."""
         self.requests.append(("list_objects_v2", params))
+        if self._list_pages is not None:
+            return self._list_pages.pop(0)
         return {"Contents": [{"Key": key} for key in self._keys]} if self._keys else {}
 
     async def delete_objects(self, **params: Any) -> dict[str, Any]:  # noqa: ANN401
-        """Record the deletion request."""
+        """Record the deletion request and return the pre-defined response."""
         self.requests.append(("delete_objects", params))
-        return {}
+        return self._delete_response
 
     async def get_object(self, **params: Any) -> dict[str, Any]:  # noqa: ANN401
-        """Return a stub body, or raise NoSuchKey when configured missing."""
+        """Return a stub body, or raise when configured missing or erroring."""
         self.requests.append(("get_object", params))
+        if self._get_error is not None:
+            raise self._get_error
         if self._missing:
             raise ClientError(
                 {"Error": {"Code": "NoSuchKey", "Message": "missing"}}, "GetObject"
@@ -401,6 +429,30 @@ class TestStartVideoGeneration:
         assert client.requests[0]["modelInput"]["duration"] == "5s"
         records = list(USAGE.get().values())
         assert records[0].quantities == {Dimension.OUTPUT_SECONDS: 5}
+
+    async def test_luma_bad_reference_mime_rejected_before_invoke(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An unsupported reference image MIME fails upfront; no invoke is sent."""
+        client = _StubRuntimeClient()
+        self._patch_infra(monkeypatch, client)
+
+        class _Ref:
+            async def get_content_type(self) -> str:
+                return "image/webp"
+
+            async def to_base64(self) -> str:
+                return "aGVsbG8="
+
+        with pytest.raises(ApiError, match="PNG or JPEG"):
+            await get_video_model("luma.ray-v2:0").start_video_generation(
+                "a cat",
+                seconds=5,
+                size="1280x720",
+                reference_image=_Ref(),  # type: ignore[arg-type]
+                extra_params={},
+            )
+        assert client.requests == []
 
     async def test_luma_hd_size_records_the_hd_spec_bucket(
         self, monkeypatch: pytest.MonkeyPatch
@@ -504,6 +556,8 @@ class TestVideoJobAccess:
         [
             ("InProgress", None, "in_progress"),
             ("Failed", "content filters blocked the prompt", "failed"),
+            # An unknown (future) Bedrock status is reported as still running.
+            ("Pending", None, "in_progress"),
         ],
     )
     async def test_get_video_job_maps_non_completed_statuses(
@@ -513,7 +567,7 @@ class TestVideoJobAccess:
         failure_message: str | None,
         expected_status: str,
     ) -> None:
-        """InProgress/Failed Bedrock statuses map to the API job status."""
+        """InProgress/Failed/unknown Bedrock statuses map to the API job status."""
         state: dict[str, Any] = {
             "invocationArn": _ARN,
             "modelArn": (
@@ -552,6 +606,41 @@ class TestVideoJobAccess:
         with pytest.raises(ApiError, match="not found") as exc_info:
             await get_video_job(invocation_arn)
         assert exc_info.value.status == 404
+
+    @pytest.mark.parametrize(
+        "error_code",
+        ["ValidationException", "AccessDeniedException", "ResourceNotFoundException"],
+    )
+    async def test_gone_or_foreign_invocations_are_not_found(
+        self, monkeypatch: pytest.MonkeyPatch, error_code: str
+    ) -> None:
+        """Aged-out, foreign-account, and deleted invocations surface as 404."""
+        client = _StubRuntimeClient(
+            get_error=ClientError(
+                {"Error": {"Code": error_code, "Message": "AWS wording"}},
+                "GetAsyncInvoke",
+            )
+        )
+        monkeypatch.setattr(video, "get_client", lambda _service, _region: client)
+
+        with pytest.raises(ApiError, match="not found") as exc_info:
+            await get_video_job(_ARN)
+        assert exc_info.value.status == 404
+
+    async def test_get_video_job_throttling_propagates(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AWS errors other than the not-found codes propagate unchanged."""
+        client = _StubRuntimeClient(
+            get_error=ClientError(
+                {"Error": {"Code": "ThrottlingException", "Message": "slow down"}},
+                "GetAsyncInvoke",
+            )
+        )
+        monkeypatch.setattr(video, "get_client", lambda _service, _region: client)
+
+        with pytest.raises(ClientError, match="ThrottlingException"):
+            await get_video_job(_ARN)
 
     async def test_foreign_job_output_is_not_found(
         self, monkeypatch: pytest.MonkeyPatch
@@ -652,6 +741,42 @@ class TestVideoJobAccess:
             await open_video_content(self._job())
         assert exc_info.value.status == 404
 
+    async def test_open_video_content_access_denied_is_not_found(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AccessDenied (missing key under least-privilege IAM) maps to 404 + warning."""
+        s3 = _StubS3Client(
+            get_error=ClientError(
+                {"Error": {"Code": "AccessDenied", "Message": "denied"}}, "GetObject"
+            )
+        )
+        monkeypatch.setattr(video, "get_client", lambda _service, _region: s3)
+        log = _new_log()
+        token = REQUEST_LOG.set(log)
+        try:
+            with pytest.raises(ApiError, match="not found") as exc_info:
+                await open_video_content(self._job())
+        finally:
+            REQUEST_LOG.reset(token)
+        assert exc_info.value.status == 404
+        # The warning keeps a real S3 permission misconfiguration diagnosable.
+        assert any("permissions" in str(detail) for detail in log["error_detail"])
+        assert log["level"] == "warning"
+
+    async def test_open_video_content_other_s3_error_propagates(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """S3 errors other than missing-key/AccessDenied propagate unchanged."""
+        s3 = _StubS3Client(
+            get_error=ClientError(
+                {"Error": {"Code": "SlowDown", "Message": "throttled"}}, "GetObject"
+            )
+        )
+        monkeypatch.setattr(video, "get_client", lambda _service, _region: s3)
+
+        with pytest.raises(ClientError, match="SlowDown"):
+            await open_video_content(self._job())
+
     async def test_video_expires_at_disabled_by_default(self) -> None:
         """Without a retention setting no expiry is reported."""
         job = self._job().model_copy(update={"completed_at": 1000})
@@ -719,6 +844,56 @@ class TestVideoJobAccess:
 
         assert [name for name, _ in s3.requests] == ["list_objects_v2"]
 
+    async def test_delete_video_output_follows_pagination(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The object listing follows ContinuationToken across pages."""
+        s3 = _StubS3Client(
+            list_pages=[
+                {
+                    "Contents": [{"Key": "videos/abc123xyz/output.mp4"}],
+                    "NextContinuationToken": "page2",
+                },
+                {"Contents": [{"Key": "videos/abc123xyz/manifest.json"}]},
+            ]
+        )
+        monkeypatch.setattr(video, "get_client", lambda _service, _region: s3)
+
+        await delete_video_output(self._job())
+
+        assert [name for name, _ in s3.requests] == [
+            "list_objects_v2",
+            "delete_objects",
+            "list_objects_v2",
+            "delete_objects",
+        ]
+        assert s3.requests[2][1]["ContinuationToken"] == "page2"
+        assert s3.requests[3][1]["Delete"]["Objects"] == [
+            {"Key": "videos/abc123xyz/manifest.json"}
+        ]
+
+    async def test_delete_video_output_warns_on_failed_keys(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Per-key deletion failures keep the delete succeeding, with a warning."""
+        s3 = _StubS3Client(
+            keys=["videos/abc123xyz/output.mp4"],
+            delete_response={
+                "Errors": [
+                    {"Key": "videos/abc123xyz/output.mp4", "Code": "AccessDenied"}
+                ]
+            },
+        )
+        monkeypatch.setattr(video, "get_client", lambda _service, _region: s3)
+        log = _new_log()
+        token = REQUEST_LOG.set(log)
+        try:
+            await delete_video_output(self._job())
+        finally:
+            REQUEST_LOG.reset(token)
+        assert any("1 object" in str(detail) for detail in log["error_detail"])
+        assert log["level"] == "warning"
+
 
 class TestToVideoJob:
     """_to_video_job: mapping of the Bedrock ``s3Uri`` into bucket/prefix."""
@@ -780,8 +955,8 @@ class _StubListClient:
         }
 
 
-def _arn(suffix: str) -> str:
-    return f"arn:aws:bedrock:us-east-1:000000000000:async-invoke/{suffix}"
+def _arn(suffix: str, region: str = "us-east-1") -> str:
+    return f"arn:aws:bedrock:{region}:000000000000:async-invoke/{suffix}"
 
 
 def _summary(
@@ -789,11 +964,12 @@ def _summary(
     submit: int,
     model: str = "amazon.nova-reel-v1:0",
     s3_uri: str | None = None,
+    region: str = "us-east-1",
 ) -> dict[str, Any]:
     """Build a ListAsyncInvokes summary for a completed job."""
     return {
-        "invocationArn": _arn(suffix),
-        "modelArn": f"arn:aws:bedrock:us-east-1::foundation-model/{model}",
+        "invocationArn": _arn(suffix, region),
+        "modelArn": f"arn:aws:bedrock:{region}::foundation-model/{model}",
         "status": "Completed",
         "submitTime": datetime.fromtimestamp(submit, tz=UTC),
         "endTime": datetime.fromtimestamp(submit + 90, tz=UTC),
@@ -801,6 +977,17 @@ def _summary(
             "s3OutputDataConfig": {"s3Uri": s3_uri or f"s3://bucket/videos/{suffix}"}
         },
     }
+
+
+class _FailingListClient:
+    """Stub client whose list_async_invokes always raises the given error."""
+
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
+    async def list_async_invokes(self, **_params: Any) -> dict[str, Any]:  # noqa: ANN401
+        """Raise the pre-defined error."""
+        raise self._error
 
 
 class TestListVideoJobs:
@@ -971,3 +1158,115 @@ class TestListVideoJobs:
 
         assert [listing.job.invocation_arn for listing in listings] == [_arn("ccc")]
         assert not has_more
+
+
+class TestListVideoJobsMultiRegion:
+    """Cross-region merge and per-region fault tolerance of the listing."""
+
+    REGIONS = ("us-east-1", "us-west-2")
+
+    @pytest.fixture(autouse=True)
+    def _regions(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Pin two regions, each with a configured bucket."""
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", list(self.REGIONS))
+        monkeypatch.setattr(video, "get_s3_bucket_for_region", lambda _region: "bucket")
+
+    @staticmethod
+    def _patch_clients(
+        monkeypatch: pytest.MonkeyPatch, clients: dict[str, Any]
+    ) -> None:
+        monkeypatch.setattr(
+            video, "get_client", lambda _service, region: clients[region]
+        )
+
+    async def test_merges_jobs_across_regions(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Jobs from every configured region merge in creation-time order."""
+        clients = {
+            "us-east-1": _StubListClient(
+                [{"asyncInvokeSummaries": [_summary("aaa", 100)]}]
+            ),
+            "us-west-2": _StubListClient(
+                [{"asyncInvokeSummaries": [_summary("bbb", 200, region="us-west-2")]}]
+            ),
+        }
+        self._patch_clients(monkeypatch, clients)
+
+        listings, has_more = await video.list_video_jobs()
+
+        assert not has_more
+        assert [listing.job.invocation_arn for listing in listings] == [
+            _arn("bbb", "us-west-2"),
+            _arn("aaa"),
+        ]
+
+    async def test_failed_region_is_skipped_with_warning(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A region failing with a ClientError is skipped and logged as a warning."""
+        clients = {
+            "us-east-1": _FailingListClient(
+                ClientError(
+                    {"Error": {"Code": "ThrottlingException", "Message": "slow down"}},
+                    "ListAsyncInvokes",
+                )
+            ),
+            "us-west-2": _StubListClient(
+                [{"asyncInvokeSummaries": [_summary("bbb", 200, region="us-west-2")]}]
+            ),
+        }
+        self._patch_clients(monkeypatch, clients)
+        log = _new_log()
+        token = REQUEST_LOG.set(log)
+        try:
+            listings, _ = await video.list_video_jobs()
+        finally:
+            REQUEST_LOG.reset(token)
+
+        assert [listing.job.invocation_arn for listing in listings] == [
+            _arn("bbb", "us-west-2")
+        ]
+        (detail,) = log["error_detail"]
+        assert isinstance(detail, dict)
+        unreachable_regions = detail["unreachable_bedrock_regions"]
+        assert isinstance(unreachable_regions, dict)
+        assert "us-east-1" in unreachable_regions
+        assert log["level"] == "warning"
+
+    async def test_all_regions_failing_raises_first_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When every region fails, the first region's error is raised."""
+        first = ClientError(
+            {"Error": {"Code": "ThrottlingException", "Message": "first"}},
+            "ListAsyncInvokes",
+        )
+        second = ClientError(
+            {"Error": {"Code": "ThrottlingException", "Message": "second"}},
+            "ListAsyncInvokes",
+        )
+        self._patch_clients(
+            monkeypatch,
+            {
+                "us-east-1": _FailingListClient(first),
+                "us-west-2": _FailingListClient(second),
+            },
+        )
+
+        with pytest.raises(ClientError) as exc_info:
+            await video.list_video_jobs()
+        assert exc_info.value is first
+
+    async def test_non_aws_error_propagates(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A non-AWS error in one region fails the listing outright."""
+        clients = {
+            "us-east-1": _FailingListClient(RuntimeError("boom")),
+            "us-west-2": _StubListClient([{"asyncInvokeSummaries": []}]),
+        }
+        self._patch_clients(monkeypatch, clients)
+
+        with pytest.raises(RuntimeError, match="boom"):
+            await video.list_video_jobs()

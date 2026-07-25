@@ -26,6 +26,9 @@ _RESOLUTIONS = {540: "540p", 720: "720p"}
 #: Supported clip durations in seconds.
 _DURATIONS = frozenset({5, 9})
 
+#: Reference image media types accepted by Luma Ray.
+_IMAGE_MEDIA_TYPES = frozenset({"image/png", "image/jpeg"})
+
 
 class VideoModel(VideoModelBase):
     """Luma AI Ray video generation model."""
@@ -72,7 +75,8 @@ class VideoModel(VideoModelBase):
             The ``modelInput`` payload for ``StartAsyncInvoke``.
 
         Raises:
-            ApiError: On an unsupported duration or size.
+            ApiError: On an unsupported duration or size, or a reference
+                image in an unsupported format.
         """
         if seconds not in _DURATIONS:
             msg = (
@@ -98,6 +102,9 @@ class VideoModel(VideoModelBase):
             "aspect_ratio": aspect_ratio,
         }
         if reference_image is not None:
+            if reference_image.media_type not in _IMAGE_MEDIA_TYPES:
+                msg = "'input_reference' must be a PNG or JPEG image."
+                raise ApiError(msg)
             body["keyframes"] = {
                 "frame0": {
                     "type": "image",

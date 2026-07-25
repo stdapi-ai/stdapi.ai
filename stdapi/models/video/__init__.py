@@ -23,7 +23,7 @@ from functools import partial
 from re import compile as re_compile
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NamedTuple
 
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 from pydantic import BaseModel
 
 from stdapi.api_errors import ApiError, UnsupportedModelError
@@ -40,7 +40,7 @@ from stdapi.models import (
     route_and_execute,
 )
 from stdapi.models.capabilities import Capability
-from stdapi.monitoring import build_metadata
+from stdapi.monitoring import REQUEST_LOG, build_metadata, log_error_details
 from stdapi.usage import record_bedrock_usage
 from stdapi.utils import now_utc_timestamp
 
@@ -70,6 +70,11 @@ _JOB_STATUS: dict[str, _JobStatus] = {
     "Completed": "completed",
     "Failed": "failed",
 }
+
+#: GetAsyncInvoke error codes meaning the job is gone, foreign, or invalid.
+_JOB_NOT_FOUND_ERRORS = frozenset(
+    {"ValidationException", "AccessDeniedException", "ResourceNotFoundException"}
+)
 
 #: Resource tag key carrying the effective video duration, set at job start.
 _SECONDS_TAG = "stdapi-ai.seconds"
@@ -228,10 +233,17 @@ class VideoModelBase(ModelBase[Any, Any]):
             reference_image=image,
             extra_params=extra_params,
         )
+        candidates = await compute_candidate_regions(self._model_id, s3_required=True)
         invocation_arn, region = await route_and_execute(
             self._model_id,
-            await compute_candidate_regions(self._model_id, s3_required=True),
-            partial(self._start_in_region, body, seconds, size),
+            candidates,
+            partial(
+                self._start_in_region,
+                body,
+                seconds,
+                size,
+                single_region=len(candidates) == 1,
+            ),
         )
         # Billed at submission, not completion: job state is not tracked here, so
         # a later failure is never reconciled against this recorded usage.
@@ -246,7 +258,13 @@ class VideoModelBase(ModelBase[Any, Any]):
         )
 
     async def _start_in_region(
-        self, body: JsonMapping, seconds: int, size: str, region: RegionName
+        self,
+        body: JsonMapping,
+        seconds: int,
+        size: str,
+        region: RegionName,
+        *,
+        single_region: bool,
     ) -> tuple[str, RegionName]:
         """Start the async invocation in *region*, writing output to its regional bucket.
 
@@ -258,6 +276,8 @@ class VideoModelBase(ModelBase[Any, Any]):
             seconds: Effective video duration in seconds.
             size: Effective video size as "<width>x<height>".
             region: Target AWS region.
+            single_region: Selects the full-retry or no-retry botocore client,
+                mirroring :func:`stdapi.aws_bedrock.bedrock_client`.
 
         Returns:
             Tuple of (invocation ARN, region that served the call).
@@ -266,7 +286,14 @@ class VideoModelBase(ModelBase[Any, Any]):
         resolved_model_id = await resolve_routed_model_id(
             self._model_id, region, inference_profile=False
         )
-        client: BedrockRuntimeClient = get_client("bedrock-runtime", region)
+        client: BedrockRuntimeClient = get_client(
+            (
+                "bedrock-runtime"
+                if single_region or SETTINGS.aws_bedrock_region_routing == "disabled"
+                else "bedrock-runtime.no-retry"
+            ),
+            region,
+        )
         tags = build_metadata(apn=True) | {_SECONDS_TAG: str(seconds), _SIZE_TAG: size}
         with handle_bedrock_client_error():
             response = await client.start_async_invoke(
@@ -339,13 +366,22 @@ async def get_video_job(invocation_arn: str) -> VideoJob:
 
     Raises:
         ApiError: 404 when the ARN is invalid, targets an unconfigured region,
-            or its output falls outside this server's videos bucket/prefix;
+            references an aged-out, deleted, or foreign-account invocation, or
+            its output falls outside this server's videos bucket/prefix;
             on AWS client errors otherwise.
     """
     region = _invocation_region(invocation_arn)
     client: BedrockRuntimeClient = get_client("bedrock-runtime", region)
-    with handle_bedrock_client_error():
-        response = await client.get_async_invoke(invocationArn=invocation_arn)
+    try:
+        with handle_bedrock_client_error():
+            response = await client.get_async_invoke(invocationArn=invocation_arn)
+    except ClientError as exc:
+        # Aged-out, deleted, and foreign-account invocations get the same 404
+        # as malformed IDs, avoiding an existence oracle.
+        if exc.response["Error"]["Code"] in _JOB_NOT_FOUND_ERRORS:
+            msg = "Video not found."
+            raise ApiError(msg, status=404) from exc
+        raise
     s3_uri = response["outputDataConfig"]["s3OutputDataConfig"]["s3Uri"]
     uri_prefix = _region_videos_uri_prefix(region)
     if uri_prefix is None or not s3_uri.startswith(uri_prefix):
@@ -372,7 +408,8 @@ def _to_video_job(invocation_arn: str, state: Mapping[str, Any]) -> VideoJob:
     return VideoJob(
         invocation_arn=invocation_arn,
         model_id=state["modelArn"].rsplit("/", 1)[-1],
-        status=_JOB_STATUS[state["status"]],
+        # An unknown Bedrock status is assumed non-terminal (still running).
+        status=_JOB_STATUS.get(state["status"], "in_progress"),
         created_at=int(state["submitTime"].timestamp()),
         completed_at=int(end.timestamp()) if (end := state.get("endTime")) else None,
         failure_message=state.get("failureMessage"),
@@ -480,7 +517,10 @@ async def list_video_jobs(
     """List this server's video generation jobs across all configured regions.
 
     Jobs are visible while AWS Bedrock retains their async invocation record;
-    the listing is independent of whether the S3 output still exists.
+    the listing is independent of whether the S3 output still exists. A region
+    whose scan fails with an AWS error is skipped (surfaced as a request-log
+    warning) instead of failing the whole listing; the listing only fails when
+    every configured region fails.
 
     Args:
         order: Sort order by creation time.
@@ -491,20 +531,37 @@ async def list_video_jobs(
 
     Returns:
         Tuple of (page of listings, whether more jobs remain).
+
+    Raises:
+        BotoCoreError: When every configured region fails (first error).
+        ClientError: When every configured region fails (first error).
     """
     sort_order: Literal["Ascending", "Descending"] = (
         "Ascending" if order == "asc" else "Descending"
     )
-    jobs = [
-        job
-        for region_jobs in await gather(
-            *(
-                _scan_region_jobs(region, sort_order)
-                for region in SETTINGS.aws_bedrock_regions
-            )
+    regions = list(SETTINGS.aws_bedrock_regions)
+    region_results = await gather(
+        *(_scan_region_jobs(region, sort_order) for region in regions),
+        return_exceptions=True,
+    )
+    jobs: list[VideoJob] = []
+    errors: list[BaseException] = []
+    failed_regions: dict[str, str] = {}
+    for region, result in zip(regions, region_results, strict=True):
+        if isinstance(result, BaseException):
+            if not isinstance(result, (BotoCoreError, ClientError)):
+                raise result
+            errors.append(result)
+            failed_regions[region] = f"{type(result).__name__}: {result}"
+            continue
+        jobs.extend(result)
+    if errors and len(errors) == len(regions):
+        raise errors[0]
+    if failed_regions and REQUEST_LOG.get(None) is not None:
+        log_error_details(
+            {"unreachable_bedrock_regions": failed_regions},  # type: ignore[dict-item]
+            level="warning",
         )
-        for job in region_jobs
-    ]
     jobs.sort(
         key=lambda job: (job.created_at, job.invocation_arn), reverse=order == "desc"
     )
@@ -586,7 +643,15 @@ async def open_video_content(job: VideoJob) -> AsyncIterator[bytes]:
             Bucket=job.output_bucket, Key=f"{job.output_prefix}/output.mp4"
         )
     except ClientError as exc:
-        if exc.response["Error"]["Code"] in ("NoSuchKey", "404"):
+        code = exc.response["Error"]["Code"]
+        if code == "AccessDenied" and REQUEST_LOG.get(None) is not None:
+            # Without s3:ListBucket, S3 reports a missing key as AccessDenied.
+            log_error_details(
+                "S3 AccessDenied on video content download: the object is gone"
+                " or the server lacks S3 permissions on the videos bucket.",
+                level="warning",
+            )
+        if code in ("NoSuchKey", "404", "AccessDenied"):
             msg = "Video content not found."
             raise ApiError(msg, status=404) from exc
         raise
@@ -596,17 +661,35 @@ async def open_video_content(job: VideoJob) -> AsyncIterator[bytes]:
 async def delete_video_output(job: VideoJob) -> None:
     """Delete all S3 objects produced by a video generation job.
 
+    Deletion is best-effort: keys S3 fails to delete are logged as a warning
+    and left to the bucket lifecycle expiry.
+
     Args:
         job: The video generation job to clean up.
     """
     s3: S3Client = get_client("s3", _invocation_region(job.invocation_arn))
-    listed = await s3.list_objects_v2(
-        Bucket=job.output_bucket, Prefix=f"{job.output_prefix}/"
-    )
-    if keys := [{"Key": obj["Key"]} for obj in listed.get("Contents", ())]:
-        await s3.delete_objects(
+    failed_keys = 0
+    token: str | None = None
+    while True:
+        listed = await s3.list_objects_v2(
             Bucket=job.output_bucket,
-            Delete={"Objects": keys},  # type: ignore[typeddict-item]
+            Prefix=f"{job.output_prefix}/",
+            **({"ContinuationToken": token} if token else {}),  # type: ignore[arg-type]
+        )
+        if keys := [{"Key": obj["Key"]} for obj in listed.get("Contents", ())]:
+            deleted = await s3.delete_objects(
+                Bucket=job.output_bucket,
+                Delete={"Objects": keys},  # type: ignore[typeddict-item]
+            )
+            failed_keys += len(deleted.get("Errors", ()))
+        token = listed.get("NextContinuationToken")
+        if not token:
+            break
+    # Deletion stays best-effort: the S3 lifecycle expiry covers stragglers.
+    if failed_keys and REQUEST_LOG.get(None) is not None:
+        log_error_details(
+            f"Video output deletion left {failed_keys} object(s) behind.",
+            level="warning",
         )
 
 
