@@ -2,16 +2,21 @@
 
 from asyncio import CancelledError, Event, sleep, wait_for
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
 import stdapi.models
 from stdapi import usage
+from stdapi.models import InvokeResult
 from stdapi.models.image import (
     ImageGenerationJobBase,
     ImageGenerationResponse,
     ImageModelBase,
+)
+from stdapi.models.image._stability import (
+    StabilityImageGenerationJobBase,
+    StabilityImageModelBase,
 )
 from stdapi.models.image.amazon_titan_image_generator import image_spec
 from stdapi.pricing import Dimension, Price, PriceKey, Service, _state
@@ -220,3 +225,42 @@ class TestStreamCancelsAbandonedJobs:
         assert await stream.__anext__() is first_image
         await stream.aclose()
         await wait_for(cancelled.wait(), timeout=5)
+
+
+class TestStabilityMultiImageTokenAccumulation:
+    """StabilityImageGenerationJobBase: n>1 fan-out sums tokens across per-image calls."""
+
+    async def test_tokens_sum_across_per_image_invocations(self) -> None:
+        """Three per-image invoke() calls, one reporting no usage, still sum correctly."""
+        results = iter(
+            [
+                InvokeResult(
+                    response={"images": ["a"]}, input_tokens=10, output_tokens=20
+                ),
+                # A call reporting no usage must not zero the accumulator.
+                InvokeResult(
+                    response={"images": ["b"]}, input_tokens=None, output_tokens=None
+                ),
+                InvokeResult(
+                    response={"images": ["c"]}, input_tokens=5, output_tokens=7
+                ),
+            ]
+        )
+
+        class _FakeModel:
+            """Fake Stability model returning one queued InvokeResult per call."""
+
+            async def invoke(self, _request: object) -> InvokeResult[dict[str, Any]]:
+                """Return the next queued per-image invocation result."""
+                return next(results)
+
+        job = object.__new__(StabilityImageGenerationJobBase)
+        job._model = cast("StabilityImageModelBase", _FakeModel())  # noqa: SLF001
+        job._input_tokens = None  # noqa: SLF001
+        job._output_tokens = None  # noqa: SLF001
+
+        for index in range(3):
+            await job._get_image_from_response({}, index)  # type: ignore[arg-type]  # noqa: SLF001
+
+        assert job.input_tokens == 15
+        assert job.output_tokens == 27

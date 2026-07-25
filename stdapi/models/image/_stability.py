@@ -211,10 +211,32 @@ class StabilityImageGenerationJobBase(
     # Supported formats
     _OUTPUT_FORMATS: ClassVar[set[str]] = {"png", "jpeg", "webp"}
 
+    @staticmethod
+    def _accumulate_tokens(current: int | None, new: int | None) -> int | None:
+        """Add *new* into *current*, treating ``None`` as "not reported".
+
+        Args:
+            current: Tokens accumulated from previous calls, or None if unset.
+            new: Tokens reported by the latest call, or None if unreported.
+
+        Returns:
+            *current* unchanged if *new* is None; *new* if *current* was
+            None; otherwise their sum.
+        """
+        if new is None:
+            return current
+        if current is None:
+            return new
+        return current + new
+
     async def _get_image_from_response(
         self, request: Request, index: int
     ) -> ImageGenerationResponse:
         """Invoke the model to generate an image.
+
+        Stability jobs invoke the model once per image (fan-out), unlike
+        single-invoke models, so token counts are accumulated across calls
+        instead of overwritten.
 
         Args:
             request: Model request.
@@ -227,8 +249,12 @@ class StabilityImageGenerationJobBase(
             ApiError: If request was filtered.
         """
         result = await self._model.invoke(request)
-        self._input_tokens = result.input_tokens
-        self._output_tokens = result.output_tokens
+        self._input_tokens = self._accumulate_tokens(
+            self._input_tokens, result.input_tokens
+        )
+        self._output_tokens = self._accumulate_tokens(
+            self._output_tokens, result.output_tokens
+        )
         response = result.response
         try:
             finish_reasons = response["finish_reasons"]
