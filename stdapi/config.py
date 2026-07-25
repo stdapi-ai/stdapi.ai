@@ -26,6 +26,7 @@ Environment Variable Examples:
 For detailed configuration options, see the _Settings class documentation.
 """
 
+import re
 from datetime import datetime
 from typing import TYPE_CHECKING, Annotated, Literal, Self
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
@@ -38,6 +39,7 @@ from pydantic import (
     JsonValue,
     SecretStr,
     ValidationError,
+    ValidationInfo,
     field_validator,
     model_validator,
 )
@@ -65,6 +67,20 @@ LogLevel = Literal["info", "warning", "error", "critical"]
 
 #: AWS Session
 AWS_SESSION = get_session()
+
+#: CloudWatch namespace charset (alphanumeric plus . - _ / # :), 1-255 characters.
+_CLOUDWATCH_NAMESPACE_PATTERN = re.compile(r"^[A-Za-z0-9._\-/#:]{1,255}$")
+
+#: Route prefix format: one or more "/segment" parts, no trailing slash.
+_ROUTES_PREFIX_PATTERN = re.compile(r"^(/[A-Za-z0-9._~-]+)+$")
+
+#: S3 prefix format: one or more "segment/" parts (S3-safe charset), no leading slash.
+_S3_PREFIX_PATTERN = re.compile(r"^([A-Za-z0-9!_.*'()-]+/)+$")
+
+#: KMS key ARN format for Bedrock CreateSession's ``encryptionKeyArn``, any AWS partition.
+_KMS_KEY_ARN_PATTERN = re.compile(
+    r"^arn:aws(?:-[a-z]+)*:kms:[a-zA-Z0-9-]*:[0-9]{12}:key/[a-zA-Z0-9-]{36}$"
+)
 
 #: Built-in set of ``anthropic_beta`` flags known to be supported by AWS Bedrock.
 _ANTHROPIC_BETA_BEDROCK_FLAGS: frozenset[str] = frozenset(
@@ -337,6 +353,19 @@ class _Settings(BaseSettings):
             "Maximum number of retries for Bedrock invocations. "
             "When region routing is enabled, retries cycle through all available regions in order. "
             "When region routing is disabled, retries are performed against the single configured region."
+        ),
+    )
+
+    aws_failover_max_retries: int = Field(
+        default=2,
+        ge=0,
+        description=(
+            "Maximum number of SDK retry attempts per candidate region for the "
+            "multi-region failover services (Polly, Transcribe, Translate, Comprehend). "
+            "Only applied when the service has several candidate regions "
+            "(no explicit region setting); failover across regions replaces "
+            "deep in-region retrying. "
+            "Default: 2."
         ),
     )
 
@@ -961,7 +990,11 @@ class _Settings(BaseSettings):
 
     cloudwatch_metrics_namespace: str = Field(
         default="stdapi",
-        description="CloudWatch namespace for the emitted usage metrics.",
+        description=(
+            "CloudWatch namespace for the emitted usage metrics. Must be "
+            "1-255 characters, using only alphanumeric characters and "
+            "'. - _ / # :', and must not start with the reserved 'AWS/' prefix."
+        ),
     )
 
     # Cost tracking settings
@@ -1269,11 +1302,14 @@ class _Settings(BaseSettings):
             value: A comma-separated string or a pre-parsed list.
 
         Returns:
-            List of stripped, non-empty items.
+            List of stripped, non-empty items, first-occurrence order
+            preserved, duplicates removed (a duplicated region would cascade
+            into every downstream region list, e.g. duplicated model card
+            regions and redundant failover attempts).
         """
         if isinstance(value, str):
             value = [item for item in (v.strip() for v in value.split(",")) if item]
-        return value
+        return list(dict.fromkeys(value))
 
     @field_validator("aws_bedrock_regions", mode="before")
     @classmethod
@@ -1335,6 +1371,132 @@ class _Settings(BaseSettings):
                 raise ValueError(msg) from None
         return value
 
+    @field_validator("cloudwatch_metrics_namespace")
+    @classmethod
+    def _validate_cloudwatch_namespace(cls, value: str) -> str:
+        """Validate the CloudWatch namespace against AWS naming constraints.
+
+        An invalid namespace makes CloudWatch silently skip EMF metric
+        extraction (log lines are still emitted, but no metric appears).
+
+        Args:
+            value: CloudWatch metrics namespace.
+
+        Returns:
+            The validated namespace.
+
+        Raises:
+            ValueError: If the namespace violates CloudWatch naming rules.
+        """
+        if not _CLOUDWATCH_NAMESPACE_PATTERN.fullmatch(value):
+            msg = (
+                f'Invalid cloudwatch_metrics_namespace "{value}": must be 1-255 '
+                "characters using only alphanumeric characters and . - _ / # :"
+            )
+            raise ValueError(msg)
+        if value.startswith("AWS/"):
+            msg = (
+                f'Invalid cloudwatch_metrics_namespace "{value}": must not start '
+                'with the reserved "AWS/" prefix.'
+            )
+            raise ValueError(msg)
+        return value
+
+    @field_validator("aws_s3_videos_prefix")
+    @classmethod
+    def _validate_videos_prefix(cls, value: str) -> str:
+        """Validate the S3 prefix used for generated videos.
+
+        The Bedrock output ``s3Uri`` is built from this value verbatim
+        (``stdapi.models.video.AsyncVideoModel.start_video_generation``),
+        while the ownership check that gates ``get_video_job``/listing
+        (``_region_videos_uri_prefix``) appends a "/" when one is missing so
+        it cannot match an unrelated sibling prefix. A prefix without a
+        trailing "/" would therefore be written one way and checked another,
+        so the trailing "/" is required rather than merely recommended. An
+        empty value would widen the ownership check to the whole bucket,
+        which is security-relevant, so empty prefixes are rejected too.
+
+        Args:
+            value: S3 prefix for generated videos.
+
+        Returns:
+            The validated prefix.
+
+        Raises:
+            ValueError: If the value is empty, starts with "/", contains "//",
+                uses characters outside S3's safe set, or has no trailing "/".
+        """
+        if not _S3_PREFIX_PATTERN.fullmatch(value):
+            msg = (
+                f'Invalid aws_s3_videos_prefix "{value}": must be non-empty, must '
+                'not start with "/" or contain "//", must use only S3-safe '
+                "characters (alphanumerics plus ! _ . * ' ( ) -) per path segment, "
+                'and must end with a trailing "/"'
+            )
+            raise ValueError(msg)
+        return value
+
+    @staticmethod
+    def _check_routes_prefix(field_name: str, value: str, *, allow_empty: bool) -> str:
+        """Validate a routes-prefix value against the shared prefix format.
+
+        Args:
+            field_name: Name of the setting being validated, used in the error message.
+            value: The routes-prefix value to validate.
+            allow_empty: Whether an empty string is a legal value for this setting.
+
+        Returns:
+            The validated prefix.
+
+        Raises:
+            ValueError: If the value is not empty (when allowed) and does not match
+                the required "/segment" format.
+        """
+        if allow_empty and value == "":
+            return value
+        if not _ROUTES_PREFIX_PATTERN.fullmatch(value):
+            msg = (
+                f'Invalid {field_name} "{value}": must start with "/", must not end '
+                'with "/", and use only alphanumeric characters and . _ ~ - per '
+                "path segment"
+            )
+            raise ValueError(msg)
+        return value
+
+    @field_validator("openai_routes_prefix")
+    @classmethod
+    def _validate_openai_routes_prefix(cls, value: str) -> str:
+        """Validate the OpenAI routes prefix, allowing the empty (root-mounted) default.
+
+        Args:
+            value: OpenAI routes prefix.
+
+        Returns:
+            The validated prefix.
+
+        Raises:
+            ValueError: If the value is non-empty and does not match the required format.
+        """
+        return cls._check_routes_prefix("openai_routes_prefix", value, allow_empty=True)
+
+    @field_validator("anthropic_routes_prefix", "cohere_routes_prefix")
+    @classmethod
+    def _validate_required_routes_prefix(cls, value: str, info: ValidationInfo) -> str:
+        """Validate the Anthropic and Cohere routes prefixes.
+
+        Args:
+            value: Routes prefix value.
+            info: Validation info, used to identify the field being validated.
+
+        Returns:
+            The validated prefix.
+
+        Raises:
+            ValueError: If the value does not match the required format.
+        """
+        return cls._check_routes_prefix(str(info.field_name), value, allow_empty=False)
+
     @field_validator("aws_bedrock_model_arn_mapping")
     @classmethod
     def _validate_arn_mapping(cls, value: dict[str, str]) -> dict[str, str]:
@@ -1365,6 +1527,90 @@ class _Settings(BaseSettings):
             raise ValueError(msg)
         return value
 
+    @field_validator("aws_bedrock_session_encryption_key_arn")
+    @classmethod
+    def _validate_session_encryption_key_arn(cls, value: str | None) -> str | None:
+        """Validate the KMS key ARN against Bedrock CreateSession's ``encryptionKeyArn`` format.
+
+        A typo'd ARN would otherwise only surface as a per-request AWS error
+        once a stored response or chat completion is created.
+
+        Args:
+            value: KMS key ARN, or None to use the AWS-managed key.
+
+        Returns:
+            The validated ARN.
+
+        Raises:
+            ValueError: If the value is set and is not a valid KMS key ARN.
+        """
+        if value is not None and not _KMS_KEY_ARN_PATTERN.fullmatch(value):
+            msg = (
+                f'Invalid aws_bedrock_session_encryption_key_arn "{value}": must be '
+                'a KMS key ARN "arn:<partition>:kms:<region>:<account-id>:key/<key-id>".'
+            )
+            raise ValueError(msg)
+        return value
+
+    @field_validator("aws_bedrock_mantle_endpoint_url")
+    @classmethod
+    def _validate_mantle_endpoint_url(cls, value: str | None) -> str | None:
+        """Validate the Bedrock Mantle endpoint URL template.
+
+        A bad "{region}" placeholder would otherwise only surface as a
+        per-request formatting error, and a non-HTTPS scheme would silently
+        disable transport encryption toward Mantle.
+
+        Args:
+            value: Endpoint URL template, or None to use the default.
+
+        Returns:
+            The validated template.
+
+        Raises:
+            ValueError: If the value does not use "https://" or its
+                "{region}" placeholder is malformed.
+        """
+        if value is None:
+            return value
+        if not value.startswith("https://"):
+            msg = (
+                f'Invalid aws_bedrock_mantle_endpoint_url "{value}": must use the '
+                '"https://" scheme.'
+            )
+            raise ValueError(msg)
+        try:
+            value.format(region="us-east-1")
+        except (KeyError, IndexError, ValueError) as error:
+            msg = (
+                f'Invalid aws_bedrock_mantle_endpoint_url "{value}": malformed '
+                '"{region}" placeholder.'
+            )
+            raise ValueError(msg) from error
+        return value
+
+    def _validate_unique_routes_prefixes(self) -> None:
+        """Ensure non-empty API routes prefixes do not collide across providers.
+
+        Raises:
+            ValueError: If two providers share the same non-empty routes prefix.
+        """
+        seen_prefixes: dict[str, str] = {}
+        for field_name, prefix in (
+            ("openai_routes_prefix", self.openai_routes_prefix),
+            ("anthropic_routes_prefix", self.anthropic_routes_prefix),
+            ("cohere_routes_prefix", self.cohere_routes_prefix),
+        ):
+            if not prefix:
+                continue
+            if prefix in seen_prefixes:
+                msg = (
+                    f"{seen_prefixes[prefix]} and {field_name} must not both be set "
+                    f'to "{prefix}": routes prefixes must be unique.'
+                )
+                raise ValueError(msg)
+            seen_prefixes[prefix] = field_name
+
     @model_validator(mode="after")
     def _validate(self) -> Self:
         """Perform cross-field validation and apply configuration defaults.
@@ -1379,6 +1625,7 @@ class _Settings(BaseSettings):
         3. Transcribe S3 bucket defaults to main S3 bucket if not specified
         4. API key configuration options cannot conflict
         5. When both MCP include/exclude are specified, include is filtered by exclude
+        6. Non-empty API routes prefixes must be unique across providers
 
         Returns:
             Self with validated and defaulted configuration.
@@ -1389,10 +1636,12 @@ class _Settings(BaseSettings):
         Examples of invalid configurations:
         - Guardrail ID without version (or vice versa)
         - Multiple API key sources specified simultaneously
+        - Two routes prefixes set to the same non-empty value
         """
         self.enable_openapi_json = (
             self.enable_openapi_json or self.enable_docs or self.enable_redoc
         )
+        self._validate_unique_routes_prefixes()
         if (
             self.aws_bedrock_guardrail_identifier
             and not self.aws_bedrock_guardrail_version
