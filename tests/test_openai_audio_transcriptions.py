@@ -5,15 +5,40 @@ specification, ensuring compatibility with the official OpenAI API behavior.
 """
 
 import io
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from openai import BadRequestError, NotFoundError, OpenAI
 
+from stdapi.models.audio.amazon_transcribe import AudioModel
 from tests.conftest import logged_usage_entries
 
 if TYPE_CHECKING:
     from starlette.testclient import TestClient as TestClientType
+
+#: Stubbed AWS Transcribe job result used by response-format regression tests.
+_STUB_TRANSCRIPT_DATA: dict[str, Any] = {
+    "transcripts": [{"transcript": "hello world"}],
+    "audio_segments": [
+        {"id": 0, "start_time": "0.0", "end_time": "1.0", "transcript": "hello"},
+        {"id": 1, "start_time": "1.0", "end_time": "2.0", "transcript": "world"},
+    ],
+    "items": [
+        {
+            "type": "pronunciation",
+            "alternatives": [{"content": "hello"}],
+            "start_time": "0.0",
+            "end_time": "0.5",
+        },
+        {
+            "type": "pronunciation",
+            "alternatives": [{"content": "world"}],
+            "start_time": "1.0",
+            "end_time": "1.5",
+        },
+    ],
+    "language_code": "en-US",
+}
 
 
 class TestAudioTranscriptions:
@@ -862,3 +887,65 @@ class TestAudioTranscriptionsJsonBody:
         body = response.json()
         assert isinstance(body.get("text"), str)
         assert len(body["text"].strip()) > 0
+
+
+@pytest.mark.local
+class TestAudioTranscriptionsResponseFormatBugs:
+    """Local stub tests for response-format regressions (no AWS calls made)."""
+
+    @staticmethod
+    def _stub_transcribe(monkeypatch: pytest.MonkeyPatch) -> None:
+        """Replace AWS Transcribe with a fixed stubbed job result."""
+
+        async def _fake_transcribe(
+            _self: AudioModel, *_args: object, **_kwargs: object
+        ) -> dict[str, Any]:
+            return _STUB_TRANSCRIPT_DATA
+
+        monkeypatch.setattr(AudioModel, "_transcribe", _fake_transcribe)
+
+    def test_text_format_returns_raw_plain_text(
+        self,
+        test_client: TestClientType | None,
+        api_key: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """response_format=text returns raw text/plain, not a JSON-quoted string."""
+        if test_client is None:
+            pytest.skip("Requires local test server")
+        self._stub_transcribe(monkeypatch)
+
+        response = test_client.post(
+            "/v1/audio/transcriptions",
+            files={"file": ("test.wav", io.BytesIO(b"fake"), "audio/wav")},
+            data={"model": "amazon.transcribe", "response_format": "text"},
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/plain")
+        assert response.text == "hello world"
+
+    def test_verbose_json_without_granularities_defaults_to_segments(
+        self,
+        test_client: TestClientType | None,
+        api_key: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """verbose_json with no timestamp_granularities still populates segments."""
+        if test_client is None:
+            pytest.skip("Requires local test server")
+        self._stub_transcribe(monkeypatch)
+
+        response = test_client.post(
+            "/v1/audio/transcriptions",
+            files={"file": ("test.wav", io.BytesIO(b"fake"), "audio/wav")},
+            data={"model": "amazon.transcribe", "response_format": "verbose_json"},
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert isinstance(body.get("segments"), list)
+        assert len(body["segments"]) > 0
+        assert body.get("words") is None

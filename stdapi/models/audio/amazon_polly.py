@@ -44,6 +44,7 @@ if TYPE_CHECKING:
         DescribeVoicesInputTypeDef,
         SynthesizeSpeechInputTypeDef,
         SynthesizeSpeechOutputTypeDef,
+        VoiceTypeDef,
     )
 
     from stdapi.types.openai_audio import AudioFileFormat
@@ -121,7 +122,9 @@ async def _get_voices_per_engine(
     """Retrieve one region's voices for an engine from Polly.
 
     Also merges the voices' metadata (description, gender, language, name)
-    into the region-independent lookup tables.
+    into the region-independent lookup tables, but only once the full
+    listing (all pages) has succeeded, so a failure part-way through
+    pagination leaves no partial metadata behind.
 
     Args:
         engine: The engine to filter voices for.
@@ -134,22 +137,24 @@ async def _get_voices_per_engine(
     next_token = None
     polly: PollyClient = get_client("polly", region)
     engine_voices: set[VoiceIdType] = set()
+    voices: list[VoiceTypeDef] = []
     params: DescribeVoicesInputTypeDef = {"Engine": engine}
     while True:
         if next_token:
             params["NextToken"] = next_token
         response = await polly.describe_voices(**params)
-        for voice in response["Voices"]:
-            voice_id = voice["Id"]
-            gender = voice["Gender"]
-            engine_voices.add(voice_id)
-            _VOICES_DESCRIPTIONS[voice_id] = f"{gender}, {voice['LanguageName']}"
-            _VOICES_BY_GENDERS.setdefault(gender, set()).add(voice_id)
-            _VOICES_BY_LANGUAGE.setdefault(voice["LanguageCode"], set()).add(voice_id)
-            _VOICES_BY_NAME_LOWER[voice_id.lower()] = voice_id
+        voices.extend(response["Voices"])
         next_token = response.get("NextToken")
         if not next_token:
             break
+    for voice in voices:
+        voice_id = voice["Id"]
+        gender = voice["Gender"]
+        engine_voices.add(voice_id)
+        _VOICES_DESCRIPTIONS[voice_id] = f"{gender}, {voice['LanguageName']}"
+        _VOICES_BY_GENDERS.setdefault(gender, set()).add(voice_id)
+        _VOICES_BY_LANGUAGE.setdefault(voice["LanguageCode"], set()).add(voice_id)
+        _VOICES_BY_NAME_LOWER[voice_id.lower()] = voice_id
     return engine_voices
 
 

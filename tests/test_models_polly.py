@@ -10,12 +10,12 @@ import stdapi.aws
 from stdapi import usage
 from stdapi.config import SETTINGS
 from stdapi.models import EXTRA_MODELS
-from stdapi.models.audio import amazon_polly
+from stdapi.models.audio import amazon_polly, get_audio_model
 from stdapi.models.audio.amazon_polly import (
     _engine_voice_regions,
     initialize_polly_models,
 )
-from stdapi.monitoring import EventLog
+from stdapi.monitoring import REQUEST_LOG, EventLog
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Mapping
@@ -86,6 +86,40 @@ def _patch_voices(
         return outcome  # type: ignore[return-value]
 
     monkeypatch.setattr(amazon_polly, "_get_voices_per_engine", _fake)
+
+
+def _patch_describe_voices(
+    monkeypatch: pytest.MonkeyPatch,
+    scripts: Mapping[tuple[str, str], list[dict[str, object] | Exception]],
+) -> None:
+    """Fake per-region Polly clients, scripting describe_voices page sequences.
+
+    Exercises the real ``_get_voices_per_engine`` pagination loop. Pairs not
+    listed in *scripts* return a single empty page.
+    """
+
+    class _FakePollyClient:
+        """Fake Polly client returning scripted describe_voices pages."""
+
+        def __init__(self, region: RegionName) -> None:
+            self._region = region
+            self._calls: dict[str, int] = {}
+
+        async def describe_voices(self, **params: object) -> dict[str, object]:
+            """Return the next scripted page for the engine, or raise it."""
+            engine = params["Engine"]
+            assert isinstance(engine, str)
+            call_index = self._calls.get(engine, 0)
+            self._calls[engine] = call_index + 1
+            page = scripts.get((engine, self._region), [{"Voices": []}])[call_index]
+            if isinstance(page, Exception):
+                raise page
+            return page
+
+    def _fake_get_client(_service: str, region: RegionName) -> _FakePollyClient:
+        return _FakePollyClient(region)
+
+    monkeypatch.setattr(amazon_polly, "get_client", _fake_get_client)
 
 
 def _start_event() -> EventLog:
@@ -202,6 +236,100 @@ class TestInitializePollyModels:
         with pytest.raises(ValueError, match="bug"):
             await initialize_polly_models(_start_event())
 
+    async def test_page_failure_discards_earlier_pages_metadata(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A second-page error leaves no metadata from the first page behind."""
+        partial_voice = {
+            "Id": "Partial",
+            "Gender": "Female",
+            "LanguageName": "English",
+            "LanguageCode": "en-US",
+        }
+        full_voice = {
+            "Id": "Full",
+            "Gender": "Male",
+            "LanguageName": "French",
+            "LanguageCode": "fr-FR",
+        }
+        _patch_describe_voices(
+            monkeypatch,
+            {
+                ("standard", "us-east-1"): [
+                    {"Voices": [partial_voice], "NextToken": "page2"},
+                    _aws_error(),
+                ],
+                ("neural", "us-east-1"): [{"Voices": [full_voice]}],
+            },
+        )
+        start_event = _start_event()
+
+        await initialize_polly_models(start_event)
+
+        assert "Partial" not in amazon_polly._VOICES_DESCRIPTIONS  # noqa: SLF001
+        assert "Partial" not in amazon_polly._VOICES_BY_GENDERS.get(  # noqa: SLF001
+            "Female", set()
+        )
+        assert "Partial" not in amazon_polly._VOICES_BY_LANGUAGE.get(  # noqa: SLF001
+            "en-US", set()
+        )
+        assert "partial" not in amazon_polly._VOICES_BY_NAME_LOWER  # noqa: SLF001
+        assert "Partial" not in amazon_polly._VOICES_BY_ENGINE.get(  # noqa: SLF001
+            "standard", set()
+        )
+        assert "amazon.polly-standard" not in EXTRA_MODELS
+        assert list(_engines_warning(start_event)) == ["standard@us-east-1"]
+
+        assert amazon_polly._VOICES_BY_ENGINE["neural"] == {"Full"}  # noqa: SLF001
+        assert EXTRA_MODELS["amazon.polly-neural"].regions == ["us-east-1"]
+
+    async def test_multi_page_listing_merges_voices_from_every_page(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A NextToken-paginated listing accumulates voices from all pages."""
+        page1_voice = {
+            "Id": "Joanna",
+            "Gender": "Female",
+            "LanguageName": "English",
+            "LanguageCode": "en-US",
+        }
+        page2_voice = {
+            "Id": "Matthew",
+            "Gender": "Male",
+            "LanguageName": "English",
+            "LanguageCode": "en-US",
+        }
+        _patch_describe_voices(
+            monkeypatch,
+            {
+                ("standard", "us-east-1"): [
+                    {"Voices": [page1_voice], "NextToken": "page2"},
+                    {"Voices": [page2_voice]},
+                ]
+            },
+        )
+
+        await initialize_polly_models()
+
+        assert amazon_polly._VOICES_BY_ENGINE["standard"] == {  # noqa: SLF001
+            "Joanna",
+            "Matthew",
+        }
+        assert amazon_polly._VOICES_BY_ENGINE_REGION["standard"]["us-east-1"] == {  # noqa: SLF001
+            "Joanna",
+            "Matthew",
+        }
+        assert amazon_polly._VOICES_DESCRIPTIONS["Joanna"] == "Female, English"  # noqa: SLF001
+        assert amazon_polly._VOICES_DESCRIPTIONS["Matthew"] == "Male, English"  # noqa: SLF001
+        assert amazon_polly._VOICES_BY_GENDERS["Female"] == {"Joanna"}  # noqa: SLF001
+        assert amazon_polly._VOICES_BY_GENDERS["Male"] == {"Matthew"}  # noqa: SLF001
+        assert amazon_polly._VOICES_BY_LANGUAGE["en-US"] == {  # noqa: SLF001
+            "Joanna",
+            "Matthew",
+        }
+        assert amazon_polly._VOICES_BY_NAME_LOWER["joanna"] == "Joanna"  # noqa: SLF001
+        assert amazon_polly._VOICES_BY_NAME_LOWER["matthew"] == "Matthew"  # noqa: SLF001
+
 
 class TestEngineVoiceRegions:
     """_engine_voice_regions: synthesis routes to regions offering the voice."""
@@ -283,3 +411,88 @@ class TestDetectLanguageFailover:
         assert language == "fr-FR"
         (key,) = records
         assert key.region == "eu-west-1"
+
+
+class _FakeAudioStream:
+    """Fake Polly audio stream body, yielding one chunk then EOF."""
+
+    def __init__(self, data: bytes) -> None:
+        self._data: bytes | None = data
+
+    async def read(self, _size: int) -> bytes:
+        """Return the chunk once, then empty bytes."""
+        data, self._data = self._data, None
+        return data or b""
+
+
+class _StubPollyClient:
+    """Stub Polly client with a fixed per-region synthesize_speech outcome."""
+
+    def __init__(self, outcome: dict[str, object] | Exception) -> None:
+        self._outcome = outcome
+        self.calls = 0
+
+    async def synthesize_speech(self, **_kwargs: object) -> dict[str, object]:
+        """Return the fixed payload or raise the configured error."""
+        self.calls += 1
+        if isinstance(self._outcome, Exception):
+            raise self._outcome
+        return self._outcome
+
+
+class TestSynthesizeSpeechFailover:
+    """AudioModel.tts: end-to-end synthesis fails over across candidate regions."""
+
+    async def test_failover_serves_audio_and_records_the_second_region(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A throttled first region falls over; usage and the log name it."""
+        _patch_voices(
+            monkeypatch,
+            {("neural", "us-east-1"): {"Joanna"}, ("neural", "eu-west-1"): {"Joanna"}},
+        )
+        await initialize_polly_models()
+        # _patch_voices bypasses the real metadata merge; seed the lookup
+        # _select_voice needs to route "Joanna" straight to that voice ID.
+        amazon_polly._VOICES_BY_NAME_LOWER["joanna"] = "Joanna"  # noqa: SLF001
+
+        clients = {
+            "us-east-1": _StubPollyClient(
+                ClientError(
+                    {"Error": {"Code": "ThrottlingException", "Message": "x"}},
+                    "SynthesizeSpeech",
+                )
+            ),
+            "eu-west-1": _StubPollyClient(
+                {
+                    "AudioStream": _FakeAudioStream(b"audio-bytes"),
+                    "RequestCharacters": "5",
+                }
+            ),
+        }
+        monkeypatch.setattr(
+            stdapi.aws, "get_client", lambda _service, region=None: clients[region]
+        )
+        log_token = REQUEST_LOG.set(_start_event())
+        usage_token = usage.init_usage()
+        try:
+            response = await get_audio_model("amazon.polly-neural").tts(
+                text="Hello", voice="Joanna", resp_format="mp3"
+            )
+            audio = b"".join([chunk async for chunk in response["audio_stream"]])
+            records = usage.USAGE.get()
+            log = REQUEST_LOG.get()
+        finally:
+            usage.USAGE.reset(usage_token)
+            REQUEST_LOG.reset(log_token)
+
+        assert audio == b"audio-bytes"
+        assert clients["us-east-1"].calls == 1
+        assert clients["eu-west-1"].calls == 1
+        (key,) = records
+        assert key.region == "eu-west-1"
+        assert log["level"] == "warning"
+        assert any(
+            "polly" in str(detail) and "us-east-1" in str(detail)
+            for detail in log["error_detail"]
+        )
