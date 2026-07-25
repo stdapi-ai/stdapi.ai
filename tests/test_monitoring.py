@@ -7,7 +7,7 @@ directly against a manually-seeded price index, bypassing this function entirely
 from asyncio import create_task, sleep
 from datetime import UTC, datetime
 from gc import collect
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
 from sse_starlette import ServerSentEvent
@@ -29,8 +29,10 @@ from stdapi.usage import get_model_state, record_bedrock_usage
 from tests.conftest import set_test_price
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Generator
+    from collections.abc import AsyncGenerator, AsyncIterable, Generator
     from typing import Any
+
+    from types_aiobotocore_bedrock_runtime.type_defs import ConverseStreamOutputTypeDef
 
     from stdapi.config import LogLevel
 
@@ -469,7 +471,8 @@ class TestStreamLogCost:
                 }
 
             wrapped = ModelBase("modela")._capture_stream_usage(  # noqa: SLF001
-                source(), region="us-east-1"
+                cast("AsyncIterable[ConverseStreamOutputTypeDef]", source()),
+                region="us-east-1",
             )
             stream = await monitoring.log_request_stream_event(wrapped)
             chunks = [chunk async for chunk in stream]
@@ -511,7 +514,11 @@ class TestStreamClientDisconnect:
         finalized: list[bool] = []
         try:
             wrapped = ModelBase("modela")._capture_stream_usage(  # noqa: SLF001
-                self._source(finalized), region="us-east-1"
+                cast(
+                    "AsyncIterable[ConverseStreamOutputTypeDef]",
+                    self._source(finalized),
+                ),
+                region="us-east-1",
             )
             stream = await monitoring.log_request_stream_event(wrapped)
             assert await stream.__anext__()
@@ -536,7 +543,11 @@ class TestStreamClientDisconnect:
         finalized: list[bool] = []
         try:
             wrapped = ModelBase("modela")._capture_stream_usage(  # noqa: SLF001
-                self._source(finalized), region="us-east-1"
+                cast(
+                    "AsyncIterable[ConverseStreamOutputTypeDef]",
+                    self._source(finalized),
+                ),
+                region="us-east-1",
             )
             stream = await monitoring.log_request_stream_event(wrapped)
             assert await stream.__anext__()
