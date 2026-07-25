@@ -225,6 +225,9 @@ environ.update(
         "log_request_params": "true",
         "model_cache_seconds": "10",
         "otel_enabled": "true",
+        # Instrument every request but sample no span: no collector listens on the
+        # exporter endpoint, and its retries drown the captured server output.
+        "otel_sample_rate": "0.0",
         "cloudwatch_metrics": "true",
         "trusted_hosts": '["*"]',
         # Model-specific extra configuration
