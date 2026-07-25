@@ -105,6 +105,7 @@ Any rerank model available in your configured AWS Bedrock regions can be used, f
 | `top_n`                     |   :material-check-circle:{ .success }    | Limits the number of returned results                             |
 | `max_tokens_per_doc`        |       :material-cog:{ .model-dep }       | Forwarded to the model; support depends on the model              |
 | `priority`                  | :material-close-circle:{ .unsupported }  | Accepted but ignored — not applicable on AWS Bedrock              |
+| `return_documents`          | :material-close-circle:{ .unsupported }  | Accepted but ignored — v2 results reference input documents by `index` |
 | Extra model-specific params | :material-plus-circle:{ .extra-feature } | Extra fields are forwarded as additional model request parameters |
 | **Output**                  |                                          |                                                                   |
 | `results` (index + score)   |   :material-check-circle:{ .success }    | Ordered by decreasing relevance                                   |
