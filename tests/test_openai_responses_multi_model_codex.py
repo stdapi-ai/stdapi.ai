@@ -38,6 +38,7 @@ import os
 import shutil
 import socket
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -267,10 +268,13 @@ def _stdapi_server_session(request: pytest.FixtureRequest) -> Generator[_ServerH
         }:
             del env[key]
 
+    # Run on this interpreter rather than through "uv run": the wrapper cannot
+    # forward the SIGKILL below to the server it spawned, leaking a listening
+    # process, and it serialises startup on the uv environment lock.
     proc = subprocess.Popen(  # noqa: S603
-        [  # noqa: S607
-            "uv",
-            "run",
+        [
+            sys.executable,
+            "-m",
             "uvicorn",
             "stdapi.main:app",
             "--host",
@@ -301,7 +305,9 @@ def _stdapi_server_session(request: pytest.FixtureRequest) -> Generator[_ServerH
     threading.Thread(target=_stdout_reader, daemon=True).start()
     threading.Thread(target=_stderr_reader, daemon=True).start()
 
-    deadline = time.monotonic() + 30
+    # Allow for an interpreter start and a full app init on a machine loaded
+    # by the other xdist workers.
+    deadline = time.monotonic() + 60
     healthy = False
     while time.monotonic() < deadline:
         try:
