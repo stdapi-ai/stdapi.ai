@@ -3,9 +3,9 @@
 
 # stdapi.ai
 
-**OpenAI & Anthropic Compatible API Gateway for AWS Bedrock and AI Services**
+**OpenAI, Anthropic & Cohere Compatible API Gateway for AWS Bedrock and AI Services**
 
-Run your favorite OpenAI and Anthropic-compatible applications on AWS Bedrock. Access 80+ models including Claude, Kimi K2, MiniMax, Qwen with enterprise privacy, compliance controls, and pay-per-use AWS pricing.
+Run your favorite OpenAI, Anthropic, and Cohere-compatible applications on AWS Bedrock. Access 80+ models including Claude, OpenAI GPT, xAI Grok, Kimi, MiniMax, Qwen with enterprise privacy, compliance controls, and pay-per-use AWS pricing.
 
 ---
 
@@ -118,10 +118,10 @@ Prefer a hands-off setup? A [managed deployment service](https://aws.amazon.com/
 - **🔒 Data stays in your AWS account** — All inference runs in your account. Data never shared with model providers or used for training. Configure allowed regions for GDPR, HIPAA, FedRAMP.
 - **🌍 Multiply quota across regions** — Each AWS region has independent quota. 3 regions = 3× tokens per minute. Automatic routing and failover—no client changes.
 - **💰 Pay only what you use** — AWS Bedrock rates, no markup, no subscriptions or monthly minimums.
-- **⚡ Advanced Bedrock features** — Reasoning modes (Claude, Nova), prompt caching, guardrails, service tiers, inference profiles, prompt routers—all through standard OpenAI and Anthropic API parameters.
-- **🧠 80+ models** — Claude, Kimi K2, MiniMax, Qwen, GLM, Nova, Llama, Stability AI, and more. Switch instantly—no vendor lock-in.
-- **🎨 Complete multi-modal API** — Chat, embeddings, image generation/editing/variations, audio speech/transcription/translation. Amazon Polly, Transcribe, Translate unified under OpenAI-compatible endpoints.
-- **📊 Full observability** — OpenTelemetry integration, request/response logging, Swagger and ReDoc API documentation.
+- **⚡ Advanced Bedrock features** — Reasoning modes (Claude, Nova), prompt caching, guardrails, service tiers, inference profiles, prompt routers, stored conversations—all through standard OpenAI and Anthropic API parameters.
+- **🧠 80+ models** — Claude, OpenAI GPT, xAI Grok, Kimi, MiniMax, Qwen, GLM, Nova, Llama, Stability AI, and more. Switch instantly—no vendor lock-in.
+- **🎨 Complete multi-modal API** — Chat, embeddings, image generation/editing/variations, video generation, audio speech/transcription/translation, content moderation. Amazon Polly, Transcribe, Translate unified under OpenAI-compatible endpoints.
+- **📊 Full observability** — OpenTelemetry integration, request/response logging, real-time AWS cost tracking per request, Swagger and ReDoc API documentation.
 - **🤖 Integrated MCP server** — Every API endpoint exposed as a Model Context Protocol tool. AI agents connect directly—no HTTP client code required. Streamable HTTP and SSE transports with configurable tool selection.
 - **🔄 Automatic deprecated model fallback** — When AWS retires a model, requests are transparently redirected to its replacement. Applications survive model deprecations without code changes.
 

@@ -577,7 +577,7 @@ All four solutions below expose an OpenAI-compatible API in front of AWS Bedrock
 | **OpenAI Completions**                      |  :material-check:{ .green-check }   |    :material-check:{ .green-check }     |                    —                    |                    —                    |
 | **OpenAI Embeddings**                       |  :material-check:{ .green-check }   |    :material-check:{ .green-check }     |    :material-check:{ .green-check }     |                    —                    |
 | **Anthropic Messages API**                  |  :material-check:{ .green-check }   |    :material-check:{ .green-check }     |                    —                    | :material-check:{ .yellow-check } [^14] |
-| **OpenAI Responses API**                    |  :material-check:{ .green-check }   |                    —                    |                    —                    | :material-check:{ .yellow-check } [^2]  |
+| **OpenAI Responses API**                    |  :material-check:{ .green-check }   | :material-check:{ .yellow-check } [^18] |                    —                    | :material-check:{ .yellow-check } [^2]  |
 | **OpenAI Image generation**                 |  :material-check:{ .green-check }   |    :material-check:{ .green-check }     |                    —                    |                    —                    |
 | **OpenAI Image editing**                    |  :material-check:{ .green-check }   |                    —                    |                    —                    |                    —                    |
 | **OpenAI Image variations**                 |  :material-check:{ .green-check }   |                    —                    |                    —                    |                    —                    |
@@ -586,37 +586,41 @@ All four solutions below expose an OpenAI-compatible API in front of AWS Bedrock
 | **OpenAI TTS (speech)**                     |  :material-check:{ .green-check }   | :material-check:{ .yellow-check } [^12] |                    —                    |                    —                    |
 | **OpenAI STT (transcription)**              |  :material-check:{ .green-check }   |                    —                    |                    —                    |                    —                    |
 | **OpenAI Files & Uploads API**              |  :material-check:{ .green-check }   |                    —                    |                    —                    |                    —                    |
+| **Server-side stored conversations**        |  :material-check:{ .green-check }   | :material-check:{ .yellow-check } [^17] |                    —                    |    :material-check:{ .green-check }     |
 | **OpenAI Realtime API**                     |                  —                  |    :material-check:{ .green-check }     |                    —                    |                    —                    |
 | **Cohere Rerank API**                       |  :material-check:{ .green-check }   |    :material-check:{ .green-check }     |                    —                    |                    —                    |
 | **Cohere Embed API**                        |  :material-check:{ .green-check }   |                    —                    |                    —                    |                    —                    |
 | **Integrated MCP server**                   |  :material-check:{ .green-check }   |                    —                    |                    —                    |                    —                    |
 | **Bedrock Full model catalog**              |  :material-check:{ .green-check }   | :material-check:{ .yellow-check } [^1]  | :material-check:{ .yellow-check } [^10] | :material-check:{ .yellow-check } [^2]  |
+| **Unified Bedrock + Mantle catalog**        |  :material-check:{ .green-check }   | :material-check:{ .yellow-check } [^15] |                    —                    |                    —                    |
+| **Every model on every text API**           |  :material-check:{ .green-check }   | :material-check:{ .yellow-check } [^16] |                    —                    |                    —                    |
 | **Multimodal inputs**                       | text · image · audio · video · docs |           text · image · docs           |              text · image               |              text · image               |
 | **Multi-region quota multiplication**       |  :material-check:{ .green-check }   | :material-check:{ .yellow-check } [^8]  |                    —                    |                    —                    |
 | **Bedrock Cross-region inference profiles** |  :material-check:{ .green-check }   | :material-check:{ .yellow-check } [^13] | :material-check:{ .yellow-check } [^13] |                    —                    |
 | **Bedrock system tools**                    |  :material-check:{ .green-check }   |                    —                    |                    —                    |                    —                    |
-| **Bedrock Guardrails**                      |  :material-check:{ .green-check }   |    :material-check:{ .green-check }     |                    —                    |    :material-check:{ .green-check }     |
+| **Bedrock Guardrails**                      |  :material-check:{ .green-check }   |    :material-check:{ .green-check }     |                    —                    |                    —                    |
 | **Bedrock Service tiers**                   |  :material-check:{ .green-check }   |    :material-check:{ .green-check }     |                    —                    |    :material-check:{ .green-check }     |
-| **Bedrock Application inference profiles**  |  :material-check:{ .green-check }   |    :material-check:{ .green-check }     |    :material-check:{ .green-check }     |    :material-check:{ .green-check }     |
-| **Bedrock prompt routers**                  |  :material-check:{ .green-check }   |                    —                    |                    —                    |    :material-check:{ .green-check }     |
+| **Bedrock Application inference profiles**  |  :material-check:{ .green-check }   |    :material-check:{ .green-check }     |    :material-check:{ .green-check }     |                 — [^19]                 |
+| **Bedrock prompt routers**                  |  :material-check:{ .green-check }   |                    —                    |                    —                    |                    —                    |
 | **Bedrock Prompt caching & reasoning**      |  :material-check:{ .green-check }   | :material-check:{ .yellow-check } [^6]  |    :material-check:{ .green-check }     | :material-check:{ .yellow-check } [^9]  |
 | **Runs in your AWS account**                |  :material-check:{ .green-check }   |    :material-check:{ .green-check }     |    :material-check:{ .green-check }     |                    —                    |
 | **Model auto-discovery**                    |  :material-check:{ .green-check }   | :material-check:{ .yellow-check } [^1]  | :material-check:{ .yellow-check } [^7]  |    :material-check:{ .green-check }     |
 | **Deprecated model failover**               |  :material-check:{ .green-check }   |                    —                    |                    —                    |                    —                    |
+| **Cost & usage tracking**                   |  :material-check:{ .green-check }   |    :material-check:{ .green-check }     |                    —                    |                    —                    |
 | **Ready-to-use deployment**                 |  :material-check:{ .green-check }   |                    —                    | :material-check:{ .yellow-check } [^3]  |    :material-check:{ .green-check }     |
 | **Commercial support**                      |  :material-check:{ .green-check }   |    :material-check:{ .green-check }     |                    —                    |  :material-check:{ .green-check } [^4]  |
 | **Self-hosted**                             |  :material-check:{ .green-check }   |    :material-check:{ .green-check }     |    :material-check:{ .green-check }     |                    —                    |
 | **AWS-native focus**                        |  :material-check:{ .green-check }   | :material-check:{ .yellow-check } [^5]  |    :material-check:{ .green-check }     |    :material-check:{ .green-check }     |
 | **Multi-provider support**                  |                  —                  | :material-check:{ .green-check } [^11]  |                    —                    |                    —                    |
-| **Open-source community**                   |                Small                |             Large - ~40k+ ★             |             Medium - ~1k ★              |                    —                    |
+| **Open-source community**                   |                Small                |             Large - ~55k ★              |             Medium - ~1k ★              |                    —                    |
 | **Source license**                          |  AGPL-3.0 (community) · commercial  |                   MIT                   |                  MIT-0                  |               AWS service               |
 | **Distribution & supply chain**             |       AWS Marketplace · GHCR        |                pip/PyPI                 |             GitHub (MIT-0)              |               AWS-managed               |
 
 !!! info "About the alternatives"
 
     - **LiteLLM** — widely adopted multi-cloud proxy with a large open-source community. Ideal when you need a single entry point across OpenAI, Azure, AWS, and others. AWS deployment and security features (WAF, VPC endpoints) require manual setup. Also offers a commercial Enterprise tier.
-    - **Bedrock Access Gateway** — official open-source AWS sample (MIT-0), actively maintained by AWS teams. Covers chat completions and embeddings only. No WAF, auto-scaling, monitoring, or commercial support included.
-    - **Bedrock Mantle** — AWS's own native OpenAI-compatible endpoint backed by AWS's full compliance and SLA. No self-hosting required. Supports chat completions and the Responses API; limited to a subset of models (mostly newer open-weight models — Claude 3.x/4.x, Nova, Llama, Cohere, and Stability AI image models are not available). Routes through an AWS-managed endpoint, not your private VPC. See [model availability](https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html). Rather than an either/or choice, stdapi.ai can serve the Mantle catalog itself: enable [Bedrock Mantle Models](#bedrock-mantle-models) to access OpenAI GPT, xAI Grok, and other Mantle-only models through the gateway, with all four text APIs available for every model.
+    - **Bedrock Access Gateway** — official open-source AWS sample (MIT-0). Covers chat completions and embeddings only. No WAF, auto-scaling, monitoring, or commercial support included.
+    - **Bedrock Mantle** — AWS's own native OpenAI-compatible endpoint backed by AWS's full compliance and SLA. No self-hosting required. Supports the Chat Completions, Responses, and Anthropic Messages APIs — but each model is restricted to specific APIs (frontier GPT = Responses only, Claude = Messages only, open-weight = Chat Completions), and it covers a subset of models (mostly newer open-weight models, plus OpenAI GPT and xAI Grok; newer Claude via the Messages API only — Amazon Nova, Meta Llama, Cohere, and Stability AI image models are not available). Guardrails, prompt routers, and cross-region inference profiles are not available on Mantle. Routes through an AWS-managed endpoint, not your private VPC. See [model availability](https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html). Rather than an either/or choice, stdapi.ai can serve the Mantle catalog itself: enable [Bedrock Mantle Models](#bedrock-mantle-models) to access OpenAI GPT, xAI Grok, and other Mantle-only models through the gateway, with all four text APIs available for every model.
 
 ---
 
@@ -632,16 +636,21 @@ All four solutions below expose an OpenAI-compatible API in front of AWS Bedrock
 </div>
 
 [^1]: Full Bedrock catalog supported; each model must be declared in config (applies to auto-discovery)
-[^2]: Subset of Bedrock models — Claude 3.x/4.x, Nova, Llama, AI21, Cohere, and Stability AI (images) not available; supports mostly newer open-weight models (DeepSeek, Gemma, Qwen, Kimi, MiniMax, newer Mistral, etc.) — see [AWS endpoint availability](https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html)
-[^3]: CDK reference sample — no WAF, auto-scaling, monitoring, or commercial support
+[^2]: Subset of Bedrock models — mostly newer open-weight models (DeepSeek, Gemma, Qwen, GLM, MiniMax, Kimi, newer Mistral) plus OpenAI GPT/gpt-oss and xAI Grok; newer Anthropic Claude generations are available via the Messages API only. Amazon Nova, Meta Llama, AI21, Cohere, and Stability AI (images) are not available — see [AWS endpoint availability](https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html)
+[^3]: CloudFormation reference sample (API Gateway + Lambda, or ALB + Fargate) — no WAF, auto-scaling, monitoring, or commercial support
 [^4]: Covered through your existing AWS Support plan
 [^5]: Generalist multi-cloud proxy covering 100+ providers; AWS-specific Bedrock features and security integrations may lag behind dedicated solutions
 [^6]: Prompt caching and reasoning supported on standard routes; coverage varies by model — not all Bedrock models support prompt caching or extended thinking
 [^7]: Auto-discovery limited to the single deployed region — some models are only available in specific AWS regions
 [^8]: Achievable via the LiteLLM router, but requires manually declaring each model per region with explicit TPM/RPM limits — no automatic quota distribution
-[^9]: Claude 3.x/4.x (which support prompt caching) not available on Mantle; reasoning available via select open-weight models (Qwen3 thinking, etc.)
+[^9]: Prompt caching on Mantle is supported but model-dependent (per each model card); reasoning is served via frontier models (GPT-5.x, gpt-oss) and select open-weight models (Qwen3 thinking, etc.)
 [^10]: Single-region deployment — some models are only available in specific AWS regions; no cross-region catalog aggregation
 [^11]: 100+ providers: OpenAI, Azure OpenAI, GCP Vertex, Anthropic direct, and more — ideal when you need a single gateway across multiple clouds
 [^12]: Requires connecting Amazon Polly as the TTS backend — not included by default in a LiteLLM on AWS deployment
 [^13]: Supported by specifying the cross-region inference profile ARN as the model ID — no automatic profile selection
-[^14]: Anthropic Messages API supported on Mantle, but only for a subset of Anthropic models — Claude 3.x/4.x are not available; coverage limited to models supported by the Mantle endpoint
+[^14]: Anthropic Messages API supported on Mantle for newer Claude generations only — Claude 3.x and some 4.x are not available; structured outputs (`output_config.format`) are rejected with a 400 on Mantle — see [AWS endpoint availability](https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html)
+[^15]: Achievable by declaring each Mantle model individually as a custom OpenAI-compatible endpoint; no unified classic-plus-Mantle catalog out of the box
+[^16]: LiteLLM translates between API formats per provider adapter; coverage is not a guaranteed all-text-APIs-on-every-model surface
+[^17]: Conversation state kept in LiteLLM's own datastore rather than native provider server-side storage
+[^18]: Served via LiteLLM's `/responses` endpoint, auto-bridged to `/chat/completions`; no native Bedrock Responses passthrough
+[^19]: Mantle uses Projects/Workspaces (tag-based cost allocation via Cost Explorer) for workload isolation instead of application inference profiles — see [AWS Bedrock Projects](https://docs.aws.amazon.com/bedrock/latest/userguide/projects.html)
