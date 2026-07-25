@@ -1,6 +1,6 @@
 """Local OpenAI-compatible embeddings types."""
 
-from typing import Literal, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import AliasChoices, Field, model_validator
 
@@ -61,11 +61,13 @@ class EmbeddingCreateParams(BaseModelRequestWithExtra):
     Validates unsupported values and combinations to match OpenAI behavior.
     """
 
-    input: InputFileUrl | str | list[InputFileUrl | str] = Field(
+    input: (
+        InputFileUrl | str | Annotated[list[InputFileUrl | str], Field(min_length=1)]
+    ) = Field(
         ...,
         description="Input text to embed, as a single string or array of strings. "
         "For multimodal models, non-text inputs can be a URL, S3 URI, base64 data URI, or Files API reference. "
-        "Token arrays are UNSUPPORTED on this implementation.",
+        "Token arrays are UNSUPPORTED on this implementation. An empty array is rejected.",
     )
     model: str = Field(
         ..., description="ID of the model to use.", min_length=1, max_length=255
