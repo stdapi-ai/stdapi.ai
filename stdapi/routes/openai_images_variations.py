@@ -199,20 +199,20 @@ async def create_image_variations(
     else:
         # Multipart form-data: binary file upload only
         form_data = await http_request.form()
-        if image is None:
-            msg = "ValidationError"
-            raise ValidationError.from_exception_data(
-                msg,
-                [
-                    {
-                        "type": "missing",
-                        "loc": ("body", "image"),
-                        "input": None,
-                        "ctx": {},
-                    }
-                ],
-            )
         with validation_error_handler():
+            if image is None:
+                msg = "ValidationError"
+                raise ValidationError.from_exception_data(
+                    msg,
+                    [
+                        {
+                            "type": "missing",
+                            "loc": ("body", "image"),
+                            "input": None,
+                            "ctx": {},
+                        }
+                    ],
+                )
             input_image = InputFile(image)
             request = ImageVariationParams(
                 model=model,

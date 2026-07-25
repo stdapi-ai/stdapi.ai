@@ -6,6 +6,10 @@ validating functionality, error handling, and compliance with OpenAI API specifi
 
 import pytest
 from openai import BadRequestError, OpenAI
+from starlette.testclient import TestClient
+
+from stdapi.api_errors import UnsupportedModelError
+from stdapi.routes import openai_images_edits
 
 # Import validation helpers from generations tests
 from .test_openai_images_generations import (
@@ -126,7 +130,7 @@ class TestImagesEditsBasic:
         )
         # image[] was parsed → error is about the model, not missing image
         assert response.status_code == 400
-        assert response.json()["error"]["code"] == "model_not_found"
+        assert "model" in response.json()["error"]["message"].lower()
 
     def test_image_array_notation_invalid_type(self, openai_client: OpenAI) -> None:
         """Test that a non-file value for 'image[]' returns 400."""
@@ -498,3 +502,63 @@ class TestImagesEditsJsonBody:
         assert response.status_code == 400
         error = response.json().get("error", {})
         assert error.get("type") == "invalid_request_error"
+
+
+@pytest.mark.local
+class TestImagesEditsModelField:
+    """Unit tests for the 'model' field regardless of request encoding (no AWS calls)."""
+
+    @pytest.fixture
+    def client(self, api_key: str) -> TestClient:
+        """Test client without lifespan (no AWS startup), pre-authenticated."""
+        from stdapi.main import app  # noqa: PLC0415
+
+        return TestClient(app, headers={"Authorization": f"Bearer {api_key}"})
+
+    @pytest.fixture
+    def probed_model_ids(self, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+        """Stub validate_model to record the requested model id and fail fast."""
+        calls: list[str] = []
+
+        async def _validate_model(
+            model_id: str, *_args: object, **_kwargs: object
+        ) -> None:
+            calls.append(model_id)
+            raise UnsupportedModelError(model_id, status=400)
+
+        monkeypatch.setattr(openai_images_edits, "validate_model", _validate_model)
+        return calls
+
+    def test_json_body_model_field_reaches_model_resolution(
+        self, client: TestClient, probed_model_ids: list[str]
+    ) -> None:
+        """A model supplied only in the JSON body reaches model resolution.
+
+        Regression: the unused, form-only 'model' Form parameter carried
+        'min_length=1' with an empty-string default, which rejected every
+        JSON-body request with a 422 before the JSON 'model' field was read.
+        """
+        response = client.post(
+            "/v1/images/edits",
+            json={
+                "model": "probe-model-id",
+                "prompt": "Make it darker",
+                "images": [{"image_url": "data:image/png;base64,AA=="}],
+            },
+        )
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "model_not_found"
+        assert probed_model_ids == ["probe-model-id"]
+
+    def test_multipart_form_model_field_still_works(
+        self, client: TestClient, probed_model_ids: list[str]
+    ) -> None:
+        """A model supplied via multipart form data still reaches model resolution unchanged."""
+        response = client.post(
+            "/v1/images/edits",
+            data={"model": "probe-model-id", "prompt": "test"},
+            files={"image": ("image.png", b"fake-bytes", "image/png")},
+        )
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "model_not_found"
+        assert probed_model_ids == ["probe-model-id"]

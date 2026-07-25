@@ -64,10 +64,44 @@ _OPENAI_QUALITY_LEVELS: dict[str, ImageOutputQuality | None] = {
 }
 
 
+def _stream_event_usage(
+    job: ImageGenerationJobBase[Any], input_image_count: int
+) -> Usage:
+    """Build a usage report from the job's tokens billed so far.
+
+    Mirrors :func:`stdapi.routes._images_common.build_images_response`: a
+    reported ``None`` falls back to the input/output image counts, a
+    reported ``0`` is kept as-is. Called after each completed image, so the
+    last completed event of the stream reports the job's final total,
+    matching the non-streaming path.
+
+    Args:
+        job: The image generation/edit job, holding live token counts.
+        input_image_count: Number of input images (0 for text-to-image).
+
+    Returns:
+        Usage report reflecting tokens billed by the job so far.
+    """
+    input_tokens = (
+        job.input_tokens if job.input_tokens is not None else input_image_count
+    )
+    output_tokens = job.output_tokens if job.output_tokens is not None else job.count
+    image_tokens = min(input_image_count, input_tokens)
+    return Usage(
+        input_tokens=input_tokens,
+        input_tokens_details=UsageInputTokensDetails(
+            image_tokens=image_tokens, text_tokens=input_tokens - image_tokens
+        ),
+        output_tokens=output_tokens,
+        total_tokens=input_tokens + output_tokens,
+    )
+
+
 async def stream_generator(
     image_stream: AsyncGenerator[ImageGenerationResponse],
     job: ImageGenerationJobBase[Any],
     created: int,
+    input_image_count: int = 0,
 ) -> AsyncGenerator[JSONServerSentEvent]:
     """Stream server-sent events for an image generation or editing request.
 
@@ -75,19 +109,13 @@ async def stream_generator(
         image_stream: Async generator yielding image generation responses.
         job: The image generation/edit job containing metadata (dimensions, format, etc).
         created: Unix timestamp used as the creation time for each event.
+        input_image_count: Number of input images (0 for text-to-image).
 
     Yields:
         JSONServerSentEvent containing partial image data or the final completed image.
     """
     indexes: dict[int, int] = {}
-    # Bedrock streaming responses carry no token usage, unlike the
-    # non-streaming path where ModelBase.invoke() reports it.
-    usage = Usage(
-        input_tokens=0,
-        input_tokens_details=UsageInputTokensDetails(image_tokens=0, text_tokens=0),
-        output_tokens=job.count,
-        total_tokens=job.count,
-    )
+    usage: Usage | None = None
     async for result in image_stream:
         if result.partial:
             index = indexes[result.index] = indexes.get(result.index, 0) + 1
@@ -104,6 +132,9 @@ async def stream_generator(
                 ).model_dump(mode="json", exclude_none=True)
             )
         else:
+            # Built after this image completes: the job's token counts are
+            # only final once every image has been generated.
+            usage = _stream_event_usage(job, input_image_count)
             yield JSONServerSentEvent(
                 data=ImageGenCompletedEvent(
                     type="image_generation.completed",

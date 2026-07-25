@@ -5,7 +5,11 @@ validating functionality, error handling, and compliance with OpenAI API specifi
 """
 
 import pytest
-from openai import BadRequestError, OpenAI
+from openai import BadRequestError, NotFoundError, OpenAI
+from starlette.testclient import TestClient
+
+from stdapi.api_errors import UnsupportedModelError
+from stdapi.routes import openai_images_variations
 
 # Import validation helpers from generations tests
 from .test_openai_images_generations import (
@@ -102,18 +106,28 @@ class TestImagesVariationsErrors:
     def test_invalid_model(
         self, openai_client: OpenAI, sample_image_file: bytes
     ) -> None:
-        """Test error handling for invalid model."""
-        with pytest.raises(BadRequestError) as exc_info:
+        """Test error handling for invalid model.
+
+        Official API returns 404 (NotFoundError) for unknown models; the
+        local implementation returns 400 (BadRequestError).
+        """
+        with pytest.raises((BadRequestError, NotFoundError)) as exc_info:
             openai_client.images.create_variation(
                 image=sample_image_file, model="invalid-model"
             )
 
-        validate_error_response(exc_info.value)
+        if isinstance(exc_info.value, BadRequestError):
+            validate_error_response(exc_info.value)
 
     def test_unsupported_model_for_variations(
-        self, openai_client: OpenAI, sample_image_file: bytes
+        self, openai_client: OpenAI, sample_image_file: bytes, use_official_api: bool
     ) -> None:
         """Test error for models that don't support variations (model-specific check)."""
+        if use_official_api:
+            pytest.skip(
+                "Bedrock model catalog (generation/editing-only models) is "
+                "gateway-specific; no equivalent model exists on the official API"
+            )
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.images.create_variation(
                 image=sample_image_file,
@@ -124,9 +138,14 @@ class TestImagesVariationsErrors:
         assert "not supported" in error_msg or "invalid model" in error_msg
 
     def test_non_image_model_for_variations(
-        self, openai_client: OpenAI, sample_image_file: bytes
+        self, openai_client: OpenAI, sample_image_file: bytes, use_official_api: bool
     ) -> None:
         """Test error when using non-image model for variations (default error path)."""
+        if use_official_api:
+            pytest.skip(
+                "Bedrock chat model catalog is gateway-specific; no equivalent "
+                "model exists on the official API"
+            )
         # Use a chat model which doesn't support image variations at all
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.images.create_variation(
@@ -287,3 +306,75 @@ class TestImagesVariationsJsonBody:
         assert response.status_code == 400
         error = response.json().get("error", {})
         assert error.get("type") == "invalid_request_error"
+
+
+@pytest.mark.local
+class TestImagesVariationsModelField:
+    """Unit tests for the 'model' field regardless of request encoding (no AWS calls)."""
+
+    @pytest.fixture
+    def client(self, api_key: str) -> TestClient:
+        """Test client without lifespan (no AWS startup), pre-authenticated."""
+        from stdapi.main import app  # noqa: PLC0415
+
+        return TestClient(app, headers={"Authorization": f"Bearer {api_key}"})
+
+    @pytest.fixture
+    def probed_model_ids(self, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+        """Stub validate_model to record the requested model id and fail fast."""
+        calls: list[str] = []
+
+        async def _validate_model(
+            model_id: str, *_args: object, **_kwargs: object
+        ) -> None:
+            calls.append(model_id)
+            raise UnsupportedModelError(model_id, status=400)
+
+        monkeypatch.setattr(openai_images_variations, "validate_model", _validate_model)
+        return calls
+
+    def test_json_body_model_field_reaches_model_resolution(
+        self, client: TestClient, probed_model_ids: list[str]
+    ) -> None:
+        """A model supplied only in the JSON body reaches model resolution.
+
+        Regression: the unused, form-only 'model' Form parameter carried
+        'min_length=1' with an empty-string default, which rejected every
+        JSON-body request with a 422 before the JSON 'model' field was read.
+        """
+        response = client.post(
+            "/v1/images/variations",
+            json={
+                "model": "probe-model-id",
+                "image": {"image_url": "data:image/png;base64,AA=="},
+            },
+        )
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "model_not_found"
+        assert probed_model_ids == ["probe-model-id"]
+
+    def test_multipart_form_model_field_still_works(
+        self, client: TestClient, probed_model_ids: list[str]
+    ) -> None:
+        """A model supplied via multipart form data still reaches model resolution unchanged."""
+        response = client.post(
+            "/v1/images/variations",
+            data={"model": "probe-model-id"},
+            files={"image": ("image.png", b"fake-bytes", "image/png")},
+        )
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "model_not_found"
+        assert probed_model_ids == ["probe-model-id"]
+
+    def test_multipart_missing_image_returns_400(self, client: TestClient) -> None:
+        """A multipart request without an 'image' file returns 400, not an unhandled error.
+
+        Regression: the ValidationError for the missing 'image' file was raised
+        outside validation_error_handler(), bypassing FastAPI's RequestValidationError
+        conversion and producing an unhandled 500 instead of a JSON 400 envelope.
+        """
+        response = client.post(
+            "/v1/images/variations", data={"model": "amazon.nova-canvas-v1:0"}
+        )
+        assert response.status_code == 400
+        assert response.json()["error"]["type"] == "invalid_request_error"
