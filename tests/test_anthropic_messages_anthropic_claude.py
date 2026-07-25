@@ -103,6 +103,14 @@ _COMPUTER_USE_BETA_NEW = "computer-use-2025-11-24"
 #: Computer-use beta flag for Claude 3.7 / 4.5 and all older models.
 _COMPUTER_USE_BETA_OLD = "computer-use-2025-01-24"
 
+#: Models on the newer ``computer_20251124`` tool type (Claude 4.6 and later).
+_COMPUTER_USE_NEW_MODELS = re.compile(
+    r"claude-(?:opus|sonnet)-4-[6-9]|claude-(?:opus|sonnet|haiku|fable|mythos)-(?:[5-9]|\d\d)"
+)
+
+#: Models rejecting every computer-use tool type (Claude Opus 5 and later).
+_COMPUTER_USE_UNSUPPORTED_MODELS = re.compile(r"claude-opus-(?:[5-9]|\d\d)")
+
 #: Memory tool beta flag (required on official API; auto-injected by the gateway).
 _MEMORY_BETA = "context-management-2025-06-27"
 
@@ -1308,6 +1316,12 @@ class TestComputerUseTool:
     _DISPLAY_WIDTH = 1024
     _DISPLAY_HEIGHT = 576
 
+    @pytest.fixture(autouse=True)
+    def _skip_without_computer_use(self, anthropic_chat_model: str) -> None:
+        """Skip when the model under test supports no computer-use tool type."""
+        if _COMPUTER_USE_UNSUPPORTED_MODELS.search(anthropic_chat_model):
+            pytest.skip("Computer use is not supported by this model")
+
     @pytest.fixture(scope="class")
     def desktop_screenshot_b64(self) -> str:
         """Base64-encoded JPEG of the sample Windows desktop screenshot.
@@ -1321,9 +1335,9 @@ class TestComputerUseTool:
     def _computer_tool(self, model: str) -> dict[str, object]:
         """Return a computer tool definition matching the sample screenshot dimensions.
 
-        Selects ``computer_20251124`` for Claude 4.6+ models (which dropped support
-        for the older ``computer_20250124`` tool type) and ``computer_20250124`` for
-        all other models.
+        Selects ``computer_20251124`` for the models that dropped support for the
+        older ``computer_20250124`` tool type, and ``computer_20250124`` for all
+        other models.
 
         Args:
             model: The Bedrock or Anthropic model ID of the model under test.
@@ -1331,7 +1345,11 @@ class TestComputerUseTool:
         Returns:
             Tool definition dict with ``type``, ``name``, and display dimensions.
         """
-        tool_type = "computer_20251124" if "4-6" in model else "computer_20250124"
+        tool_type = (
+            "computer_20251124"
+            if _COMPUTER_USE_NEW_MODELS.search(model)
+            else "computer_20250124"
+        )
         return {
             "type": tool_type,
             "name": "computer",
@@ -1343,9 +1361,9 @@ class TestComputerUseTool:
     def _beta_headers(model: str, use_anthropic_api: bool) -> dict[str, str]:
         """Return the beta headers required for computer use.
 
-        Uses ``computer-use-2025-11-24`` for Claude 4.6+ models and the older
-        ``computer-use-2025-01-24`` for all others.  On Bedrock (``use_anthropic_api
-        = False``) no beta header is required.
+        Uses ``computer-use-2025-11-24`` for the models on the newer tool type and
+        the older ``computer-use-2025-01-24`` for all others.  On Bedrock
+        (``use_anthropic_api = False``) no beta header is required.
 
         Args:
             model: The Bedrock or Anthropic model ID of the model under test.
@@ -1356,7 +1374,11 @@ class TestComputerUseTool:
         """
         if not use_anthropic_api:
             return {}
-        beta = _COMPUTER_USE_BETA_NEW if "4-6" in model else _COMPUTER_USE_BETA_OLD
+        beta = (
+            _COMPUTER_USE_BETA_NEW
+            if _COMPUTER_USE_NEW_MODELS.search(model)
+            else _COMPUTER_USE_BETA_OLD
+        )
         return {"anthropic-beta": beta}
 
     @staticmethod

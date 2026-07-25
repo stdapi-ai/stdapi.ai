@@ -122,6 +122,9 @@ class AnthropicClaudeChatModel(_BaseChatModel):
         "low": "low",
     }
 
+    #: Whether the model accepts an explicitly disabled reasoning configuration.
+    REASONING_DISABLE_SUPPORTED: ClassVar[bool] = True
+
     def _req_extract_server_tools(
         self, tool_config: ToolConfigurationTypeDef | None
     ) -> list[JsonMapping]:
@@ -287,7 +290,8 @@ class AnthropicClaudeChatModel(_BaseChatModel):
 
         When ``budget_tokens`` is explicitly provided (> 0), uses budget-based
         reasoning. Otherwise uses adaptive reasoning with an optional effort level.
-        When ``enabled`` is ``False``, reasoning is explicitly disabled.
+        When ``enabled`` is ``False``, reasoning is explicitly disabled, unless the
+        model rejects that configuration and always reasons in adaptive mode.
 
         Args:
             additional_request_fields: Additional request fields dict to update.
@@ -297,6 +301,13 @@ class AnthropicClaudeChatModel(_BaseChatModel):
             max_tokens: Unused.
         """
         if not enabled:
+            if not self.REASONING_DISABLE_SUPPORTED:
+                log_error_details(
+                    "Reasoning cannot be disabled on this model: "
+                    "its default adaptive mode is used instead",
+                    level="warning",
+                )
+                return
             additional_request_fields["reasoning_config"] = {"type": "disabled"}
         elif budget_tokens:
             additional_request_fields["reasoning_config"] = {

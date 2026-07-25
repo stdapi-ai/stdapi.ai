@@ -167,7 +167,7 @@ Create or edit `~/.claude/settings.json`:
     "ANTHROPIC_AUTH_TOKEN": "YOUR_API_KEY",
     "ANTHROPIC_BASE_URL": "https://YOUR_STDAPI_URL/anthropic",
     "ANTHROPIC_DEFAULT_FABLE_MODEL": "anthropic.claude-fable-5",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "anthropic.claude-opus-4-8",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "anthropic.claude-opus-5",
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "anthropic.claude-sonnet-5",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "anthropic.claude-haiku-4-5-20251001-v1:0"
   }
@@ -177,7 +177,7 @@ Create or edit `~/.claude/settings.json`:
 - Replace `YOUR_STDAPI_URL` with your stdapi.ai deployment URL (e.g., `https://api.example.com` or `http://localhost:8000` for local)
 - Replace `YOUR_API_KEY` with your stdapi.ai API key
 - The `/anthropic` path prefix is configured via the [`ANTHROPIC_ROUTES_PREFIX`](operations_configuration.md#anthropic-routes-prefix) setting (default: `/anthropic`)
-- The `ANTHROPIC_DEFAULT_*_MODEL` variables pin each model tier to a specific Bedrock model ID — recommended for production stability. Without them, Claude Code resolves aliases (`fable`, `opus`, `sonnet`, `haiku`) which may change when Anthropic releases new versions. stdapi.ai also accepts the short alias names (e.g. `claude-sonnet-4-6`) as a convenience.
+- The `ANTHROPIC_DEFAULT_*_MODEL` variables pin each model tier to a specific Bedrock model ID — recommended for production stability. Without them, Claude Code resolves aliases (`fable`, `opus`, `sonnet`, `haiku`) which may change when Anthropic releases new versions. stdapi.ai also accepts the short alias names (e.g. `claude-sonnet-5`) as a convenience.
 
 !!! tip "Beta Flag Compatibility"
     stdapi.ai automatically filters unsupported `anthropic_beta` flags, so Claude Code works without needing `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`. Bedrock-supported flags (like `Interleaved-thinking-2025-05-14` and `token-efficient-tools-2025-02-19`) are preserved while unsupported ones are silently removed. See [`ANTHROPIC_BETA_FILTER`](operations_configuration.md#anthropic-beta-filter) and [`ANTHROPIC_BETA_ALLOWLIST`](operations_configuration.md#anthropic-beta-allowlist) for details.
