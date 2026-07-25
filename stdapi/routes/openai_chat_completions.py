@@ -13,7 +13,7 @@ The module provides:
 """
 
 from asyncio import gather
-from typing import TYPE_CHECKING, Annotated, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Never
 
 from fastapi import APIRouter, Depends, Path, Query, Request
 from pydantic import ValidationError
@@ -239,6 +239,11 @@ async def create_chat_completion(
         result.moderation = build_chat_moderation(request.moderation)
         result.metadata = request.metadata
         if store:
+            # A locally stored result must carry the server-assigned ID so the
+            # stored surface (GET/DELETE/messages) can serve it: some backends
+            # (e.g. Mantle passthrough) ignore completion_id and return their
+            # own upstream ID.
+            result.id = completion_id
             try:
                 await save_stored_response(
                     completion_id,
@@ -255,6 +260,29 @@ async def create_chat_completion(
                 await discard_stored_response_session(completion_id, "chat_completion")
                 raise
     return result
+
+
+def _malformed_stored_document(completion_id: str, error: Exception) -> Never:
+    """Log a malformed stored chat completion document and raise the standard 404.
+
+    Guards against a foreign or corrupt document (schema drift, a document
+    written by an incompatible version) crashing route handling instead of
+    surfacing as a normal not-found error.
+
+    Args:
+        completion_id: Stored chat completion identifier.
+        error: The parsing or validation failure.
+
+    Raises:
+        ApiError: Always, with status 404.
+    """
+    log_error_details(
+        f"Discarding malformed stored chat completion document for "
+        f"'{completion_id}': {error}",
+        level="warning",
+    )
+    msg = f"Chat completion with id '{completion_id}' not found."
+    raise ApiError(msg, status=404)
 
 
 def _store_message_content(message: dict[str, Any]) -> dict[str, Any]:
@@ -300,6 +328,25 @@ def _metadata_filters(request: Request) -> dict[str, str]:
     }
 
 
+def _matches_filters(
+    completion: ChatCompletion, model: str | None, metadata: dict[str, str]
+) -> bool:
+    """Check whether a stored chat completion matches the list filters.
+
+    Args:
+        completion: Candidate stored chat completion.
+        model: Required model ID, or None to skip the check.
+        metadata: Required metadata key-value pairs.
+
+    Returns:
+        True if the completion matches every given filter.
+    """
+    if model is not None and completion.model != model:
+        return False
+    stored_metadata = completion.metadata or {}
+    return all(stored_metadata.get(key) == value for key, value in metadata.items())
+
+
 async def _load_completion_candidate(completion_id: str) -> ChatCompletion | None:
     """Load a stored chat completion candidate for the list endpoint.
 
@@ -337,12 +384,32 @@ async def _load_completion_candidate(completion_id: str) -> ChatCompletion | Non
         "creation time (OpenAI Chat Completions API).\n\n"
         "Filter by `model` and by metadata pairs passed as "
         "`metadata[key]=value` query parameters. Stored chat completions live "
-        "in AWS Bedrock session storage; the scan covers the most recent "
-        "sessions of the primary Bedrock region."
+        "in AWS Bedrock session storage; listings scan a capped number of "
+        "sessions (1,000) in the primary Bedrock region; accounts beyond the "
+        "cap may see incomplete listings."
     ),
     response_description="A paginated list of stored chat completions.",
     responses={200: {"description": "The stored chat completions."}},
     response_model_exclude_none=True,
+    openapi_extra={
+        "parameters": [
+            {
+                "name": "metadata",
+                "in": "query",
+                "required": False,
+                "style": "deepObject",
+                "explode": True,
+                "schema": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                },
+                "description": (
+                    "Filter by metadata key-value pairs, passed as "
+                    "`metadata[key]=value` (one query parameter per key)."
+                ),
+            }
+        ]
+    },
 )
 async def list_chat_completions(
     request: Request,
@@ -396,27 +463,30 @@ async def list_chat_completions(
     ids = [f"chatcmpl-{session_id}" for session_id, _ in sessions]
     if after is not None:
         index = next((i for i, id_ in enumerate(ids) if id_ == after), None)
-        ids = ids[index + 1 :] if index is not None else []
+        if index is None:
+            msg = f"No chat completion with id '{after}' found."
+            raise ApiError(msg, status=404)
+        ids = ids[index + 1 :]
+    # Unfiltered: every remaining ID is a match by definition, so has_more is
+    # answered from the ID count alone, and only the first `limit` documents
+    # need to be loaded (no probe load of a limit+1'th document).
+    filtered = bool(model or metadata)
+    candidate_ids = ids if filtered else ids[:limit]
     completions: list[ChatCompletion] = []
-    has_more = False
-    for batch_start in range(0, len(ids), _LIST_LOAD_BATCH_SIZE):
-        batch = ids[batch_start : batch_start + _LIST_LOAD_BATCH_SIZE]
+    has_more = not filtered and len(ids) > limit
+    for batch_start in range(0, len(candidate_ids), _LIST_LOAD_BATCH_SIZE):
+        batch = candidate_ids[batch_start : batch_start + _LIST_LOAD_BATCH_SIZE]
         candidates = await gather(*(_load_completion_candidate(id_) for id_ in batch))
         for completion in candidates:
-            if completion is None:
-                continue
-            if model is not None and completion.model != model:
-                continue
-            stored_metadata = completion.metadata or {}
-            if any(
-                stored_metadata.get(key) != value for key, value in metadata.items()
+            if completion is None or (
+                filtered and not _matches_filters(completion, model, metadata)
             ):
                 continue
-            if len(completions) == limit:
+            if filtered and len(completions) == limit:
                 has_more = True
                 break
             completions.append(completion)
-        if has_more:
+        if filtered and has_more:
             break
     return log_response_params(
         ChatCompletionList(
@@ -463,12 +533,16 @@ async def update_chat_completion(
     """
     log_request_params({"completion_id": completion_id, "metadata": body.metadata})
     stored = await load_stored_response(completion_id, "chat_completion")
-    if body.metadata is None:
-        stored["response"].pop("metadata", None)
-    else:
-        stored["response"]["metadata"] = body.metadata
+    try:
+        if body.metadata is None:
+            stored["response"].pop("metadata", None)
+        else:
+            stored["response"]["metadata"] = body.metadata
+        result = ChatCompletion.model_validate(stored["response"])
+    except (KeyError, TypeError, AttributeError, ValidationError) as error:
+        _malformed_stored_document(completion_id, error)
     await save_stored_response(completion_id, stored)
-    return log_response_params(ChatCompletion.model_validate(stored["response"]))
+    return log_response_params(result)
 
 
 @router.get(
@@ -503,7 +577,11 @@ async def retrieve_chat_completion(
     """
     log_request_params({"completion_id": completion_id})
     stored = await load_stored_response(completion_id, "chat_completion")
-    return log_response_params(ChatCompletion.model_validate(stored["response"]))
+    try:
+        result = ChatCompletion.model_validate(stored["response"])
+    except (KeyError, TypeError, ValidationError) as error:
+        _malformed_stored_document(completion_id, error)
+    return log_response_params(result)
 
 
 @router.delete(
@@ -596,10 +674,13 @@ async def list_chat_completion_messages(
         {"completion_id": completion_id, "after": after, "limit": limit, "order": order}
     )
     stored = await load_stored_response(completion_id, "chat_completion")
-    messages = [
-        {"id": f"msg-{index}", **_store_message_content(message)}
-        for index, message in enumerate(stored.get("messages") or [])
-    ]
+    try:
+        messages = [
+            {"id": f"msg-{index}", **_store_message_content(message)}
+            for index, message in enumerate(stored.get("messages") or [])
+        ]
+    except (AttributeError, TypeError) as error:
+        _malformed_stored_document(completion_id, error)
     if order == "desc":
         messages.reverse()
     if after is not None:
@@ -607,7 +688,7 @@ async def list_chat_completion_messages(
             (i for i, message in enumerate(messages) if message["id"] == after), None
         )
         if index is None:
-            msg = f"No input item with id '{after}'."
+            msg = f"No message with id '{after}' found for this chat completion."
             raise ApiError(msg, status=404)
         messages = messages[index + 1 :]
     page, has_more = messages[:limit], len(messages) > limit

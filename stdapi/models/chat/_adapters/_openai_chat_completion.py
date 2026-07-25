@@ -10,7 +10,7 @@ from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
 from pydantic_core import to_json
-from sse_starlette import JSONServerSentEvent
+from sse_starlette import JSONServerSentEvent, ServerSentEvent
 
 from stdapi.api_errors import ApiError
 from stdapi.aws_bedrock import build_system_blocks, set_inference_configuration
@@ -263,12 +263,23 @@ def build_tool_config(
     routing (``SUPPORTED_SYSTEM_TOOLS`` auto-promotion) is handled at the model
     layer by ``_req_promote_system_tools``.
 
+    When ``tool_choice`` (or legacy ``function_call``) is ``'none'``, no tool
+    config is returned so the model behaves as if no tools were passed.  If the
+    message history still requires a ``toolConfig`` (it contains ``toolUse``/
+    ``toolResult`` blocks), the model layer synthesizes a permissive one.
+
     Args:
         request: The request object containing the data to map and configure tools.
 
     Returns:
-        Bedrock tool configuration, or ``None`` if no tools are present.
+        Bedrock tool configuration, or ``None`` if no tools are present or tool
+        calling is disabled via ``'none'``.
     """
+    if request.tool_choice == "none" or (
+        "function_call" in request.model_fields_set and request.function_call == "none"
+    ):
+        return None
+
     tools: list[ToolTypeDef] = []
     for tool in _map_tools(request):
         _map_tool_spec(tool, tools)
@@ -1122,8 +1133,12 @@ async def format_stream(
     *,
     include_usage: bool = False,
     suppress_tool_names: frozenset[str] | None = None,
-) -> AsyncGenerator[JSONServerSentEvent]:
+) -> AsyncGenerator[ServerSentEvent]:
     """Stream Bedrock Converse events as OpenAI ChatCompletionChunk SSE events.
+
+    When ``include_usage`` is set, usage is reported in its own trailing chunk
+    with empty ``choices`` (per OpenAI spec), separate from the finish-reason
+    chunk. The stream always ends with a ``[DONE]`` sentinel.
 
     Args:
         completion_id: Unique identifier for the completion.
@@ -1137,7 +1152,7 @@ async def format_stream(
             silently dropped (e.g. system tools handled server-side).
 
     Yields:
-        JSONServerSentEvent containing the formatted response payload.
+        JSONServerSentEvent chunks, terminated by the ``[DONE]`` sentinel.
     """
     yield JSONServerSentEvent(
         data=log_response_params(
@@ -1161,6 +1176,21 @@ async def format_stream(
             event, suppress_tool_names, suppressed_indices
         ):
             continue
+        if end_state:
+            # Past the finish chunk: only a trailing usage-only chunk remains to emit.
+            if include_usage and (usage := _openai_common.extract_stream_usage(event)):
+                yield JSONServerSentEvent(
+                    data=ChatCompletionChunk(
+                        id=completion_id,
+                        choices=[],
+                        created=created,
+                        model=model_id,
+                        object="chat.completion.chunk",
+                        service_tier=service_tier,
+                        usage=usage,
+                    ).model_dump(mode="json", exclude_none=True)
+                )
+            continue
         chunk, end = _stream_delta_chunk(
             completion_id,
             created,
@@ -1171,17 +1201,9 @@ async def format_stream(
             chunk=chunk,
         )
         end_state |= end
-        if end_state:
-            if (
-                include_usage
-                and chunk
-                and (usage := _openai_common.extract_stream_usage(event))
-            ):
-                chunk.usage = usage
-        elif chunk:
+        if chunk:
             yield JSONServerSentEvent(
                 data=chunk.model_dump(mode="json", exclude_none=True)
             )
             chunk = None
-    if chunk:
-        yield JSONServerSentEvent(data=chunk.model_dump(mode="json", exclude_none=True))
+    yield ServerSentEvent(data="[DONE]", event=None)

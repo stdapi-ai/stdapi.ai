@@ -209,7 +209,18 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
                 "Provide strings instead."
             )
             raise ValueError(msg)
+        self._validate_stop_sequences()
         return self
+
+    def _validate_stop_sequences(self) -> None:
+        """Validate stop sequences are not whitespace-only (AWS Bedrock rejects blank ones)."""
+        sequences = [self.stop] if isinstance(self.stop, str) else self.stop or []
+        if any(not sequence.strip() for sequence in sequences):
+            msg = (
+                "Stop sequences must contain at least one non-whitespace "
+                "character (not supported by AWS Bedrock)."
+            )
+            raise ValueError(msg)
 
 
 # Ref: openai.types.completion.Completion
