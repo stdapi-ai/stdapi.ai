@@ -435,6 +435,9 @@ async def complete_multipart_session(
 ) -> tuple[MultipartSession, FileRecord]:
     """Assemble parts and produce a file record, validating fingerprints and total size.
 
+    S3 cannot reassemble multipart parts out of order, so *part_ids* must be
+    strictly ascending by part number; this is checked before any S3 call.
+
     Args:
         upload_id: Session identifier.
         part_ids: Ordered part IDs to include in the final file.
@@ -443,8 +446,8 @@ async def complete_multipart_session(
         ``(session, file_record)`` — session metadata and the assembled file.
 
     Raises:
-        ApiError: 404 not found; 400 not pending, bad part fingerprint,
-            unknown part, or size mismatch.
+        ApiError: 404 not found; 400 not pending, out-of-order part_ids, bad
+            part fingerprint, unknown part, or size mismatch.
     """
     file_id = _file_id_from_upload_id(upload_id)
     bucket = resolve_file_bucket(file_id)
@@ -459,8 +462,16 @@ async def complete_multipart_session(
 
     s3_parts: list[dict[str, int | str]] = []
     assembled_size = 0
+    previous_pn = 0
     for pid in part_ids:
         pn = _extract_part_number(pid, upload_id)
+        if pn <= previous_pn:
+            msg = (
+                f"Part '{pid}' (number {pn}) is out of order: part_ids must be "
+                "listed in ascending upload order."
+            )
+            raise ApiError(msg)
+        previous_pn = pn
         if (part := parts_info.get(pn)) is None:
             msg = f"Part '{pid}' (number {pn}) was not uploaded."
             raise ApiError(msg)

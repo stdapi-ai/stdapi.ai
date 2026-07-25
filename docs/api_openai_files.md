@@ -50,7 +50,7 @@ Upload and manage files via an OpenAI-compatible interface. Files are stored in 
 | **Upload**                 |                                          |                                                                                               |
 | `file` (multipart)         |   :material-check-circle:{ .success }    | Required binary form field                                                                    |
 | `file` (JSON body)         | :material-plus-circle:{ .extra-feature } | Base64, data URI, HTTPS URL, or S3 URI — for MCP / AI agents                                  |
-| `purpose`                  |   :material-minus-circle:{ .partial }    | One of `assistants`, `batch`, `fine-tune`, `vision`, `user_data`, `evals`; informational only |
+| `purpose`                  |   :material-minus-circle:{ .partial }    | Strictly validated against `assistants`, `batch`, `fine-tune`, `vision`, `user_data`, `evals` (others rejected); has no behavioral effect on storage or processing |
 | `expires_after[anchor]`    |   :material-check-circle:{ .success }    | Only `"created_at"` is accepted; expiry is computed from `expires_after[seconds]`             |
 | `expires_after[seconds]`   |   :material-check-circle:{ .success }    | Range: 3 600 – 2 592 000 (1 hour – 30 days)                                                   |
 | **Listing**                |                                          |                                                                                               |
@@ -219,7 +219,7 @@ Upload IDs use the same base32-encoded payload as file IDs. The prefix is swappe
 
 ### Create an Upload Session
 
-Set the optional `expires_after` object to give the resulting file a TTL (same behavior as `expires_after` on `/v1/files`, 1 hour to 30 days).
+Set the optional `expires_after` object to give the resulting file a TTL (same behavior as `expires_after` on `/v1/files`, 1 hour to 30 days). The pending upload's own `expires_at` always reflects the upload session's expiry (1 day); the requested file TTL appears on the resulting file object once the upload is completed.
 
 ```bash
 curl -X POST "$BASE/v1/uploads" \
@@ -299,6 +299,8 @@ curl -X POST "$BASE/v1/uploads/upload_0190c51c7de7455d9b8c2efe27dfbf67/complete"
   }'
 ```
 
+`part_ids` must be listed in ascending upload order (part 1, part 2, ...); S3 cannot reassemble multipart uploads out of order, so a reordered list is rejected with a 400 error rather than silently reordered.
+
 **Response:** A completed `Upload` object with the `file` field populated.
 
 ```json
@@ -345,7 +347,7 @@ curl -X POST "$BASE/v1/uploads/upload_0190c51c7de7455d9b8c2efe27dfbf67/cancel" \
 | `purpose`                |   :material-check-circle:{ .success }    | Echoed to the final file object                              |
 | Part data (binary)       |   :material-check-circle:{ .success }    | Standard `multipart/form-data` binary upload via the `data` field |
 | Part data (JSON body)    | :material-plus-circle:{ .extra-feature } | Base64, data URI, HTTPS URL, or S3 URI — for MCP / AI agents |
-| Part ordering            |   :material-check-circle:{ .success }    | Caller controls order via `part_ids` list at completion      |
+| Part ordering            |   :material-minus-circle:{ .partial }    | `part_ids` must be listed in ascending upload order; S3 cannot reassemble out of order |
 | `md5` checksum           | :material-close-circle:{ .unsupported }  | Accepted but not validated                                   |
 | Session TTL              |   :material-check-circle:{ .success }    | 1 day from creation                                          |
 

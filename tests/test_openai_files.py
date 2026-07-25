@@ -9,7 +9,8 @@ import base64
 import io
 import time
 from contextlib import suppress
-from typing import Any
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import patch
 
 import pytest
@@ -20,7 +21,11 @@ from starlette.testclient import TestClient
 
 from stdapi.api_errors import ApiError
 from stdapi.config import SETTINGS
-from stdapi.files import _core, _multipart
+from stdapi.files import FileRecord, _core, _multipart
+from stdapi.routes import openai_files as openai_files_routes
+
+if TYPE_CHECKING:
+    import httpx
 
 #: Minimal valid PDF bytes for testing document endpoints.
 _MINIMAL_PDF: bytes = (
@@ -508,6 +513,87 @@ class TestCreateMultipartSessionUnit:
         assert "stdapi-ai.expires" not in stub_s3.create_kwargs["Tagging"]
 
 
+class _StubCompleteS3Client:
+    """Stub S3 client for ``complete_multipart_session`` part-order tests.
+
+    Supports just enough of the S3 multipart API surface to drive
+    ``create_multipart_session`` and ``complete_multipart_session`` without any
+    real AWS call: the created upload ID is cached in-process by
+    ``create_multipart_session``, so ``complete_multipart_session`` never needs
+    ``list_multipart_uploads``.
+    """
+
+    def __init__(self) -> None:
+        self.marker_metadata: dict[str, str] = {}
+        self.parts: dict[int, tuple[str, int]] = {}
+        self.complete_called = False
+
+    async def create_multipart_upload(self, **_kwargs: object) -> dict[str, Any]:
+        return {"UploadId": "s3-upload-id"}
+
+    async def put_object(self, **kwargs: object) -> dict[str, Any]:
+        self.marker_metadata = kwargs["Metadata"]  # type: ignore[assignment]
+        return {}
+
+    async def head_object(self, **_kwargs: object) -> dict[str, Any]:
+        return {"Metadata": self.marker_metadata}
+
+    async def list_parts(self, **_kwargs: object) -> dict[str, Any]:
+        return {
+            "Parts": [
+                {"PartNumber": pn, "ETag": etag, "Size": size}
+                for pn, (etag, size) in self.parts.items()
+            ]
+        }
+
+    async def complete_multipart_upload(self, **_kwargs: object) -> dict[str, Any]:
+        self.complete_called = True
+        return {}
+
+
+@pytest.mark.local
+class TestCompleteMultipartSessionOrderUnit:
+    """Unit tests for part-order validation in complete_multipart_session (stubbed S3).
+
+    S3 cannot reassemble multipart parts out of order (part numbers are fixed
+    at add time), so out-of-order ``part_ids`` must be rejected with a clean
+    400 before any S3 call is made -- not surfaced as a 502 from S3's
+    ``InvalidPartOrder``.
+    """
+
+    @pytest.fixture
+    def stub_s3(self, monkeypatch: pytest.MonkeyPatch) -> _StubCompleteS3Client:
+        """Patch the S3 client, bucket resolution, and bucket lookup with stubs."""
+        stub = _StubCompleteS3Client()
+        monkeypatch.setattr(_multipart, "get_client", lambda *_: stub)
+        monkeypatch.setattr(_multipart, "_require_bucket", lambda: "bucket")
+        monkeypatch.setattr(
+            _multipart, "resolve_file_bucket", lambda _payload: "bucket"
+        )
+        monkeypatch.setattr(_multipart, "track_temporary_s3_objects", lambda *_: None)
+        return stub
+
+    async def test_complete_rejects_reversed_part_order(
+        self, stub_s3: _StubCompleteS3Client
+    ) -> None:
+        """part_ids listed in descending order are rejected with 400, mentioning order."""
+        session = await _multipart.create_multipart_session(
+            "f.bin", "text/plain", "assistants", 2
+        )
+        part_1 = _multipart._make_part_id(session.upload_id, 1)  # noqa: SLF001
+        part_2 = _multipart._make_part_id(session.upload_id, 2)  # noqa: SLF001
+        stub_s3.parts = {1: ("etag-1", 1), 2: ("etag-2", 1)}
+
+        with pytest.raises(ApiError) as exc_info:
+            await _multipart.complete_multipart_session(
+                session.upload_id, [part_2, part_1]
+            )
+
+        assert exc_info.value.status == 400
+        assert "order" in str(exc_info.value).lower()
+        assert stub_s3.complete_called is False
+
+
 @pytest.mark.local
 class TestOpenAIFilesMalformedJsonBody:
     """POST /v1/files with a malformed JSON body (unit, no AWS)."""
@@ -525,6 +611,80 @@ class TestOpenAIFilesMalformedJsonBody:
             "/v1/files", content=b"{", headers={"content-type": "application/json"}
         )
         assert response.status_code == 400, response.text
+
+
+@pytest.mark.local
+class TestOpenAIFilesExpiresAfterBracketNotation:
+    """POST /v1/files with the bracket-notation ``expires_after[seconds]`` form field.
+
+    The pydantic ``Form`` binding (``expires_after_seconds`` / ``expires_after[seconds]``
+    alias) only matches the unbracketed alias in practice; a manual fallback reads the
+    raw bracket-notation value and must enforce the same 1 hour-30 day bounds (unit,
+    no AWS -- the file never reaches S3 in the rejected cases).
+    """
+
+    @pytest.fixture
+    def client(self, api_key: str) -> TestClient:
+        """Test client without lifespan (no AWS startup), pre-authenticated."""
+        from stdapi.main import app  # noqa: PLC0415
+
+        return TestClient(app, headers={"Authorization": f"Bearer {api_key}"})
+
+    @staticmethod
+    def _upload(client: TestClient, seconds_value: str) -> httpx.Response:
+        """POST a minimal file with a bracket-notation ``expires_after[seconds]`` field."""
+        return cast(
+            "httpx.Response",
+            client.post(
+                "/v1/files",
+                files={"file": ("t.txt", b"hello", "text/plain")},
+                data={"purpose": "assistants", "expires_after[seconds]": seconds_value},
+            ),
+        )
+
+    def test_bracket_seconds_below_minimum_rejected(self, client: TestClient) -> None:
+        """59 seconds (below the 3600s minimum) is rejected with 400, not accepted."""
+        response = self._upload(client, "59")
+        assert response.status_code == 400, response.text
+
+    def test_bracket_seconds_above_maximum_rejected(self, client: TestClient) -> None:
+        """99999999 seconds (above the 2592000s maximum) is rejected with 400."""
+        response = self._upload(client, "99999999")
+        assert response.status_code == 400, response.text
+
+    def test_bracket_seconds_non_numeric_rejected(self, client: TestClient) -> None:
+        """A non-numeric value is rejected with 400 and a JSON error envelope, not a bare 500."""
+        response = self._upload(client, "not_a_number")
+        assert response.status_code == 400, response.text
+        body = response.json()
+        assert "error" in body
+
+    def test_bracket_seconds_valid_value_accepted(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A valid bracket-notation value (7200s) is still accepted (regression guard)."""
+        captured: dict[str, Any] = {}
+
+        async def fake_upload_file(
+            _file: object, purpose: str | None, expires_after: int | None = None
+        ) -> FileRecord:
+            captured["expires_after"] = expires_after
+            now = int(datetime.now(UTC).timestamp())
+            return FileRecord(
+                file_id="a" * 32,
+                filename="t.txt",
+                content_type="text/plain",
+                purpose=purpose or "",
+                size=5,
+                created_at=datetime.now(UTC),
+                expires_at=now + expires_after if expires_after is not None else None,
+            )
+
+        monkeypatch.setattr(openai_files_routes, "upload_file", fake_upload_file)
+        response = self._upload(client, "7200")
+        assert response.status_code == 200, response.text
+        assert captured["expires_after"] == 7200
+        assert response.json()["expires_at"] is not None
 
 
 class TestOpenAIUploads:
