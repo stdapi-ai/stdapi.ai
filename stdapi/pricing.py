@@ -1970,8 +1970,10 @@ async def stop_price_catalog() -> None:
         _log_price_catalog_event(
             "error",
             [
-                "Price catalog load task raised during shutdown "
-                f"({type(exception).__name__}: {exception})"
+                (
+                    "Price catalog load task raised during shutdown "
+                    f"({type(exception).__name__}: {exception})"
+                )
             ],
             None,
         )
@@ -2003,8 +2005,10 @@ async def _load_price_catalog_with_retry() -> None:
                     _log_price_catalog_event(
                         "info",
                         [
-                            "Price catalog load already completed by a "
-                            "concurrent on-demand refresh"
+                            (
+                                "Price catalog load already completed by a "
+                                "concurrent on-demand refresh"
+                            )
                         ],
                         start,
                     )

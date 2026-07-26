@@ -89,8 +89,10 @@ class TestComputeCostsMultiCurrency:
         self._record_mixed_currency_usage()
         warnings = compute_costs()
         assert warnings == [
-            "Multiple currencies resolved for bedrock-runtime/mixedmodel "
-            "in us-east-1: ['EUR', 'USD']"
+            (
+                "Multiple currencies resolved for bedrock-runtime/mixedmodel "
+                "in us-east-1: ['EUR', 'USD']"
+            )
         ]
 
     def test_single_currency_still_uses_cost_and_currency(self) -> None:
@@ -518,8 +520,10 @@ class TestComputeCostsUnpricedDimension:
         record_bedrock_usage("nopricemodel", input_tokens=1000)
         warnings = compute_costs()
         assert warnings == [
-            "No price found for bedrock-runtime/nopricemodel in "
-            "us-east-1: ['input_tokens']"
+            (
+                "No price found for bedrock-runtime/nopricemodel in "
+                "us-east-1: ['input_tokens']"
+            )
         ]
         record = next(iter(usage.USAGE.get().values()))
         assert record.cost == Decimal(0)
@@ -535,8 +539,10 @@ class TestComputeCostsUnpricedDimension:
         record_bedrock_usage("partialpricemodel", input_tokens=1000, output_tokens=1000)
         warnings = compute_costs()
         assert warnings == [
-            "No price found for bedrock-runtime/partialpricemodel in "
-            "us-east-1: ['output_tokens']"
+            (
+                "No price found for bedrock-runtime/partialpricemodel in "
+                "us-east-1: ['output_tokens']"
+            )
         ]
         record = next(iter(usage.USAGE.get().values()))
         assert record.cost == Decimal("0.003000")

@@ -474,8 +474,8 @@ class ImageGenerationJobBase[ImageModelT: "ImageModelBase[Any, Any, Any]"]:
             for task in as_completed(tasks):
                 yield await task
         finally:
-            for task in tasks:
-                task.cancel()
+            for pending in tasks:
+                pending.cancel()
             # Await cancellation so asyncio doesn't log unretrieved exceptions at GC.
             await gather(*tasks, return_exceptions=True)
 

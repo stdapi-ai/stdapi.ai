@@ -605,7 +605,7 @@ class TestTextEditorTool:
             model=anthropic_chat_model,
             max_tokens=4096,
             messages=[{"role": "user", "content": "Say hello."}],
-            tools=[{**_TEXT_EDITOR_TOOL, "max_characters": 1000}],  # type: ignore[list-item, typeddict-item]
+            tools=[{**_TEXT_EDITOR_TOOL, "max_characters": 1000}],  # type: ignore[list-item]
         )
         assert response.type == "message"
         assert len(response.content) >= 1

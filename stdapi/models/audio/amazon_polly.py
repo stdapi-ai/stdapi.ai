@@ -267,7 +267,7 @@ async def _select_voice(
             & _VOICES_BY_ENGINE[engine]
         )
         if candidates:
-            return sorted(candidates)[0], language
+            return min(candidates), language
     return voice, None  # type: ignore[return-value]
 
 

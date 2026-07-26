@@ -68,8 +68,10 @@ async def register(start_event: EventLog) -> None:
                     ),
                     "PlatformNotSupportedException": (
                         UnsupportedPlatformError,
-                        "The AWS Marketplace product is only supported on Amazon ECS, "
-                        "Amazon EKS, and AWS Fargate.",
+                        (
+                            "The AWS Marketplace product is only supported on Amazon ECS, "
+                            "Amazon EKS, and AWS Fargate."
+                        ),
                     ),
                     "DisabledApiException": (
                         UnsupportedPlatformError,
@@ -77,13 +79,17 @@ async def register(start_event: EventLog) -> None:
                     ),
                     "InvalidProductCodeException": (
                         InvalidProductError,
-                        "Invalid AWS Marketplace product: "
-                        f"{PRODUCT_CODE} {product_public_key_version}",
+                        (
+                            "Invalid AWS Marketplace product: "
+                            f"{PRODUCT_CODE} {product_public_key_version}"
+                        ),
                     ),
                     "InvalidPublicKeyVersionException": (
                         InvalidProductError,
-                        "Invalid AWS Marketplace product: "
-                        f"{PRODUCT_CODE} {product_public_key_version}",
+                        (
+                            "Invalid AWS Marketplace product: "
+                            f"{PRODUCT_CODE} {product_public_key_version}"
+                        ),
                     ),
                     "ParamValidationError": (
                         InvalidProductError,

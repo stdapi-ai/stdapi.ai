@@ -519,8 +519,10 @@ def _apply_record_cost(
     """
     warnings = (
         [
-            f"No price found for {record.service}/{record.model} in "
-            f"{record.region}: {sorted(dimension.value for dimension in unpriced)}"
+            (
+                f"No price found for {record.service}/{record.model} in "
+                f"{record.region}: {sorted(dimension.value for dimension in unpriced)}"
+            )
         ]
         if unpriced
         else []

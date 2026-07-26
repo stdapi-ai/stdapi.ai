@@ -97,6 +97,7 @@ ignore = [
     "E501", # format conflicts, line length
     "PLR2004", # constants ints
     "PLR0913", # Functions with many arguments
+    "PLR0917", # Functions with many positional arguments
     "PLW2901", # loop variable overide
     "COM812", # format conflicts
     "TD002", # to do comments
@@ -104,6 +105,7 @@ ignore = [
     "FIX002", # to do comments
     "ERA001", # docstring false positive
     "PYI036", # type false positive
+    "CPY001", # Copyright notice
 ]
 
 [tool.ruff.lint.pydocstyle]
