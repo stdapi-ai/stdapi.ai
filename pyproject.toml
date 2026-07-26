@@ -27,7 +27,6 @@ opentelemetry = [
     "opentelemetry-instrumentation-fastapi",
     "opentelemetry-instrumentation-botocore",
     "opentelemetry-instrumentation-aiohttp-client",
-    "opentelemetry-exporter-otlp",
     "opentelemetry-propagator-aws-xray",
     "opentelemetry-distro",
     "opentelemetry-exporter-otlp-proto-http",
