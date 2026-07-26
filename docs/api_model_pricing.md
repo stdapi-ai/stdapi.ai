@@ -6,7 +6,7 @@ keywords: AWS Bedrock pricing API, model price comparison, token price API, AI a
 
 # Model Pricing API
 
-Query the exact AWS unit prices for one or more models, straight from the same AWS Price List catalog the server uses for [request cost tracking](operations_logging_monitoring.md#cost-tracking-real-time-aws-pricing). Purpose-built for cost-aware model selection: shortlist models with [`search_models`](api_search_models.md), then compare their price cards in one call.
+Query the exact AWS unit prices for one or more models, straight from the same AWS Price List catalog the server uses for [request cost tracking](operations_cost_management.md#cost-tracking-real-time-aws-pricing). Purpose-built for cost-aware model selection: shortlist models with [`search_models`](api_search_models.md), then compare their price cards in one call.
 
 ## Quick Start
 

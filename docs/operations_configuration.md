@@ -3778,7 +3778,7 @@ export TIMEZONE=Europe/London
 
 ## CloudWatch Metrics and Cost Tracking
 
-The behavior of these settings — EMF line structure, cost log format, pricing accuracy, regional price fallback, known limitations, and the price override format with examples — is documented in [CloudWatch Metrics (EMF)](operations_logging_monitoring.md#cloudwatch-metrics-emf) and [Cost Tracking](operations_logging_monitoring.md#cost-tracking-real-time-aws-pricing) in the Logging and Monitoring guide.
+The behavior of these settings — EMF line structure, cost log format, pricing accuracy, regional price fallback, known limitations, and the price override format with examples — is documented in [CloudWatch Metrics (EMF)](operations_logging_monitoring.md#cloudwatch-metrics-emf) and [Cost Tracking](operations_cost_management.md#cost-tracking-real-time-aws-pricing) in the Logging and Monitoring guide.
 
 #### `CLOUDWATCH_METRICS` { #cloudwatch-metrics }
 
@@ -3816,7 +3816,7 @@ export CLOUDWATCH_METRICS_NAMESPACE=my-app-metrics
 #### `COST_TRACKING` { #cost-tracking }
 
 :octicons-package-24: **Purpose**
-:   Enable real-time cost computation from live AWS pricing ([details and accuracy caveats](operations_logging_monitoring.md#cost-tracking-real-time-aws-pricing)). Disabled by default: it requires the extra `pricing:GetProducts` IAM permission.
+:   Enable real-time cost computation from live AWS pricing ([details and accuracy caveats](operations_cost_management.md#cost-tracking-real-time-aws-pricing)). Disabled by default: it requires the extra `pricing:GetProducts` IAM permission.
 
 :octicons-database-24: **Type**
 :   Boolean
@@ -3831,7 +3831,7 @@ export COST_TRACKING=true
 #### `COST_PRICE_OVERRIDES` { #cost-price-overrides }
 
 :octicons-package-24: **Purpose**
-:   Operator-supplied unit price overrides for models not covered by the AWS Price List API ([format and example](operations_logging_monitoring.md#override-map-for-missing-models))
+:   Operator-supplied unit price overrides for models not covered by the AWS Price List API ([format and example](operations_cost_management.md#override-map-for-missing-models))
 
 :octicons-database-24: **Type**
 :   JSON object — keys are model IDs, values are dicts mapping dimension name to price per one unit

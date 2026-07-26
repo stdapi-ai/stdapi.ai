@@ -530,7 +530,7 @@ export MCP_EXCLUDE_TOOLS="openai_files_delete,anthropic_files_delete"
 - **Optional CloudWatch cost metrics** — Track spend alongside your other operational metrics via EMF
 
 !!! note "Opt-in, and an estimate — not a bill"
-    Cost tracking is disabled by default (it needs the `pricing:GetProducts` IAM permission); enable it with `COST_TRACKING=true`. Costs are a best-effort approximation for visibility and alerting, not a substitute for your AWS invoice — see [Cost Tracking](operations_logging_monitoring.md#cost-tracking-real-time-aws-pricing) for accuracy details and known limitations.
+    Cost tracking is disabled by default (it needs the `pricing:GetProducts` IAM permission); enable it with `COST_TRACKING=true`. Costs are a best-effort approximation for visibility and alerting, not a substitute for your AWS invoice — see [Cost Tracking](operations_cost_management.md#cost-tracking-real-time-aws-pricing) for accuracy details and known limitations.
 
 ### Developer Tools
 
