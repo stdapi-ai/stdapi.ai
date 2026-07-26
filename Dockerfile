@@ -1,5 +1,35 @@
 # Container image for AGPL/Community edition of stdapi.ai
 
+FROM python:3-alpine AS ffmpeg-builder
+
+# Build ffmpeg with only the audio encoders this server uses, pinned to the
+# version Alpine packages.  The distribution package links video codecs, X11 and
+# font libraries — none of which are reachable from audio transcoding — and
+# costs ~130 MB for a binary used solely to encode Polly PCM to wav/flac/aac.
+RUN apk add --no-cache build-base nasm curl && \
+    apk update >/dev/null && \
+    ffmpeg_version="$(apk search -x ffmpeg | head -1 | sed 's/^ffmpeg-//; s/-r[0-9]*$//')" && \
+    echo "Building ffmpeg ${ffmpeg_version}" && \
+    for url in "https://ffmpeg.org/releases/ffmpeg-${ffmpeg_version}.tar.xz" \
+               "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n${ffmpeg_version}.tar.gz"; do \
+        echo "Fetching ${url}" && \
+        curl -fsSL --connect-timeout 20 --max-time 900 \
+            --retry 10 --retry-delay 10 --retry-all-errors --retry-connrefused \
+            "${url}" -o /tmp/ffmpeg.tar && break; \
+    done && \
+    mkdir -p /tmp/ffmpeg && tar xf /tmp/ffmpeg.tar -C /tmp/ffmpeg --strip-components=1 && \
+    cd /tmp/ffmpeg && ./configure --prefix=/ffmpeg-out \
+        --disable-everything --disable-doc --disable-network --disable-autodetect \
+        --disable-debug --disable-shared --enable-static --enable-small \
+        --enable-protocol=pipe,file \
+        --enable-demuxer=wav,mp3,ogg,flac,aac,pcm_s16le \
+        --enable-decoder=pcm_s16le,mp3float,vorbis,flac,aac \
+        --enable-encoder=pcm_s16le,flac,aac \
+        --enable-muxer=wav,flac,adts \
+        --enable-filter=aresample,aformat,anull \
+        --enable-parser=mpegaudio,flac,aac && \
+    make -j"$(nproc)" && make install
+
 FROM python:3-alpine AS builder
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
@@ -37,10 +67,11 @@ RUN AWS_DEFAULT_REGION=eu-west-3 python -c "import stdapi.main"
 
 FROM python:3-alpine
 
-RUN apk add --no-cache tzdata libmagic ffmpeg && \
+RUN apk add --no-cache tzdata libmagic && \
     adduser -D -u 1000 nonroot && \
     ls -la /home
 
+COPY --from=ffmpeg-builder /ffmpeg-out/bin/ffmpeg /usr/bin/ffmpeg
 COPY --from=builder /opt/app /opt/app
 
 USER nonroot
