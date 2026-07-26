@@ -32,9 +32,9 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.local
 
 
-def _client_error(code: str, status: int = 400) -> ClientError:
+def _client_error(code: str, status: int = 400, message: str = "") -> ClientError:
     response: Any = {
-        "Error": {"Code": code, "Message": code},
+        "Error": {"Code": code, "Message": message or code},
         "ResponseMetadata": {"HTTPStatusCode": status},
     }
     return ClientError(response, "SomeOperation")
@@ -104,10 +104,25 @@ class TestIsFailoverError:
         """An unlisted code still fails over when the HTTP status is 5xx."""
         assert is_failover_error(_client_error("WeirdBackendError", status=503)) is True
 
+    def test_service_missing_from_the_region_fails_over(self) -> None:
+        """Comprehend's answer outside its regions moves on to the next one."""
+        error = _client_error(
+            "NotAuthorizedException",
+            message="Your account is not authorized to make this call.",
+        )
+        assert is_failover_error(error) is True
+
+    def test_operation_unsupported_in_the_region_fails_over(self) -> None:
+        """An operation the region does not offer moves on to the next one."""
+        error = _client_error(
+            "InvalidRequestException",
+            message="UNSUPPORTED_OPERATION: This operation is not supported in this region",
+        )
+        assert is_failover_error(error) is True
+
     @pytest.mark.parametrize(
         "code",
         [
-            "NotAuthorizedException",
             "AccessDeniedException",
             "ValidationException",
             "UnrecognizedClientException",
@@ -117,6 +132,11 @@ class TestIsFailoverError:
     def test_account_global_and_caller_errors_do_not_fail_over(self, code: str) -> None:
         """Auth/policy/validation errors fail identically in every region."""
         assert is_failover_error(_client_error(code)) is False
+
+    def test_plain_invalid_request_does_not_fail_over(self) -> None:
+        """A validation error keeping the InvalidRequestException code stays fatal."""
+        error = _client_error("InvalidRequestException", message="Invalid text segment")
+        assert is_failover_error(error) is False
 
 
 class TestCallWithRegionFailover:

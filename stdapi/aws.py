@@ -280,6 +280,14 @@ _FAILOVER_ERROR_CODES: Final[frozenset[str]] = frozenset(
     }
 )
 
+#: ClientError codes answered by a service absent from the called region
+_REGION_UNAVAILABLE_ERROR_CODES: Final[frozenset[str]] = frozenset(
+    {"NotAuthorizedException"}
+)
+
+#: Error message prefix of an operation unavailable in the called region
+_UNSUPPORTED_OPERATION_PREFIX: Final = "UNSUPPORTED_OPERATION"
+
 
 def service_regions(region: RegionName | None) -> list[RegionName]:
     """Return the candidate regions for an auxiliary AWS service.
@@ -300,14 +308,24 @@ def is_failover_error(exception: BotoCoreError | ClientError) -> bool:
         exception: The AWS error.
 
     Returns:
-        True for network/availability/throttling/5xx errors, False for
-        caller errors (validation, bad input) that would fail everywhere.
+        True for network/availability/throttling/5xx errors and for a service
+        or operation the region does not offer, False for caller errors
+        (validation, bad input) that would fail everywhere.
     """
     if isinstance(exception, BotoCoreError):
         return True
-    code: str = exception.response.get("Error", {}).get("Code", "")
+    error = exception.response.get("Error", {})
+    code: str = error.get("Code", "")
     status = exception.response.get("ResponseMetadata", {}).get("HTTPStatusCode", 0)
-    return code in _FAILOVER_ERROR_CODES or status >= 500
+    if code in _FAILOVER_ERROR_CODES or status >= 500:
+        return True
+    # A service the region does not host answers a 4xx the next region serves:
+    # Comprehend reports NotAuthorizedException outside its regions, and
+    # UNSUPPORTED_OPERATION where only that operation is unavailable.
+    message: str = error.get("Message", "")
+    return code in _REGION_UNAVAILABLE_ERROR_CODES or message.startswith(
+        _UNSUPPORTED_OPERATION_PREFIX
+    )
 
 
 async def call_with_region_failover[ResultT](
