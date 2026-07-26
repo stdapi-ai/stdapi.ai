@@ -5,19 +5,27 @@ encoded entirely in native S3 object attributes (ContentType,
 ContentDisposition, user Metadata, LastModified, ContentLength),
 so no external database is required.
 
-File payload format: ``base32(uuid7_bytes + crc32_bytes)`` — 20 bytes encoded
-as 32 base32 characters (no padding).  The first 16 bytes are a UUIDv7 (millisecond-
+File payload format: ``base32hex(uuid7_bytes + crc32_bytes)`` — 20 bytes encoded
+as 32 base32hex characters (no padding).  The first 16 bytes are a UUIDv7 (millisecond-
 precision timestamp in the high bits, so payloads remain lexicographically ordered by
 creation time), and the last 4 bytes are the CRC32 of the S3 bucket name.  This
 fingerprint lets any caller resolve the correct bucket without lookup tables or
 hardcoded region mappings.
+
+The base32hex alphabet (``0-9a-v``) is used rather than standard base32
+(``a-z2-7``) because only the former sorts in the same order as the bytes it
+encodes: standard base32 maps the six highest values to ``2-7``, which sort
+below ``a-z``, breaking the creation-time ordering the listing relies on.
+Payloads minted before this change use the standard alphabet and are still
+accepted; they are told apart by the bucket fingerprint they decode to.
 
 S3 keys store the bare 32-char payload (no API-level prefix).  The ``file-``
 or ``file_`` prefix is added at the API response boundary only.
 """
 
 from asyncio import gather
-from base64 import b32decode, b32encode
+from base64 import b32decode, b32hexdecode, b32hexencode
+from binascii import Error as _BinasciiError
 from binascii import crc32 as _crc32
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -43,7 +51,7 @@ from stdapi.types import FILE_ID_PATTERN
 from stdapi.utils import now_utc_timestamp, parse_content_disposition_filename
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Callable
     from typing import NotRequired, TypedDict
 
     from types_aiobotocore_bedrock.literals import RegionName
@@ -153,20 +161,69 @@ def parse_file_id(fid: str) -> str:
     return fid[5:]
 
 
-def _file_id_from_bucket(bucket: str) -> str:
-    """Generate a bare 32-char base32 payload embedding a CRC32 fingerprint of the bucket name.
+def encode_id_payload(bucket: str) -> str:
+    """Generate a bare 32-char payload embedding a CRC32 fingerprint of the bucket name.
 
     Payload: ``uuid7_bytes (16) + crc32_bytes (4)`` = 20 bytes → 32 lowercase
-    base32 characters without padding.
+    base32hex characters without padding, which sort by creation time.
 
     Args:
         bucket: S3 bucket name the file will be stored in.
+
+    Returns:
+        Bare 32-char payload.
     """
     return (
-        b32encode(uuid7().bytes + _crc32(bucket.encode()).to_bytes(4, "big"))
+        b32hexencode(uuid7().bytes + _crc32(bucket.encode()).to_bytes(4, "big"))
         .lower()
         .decode()
     )
+
+
+def _decode_or_none(decode: Callable[[str], bytes], payload: str) -> bytes | None:
+    """Decode *payload* with *decode*, returning ``None`` on a wrong alphabet.
+
+    Args:
+        decode: ``b32hexdecode`` or ``b32decode``.
+        payload: Upper-cased bare payload.
+
+    Returns:
+        Decoded bytes, or ``None`` when the payload is not valid in that alphabet.
+    """
+    try:
+        return decode(payload)
+    except _BinasciiError, KeyError:
+        return None
+
+
+def decode_id_payload(payload: str) -> bytes:
+    """Decode a bare 32-char payload to its 20 raw bytes, accepting both alphabets.
+
+    Payloads minted before the base32hex switch use the standard base32
+    alphabet.  A payload using ``w-z`` can only be a legacy one; otherwise the
+    alphabets overlap, and the one whose trailing CRC32 names a configured
+    bucket wins.
+
+    Args:
+        payload: Bare 32-char file or upload payload.
+
+    Returns:
+        The 20 decoded bytes: ``uuid7_bytes (16) + crc32_bytes (4)``.
+    """
+    upper = payload.upper()
+    candidates = [
+        decoded
+        for decode in (b32hexdecode, b32decode)
+        # A payload valid in one alphabet is usually invalid in the other;
+        # b32decode reports that as KeyError rather than binascii.Error.
+        if (decoded := _decode_or_none(decode, upper)) is not None
+    ]
+    for decoded in candidates:
+        if int.from_bytes(decoded[16:], "big") in _BUCKET_CRC32:
+            return decoded
+    # No fingerprint matched, e.g. a decommissioned bucket: the caller falls
+    # back to the primary bucket, so any successful decoding will do.
+    return candidates[0] if candidates else b""
 
 
 def resolve_file_bucket(payload: str) -> str:
@@ -189,7 +246,7 @@ def resolve_file_bucket(payload: str) -> str:
         ApiError: If no bucket is configured at all (503).
     """
     return (
-        _BUCKET_CRC32.get(int.from_bytes(b32decode(payload.upper())[16:], "big"))
+        _BUCKET_CRC32.get(int.from_bytes(decode_id_payload(payload)[16:], "big"))
         or _require_bucket()
     )
 
@@ -237,7 +294,7 @@ async def upload_file(
         ApiError: ``aws_s3_bucket`` not configured (503) or invalid filename.
     """
     bucket = require_s3_bucket_for_region(region) if region else _require_bucket()
-    payload = _file_id_from_bucket(bucket)
+    payload = encode_id_payload(bucket)
     s3_key = file_id_s3_key(payload)
     expires_at = (
         now_utc_timestamp() + expires_after if expires_after is not None else None

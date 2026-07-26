@@ -17,10 +17,10 @@ from stdapi.config import SETTINGS
 _BRACKET_PARSE_PATTERN = regex_compile(r"([^\[\]]+)|\[\]")
 
 #: Regex pattern that a valid Files API file ID must match on input (both prefixes accepted).
-FILE_ID_PATTERN: str = r"^file[-_][a-z2-7]{32}$"
+FILE_ID_PATTERN: str = r"^file[-_][a-z0-9]{32}$"
 
 #: Regex pattern that a valid Uploads API upload ID must match.
-UPLOAD_ID_PATTERN: str = r"^upload_[a-z2-7]{32}$"
+UPLOAD_ID_PATTERN: str = r"^upload_[a-z0-9]{32}$"
 
 #: Regex pattern that a valid Uploads API part ID must match.
 PART_ID_PATTERN: str = r"^part_[0-9a-f]{32}$"

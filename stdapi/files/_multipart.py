@@ -16,19 +16,17 @@ pods may race on the part number (last writer wins); sequential use is safe.
 
 ID formats
 ----------
-- Session: ``upload_{base32(uuid7_bytes(16) + crc32_bytes(4))}`` — swapping
+- Session: ``upload_{base32hex(uuid7_bytes(16) + crc32_bytes(4))}`` — swapping
   ``upload_`` for ``file-`` gives the final file ID (O(1) bucket resolution).
 - Part: ``part_{fingerprint(16 hex)}{part_number(4 hex)}{random(12 hex)}``
 """
 
 from asyncio import gather
-from base64 import b32decode, b32encode
-from binascii import crc32 as _crc32
 from contextlib import suppress
 from dataclasses import dataclass
 from time import monotonic
 from typing import TYPE_CHECKING, Never
-from uuid import uuid4, uuid7
+from uuid import uuid4
 
 from botocore.exceptions import ClientError
 
@@ -41,6 +39,8 @@ from stdapi.files._core import (
     _record_from_head,
     _require_bucket,
     _validate_filename,
+    decode_id_payload,
+    encode_id_payload,
     file_id_s3_key,
     resolve_file_bucket,
 )
@@ -89,7 +89,7 @@ def _file_id_from_upload_id(upload_id: str) -> str:
 
 
 def _multipart_ids_from_bucket(bucket: str) -> tuple[str, str]:
-    """Generate a linked ``(upload_id, file_payload)`` pair sharing one base32 payload.
+    """Generate a linked ``(upload_id, file_payload)`` pair sharing one payload.
 
     Sharing the payload means :func:`~stdapi.files._core.resolve_file_bucket` works
     on both, and :func:`_file_id_from_upload_id` is a pure string prefix strip.
@@ -97,17 +97,13 @@ def _multipart_ids_from_bucket(bucket: str) -> tuple[str, str]:
     Args:
         bucket: S3 bucket name the session will be stored in.
     """
-    payload = (
-        b32encode(uuid7().bytes + _crc32(bucket.encode()).to_bytes(4, "big"))
-        .lower()
-        .decode()
-    )
+    payload = encode_id_payload(bucket)
     return f"upload_{payload}", payload
 
 
 def _upload_fingerprint(upload_id: str) -> str:
-    """Return the 16-hex-char fingerprint for *upload_id* (first 8 bytes of its base32 payload)."""
-    return b32decode(upload_id[7:].upper())[:8].hex()
+    """Return the 16-hex-char fingerprint for *upload_id* (first 8 bytes of its payload)."""
+    return decode_id_payload(upload_id[7:])[:8].hex()
 
 
 def _multipart_meta_key(upload_id: str) -> str:
@@ -119,12 +115,12 @@ def _created_at_from_upload_id(upload_id: str) -> int:
     """Extract the Unix creation timestamp (seconds) from the uuid7 in *upload_id*.
 
     UUID7's first 48 bits are the millisecond Unix timestamp; the upload_id
-    payload is ``uuid7_bytes (16) + crc32_bytes (4)`` base32-encoded.
+    payload is ``uuid7_bytes (16) + crc32_bytes (4)`` encoded.
 
     Returns:
         Unix timestamp in seconds.
     """
-    return int.from_bytes(b32decode(upload_id[7:].upper())[:6], "big") // 1000
+    return int.from_bytes(decode_id_payload(upload_id[7:])[:6], "big") // 1000
 
 
 def _make_part_id(upload_id: str, part_number: int) -> str:
@@ -133,7 +129,7 @@ def _make_part_id(upload_id: str, part_number: int) -> str:
     Format: ``part_{fingerprint(16 hex)}{part_number(4 hex)}{random(12 hex)}``.
 
     Args:
-        upload_id: Source of the fingerprint (first 8 bytes of the base32 payload).
+        upload_id: Source of the fingerprint (first 8 bytes of the payload).
         part_number: 1-based S3 part number.
 
     Returns:
