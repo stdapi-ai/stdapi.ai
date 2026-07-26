@@ -2778,6 +2778,7 @@ class InputTokensDetails(BaseModelResponse):
     """A detailed breakdown of the input tokens."""
 
     cached_tokens: int = Field(description="Cached token count.")
+    cache_write_tokens: int = Field(default=0, description="Cache write token count.")
 
 
 # Ref: openai.types.responses.response_usage.OutputTokensDetails

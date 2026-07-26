@@ -1808,7 +1808,9 @@ async def format_response(
             *_map_stop_reason(bedrock_response.get("stopReason")),
             ResponseUsage(
                 input_tokens=input_tokens,
-                input_tokens_details=InputTokensDetails(cached_tokens=cache_read),
+                input_tokens_details=InputTokensDetails(
+                    cached_tokens=cache_read, cache_write_tokens=cache_write
+                ),
                 output_tokens=output_tokens,
                 output_tokens_details=OutputTokensDetails(),
                 total_tokens=input_tokens + output_tokens,
@@ -2755,7 +2757,8 @@ async def format_stream(
             ResponseUsage(
                 input_tokens=input_tokens,
                 input_tokens_details=InputTokensDetails(
-                    cached_tokens=state.cached_tokens
+                    cached_tokens=state.cached_tokens,
+                    cache_write_tokens=state.cache_write_tokens,
                 ),
                 output_tokens=state.output_tokens,
                 output_tokens_details=OutputTokensDetails(),
