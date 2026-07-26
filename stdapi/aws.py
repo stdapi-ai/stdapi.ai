@@ -1,12 +1,13 @@
 """AWS client management and connection pooling."""
 
-from asyncio import gather
+from asyncio import gather, sleep
 from contextlib import AsyncExitStack, suppress
 from logging import getLogger
 from os import environ
 from typing import TYPE_CHECKING, Any, Final, NotRequired, Self, TypedDict, TypeVar
 
 from aiobotocore.config import AioConfig
+from aiohttp import ClientError as HttpClientError
 from aiohttp import ClientSession, ClientTimeout
 from botocore.exceptions import BotoCoreError, ClientError
 
@@ -31,6 +32,18 @@ AWS_ENVIRONMENT: AwsEnvironment = {}
 
 #: Cached AWS service clients keyed by (service, region)
 _CLIENTS: dict[str, dict[RegionName, Any]] = {}
+
+#: Attempts allowed to read the ECS container metadata endpoint at startup
+_ECS_METADATA_ATTEMPTS: Final = 3
+
+#: Delay between two ECS container metadata attempts, in seconds
+_ECS_METADATA_RETRY_DELAY: Final = 1.0
+
+#: Total timeout of a single ECS container metadata request, in seconds
+_ECS_METADATA_TIMEOUT: Final = 10
+
+#: Connection timeout of a single ECS container metadata request, in seconds
+_ECS_METADATA_CONNECT_TIMEOUT: Final = 5
 
 #: Region-rotated Bedrock services that get single-attempt ".no-retry" client pools
 _NO_RETRY_SERVICES: Final = ("bedrock-runtime", "bedrock-agent-runtime")
@@ -392,35 +405,72 @@ def get_client(service: str, region_name: RegionName | None = None) -> Any:  # n
         raise
 
 
-async def initialize_aws_account_info() -> None:
+async def _set_account_id_from_sts() -> None:
+    """Set the account ID from the STS caller identity."""
+    async with AWS_SESSION.create_client(
+        "sts",
+        config=AioConfig(user_agent=server.USER_AGENT, parameter_validation=False),
+        region_name=AWS_REGION,
+    ) as sts_client:
+        AWS_ENVIRONMENT["account_id"] = (await sts_client.get_caller_identity())[
+            "Account"
+        ]
+
+
+async def _set_account_info_from_ecs(metadata_path: str) -> None:
+    """Set the account ID and the task-qualified server name from container metadata.
+
+    Args:
+        metadata_path: ECS task metadata endpoint URI.
+    """
+    async with ClientSession(
+        headers=server.HTTP_CLIENT_HEADERS,
+        timeout=ClientTimeout(
+            total=_ECS_METADATA_TIMEOUT, connect=_ECS_METADATA_CONNECT_TIMEOUT
+        ),
+    ) as session:
+        async with session.get(metadata_path) as resp:
+            resp.raise_for_status()
+            container_name = (await resp.json())["Name"]
+        async with session.get(f"{metadata_path}/task") as resp:
+            resp.raise_for_status()
+            parts = (await resp.json())["TaskARN"].split(":")
+            AWS_ENVIRONMENT["account_id"] = parts[4]
+            task_id = parts[5].split("/")[-1]
+    server.SERVER_NAME = f"{task_id}-{container_name}-{server.SERVER_ID}"
+
+
+async def initialize_aws_account_info() -> str | None:
     """Initialize AWS account information at server startup.
 
-    Retrieves AWS account ID from ECS container metadata (if available)
-    or falls back to STS API. Also extracts ECS task ID if running in ECS.
-    Stores results in AWS_ACCOUNT_INFO dict.
+    Retrieves the AWS account ID from the ECS container metadata endpoint, which
+    also names the server after its task, and falls back to the STS API outside
+    ECS or when that endpoint stays unreachable. The endpoint is served by the
+    ECS agent over the task ENI and can answer slowly while the rest of the
+    startup sequence competes for the task CPU, hence the retries.
+
+    Returns:
+        A warning message when the metadata endpoint could not be reached,
+        ``None`` otherwise.
     """
     try:
         metadata_path = environ["ECS_CONTAINER_METADATA_URI_V4"]
     except KeyError:
-        async with AWS_SESSION.create_client(
-            "sts",
-            config=AioConfig(user_agent=server.USER_AGENT, parameter_validation=False),
-            region_name=AWS_REGION,
-        ) as sts_client:
-            AWS_ENVIRONMENT["account_id"] = (await sts_client.get_caller_identity())[
-                "Account"
-            ]
-    else:
-        async with ClientSession(
-            headers=server.HTTP_CLIENT_HEADERS,
-            timeout=ClientTimeout(total=2, connect=1),
-        ) as session:
-            async with session.get(metadata_path) as resp:
-                resp.raise_for_status()
-                container_name = (await resp.json())["Name"]
-            async with session.get(f"{metadata_path}/task") as resp:
-                resp.raise_for_status()
-                parts = (await resp.json())["TaskARN"].split(":")
-                AWS_ENVIRONMENT["account_id"] = parts[4]
-                task_id = parts[5].split("/")[-1]
-        server.SERVER_NAME = f"{task_id}-{container_name}-{server.SERVER_ID}"
+        await _set_account_id_from_sts()
+        return None
+    warning = None
+    for attempt in range(_ECS_METADATA_ATTEMPTS):
+        if attempt:
+            await sleep(_ECS_METADATA_RETRY_DELAY)
+        try:
+            await _set_account_info_from_ecs(metadata_path)
+        except (HttpClientError, TimeoutError) as exception:
+            warning = (
+                "ECS container metadata endpoint unreachable after "
+                f"{_ECS_METADATA_ATTEMPTS} attempts ({type(exception).__name__}): "
+                "the server name does not identify the ECS task"
+            )
+        else:
+            return None
+    await _set_account_id_from_sts()
+    return warning

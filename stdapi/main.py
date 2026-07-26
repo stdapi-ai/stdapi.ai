@@ -151,6 +151,11 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                         server_id=server.SERVER_NAME,
                         server_version=SERVER_FULL_VERSION,
                     )
+                    # Runs alone: the ECS metadata endpoint answers on the task
+                    # ENI and times out when the startup fan-out below saturates
+                    # the task CPU.
+                    if account_warning := await initialize_aws_account_info():
+                        add_server_warning(start_event, account_warning)
                     raise_first_exception(
                         await gather(
                             initialize_authentication(start_event),
@@ -159,7 +164,6 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                             initialize_transcribe_models(),
                             initialize_moderation_models(),
                             register(start_event),
-                            initialize_aws_account_info(),
                             return_exceptions=True,
                         )
                     )
