@@ -481,11 +481,13 @@ def _run_codex(
     assert _CODEX_BIN is not None
 
     env: dict[str, str] = {
+        # A locally spawned server runs without an API key and takes any
+        # non-empty value; an external --server-url target needs the configured
+        # key, inherited from the environment below.
+        "OPENAI_API_KEY": "test-key",
         **os.environ,
         # Route all Responses API calls through our test server.
         "OPENAI_BASE_URL": base_url,
-        # The server runs without an API key; any non-empty value avoids SDK errors.
-        "OPENAI_API_KEY": "test-key",
     }
     if extra_env:
         env.update(extra_env)
