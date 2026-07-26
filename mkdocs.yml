@@ -88,6 +88,7 @@ nav:
           - Authentication & Security: operations_authentication_security.md
           - Licensing: operations_licensing.md
           - Logging & Monitoring: operations_logging_monitoring.md
+          - Cost Management: operations_cost_management.md
           - Resilience & Failover: operations_resilience.md
           - Data Sovereignty & Compliance: operations_compliance.md
           - Troubleshooting: operations_troubleshooting.md
