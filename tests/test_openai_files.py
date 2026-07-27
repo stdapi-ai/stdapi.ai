@@ -594,6 +594,68 @@ class TestCompleteMultipartSessionOrderUnit:
         assert stub_s3.complete_called is False
 
 
+class _StubAddPartS3Client(_StubCompleteS3Client):
+    """Stub S3 client recording the part numbers ``add_part`` writes."""
+
+    async def upload_part(self, **kwargs: object) -> dict[str, Any]:
+        part_number = cast("int", kwargs["PartNumber"])
+        body = cast("bytes", kwargs["Body"])
+        self.parts[part_number] = (f"etag-{part_number}", len(body))
+        return {}
+
+
+@pytest.mark.local
+class TestAddPartNumberingUnit:
+    """Unit tests for part numbering in add_part (stubbed S3).
+
+    Part numbers must continue the parts S3 already holds: several server
+    instances share one upload session through a load balancer, and a
+    process-local counter would hand the same number to two parts, silently
+    overwriting one of them in S3.
+    """
+
+    @pytest.fixture
+    def stub_s3(self, monkeypatch: pytest.MonkeyPatch) -> _StubAddPartS3Client:
+        """Patch the S3 client, bucket resolution, and bucket lookup with stubs."""
+        stub = _StubAddPartS3Client()
+        monkeypatch.setattr(_multipart, "get_client", lambda *_: stub)
+        monkeypatch.setattr(_multipart, "_require_bucket", lambda: "bucket")
+        monkeypatch.setattr(
+            _multipart, "resolve_file_bucket", lambda _payload: "bucket"
+        )
+        return stub
+
+    async def test_consecutive_parts_are_numbered_in_order(
+        self, stub_s3: _StubAddPartS3Client
+    ) -> None:
+        """Parts added one after another get consecutive numbers from 1."""
+        session = await _multipart.create_multipart_session(
+            "f.bin", "text/plain", "assistants", 8
+        )
+
+        first, _ = await _multipart.add_part(session.upload_id, b"1234")
+        second, _ = await _multipart.add_part(session.upload_id, b"5678")
+
+        extract = _multipart._extract_part_number  # noqa: SLF001
+        assert extract(first, session.upload_id) == 1
+        assert extract(second, session.upload_id) == 2
+
+    async def test_part_uploaded_by_another_instance_advances_the_number(
+        self, stub_s3: _StubAddPartS3Client
+    ) -> None:
+        """A part stored by another instance is counted, so its number is not reused."""
+        session = await _multipart.create_multipart_session(
+            "f.bin", "text/plain", "assistants", 8
+        )
+        # Part served by another instance: this process never saw it.
+        stub_s3.parts[1] = ("etag-1", 4)
+
+        part_id, _ = await _multipart.add_part(session.upload_id, b"5678")
+
+        assert _multipart._extract_part_number(part_id, session.upload_id) == 2  # noqa: SLF001
+        assert stub_s3.parts[1] == ("etag-1", 4)
+
+
 @pytest.mark.local
 class TestOpenAIFilesMalformedJsonBody:
     """POST /v1/files with a malformed JSON body (unit, no AWS)."""

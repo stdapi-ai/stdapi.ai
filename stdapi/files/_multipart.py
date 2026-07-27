@@ -55,27 +55,23 @@ _MULTIPART_EXPIRY_SECONDS: int = 86400
 #: S3 tagging query string marking an object for Lifecycle expiry cleanup.
 _EXPIRING_S3_TAGGING: str = f"{S3_TAGGING}&stdapi-ai.expires=true"
 
-#: Per-process cache: upload_id → (s3_upload_id, part_count, expires_monotonic).
-_cache: dict[str, tuple[str, int, float]] = {}
+#: Per-process cache: upload_id → (s3_upload_id, expires_monotonic).
+_cache: dict[str, tuple[str, float]] = {}
 
 
-def _cache_get(upload_id: str) -> tuple[str, int] | None:
-    """Return cached ``(s3_upload_id, part_count)`` for *upload_id*, or ``None`` if absent/expired."""
+def _cache_get(upload_id: str) -> str | None:
+    """Return the cached ``s3_upload_id`` for *upload_id*, or ``None`` if absent/expired."""
     if entry := _cache.get(upload_id):
-        s3_upload_id, part_count, expires = entry
+        s3_upload_id, expires = entry
         if monotonic() < expires:
-            return s3_upload_id, part_count
+            return s3_upload_id
         del _cache[upload_id]
     return None
 
 
-def _cache_set(upload_id: str, s3_upload_id: str, part_count: int) -> None:
-    """Store *s3_upload_id* and *part_count* in the per-process cache for the session TTL."""
-    _cache[upload_id] = (
-        s3_upload_id,
-        part_count,
-        monotonic() + _MULTIPART_EXPIRY_SECONDS,
-    )
+def _cache_set(upload_id: str, s3_upload_id: str) -> None:
+    """Store *s3_upload_id* in the per-process cache for the session TTL."""
+    _cache[upload_id] = (s3_upload_id, monotonic() + _MULTIPART_EXPIRY_SECONDS)
 
 
 def _cache_del(upload_id: str) -> None:
@@ -256,7 +252,8 @@ async def _require_s3_upload_id(
     """Return the S3 multipart upload ID for a pending session.
 
     Checks the per-process cache first; on a cache miss falls back to
-    ``list_multipart_uploads`` + ``list_parts`` to populate the cache.
+    ``list_multipart_uploads`` to populate the cache. The upload ID is fixed
+    for the session's lifetime, so caching it never goes stale.
 
     Args:
         upload_id: Session identifier.
@@ -268,18 +265,14 @@ async def _require_s3_upload_id(
         ApiError: 404 if the session does not exist; 400 if not pending.
     """
     if cached := _cache_get(upload_id):
-        return cached[0]
+        return cached
 
     for upload in (await s3.list_multipart_uploads(Bucket=bucket, Prefix=s3_key)).get(
         "Uploads", []
     ):
         if upload["Key"] == s3_key:
             s3_upload_id = upload["UploadId"]
-            _cache_set(
-                upload_id,
-                s3_upload_id,
-                len(await _list_all_parts(s3, bucket, s3_key, s3_upload_id)),
-            )
+            _cache_set(upload_id, s3_upload_id)
             return s3_upload_id
 
     return await _check_not_pending(upload_id, bucket, s3)
@@ -363,7 +356,7 @@ async def create_multipart_session(
             Tagging=S3_TAGGING,
         ),
     )
-    _cache_set(upload_id, multipart_resp["UploadId"], 0)
+    _cache_set(upload_id, multipart_resp["UploadId"])
 
     return MultipartSession(
         upload_id=upload_id,
@@ -382,9 +375,9 @@ async def create_multipart_session(
 async def add_part(upload_id: str, data: bytes) -> tuple[str, int]:
     """Add a part to an existing multipart session.
 
-    On a cache hit (same pod, sequential uploads) only a single S3
-    ``upload_part`` call is made.  On a cache miss the session is
-    rediscovered via ``list_multipart_uploads`` + ``list_parts``.
+    The part number continues the parts already stored in S3, so consecutive
+    parts of one upload keep their order even when a load balancer spreads them
+    over several server instances.
 
     Args:
         upload_id: Session identifier.
@@ -401,12 +394,12 @@ async def add_part(upload_id: str, data: bytes) -> tuple[str, int]:
     s3_key = file_id_s3_key(file_id)
     s3: S3Client = get_client("s3", BUCKET_TO_REGION.get(bucket))
 
-    if not (cached := _cache_get(upload_id)):
-        await _require_s3_upload_id(upload_id, bucket, s3_key, s3)
-        cached = _cache_get(upload_id) or ("", 0)
-    s3_upload_id, part_count = cached
-
-    part_number = part_count + 1
+    s3_upload_id = await _require_s3_upload_id(upload_id, bucket, s3_key, s3)
+    # Numbering from the parts S3 holds rather than from a process-local
+    # counter: another instance may have served the previous part, and reusing
+    # its number would overwrite it.
+    parts = await _list_all_parts(s3, bucket, s3_key, s3_upload_id)
+    part_number = max(parts, default=0) + 1
 
     try:
         await s3.upload_part(
@@ -422,7 +415,6 @@ async def add_part(upload_id: str, data: bytes) -> tuple[str, int]:
             await _check_not_pending(upload_id, bucket, s3)
         raise  # pragma: no cover
 
-    _cache_set(upload_id, s3_upload_id, part_number)
     return _make_part_id(upload_id, part_number), now_utc_timestamp()
 
 
