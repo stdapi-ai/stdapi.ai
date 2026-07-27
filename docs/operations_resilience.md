@@ -6,7 +6,7 @@ keywords: AWS high availability, multi-AZ ECS Fargate, ALB resilience, Bedrock c
 
 # :material-shield-check: Resilience & Failover
 
-stdapi.ai on AWS is designed for high availability at every layer — from intelligent multi-region request routing to the underlying infrastructure running the service. This page covers both the application-level region routing for AWS Bedrock and the infrastructure resilience built into the Terraform module.
+stdapi.ai on AWS is designed for high availability at every layer — from intelligent multi-region request routing to the underlying infrastructure running the service. This page covers both the application-level region routing for Amazon Bedrock and the infrastructure resilience built into the Terraform module.
 
 ---
 
@@ -107,7 +107,7 @@ export AWS_BEDROCK_REGION_ROUTING_UNAVAILABLE_BACKOFF_SECONDS=30
 
 1. **Model discovery** — At startup, stdapi.ai discovers which models are available in each configured region.
 2. **Region selection** — When a request arrives, the router picks the best region for that model based on the active strategy and current region health.
-3. **Automatic failover with cycling** — For synchronous and streaming requests without S3 inputs, the retry loop cycles through regions in priority order, wrapping back to the start after exhausting all regions, up to `AWS_BEDROCK_MAX_RETRIES` total retries. For example, with 3 regions and 9 retries the sequence is `r1, r2, r3, r1, r2, r3, r1, r2, r3, r1`. All retryable errors escalate to the next region immediately. When S3 inputs are present, the region is pinned and botocore's adaptive retries handle resilience within that region (see [S3-Aware Region Selection](#s3-aware-region-selection)).
+3. **Automatic failover with cycling** — For synchronous and streaming requests without S3 inputs, the retry loop cycles through regions in priority order, wrapping back to the start after exhausting all regions, up to `AWS_BEDROCK_MAX_RETRIES` total retries (see the [Configuration](#configuration) example below for a worked sequence). All retryable errors escalate to the next region immediately. When S3 inputs are present, the region is pinned and botocore's adaptive retries handle resilience within that region (see [S3-Aware Region Selection](#s3-aware-region-selection)).
 4. **Backoff tracking** — Regions that produce errors are temporarily deprioritized. Quota errors use exponential backoff (base interval doubles per consecutive error, capped at 1 hour); unavailability errors use a fixed backoff. Once the backoff expires, regions rejoin the rotation.
 
 ```mermaid
@@ -121,7 +121,7 @@ flowchart LR
 
     router -->|"region selected"| r1
 
-    subgraph aws ["<img src='../styles/logo_amazon_bedrock.svg' style='height:48px;width:auto;vertical-align:middle;' /> AWS Bedrock"]
+    subgraph aws ["<img src='../styles/logo_amazon_bedrock.svg' style='height:48px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
         r1["us-east-1"]
         r2["us-west-2"]
         r3["eu-west-1"]
@@ -263,7 +263,7 @@ You can restrict specific models to a fixed set of regions. This is useful when 
 export AWS_BEDROCK_MODEL_REGION_RESTRICT='{"amazon.nova-pro-v1:0": ["us-east-1"]}'
 ```
 
-Keys are Bedrock model IDs (or prefixes). Values are ordered lists of allowed regions. The model is **only** made available in those regions—no fallback to other regions occurs. The order of the list determines the routing priority when multiple regions are listed.
+Keys are Bedrock model IDs (or prefixes). Values are ordered lists of allowed regions. The model is **only** made available in those regions—no fallback to other regions occurs. The order of the list determines the routing priority when multiple regions are listed (with the default `ordered` routing strategy).
 
 ---
 
@@ -273,7 +273,7 @@ When a client sends a request using a model ID that has been retired or supersed
 
 This is controlled by [`AWS_BEDROCK_DEPRECATED_MODEL_FALLBACK`](operations_configuration.md#bedrock-deprecated-model-fallback) (default: `true`).
 
-#### How it works
+#### How It Works
 
 1. On a cache miss, the deprecation registry is consulted for a replacement.
 2. If the replacement is itself deprecated, the chain is followed until a live model is found or the chain ends.
@@ -283,27 +283,27 @@ This is controlled by [`AWS_BEDROCK_DEPRECATED_MODEL_FALLBACK`](operations_confi
 !!! warning "`AWS_BEDROCK_LEGACY` — Use with caution"
     Setting `AWS_BEDROCK_LEGACY=true` forces stdapi.ai to keep serving legacy (end-of-life) models. AWS may deny requests to such models with an access error if you have not been actively using the model recently, causing failover to break silently. Only set this option if using a legacy model is absolutely required.
 
-#### Legacy model warnings
+#### Legacy Model Warnings
 
 Using a **legacy** model (one AWS has scheduled for end-of-life) also emits a `warning`-level log entry, including the EOL date when known:
 
-```
-Model 'anthropic.claude-haiku-4-5-20251001-v1:0' is legacy and will reach end-of-life on 2026-06-19. Please migrate to a supported model.
+```text
+Model 'anthropic.claude-haiku-4-5-20251001-v1:0' is legacy and will reach end-of-life on 2027-06-19. Please migrate to a supported model.
 ```
 
 Models whose EOL date falls within the current cache window are **proactively excluded** at cache refresh time, so they are never served to clients even if AWS has not yet removed them from the available models list.
 
-#### Strict mode
+#### Strict Mode
 
 Set `AWS_BEDROCK_DEPRECATED_MODEL_FALLBACK=false` to disable the fallback. Requests using a deprecated model ID will fail with a `404` that includes the recommended replacement, forcing clients to update their code explicitly:
 
-```
+```text
 Model 'amazon.titan-text-lite-v1' is deprecated or pending deprecation, please use 'amazon.nova-lite-v1:0' instead.
 ```
 
-#### Extending the registry
+#### Extending the Registry
 
-The built-in deprecation registry covers all models listed in the [AWS Bedrock model lifecycle](https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html). Use [`AWS_BEDROCK_DEPRECATED_MODELS`](operations_configuration.md#bedrock-deprecated-models) to add custom mappings or override existing ones.
+The built-in deprecation registry covers all models listed in the [Amazon Bedrock model lifecycle](https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html). Use [`AWS_BEDROCK_DEPRECATED_MODELS`](operations_configuration.md#bedrock-deprecated-models) to add custom mappings or override existing ones.
 
 ---
 
@@ -347,7 +347,7 @@ The Terraform module deploys stdapi.ai following AWS best practices for high ava
   <br>99.999999999% object durability; regional buckets co-located with each Bedrock endpoint
 
 - :material-rocket-launch-outline: __Fast Task Startup__
-  <br>New tasks become healthy in under 30 seconds, minimising the recovery window after any failure
+  <br>New tasks become healthy in under 30 seconds, minimizing the recovery window after any failure
 
 - :material-update: __Zero-Downtime Updates__
   <br>Rolling deployments and ALB connection draining ensure in-flight requests always complete cleanly
@@ -361,7 +361,7 @@ flowchart TB
 
     subgraph deployment["AWS Region (ECS deployment)"]
         alb["<img src='../styles/logo_amazon_load_balancing.svg' style='height:48px;width:auto;vertical-align:middle;' /><br/>ALB + WAF"]
-        b_local["<img src='../styles/logo_amazon_bedrock.svg' style='height:48px;width:auto;vertical-align:middle;' /><br/>AWS Bedrock"]
+        b_local["<img src='../styles/logo_amazon_bedrock.svg' style='height:48px;width:auto;vertical-align:middle;' /><br/>Amazon Bedrock"]
         s3r["<img src='../styles/logo_amazon_s3.svg' style='height:48px;width:auto;vertical-align:middle;' /><br/>S3"]
 
         subgraph az_a["Availability Zone A"]
@@ -373,11 +373,11 @@ flowchart TB
     end
 
     subgraph br2["Bedrock Region 2"]
-        b2["<img src='../styles/logo_amazon_bedrock.svg' style='height:48px;width:auto;vertical-align:middle;' /><br/>AWS Bedrock"]
+        b2["<img src='../styles/logo_amazon_bedrock.svg' style='height:48px;width:auto;vertical-align:middle;' /><br/>Amazon Bedrock"]
         bs2["<img src='../styles/logo_amazon_s3.svg' style='height:48px;width:auto;vertical-align:middle;' /><br/>Regional S3"]
     end
     subgraph brn["Bedrock Region N"]
-        bn["<img src='../styles/logo_amazon_bedrock.svg' style='height:48px;width:auto;vertical-align:middle;' /><br/>AWS Bedrock"]
+        bn["<img src='../styles/logo_amazon_bedrock.svg' style='height:48px;width:auto;vertical-align:middle;' /><br/>Amazon Bedrock"]
         bsn["<img src='../styles/logo_amazon_s3.svg' style='height:48px;width:auto;vertical-align:middle;' /><br/>Regional S3"]
     end
 
@@ -397,12 +397,12 @@ flowchart TB
 
 **Multi-AZ spread.** The Terraform module places ECS tasks across all available Availability Zones in the region. If an AZ experiences a partial or full failure, tasks in the remaining AZs continue to process requests without interruption. The default configuration maintains at least one task per Availability Zone, guaranteeing availability even during a task replacement event.
 
-**Auto-scaling.** Task count scales automatically based on CPU utilisation, memory utilisation, and ALB request count — whichever metric signals pressure first. Fargate Spot is optionally available for cost-sensitive deployments — see [Cost-Optimized Deployment](operations_deploy_advanced.md#cost-optimized-deployment) for the trade-offs.
+**Auto-scaling.** Task count scales automatically based on CPU utilization, memory utilization, and ALB request count — whichever metric signals pressure first. Fargate Spot is optionally available for cost-sensitive deployments — see [Cost-Optimized Deployment](operations_deploy_advanced.md#cost-optimized-deployment) for the trade-offs.
 
 !!! info "Terraform Module"
-    Minimum capacity defaults to the number of deployed Availability Zones (one task per AZ, via `autoscaling_min_capacity`). Maximum capacity is configurable (`autoscaling_max_capacity`, default: `null` — uses the AWS Application Auto Scaling default). Auto-scaling targets CPU and memory utilisation as well as ALB request count per target, so the service scales out under any of these pressure signals.
+    Minimum capacity defaults to the number of deployed Availability Zones (one task per AZ, via `autoscaling_min_capacity`). Maximum capacity is configurable (`autoscaling_max_capacity`, default: `null` — uses the AWS Application Auto Scaling default). Auto-scaling targets CPU and memory utilization as well as ALB request count per target, so the service scales out under any of these pressure signals.
 
-**Fast startup.** The stdapi.ai container image is optimised for minimal startup time — a new task typically becomes healthy in under 30 seconds. Fast startup is critical for recovery: when ECS detects a failed task it launches a replacement immediately, keeping the degraded window short and ensuring the service restores full capacity without manual intervention.
+**Fast startup.** The stdapi.ai container image is optimized for minimal startup time — a new task typically becomes healthy in under 30 seconds. Fast startup is critical for recovery: when ECS detects a failed task it launches a replacement immediately, keeping the degraded window short and ensuring the service restores full capacity without manual intervention.
 
 **Zero-downtime updates.** ECS rolling deployments start the new container version and wait for it to pass health checks before draining the old task. The ALB connection draining period lets in-flight requests complete on the outgoing task before it is deregistered. Application updates never interrupt ongoing API calls.
 
@@ -411,7 +411,7 @@ flowchart TB
 The Application Load Balancer is a fully managed, natively multi-AZ AWS service:
 
 - **Cross-AZ load balancing** — traffic is distributed evenly across tasks in all healthy AZs.
-- **Health check integration** — the ALB polls `/health` on each task; a task is removed from rotation after two consecutive failed checks (~60 s) and readded as soon as it recovers.
+- **Health check integration** — the ALB polls `/health` on each task; a task is removed from rotation after consecutive failed health checks and readded as soon as it recovers.
 - **WAF protection** — when enabled, WAF sits in front of the ALB and mitigates DDoS and rate-limit abuse before requests reach the application.
 
 !!! info "Terraform Module"
@@ -423,7 +423,7 @@ The Application Load Balancer is a fully managed, natively multi-AZ AWS service:
 
 ### :material-earth: Bedrock Cross-Region Inference
 
-AWS Bedrock supports [cross-region inference profiles](https://docs.aws.amazon.com/bedrock/latest/userguide/cross-region-inference.html), which allow Bedrock to automatically route a model invocation to another AWS region when the primary region is throttled or temporarily unavailable. stdapi.ai enables cross-region inference by default (`AWS_BEDROCK_CROSS_REGION_INFERENCE_GLOBAL=true`).
+Amazon Bedrock supports [cross-region inference profiles](https://docs.aws.amazon.com/bedrock/latest/userguide/cross-region-inference.html), which allow Bedrock to automatically route a model invocation to another AWS region when the primary region is throttled or temporarily unavailable. stdapi.ai enables cross-region inference by default (`AWS_BEDROCK_CROSS_REGION_INFERENCE_GLOBAL=true`).
 
 This creates two complementary failover layers:
 
@@ -453,6 +453,9 @@ For the highest possible resilience, deploy two independent stdapi.ai stacks in 
 
 Additional Bedrock regions (without ECS) can be added to `AWS_BEDROCK_REGIONS` in each stack to expand model availability and quota without deploying more ECS infrastructure.
 
+!!! tip "No dedicated sample yet"
+    There is no ready-to-use Terraform example for this two-stack + Global Accelerator topology. Start from the [Production Deployment](operations_deploy_advanced.md#production-deployment-fully-featured) module configuration and deploy it twice — once per region — then add Global Accelerator in front of both.
+
 **What this adds on top of a single-region deployment:**
 
 | Component | Single region | Multi-region + GA |
@@ -474,7 +477,7 @@ flowchart LR
         direction TB
         alb_a["<img src='../styles/logo_amazon_load_balancing.svg' style='height:48px;width:auto;vertical-align:middle;' /><br/>ALB + WAF"]
         ecs_a["<img src='../styles/logo.svg' style='height:48px;width:auto;vertical-align:middle;' /><br/>stdapi.ai<br/>ECS Fargate"]
-        b_a["<img src='../styles/logo_amazon_bedrock.svg' style='height:48px;width:auto;vertical-align:middle;' /><br/>AWS Bedrock"]
+        b_a["<img src='../styles/logo_amazon_bedrock.svg' style='height:48px;width:auto;vertical-align:middle;' /><br/>Amazon Bedrock"]
         s3_a["<img src='../styles/logo_amazon_s3.svg' style='height:48px;width:auto;vertical-align:middle;' /><br/>S3"]
     end
 
@@ -482,13 +485,13 @@ flowchart LR
         direction TB
         alb_b["<img src='../styles/logo_amazon_load_balancing.svg' style='height:48px;width:auto;vertical-align:middle;' /><br/>ALB + WAF"]
         ecs_b["<img src='../styles/logo.svg' style='height:48px;width:auto;vertical-align:middle;' /><br/>stdapi.ai<br/>ECS Fargate"]
-        b_b["<img src='../styles/logo_amazon_bedrock.svg' style='height:48px;width:auto;vertical-align:middle;' /><br/>AWS Bedrock"]
+        b_b["<img src='../styles/logo_amazon_bedrock.svg' style='height:48px;width:auto;vertical-align:middle;' /><br/>Amazon Bedrock"]
         s3_b["<img src='../styles/logo_amazon_s3.svg' style='height:48px;width:auto;vertical-align:middle;' /><br/>S3"]
     end
 
     subgraph region_c["AWS Region C (Bedrock only)"]
         direction TB
-        b_c["<img src='../styles/logo_amazon_bedrock.svg' style='height:48px;width:auto;vertical-align:middle;' /><br/>AWS Bedrock"]
+        b_c["<img src='../styles/logo_amazon_bedrock.svg' style='height:48px;width:auto;vertical-align:middle;' /><br/>Amazon Bedrock"]
         s3_c["<img src='../styles/logo_amazon_s3.svg' style='height:48px;width:auto;vertical-align:middle;' /><br/>Regional S3"]
     end
 
@@ -508,8 +511,8 @@ flowchart LR
 - **Health-based failover** — GA continuously health-checks each ALB endpoint. If a region's ALB stops responding, GA automatically reroutes its traffic to the other region within seconds — with no DNS TTL delay.
 - **Single Anycast entry point** — clients always connect to the same two static IPs regardless of which region handles the request. No client reconfiguration is needed during a regional failure.
 
-!!! note "API key synchronisation"
-    Both ECS stacks must share the same API key so clients can reach either region transparently. Use `api_key_secretsmanager_secret` pointing to a cross-region replicated Secrets Manager secret, or set the same key via `api_key_value` in both modules.
+!!! note "API key synchronization"
+    Both ECS stacks must share the same API key so clients can reach either region transparently. Use `api_key_secretsmanager_secret` pointing to a cross-region replicated Secrets Manager secret, or set the same key via `api_key` in both modules.
 
 ---
 

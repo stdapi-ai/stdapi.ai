@@ -41,9 +41,9 @@ The API key authentication method uses a single API key that mimics the behavior
 
 Three sources are supported — configure exactly one. If more than one is set, the first match in this precedence order is used (the others are ignored): **Direct value → SSM Parameter Store → Secrets Manager**.
 
+- **Direct value** (`API_KEY`) — for local development and testing only; not recommended for production.
 - **SSM Parameter Store** (`API_KEY_SSM_PARAMETER`) — the parameter must already exist before startup.
 - **Secrets Manager** (`API_KEY_SECRETSMANAGER_SECRET`) — the secret must already exist; supports a configurable key within the JSON secret via `API_KEY_SECRETSMANAGER_KEY`.
-- **Direct value** (`API_KEY`) — for local development and testing only; not recommended for production.
 
 For the full list of environment variables and required IAM permissions for each method, see the [Configuration Guide](operations_configuration.md#authentication).
 
@@ -59,14 +59,14 @@ For the full list of environment variables and required IAM permissions for each
 
 ### :material-account-check: OIDC, Cognito & IAM Identity Center
 
-For user-facing applications or enterprise SSO, you can offload authentication to an OpenID Connect (OIDC) provider, Amazon Cognito, or AWS IAM Identity Center (the AWS-native workforce SSO service for centralised employee and partner access).
+For user-facing applications or enterprise SSO, you can offload authentication to an OpenID Connect (OIDC) provider, Amazon Cognito, or AWS IAM Identity Center (the AWS-native workforce SSO service for centralized employee and partner access).
 
-When authentication is handled at this layer, requests are fully validated **before they reach stdapi.ai** — the application receives only authenticated, pre-authorised requests.
+When authentication is handled at this layer, requests are fully validated **before they reach stdapi.ai** — the application receives only authenticated, pre-authorized requests.
 
 !!! tip "Trusted by AWS teams — no custom implementation risk"
-    Cognito and IAM Identity Center are the same identity systems AWS teams already rely on for console access and internal applications. By delegating authentication to these services, you get MFA, SSO, and fine-grained permission sets without building or maintaining custom user management logic — and without the security risk of a home-grown implementation. Crucially, there are **no API keys to rotate**: access is revoked instantly through your identity provider.
+    Cognito and IAM Identity Center are the same identity systems AWS teams already rely on for console access and internal applications. By delegating authentication to these services, you get MFA, SSO, and fine-grained permission sets without building or maintaining custom user management logic — and without the security risk of a home-grown implementation. See [Eliminate key rotation with AWS native auth](#security-best-practices) for the operational payoff.
 
-!!! warning "Terraform Module"
+!!! info "Terraform Module"
     The Terraform module does not configure OIDC, Cognito, or IAM Identity Center authentication. These integrations must be set up directly on the ALB or API Gateway.
 
 #### via Application Load Balancer (ALB)
@@ -237,11 +237,11 @@ stdapi.ai fetches user-supplied URLs as multimodal content references (images, d
 
 ## :material-shield-bug: Prompt Injection
 
-Prompt injection is an application-level security concern: just as AWS secures the database engine but customers are responsible for preventing SQL injection, AWS secures the Bedrock infrastructure but **your application is responsible for preventing prompt injection**. For full details, see the [AWS Bedrock prompt injection security documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-injection.html).
+Prompt injection is an application-level security concern: just as AWS secures the database engine but customers are responsible for preventing SQL injection, AWS secures the Bedrock infrastructure but **your application is responsible for preventing prompt injection**. For full details, see the [Amazon Bedrock prompt injection security documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-injection.html).
 
 Key practices recommended by AWS:
 
-- **Input validation** — validate and sanitise all user input before passing it to the model; remove or escape special characters and enforce expected formats.
+- **Input validation** — validate and sanitize all user input before passing it to the model; remove or escape special characters and enforce expected formats.
 - **Secure coding** — avoid string concatenation for building prompts; apply the principle of least privilege when granting access to resources.
 - **System prompt scoping** — when using system prompts, clearly define what the model can and cannot do. Newer models differentiate between system and user prompts — check the model provider's documentation for model-specific guidance.
 - **Security testing** — regularly test for prompt injection using penetration testing, static analysis, and dynamic application security testing (DAST).
@@ -251,7 +251,7 @@ Key practices recommended by AWS:
     The most effective mitigation available within stdapi.ai is to configure an **Amazon Bedrock Guardrail**. Guardrails include a dedicated prompt attack detection layer and can be applied **per request** (via request headers) or **globally for the entire server** (via environment variables). See the [Bedrock Guardrails configuration section](operations_configuration.md#bedrock-guardrails) for setup instructions, and [Detect prompt attacks with Amazon Bedrock Guardrails](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-prompt-attack.html) for the upstream AWS documentation.
 
 !!! warning "stdapi.ai does not include built-in prompt injection protection"
-    stdapi.ai passes user prompts to the model as-is and does not apply any custom filtering or sanitisation against prompt injection. Protecting against this risk is the responsibility of your application and infrastructure.
+    stdapi.ai passes user prompts to the model as-is and does not apply any custom filtering or sanitization against prompt injection. Protecting against this risk is the responsibility of your application and infrastructure.
 
 ---
 
@@ -324,7 +324,7 @@ If your compliance requirements mandate encryption all the way to the container,
 -   **Certificate Management**: Use ACM Private CA or a self-signed certificate for the internal service. Note that the ALB does not validate the backend certificate by default; it only ensures the connection is encrypted.
 -   **Sidecar Proxy**: Alternatively, you can run a sidecar container (like Nginx or Envoy) alongside stdapi.ai to handle TLS termination locally.
 
-!!! warning "Terraform Module Support"
+!!! info "Terraform Module Support"
     The provided Terraform module **does not currently support** automatic configuration of end-to-end encryption. You will need to manually configure the ALB target group for HTTPS and manage certificate provisioning.
 
 ### :material-certificate-outline: Mutual TLS — Client to Entry Point

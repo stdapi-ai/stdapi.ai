@@ -1,10 +1,10 @@
 ---
-title: Logging & Monitoring - AWS Bedrock API Observability
+title: Logging & Monitoring - Amazon Bedrock API Observability
 description: Production-grade observability for stdapi.ai with CloudWatch, OpenTelemetry. Track API performance, monitor costs, debug issues, and ensure compliance.
 keywords: AWS CloudWatch logs, API monitoring, OpenTelemetry, API observability, cost monitoring AWS, performance tracking, compliance logging
 ---
 
-# :material-chart-line: Logging and Monitoring
+# :material-chart-line: Logging & Monitoring
 
 stdapi.ai provides production-grade observability out of the box. Track request performance, debug issues, monitor costs, and ensure compliance with structured JSON logging and OpenTelemetry integration.
 
@@ -39,6 +39,8 @@ stdapi.ai emits structured JSON logs for every request, stream, and background t
   <br>Enable `LOG_REQUEST_PARAMS=true` for full request/response logging when troubleshooting issues.
 
 </div>
+
+---
 
 ## :material-rocket-launch: Quick Start
 
@@ -77,7 +79,9 @@ export ENABLE_PROXY_HEADERS=true  # When behind ALB/CloudFront
     To log the real client IP address (instead of the proxy IP), also enable `ENABLE_PROXY_HEADERS=true` when running behind AWS ALB, CloudFront, or other reverse proxies. See the [Configuration Guide](operations_configuration.md#client-ip-logging) for details.
 
 !!! tip "CloudWatch best practice"
-    JSON to STDOUT is optimal for CloudWatch Logs Insights. In AWS ECS, the task’s log driver forwards container STDOUT to CloudWatch Logs automatically.
+    JSON to STDOUT is optimal for CloudWatch Logs Insights. In AWS ECS, the task's log driver forwards container STDOUT to CloudWatch Logs automatically.
+
+---
 
 ## :material-format-list-bulleted: Event Types
 
@@ -90,6 +94,8 @@ stdapi.ai emits five kinds of JSON events (one per line):
 | `request`        | One per HTTP request. Method, path, status, timings, and optional request/response. |
 | `request_stream` | Streaming segments (SSE/audio). Indicates streaming activity and duration.          |
 | `background`     | Background tasks correlated to the parent request.                                  |
+
+---
 
 ## :material-table-column: Common Fields
 
@@ -125,6 +131,8 @@ Each event shares core fields and may add type‑specific ones.
     - Authentication/authorization: For security, client responses for `401` and `403` include only generic messages. Full diagnostic details are captured in server logs under `error_detail` and can be correlated via `id` (see `x-request-id`).
     - `server_warnings` (on the `start` event) often highlights missing configuration and features that have been disabled as a result (for example, no S3 bucket configured disables certain image/audio features).
     - `error_detail` (on any event) contains formatted exception traces and diagnostic hints, which frequently point to missing configuration, unavailable dependencies, or disabled features.
+
+---
 
 ## :material-cash-multiple: Usage Metrics Fields
 
@@ -177,6 +185,8 @@ Usage is reported as a nested `usage` list on `request` / `request_stream` event
 !!! note "No estimates"
     All values are real AWS-billed quantities. No estimation is performed — if AWS doesn't return a count, the field is absent (zero).
 
+---
+
 ## :material-chart-line: CloudWatch Metrics (EMF)
 
 When `CLOUDWATCH_METRICS=true` is enabled, usage is emitted as CloudWatch Embedded Metric Format (EMF) lines to stdout. These are automatically extracted as CloudWatch Metrics on ECS with no extra IAM/API calls.
@@ -205,7 +215,7 @@ Each billed usage entry generates one EMF JSON line:
       ]
     }]
   },
-  "Model": "anthropic.claude-3-5-sonnet-20241022",
+  "Model": "anthropic.claude-sonnet-5",
   "operation": "/v1/chat/completions",
   "InputTokens": 1500,
   "OutputTokens": 450
@@ -214,18 +224,23 @@ Each billed usage entry generates one EMF JSON line:
 
 ### Metric Details
 
-- **Single dimension**: `Model` — provides low cardinality for cost control
+- **Single dimension**: `Model` — provides low cardinality for cost control. A second `[Model, Currency]` dimension set is added for the `Cost` metric — see [Cost Management](operations_cost_management.md#cost-tracking-real-time-aws-pricing) for why cost needs its own dimension set.
 - **`operation`**: Included as a queryable field (not a dimension)
 - **Metric units**: `Count` for all token/image/character counts, `Seconds` for audio duration
 
 !!! tip "Querying EMF metrics"
     Use CloudWatch Logs Insights to search EMF lines:
-    ```
+    ```sql
     fields @timestamp, Model, InputTokens, OutputTokens
     | filter _aws.CloudWatchMetrics is not null
     | sort @timestamp desc
     | limit 20
     ```
+
+!!! note "Performance"
+    EMF lines bypass log-level filtering and write directly to stdout. This ensures metrics are always available on ECS where CloudWatch Agent scrapes stdout.
+
+---
 
 ## :material-currency-usd: Cost Tracking and Attribution { #cost-tracking-real-time-aws-pricing }
 
@@ -233,8 +248,7 @@ Real-time cost computation (`COST_TRACKING`), the price catalog and its accuracy
 
 [:octicons-arrow-right-24: Cost Management](operations_cost_management.md)
 
-!!! note "Performance"
-    EMF lines bypass log-level filtering and write directly to stdout. This ensures metrics are always available on ECS where CloudWatch Agent scrapes stdout.
+---
 
 ## :material-link-variant: Correlating Logs and Traces
 
@@ -242,25 +256,25 @@ Real-time cost computation (`COST_TRACKING`), the price catalog and its accuracy
 - The `x-request-id` response header exposes the same value so external systems can propagate correlation.
 - With OTel enabled, a root span named like `POST /v1/...` is created and carries attributes: `http.method`, `http.url`, `http.user_agent`, `request.id`, `server.id`, `http.status_code`, and `duration_ms`.
 
-!!! tip "Do and Don’t for correlation"
+!!! tip "Do and Don't for correlation"
     - Do propagate `x-request-id` across client → service → downstreams when possible.
     - Do use `request_stream` durations to account for total user‑perceived latency.
-    - Don’t generate your own request IDs for the same hop; prefer the provided one.
+    - Don't generate your own request IDs for the same hop; prefer the provided one.
+
+---
 
 ## :material-magnify: Reading the Logs
 
 - High latency: Inspect `execution_time_ms` on the `request` event. If the response was streamed, also sum `request_stream` durations. Combine with OTel spans to locate downstream delays (model provider, S3, etc.).
 - Errors: Look for `level=critical` and `error_detail` (formatted exceptions). With OTel, the span is marked error with attributes `error=true` and `error.message`.
-
-!!! warning "When to open a GitHub issue"
-    If you encounter `level=critical` events,
-    capture representative JSON log lines (redacting sensitive data)
-    and open an issue at https://github.com/stdapi-ai/stdapi.ai/issues. Include information about the failing request
-    to help reproduce the issue.
-
 - Payload issues: Temporarily enable `LOG_REQUEST_PARAMS=true` to validate requests/responses, then disable.
 - Client identification: `client_user_agent` and optional `request_user_id` / `request_org_id` help tie requests to users.
 - Routing confirmation: `model_id` and `voice_id` confirm which provider/model/voice handled the request.
+
+!!! warning "When to open a GitHub issue"
+    If you encounter `level=critical` events, capture representative JSON log lines (redacting sensitive data) and open an issue on [GitHub](https://github.com/stdapi-ai/stdapi.ai/issues). Include information about the failing request to help reproduce the issue.
+
+---
 
 ## :material-filter: Controlling Log Verbosity
 
@@ -282,6 +296,8 @@ export LOG_LEVEL=warning
 
     Additionally, infrastructure routes are automatically excluded from logging to reduce noise: `/docs`, `/favicon.ico`, `/health`, `/openapi.json`, `/redoc`.
 
+---
+
 ## :material-graphql: OpenTelemetry Integration
 
 When `OTEL_ENABLED=true`:
@@ -292,6 +308,11 @@ When `OTEL_ENABLED=true`:
 - Sampling is controlled via `OTEL_SAMPLE_RATE`.
 
 For exporters and advanced setup, rely on standard OTel environment variables supported by your exporter/backend.
+
+!!! note "No X-Ray IAM permissions needed"
+    Export is push-based OTLP/HTTP to the endpoint you configure — the application makes no direct AWS X-Ray API calls and needs no extra IAM permissions for tracing. To forward traces to AWS X-Ray, point the OTLP endpoint at an [ADOT collector](https://aws-otel.github.io/docs/introduction), which handles the X-Ray upload using its own credentials.
+
+---
 
 ## :material-code-json: Example Events
 
@@ -358,6 +379,8 @@ __Example — Error with captured details__
 }
 ```
 
+---
+
 ## :material-text-search: CloudWatch Logs Insights Queries
 
 These examples assume JSON logs in CloudWatch Logs (default with ECS awslogs/awsfirelens). Adjust the log group and time range.
@@ -391,30 +414,31 @@ fields path, execution_time_ms
 | sort p95_ms desc
 ```
 
+---
+
 ## :material-aws: AWS Service-Level Logs and Metrics
 
 Beyond stdapi.ai logs and OTel traces,
 use AWS-native signals from the underlying AI services to validate provider behavior,
 monitor throttling/latency, and audit access.
 Enable only what you need: some options can capture content and increase costs.
-For full, up-to-date details,
-refer to the official AWS documentation for more information.
+For details, refer to the official AWS documentation.
 
 - CloudWatch Metrics: Throughput, latency, throttling, and error rates per service/region.
 - CloudTrail: Control-plane auditing of API calls (who did what, when, from where).
 - Content/Invocation logging: Optional features that may record inputs/outputs. Use with caution and encryption/retention controls.
-- Correlation: Service logs won’t include StdAPI `x-request-id`. Correlate by time window, region, model/voice/job identifiers, and volume. Use StdAPI `model_id`, `voice_id`, and `execution_time_ms` to narrow windows.
-- AWS Bedrock Invocation logging (optional): Export invocation metadata and, if enabled, content to CloudWatch Logs/S3/Firehose. Treat prompts/completions as sensitive; manage retention and KMS.
+- Correlation: Service logs won't include stdapi.ai's `x-request-id`. Correlate by time window, region, model/voice/job identifiers, and volume. Use stdapi.ai's `model_id`, `voice_id`, and `execution_time_ms` to narrow windows.
+- Amazon Bedrock Invocation logging (optional): Export invocation metadata and, if enabled, content to CloudWatch Logs/S3/Firehose. Treat prompts/completions as sensitive; manage retention and KMS.
 
 ### AWS Service Correlation Metadata
 
 stdapi.ai attaches correlation identifiers to outgoing service calls, allowing you to trace a stdapi.ai request back to the corresponding AWS service invocation.
 
 | Key                    | Description                                                                                                                      |
-|:-----------------------|:---------------------------------------------------------------------------------------------------------------------------------|
+|:-----------------------|:-----------------------------------------------------------------------------------------------------------------------------------|
 | `stdapi-ai.request_id` | Matches the `id` field in stdapi.ai logs and the `x-request-id` response header                                                  |
 | `stdapi-ai.server_id`  | Matches the `server_id` field in stdapi.ai logs                                                                                  |
-| `stdapi-ai.user_id`    | Present only when the client supplies a user ID (e.g. `user` field in OpenAI requests, `metadata.user_id` in Anthropic requests) |
+| `stdapi-ai.user_id`    | Present only when the client supplies a user identifier — the `safety_identifier` field (or the deprecated `user` alias) in OpenAI requests, `metadata.user_id` in Anthropic requests |
 
 Coverage and how to use it varies by service:
 
@@ -425,6 +449,8 @@ Coverage and how to use it varies by service:
 
 !!! note "Security"
     Any `stdapi-ai.*` key supplied by the client is silently dropped before the service call. Only values injected by stdapi.ai itself are forwarded under that prefix.
+
+---
 
 ## :material-cloud-check: Infrastructure Observability
 
@@ -447,12 +473,16 @@ Coverage and how to use it varies by service:
 
     ALB access logs and WAF logs are stored in dedicated S3 buckets, **KMS-encrypted**. These capture all HTTP requests at the infrastructure level — use them to audit traffic patterns and investigate security events before they reach the application.
 
+---
+
 ## :material-wrench: Troubleshooting Checklist
 
 - No logs visible: Ensure you are reading container STDOUT. On ECS/Kubernetes, verify the log driver and retention.
 - Missing `request_params`: Confirm `LOG_REQUEST_PARAMS=true` and restart after changing environment variables.
 - No traces: Verify `OTEL_ENABLED=true` and that exporters are configured and reachable.
 - Correlation missed: Ensure clients read and propagate `x-request-id` for multi‑hop requests.
+
+---
 
 ## :material-arrow-right: Next Steps
 

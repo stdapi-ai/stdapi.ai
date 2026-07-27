@@ -1,5 +1,5 @@
 ---
-title: Cost Management - AWS Bedrock Gateway Spend, Pricing & Attribution
+title: Cost Management - Amazon Bedrock Gateway Spend, Pricing & Attribution
 description: Understand and control what stdapi.ai costs — AWS Marketplace vs AWS-billed models and credit eligibility, infrastructure and license cost, real-time cost tracking, and per-user cost attribution.
 keywords: AWS Bedrock cost, AI gateway pricing, AWS Marketplace billing, AWS credits, Bedrock cost tracking, cost attribution, FinOps AWS AI, LLM cost management
 ---
@@ -12,13 +12,11 @@ Running stdapi.ai bills into three independent buckets:
 |:------------------------------|:------------------------------------------------------------------------------|:----------------------|:-----------------------------------|
 | **AI service usage**          | AWS (Amazon Bedrock, Polly, Transcribe, …) **or** AWS Marketplace, per model  | Requests and tokens   | Only the AWS-billed models         |
 | **Gateway infrastructure**    | AWS (ECS Fargate, ALB, S3, CloudWatch, …)                                     | Running containers    | Yes                                |
-| **Gateway license**           | AWS Marketplace (Enterprise Edition only)                                      | Container-hours       | No — Marketplace is never credited |
+| **Gateway license**           | AWS Marketplace (Commercial License only)                                      | Container-hours       | No — Marketplace is never credited |
 
 **AI service usage dominates any normal deployment.** The gateway runs on a small ARM64 container, so its infrastructure and license form a low fixed floor that model spend passes quickly. Read the AI-cost sections first; [Gateway Cost](#gateway-cost) matters mainly at low traffic or under a hard cost constraint.
 
 stdapi.ai **adds no markup**: model usage is billed to you by AWS at the same rate as calling Bedrock directly.
-
----
 
 ---
 
@@ -28,13 +26,11 @@ The [Model Pricing API](api_model_pricing.md) (`GET /model_pricing`) exposes the
 
 ---
 
----
-
 ## :material-store: Marketplace-Billed vs AWS-Billed Models
 
 A separate **AWS Marketplace** line on your bill for Bedrock usage is expected, not an error. AWS states it plainly:
 
-!!! quote "[Amazon Bedrock FAQ](https://aws.amazon.com/bedrock/faqs/) — *Why do I see a billing entry for AWS Marketplace for my usage of AWS Bedrock?*"
+!!! quote "[Amazon Bedrock FAQ](https://aws.amazon.com/bedrock/faqs/) — *Why do I see a billing entry for AWS Marketplace for my usage of Amazon Bedrock?*"
     "Customers will see an AWS Marketplace bill for certain Bedrock serverless models and Bedrock Marketplace models. This is because these models are sold by third party providers as *Third-Party Content*, as described in the AWS service terms section 50.12."
 
 ### Why It Matters: AWS Credits
@@ -66,15 +62,11 @@ The split follows the model **provider**, not the API you call. Per AWS, models 
 
 ---
 
----
-
 ## :material-currency-usd: Cost Tracking (Real-Time AWS Pricing)
 
 When `COST_TRACKING=true` is enabled, stdapi.ai computes real-time costs from live AWS pricing. Costs are attributed to the actual region where each request was served.
 
 ### How It Works
-
-The loaded catalog is also queryable through the [Model Pricing API](api_model_pricing.md) (`GET /model_pricing`) for cost-aware model selection.
 
 1. **Price Catalog**: At startup, stdapi.ai fetches the AWS Price List API for all configured regions and services in a background task, then caches in memory. Server readiness never waits on it: requests served before the load completes simply record usage without a cost. Failed loads are retried with exponential backoff (1–15 min), and each attempt's outcome is logged as a `background` event named `price_catalog_load`
 2. **On-Demand Refresh**: The catalog is refreshed whenever a newly available Bedrock model is discovered with no catalog entry yet — not on a proactive schedule. If that refresh's AWS call fails, the error fails the request that triggered it
@@ -99,7 +91,7 @@ Each usage entry includes cost and currency when resolved:
 ```json
 {
   "service": "bedrock-runtime",
-  "model": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+  "model": "anthropic.claude-sonnet-5",
   "operation": "/v1/chat/completions",
   "region": "us-east-1",
   "input_tokens": 1500,
@@ -139,7 +131,7 @@ When CloudWatch metrics are enabled, a `Cost` metric (unit: None) is emitted und
       }
     ]
   },
-  "Model": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+  "Model": "anthropic.claude-sonnet-5",
   "Currency": "USD",
   "Cost": 0.004575,
   "InputTokens": 1500
@@ -169,7 +161,7 @@ Costs are **never summed across currencies** — this safety behavior is always 
 ```json
 {
   "service": "bedrock-runtime",
-  "model": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+  "model": "anthropic.claude-sonnet-5",
   "input_tokens": 1500,
   "output_tokens": 450,
   "costs": {
@@ -210,14 +202,14 @@ Multimodal embedding inputs are billed by AWS per media unit on top of (or inste
 - **Rerank queries with more than 100 documents**: AWS bills one search unit per 100 documents; the document count isn't visible at recording time, so one unit per query is recorded.
 - **Reserved capacity pricing**: if a request explicitly asks for AWS's Reserved Capacity service tier, its cost is computed at the standard on-demand rate instead — Reserved Capacity uses a separate monthly-commitment pricing model this app doesn't ingest. Avoid relying on this app's cost figures for Reserved Capacity workloads.
 - Some very new or region-specific models may have no published price anywhere yet — AWS publishes pricing after model availability, sometimes with a delay.
-- **AWS GovCloud**: the Price List API has no GovCloud endpoint, so catalog prices cannot be fetched there — usage is still recorded, a startup warning is emitted, and only `cost_price_overrides` entries produce costs.
+- **AWS GovCloud**: the Price List API has no GovCloud endpoint, so catalog prices cannot be fetched there — usage is still recorded, a startup warning is emitted, and only `COST_PRICE_OVERRIDES` entries produce costs.
 
 ### Override Map for Missing Models
 
-Some models (e.g., mid-tier Claude) may not appear in the AWS Price List API. Use `cost_price_overrides` to fill gaps (Bedrock models only — Polly/Transcribe/Translate/Comprehend prices always come from the catalog):
+Some models — recently released ones, or region-specific listings — may not appear yet in the AWS Price List API. Use `COST_PRICE_OVERRIDES` to fill gaps (Bedrock models only — Polly/Transcribe/Translate/Comprehend prices always come from the catalog):
 
 ```bash
-export COST_PRICE_OVERRIDES='{"anthropic.claude-3-5-sonnet-20241022":{"input_tokens":0.000003,"output_tokens":0.000015}}'
+export COST_PRICE_OVERRIDES='{"anthropic.claude-sonnet-5":{"input_tokens":0.000003,"output_tokens":0.000015}}'
 ```
 
 Prices are per **one unit** (token, character, second) in your partition's currency.
@@ -236,8 +228,6 @@ Ensure your IAM role includes pricing read access (the Price List API serves ide
 
 ---
 
----
-
 ## :material-tag-multiple: AWS Cost Attribution
 
 Cost tracking prices **each request** as it happens. AWS-side attribution answers a different question — whose spend lands on the **AWS bill**, in [Cost Explorer](https://docs.aws.amazon.com/cost-management/latest/userguide/ce-what-is.html) and [CUR 2.0](https://docs.aws.amazon.com/cur/latest/userguide/what-is-cur.html). The two are complementary: request logs for granular analysis, AWS attribution for invoicing and chargeback.
@@ -246,7 +236,7 @@ Cost tracking prices **each request** as it happens. AWS-side attribution answer
 |:------------------------|:-----------------------------------------------------------------------------------------------------------------------------------------------------|:-------------------------------------|:------------------------------------------------------------------|
 | **Service / gateway**   | [IAM principal attribution](https://docs.aws.amazon.com/bedrock/latest/userguide/cost-mgmt-iam-principal-tracking.html) — AWS captures the caller identity | Cost Explorer, CUR 2.0               | Automatic; tag the execution role for finer breakdowns            |
 | **Application / workload** | [Bedrock Project/Workspace](operations_configuration.md#bedrock-mantle-project) (Bedrock Mantle models)                                            | Cost Explorer, CUR 2.0               | Set `AWS_BEDROCK_MANTLE_PROJECT`                                  |
-| **End user**            | `stdapi-ai.user_id` request metadata and job tags                                                                                                     | stdapi.ai logs, Bedrock invocation logs | Clients send `user` (OpenAI) or `metadata.user_id` (Anthropic)    |
+| **End user**            | `stdapi-ai.user_id` request metadata and job tags                                                                                                     | stdapi.ai logs, Bedrock invocation logs | Clients send `safety_identifier` — `user` is a deprecated alias — (OpenAI) or `metadata.user_id` (Anthropic) |
 
 ### IAM Principal Attribution
 
@@ -260,8 +250,6 @@ stdapi.ai calls AWS with a **single execution role** — the ECS task role — s
 ### Per-User Attribution
 
 Because every call shares the gateway's execution role, AWS itself cannot split Cost Explorer costs per end user. stdapi.ai attributes users at the request level instead: the client-supplied identifier is recorded as `stdapi-ai.user_id` in the request log — alongside that request's computed cost — and forwarded to Bedrock as request metadata, so per-user spend is aggregated from the logs rather than from the AWS bill.
-
----
 
 ---
 
@@ -294,7 +282,7 @@ The [Terraform module](operations_getting_started.md) provisions:
     ```
 
 - **Reuse existing network infrastructure.** Passing `subnet_ids` and `security_group_id` deploys into your VPC and creates **no additional NAT gateways or load balancers** — see [Integration with Existing Infrastructure](operations_deploy_advanced.md). On a small deployment these are often larger than the gateway itself.
-- **Scale to your real floor.** `autoscaling_min_capacity` sets how many containers run at idle. Because the Enterprise license is billed per container-hour, this number drives both infrastructure *and* license cost.
+- **Scale to your real floor.** `autoscaling_min_capacity` sets how many containers run at idle. Because the Commercial License is billed per container-hour, this number drives both infrastructure *and* license cost.
 - **Use Fargate Spot** and trim log retention, as the [Cost-Optimized Deployment](operations_deploy_advanced.md#cost-optimized-deployment) example does.
 - **Trim observability volume.** Raising `LOG_LEVEL` and disabling request/response payload logging cut CloudWatch ingestion — see [Controlling Log Verbosity](operations_logging_monitoring.md#controlling-log-verbosity). Note that **EMF metric lines are not affected by `LOG_LEVEL`**: they are written to stdout on every request whenever `CLOUDWATCH_METRICS` is on, so disabling that setting is the only way to remove them.
 
@@ -305,19 +293,10 @@ The [Terraform module](operations_getting_started.md) provisions:
 
 ### License
 
-stdapi.ai is [dual-licensed](operations_licensing.md), and the edition you run decides whether the gateway itself costs anything.
-
-| Edition        | License                        | Cost                                                                 |
-|:---------------|:-------------------------------|:----------------------------------------------------------------------|
-| **Community**  | AGPL-3.0-or-later              | Free — you must share your modifications under the same license       |
-| **Enterprise** | Commercial, via AWS Marketplace | **$0.10 per container-hour**, pay-as-you-go, no upfront or minimum    |
-
-The Enterprise Edition includes a **14-day free trial**, and a [private offer](operations_getting_started.md) brings the rate to **$0.09 per container-hour**. There is no per-request or per-token component: the license tracks running containers only, so cost follows `autoscaling_min_capacity`/`max_capacity` rather than traffic.
+stdapi.ai is [dual-licensed](operations_licensing.md): the free AGPL-3.0-or-later license costs nothing but requires sharing your modifications, while the Commercial License — billed per container-hour via AWS Marketplace, no per-request or per-token component — is what production deployments typically run. See [Licensing](operations_licensing.md) for the full pricing table and trial/private-offer terms.
 
 !!! info "The license is itself a Marketplace charge"
-    Being an AWS Marketplace subscription, the Enterprise license appears on the Marketplace section of your bill and — like [Marketplace-billed models](#why-it-matters-aws-credits) — **cannot be paid with AWS promotional credits**.
-
----
+    Being an AWS Marketplace subscription, the Commercial License appears on the Marketplace section of your bill and — like [Marketplace-billed models](#why-it-matters-aws-credits) — **cannot be paid with AWS promotional credits**.
 
 ---
 

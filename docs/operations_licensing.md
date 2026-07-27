@@ -155,15 +155,17 @@ No migration required between steps. Your Terraform configuration and applicatio
 2. **Accept Contract** — Accept the AWS Marketplace Standard Contract during checkout
 3. **Deploy** — Use the [Terraform module](operations_getting_started.md) to deploy immediately with commercial rights activated
 
-**Pricing:** The commercial license is billed at **$0.10/container-hour** through AWS Marketplace — no per-request markup and no markup on model usage. You pay AWS Bedrock rates directly for inference.
+**Pricing:** The commercial license is billed at **$0.10/container-hour** through AWS Marketplace — no per-request markup and no markup on model usage. You pay Amazon Bedrock rates directly for inference.
 
 **Typical monthly cost example** (license only, excluding AWS infrastructure and Bedrock model costs):
 
 | Scenario | Hours/month | License cost |
 |---|---|---|
 | 1 container, 24 × 7 | 720 h | ~$72/month |
-| 1 container, Fargate Spot (~70% savings) | 720 h | ~$22/month |
 | Dev/staging with scheduled stop outside business hours | ~165 h | ~$17/month |
+
+!!! note "Fargate Spot does not reduce the license cost"
+    The license fee is billed per container-hour regardless of the Fargate pricing model — 720 h × $0.10 = $72/month whether the underlying container runs on Spot or standard Fargate. Spot only discounts the **AWS infrastructure** cost (the ECS/Fargate compute itself), not the Marketplace license. See [Cost Management](operations_cost_management.md#gateway-cost) for the full infrastructure-vs-license breakdown.
 
 Pay with AWS credits — consolidated with your existing AWS bill, no separate invoice or procurement.
 
@@ -277,3 +279,16 @@ If you'd prefer not to manage the Terraform deployment yourself, a [managed depl
 Response time is **1 business day** during the engagement. All work is performed inside your own AWS account — no data leaves your environment.
 
 [:octicons-arrow-right-24: View Managed Deployment Service on AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-xknxzjgl7zi5s)
+
+---
+
+## :material-arrow-right: Next Steps
+
+<div class="grid cards" markdown>
+
+- :material-rocket-launch: [**Getting Started**](operations_getting_started.md) — Deploy the commercial container with Terraform
+- :material-cash-multiple: [**Cost Management**](operations_cost_management.md) — Infrastructure, license, and AI usage cost breakdown
+- :material-docker: [**Local Development**](operations_getting_started_local.md) — Evaluate with the free AGPL community image
+- :material-email-outline: [**Contact**](contact.md) — Sales, support, and private offer requests
+
+</div>

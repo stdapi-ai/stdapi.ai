@@ -76,10 +76,10 @@ flowchart LR
   openai["<img src='../styles/logo_openai.svg' style='height:64px;width:auto;vertical-align:middle;' /> OpenAI SDK"] -->|HTTPS| alb["<img src='../styles/logo_amazon_load_balancing.svg' style='height:64px;width:auto;vertical-align:middle;' /> ALB"]
   anthropic["<img src='../styles/logo_anthropic.svg' style='height:64px;width:auto;vertical-align:middle;' /> Anthropic SDK"] -->|HTTPS| alb
   alb --> ecs["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai<br/>ECS Fargate"]
-  ecs --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Bedrock"]
-  ecs --> polly["<img src='../styles/logo_amazon_polly.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Polly"]
-  ecs --> transcribe["<img src='../styles/logo_amazon_transcribe.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Transcribe"]
-  ecs --> s3["<img src='../styles/logo_amazon_s3.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS S3"]
+  ecs --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
+  ecs --> polly["<img src='../styles/logo_amazon_polly.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Polly"]
+  ecs --> transcribe["<img src='../styles/logo_amazon_transcribe.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Transcribe"]
+  ecs --> s3["<img src='../styles/logo_amazon_s3.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon S3"]
   ecs --> cloudwatch["<img src='../styles/logo_amazon_cloudwatch.svg' style='height:64px;width:auto;vertical-align:middle;' /> CloudWatch"]
 ```
 
@@ -137,7 +137,7 @@ stdapi.ai is compatible with both OpenAI and Anthropic SDKs. If you've used eith
       }'
     ```
 
-**Using the official SDKs?** Point the `base_url` / `base_url` option at `$API_ENDPOINT/v1` (OpenAI SDK) or `$API_ENDPOINT/anthropic` (Anthropic SDK) and use your existing code — no other changes needed. The [API Overview](api_overview.md) has SDK snippets for Python, Node.js, and more.
+**Using the official SDKs?** Point the `base_url` (Python) / `baseURL` (Node.js) option at `$API_ENDPOINT/v1` (OpenAI SDK) or `$API_ENDPOINT/anthropic` (Anthropic SDK) and use your existing code — no other changes needed. The [API Overview](api_overview.md) has SDK snippets for Python, Node.js, and more.
 
 !!! tip "Discover the full model catalog"
     Once your first call succeeds, switch the `model` field to any other Bedrock model — `anthropic.claude-fable-5`, `anthropic.claude-sonnet-5`, `qwen.qwen3-coder-480b-a35b-v1:0`, and more.
@@ -146,14 +146,12 @@ stdapi.ai is compatible with both OpenAI and Anthropic SDKs. If you've used eith
     - **Find a model by capability:** the same endpoint filters by modality, route, region, streaming, or legacy status — e.g. `GET /search_models?input_modalities=IMAGE&route=/v1/chat/completions` returns only vision-capable chat models. This is also the recommended way for AI agents to discover the right model ID before calling another endpoint. See the [Search Models API](api_search_models.md) reference.
     - **OpenAI SDK compatibility:** `GET /v1/models` is also available with the standard OpenAI listing format (lighter payload, no capability metadata) for tools that require the exact OpenAI schema.
 
-**No API key configured?** stdapi.ai runs without authentication by default for quick testing. Add `api_key_create = true` to your Terraform config to enable it.
-
-**Available models:** All AWS Bedrock models available in your configured regions are automatically discovered and exposed. List them with `GET /search_models` — the default endpoint for model discovery, returning full details (capabilities, routes, regions) for every model. Use query parameters to filter by capability (modality, route, region, streaming, legacy status) — particularly useful for AI agents that need to pick the right model dynamically. `GET /v1/models` is also available for strict OpenAI SDK compatibility.
+**Using your own Terraform config instead of the sample?** The sample above enables authentication for you (`api_key_create = true`, retrieved above). Writing your own module config from scratch? stdapi.ai runs without authentication unless you set `api_key_create = true` — see [Authentication & Security](operations_authentication_security.md) for all options.
 
 **Verify the deployment is healthy:**
 
 ```bash
-curl https://your-endpoint/health
+curl $API_ENDPOINT/health
 # → {"status": "ok"}
 ```
 
@@ -163,13 +161,7 @@ The `/health` endpoint requires no authentication and is used by the ALB health 
 
 ## :material-wrench: Troubleshooting
 
-The two most common first-deployment hiccups:
-
-??? failure "`503 Service Unavailable` on the docs or API for 2–3 minutes"
-    The ECS service is still starting. Wait a few minutes and refresh — the container will be ready shortly.
-
-??? failure "Browser TLS warning on the `docs_url`"
-    The auto-generated ALB domain (`*.elb.amazonaws.com`) has no trusted certificate. Safe to bypass for testing. For a production-grade certificate, set `alb_domain_name` in the Terraform module to use an ACM-managed certificate on your own domain.
+The `503` and TLS-warning hiccups on first deployment are already covered above — see [Make Your First API Call](#make-your-first-api-call).
 
 :material-arrow-right: **Full troubleshooting guide:** [Troubleshooting](operations_troubleshooting.md) — 401 auth errors, 404 model not found, ThrottlingException, S3 errors, VPC connectivity, Terraform IAM failures, and more.
 
@@ -177,9 +169,19 @@ The two most common first-deployment hiccups:
 
 ## :material-currency-usd: Deployment Cost
 
-Costs scale with the number of Availability Zones (AZs): by default, the Terraform module deploys **one ECS Fargate container per AZ**. Both AWS infrastructure costs (ECS/Fargate) and the stdapi.ai product fee (billed per container-hour, after the trial period) are proportional to the number of running containers.
+Costs scale with the number of Availability Zones (AZs) — see [Cost-Optimized Deployment](operations_deploy_advanced.md#cost-optimized-deployment) for configuration to limit them, and [Cost Management](operations_cost_management.md) for the full cost breakdown.
 
-To reduce costs, you can limit the number of AZs or use Fargate Spot pricing. See [Cost-Optimized Deployment](operations_deploy_advanced.md#cost-optimized-deployment) for configuration examples.
+---
+
+## :material-delete-outline: Cleaning Up
+
+When you're done testing, tear down the stack to stop incurring AWS and license charges:
+
+```bash
+terraform destroy
+```
+
+Running from the ZIP download instead of `git clone`? Run the same command from the `samples-main/getting_started_production/terraform` directory.
 
 ---
 
@@ -190,6 +192,7 @@ To reduce costs, you can limit the number of AZs or use Fargate Spot pricing. Se
 - :material-book-open-variant: [**API Overview**](api_overview.md) — Endpoints, parameters, and usage examples
 - :material-cog: [**Configuration**](operations_configuration.md) — All environment variables and options
 - :material-server-network: [**Advanced Deployment**](operations_deploy_advanced.md) — VPC integration, multi-region, cost optimization, manual ECS
+- :material-cash-multiple: [**Cost Management**](operations_cost_management.md) — Infrastructure, license, and AI usage cost breakdown
 - :material-directions-fork: [**Resilience & Failover**](operations_resilience.md) — Multi-region routing and quota multiplication
 - :material-shield-lock: [**Data Sovereignty & Compliance**](operations_compliance.md) — GDPR-compliant region configuration
 - :material-puzzle: [**Use Cases**](use_cases.md) — Open WebUI, n8n, coding assistants, and more

@@ -6,7 +6,7 @@ keywords: stdapi.ai troubleshooting, AWS Bedrock errors, Terraform apply failed,
 
 # :material-wrench: Troubleshooting
 
-Common issues when deploying stdapi.ai for the first time. If your error isn't listed here, open an issue on [GitHub](https://github.com/stdapi-ai/stdapi.ai/issues) or reach out via the [AWS Marketplace contact form](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo).
+Common issues when deploying stdapi.ai for the first time. If your error isn't listed here, see the [Contact](contact.md) page, or open an issue on [GitHub](https://github.com/stdapi-ai/stdapi.ai/issues).
 
 ---
 
@@ -39,7 +39,7 @@ Common issues when deploying stdapi.ai for the first time. If your error isn't l
 ??? failure "ElastiCache creation failed — insufficient capacity in AZ (Open WebUI sample)"
     The ElastiCache Valkey cache occasionally fails to create when the target availability zone is out of capacity.
 
-    ```
+    ```text
     Error: waiting for ElastiCache Replication Group ... create: unexpected state 'create-failed',
     wanted target 'available'
     ```
@@ -56,8 +56,10 @@ Common issues when deploying stdapi.ai for the first time. If your error isn't l
         --userns=keep-id \
         -v ~/.aws:/home/nonroot/.aws:ro,z \
         -e AWS_BEDROCK_REGIONS=us-east-1,us-west-2 \
+        -e ENABLE_DOCS=true \
         ghcr.io/stdapi-ai/stdapi.ai-community:latest
       ```
+    - See [Local Development](operations_getting_started_local.md#run-it) for the full run command.
 
 ---
 
@@ -84,7 +86,7 @@ Common issues when deploying stdapi.ai for the first time. If your error isn't l
     - See [Authentication & Security](operations_authentication_security.md) for all options.
 
 ??? failure "`403 Forbidden` — IAM permission denied on API calls"
-    The gateway reached AWS Bedrock, but the **ECS task role** (or your local AWS credentials) lacks permission for the requested action. AWS returns `AccessDeniedException`, which stdapi.ai maps to HTTP `403` with error type `permission_error`. This is an IAM misconfiguration, **not** a client API-key problem.
+    The gateway reached Amazon Bedrock, but the **ECS task role** (or your local AWS credentials) lacks permission for the requested action. AWS returns `AccessDeniedException`, which stdapi.ai maps to HTTP `403` with error type `permission_error`. This is an IAM misconfiguration, **not** a client API-key problem.
 
     - Confirm the task role grants `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream` (and the `bedrock:Converse*` actions) for the target model ARNs.
     - For models invoked through an inference profile, allow both the profile ARN and the underlying foundation-model ARNs in the policy.
@@ -116,7 +118,7 @@ Common issues when deploying stdapi.ai for the first time. If your error isn't l
 ??? failure "`400 Bad Request` — This model is not available under data retention mode 'default'."
     A specific model is unavailable or requests to it are rejected because your account's data retention mode is incompatible with what that model requires.
 
-    AWS Bedrock enforces retention compatibility at invocation time: each model declares the retention modes it accepts, and if your effective mode is not among them, the request is blocked.
+    Amazon Bedrock enforces retention compatibility at invocation time: each model declares the retention modes it accepts, and if your effective mode is not among them, the request is blocked.
 
     **Common scenarios:**
 
@@ -132,7 +134,7 @@ Common issues when deploying stdapi.ai for the first time. If your error isn't l
 ??? failure "S3 error on image generation or audio transcription"
     The S3 bucket is missing, unreachable, or in the wrong region.
 
-    - The Terraform module creates this bucket automatically via `s3_bucket_create = true`.
+    - The Terraform module creates the bucket automatically unless you pass your own via `aws_s3_bucket`.
     - If you're using your own bucket: `AWS_S3_BUCKET` must point to a bucket in the same region as the **first** entry in `AWS_BEDROCK_REGIONS`.
     - Verify the ECS task IAM role has `s3:PutObject` / `s3:GetObject` on the bucket.
 
@@ -140,8 +142,21 @@ Common issues when deploying stdapi.ai for the first time. If your error isn't l
     Outbound traffic to AWS endpoints is blocked.
 
     - Confirm the ECS task's security group allows outbound HTTPS (port 443).
-    - If using **VPC endpoints** (the commercial Terraform default), verify the endpoint security groups and policies permit traffic from the ECS task subnet.
+    - If using **VPC endpoints** (the Terraform module default), verify the endpoint security groups and policies permit traffic from the ECS task subnet.
     - If ECS runs in a private subnet without VPC endpoints, confirm the NAT gateway / route table is configured.
+
+??? failure "`413 Payload Too Large` — request or file rejected as oversized"
+    Either the application-level file-size cap or an edge control rejected the request.
+
+    - Check [`MAX_INPUT_FILE_SIZE`](operations_configuration.md#max-input-file-size) — it caps the bytes of any single file loaded into memory for model input; disabled by default, so if it's set and the error appears, raise it or reduce the input size.
+    - If the deployment sits behind the Terraform module's WAF (`alb_waf_enabled=true`), check for a `SizeConstraintStatement` rule on the request body — see [Request Size & Resource Limits](operations_authentication_security.md#request-size-resource-limits).
+    - If fronted by Amazon API Gateway instead of an ALB, remember its hard 10 MB payload limit.
+
+??? failure "`408`/`504` — request times out mid-stream on long generations"
+    A slow or hung generation exceeded a timeout somewhere between the model and the client.
+
+    - Check [`AI_RESPONSE_TIMEOUT`](operations_configuration.md#ai-response-timeout) — it closes stalled upstream model connections; raise it for workloads with long-running generations.
+    - Check the Terraform module's `alb_idle_timeout` (default: 3600 s) — if you lowered it, or front the deployment with your own load balancer at a shorter idle timeout, streaming responses can be cut off mid-flight. See [ALB Resilience](operations_resilience.md#alb-resilience).
 
 ### AWS error → HTTP status mapping
 
@@ -175,13 +190,19 @@ stdapi.ai translates upstream AWS error codes into standard HTTP responses with 
 
     - Verify the OIDC issuer URL, client ID, client secret, and redirect URI in the ALB listener rule.
     - For Cognito, confirm the app client is configured as a "confidential" client with a client secret.
-    - See [Authentication & Security → ALB OIDC](operations_authentication_security.md).
+    - See [Authentication & Security → via Application Load Balancer (ALB)](operations_authentication_security.md#via-application-load-balancer-alb).
 
 ---
 
-## :material-arrow-right: Still stuck?
+## :material-arrow-right: Next Steps
 
-- [Configuration reference](operations_configuration.md) — Every environment variable.
-- [Terraform module docs](https://github.com/stdapi-ai/terraform-aws-stdapi-ai) — All module inputs and outputs.
-- [GitHub issues](https://github.com/stdapi-ai/stdapi.ai/issues) — Report a bug or ask a question.
-- [Advanced Deployment](operations_deploy_advanced.md) — VPC integration, manual ECS, multi-region.
+<div class="grid cards" markdown>
+
+- :material-cog: [**Configuration Reference**](operations_configuration.md) — Every environment variable
+- :material-server-network: [**Advanced Deployment**](operations_deploy_advanced.md) — VPC integration, manual ECS, multi-region
+- :material-lock: [**Authentication & Security**](operations_authentication_security.md) — API keys, OIDC/Cognito, IAM
+- :material-terraform: [**Terraform Module Docs**](https://github.com/stdapi-ai/terraform-aws-stdapi-ai) — All module inputs and outputs
+- :material-github: [**GitHub Issues**](https://github.com/stdapi-ai/stdapi.ai/issues) — Report a bug or ask a question
+- :material-email-outline: [**Contact**](contact.md) — Reach the team directly
+
+</div>

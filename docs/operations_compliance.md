@@ -10,9 +10,9 @@ stdapi.ai is deployed entirely within your AWS account. All AI model inference, 
 
 !!! success "What this means for your organization"
     - **Your data never leaves your AWS account** — all model inference, storage, and service calls run exclusively in the regions you configure
-    - **AWS Bedrock does not retain or train on your data** — prompts and completions are never used for model training; model providers have no access
+    - **Amazon Bedrock does not retain or train on your data** — prompts and completions are never used for model training; model providers have no access
     - **AWS services carry enterprise compliance certifications** — GDPR, ISO 27001/27017/27018, SOC 1/2/3, HIPAA, FedRAMP (Moderate and High), PCI-DSS, and more via Amazon Bedrock
-    - **All data encrypted in transit and at rest** — TLS 1.2+ on all AWS service calls; the Terraform module additionally enforces TLS 1.3 with post-quantum key exchange on the ALB and Customer Managed KMS keys for all stored data
+    - **All data encrypted in transit and at rest** — TLS 1.2+ on all AWS service calls; the Terraform module additionally configures the ALB with TLS 1.2+ with TLS 1.3 and post-quantum key exchange enabled, and Customer Managed KMS keys for all stored data
 
 <div class="grid cards" markdown>
 
@@ -37,14 +37,14 @@ stdapi.ai is deployed entirely within your AWS account. All AI model inference, 
 
 ---
 
-## :material-application-outline: Application
+## :material-application-outline: Application Data Flow
 
 The diagram below shows exactly where data flows and what is retained at each step:
 
 ```mermaid
 %%{init: {'flowchart': {'htmlLabels': false}} }%%
 flowchart TD
-    client["Client request"] -->|"HTTPS (TLS 1.3)"| alb["ALB (your AWS account)"]
+    client["Client request"] -->|"HTTPS (TLS 1.2+, TLS 1.3 and PQ key exchange enabled)"| alb["ALB (your AWS account)"]
     alb -->|"HTTP (private VPC)"| ecs["ECS container\n(in-memory only, stateless)"]
     ecs -->|"HTTPS — inference"| bedrock["Amazon Bedrock\n(no prompt retention)"]
     ecs -->|"HTTPS — temp files"| s3["Amazon S3\n(your bucket, TTL = request duration)"]
@@ -56,21 +56,11 @@ flowchart TD
 
 - **ECS container** — holds request data in memory only; stateless between requests; no disk writes
 - **Amazon Bedrock** — processes the inference and returns the result; does not retain prompts ([AWS source](https://docs.aws.amazon.com/bedrock/latest/userguide/data-protection.html))
-- **Amazon S3** — temporary storage for multimodal inputs/outputs (images, audio, PDFs); files are deleted immediately after the request completes; a 1-day lifecycle policy acts as a failsafe
+- **Amazon S3** — temporary storage for multimodal inputs/outputs (images, audio, PDFs); files are deleted immediately after the request completes — see [S3 Data Storage](#s3-data-storage) for the lifecycle-policy failsafe
 - **Amazon CloudWatch** — receives structured request metadata (method, path, status, model, latency); prompt and response content are **never logged by default** (requires `LOG_REQUEST_PARAMS=true` to enable)
-- **Polly / Transcribe / Comprehend / Translate** — used only when audio or translation features are invoked; see [AI service opt-out](#aws-ai-service-improvement-opt-out) for data retention controls
+- **Amazon Polly / Transcribe / Comprehend / Translate** — used only when audio or translation features are invoked; see [AI service opt-out](#aws-ai-service-improvement-opt-out) for data retention controls
 
-stdapi.ai communicates exclusively with the following AWS services, all within the regions you configure:
-
-- **Amazon Bedrock** — model inference
-- **Amazon S3** — temporary file storage for multimodal inputs and outputs
-- **Amazon Polly** — text-to-speech (when used)
-- **Amazon Transcribe** — speech-to-text (when used)
-- **Amazon Comprehend** — language detection (when used)
-- **Amazon Translate** — text translation (when used)
-- **Amazon CloudWatch** — logs and metrics
-
-No other outbound network calls are made. The application does not contact any third-party API, telemetry service, or external endpoint.
+stdapi.ai communicates exclusively with the six AWS services above, all within the regions you configure. No other outbound network calls are made — the application does not contact any third-party API, telemetry service, or external endpoint.
 
 ### Data in Transit
 
@@ -88,15 +78,15 @@ ECS containers hold no user data between requests. All persistent data (multimod
 
 ---
 
-## :material-brain: AWS Bedrock
+## :material-brain: Amazon Bedrock
 
 ### Data Privacy
 
-AWS gives you explicit control over whether your prompts and outputs are retained from inference requests via a **data retention mode**. The mode can be set at the account or project level and applies consistently across all inference calls. For full details, see the [AWS Bedrock data retention documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/data-retention.html).
+AWS gives you explicit control over whether your prompts and outputs are retained from inference requests via a **data retention mode**. The mode can be set at the account or project level and applies consistently across all inference calls. For full details, see the [Amazon Bedrock data retention documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/data-retention.html).
 
 #### Data Retention Modes
 
-| Mode                  | Behaviour                                                                                                                                                                                  |
+| Mode                  | Behavior                                                                                                                                                                                   |
 |-----------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `default`             | AWS may retain data for safety and abuse-prevention purposes. The model provider does **not** receive it. Actual retention depends on the model — consult the model's terms for specifics. |
 | `provider_data_share` | AWS retains and shares your inference data with the model provider per their requirements. Required for access to certain models (see below).                                              |
@@ -107,16 +97,16 @@ AWS gives you explicit control over whether your prompts and outputs are retaine
 
 #### Zero Data Retention (ZDR) for High-Compliance Accounts
 
-Some models require data retention for safety and abuse-prevention purposes. If your organisation requires zero data retention for compliance reasons and needs access to these models, contact your **AWS account manager** to discuss eligibility. ZDR access is evaluated on a per-account, per-model basis in coordination with the model provider.
+Some models require data retention for safety and abuse-prevention purposes. If your organization requires zero data retention for compliance reasons and needs access to these models, contact your **AWS account manager** to discuss eligibility. ZDR access is evaluated on a per-account, per-model basis in coordination with the model provider.
 
-You can also enforce a zero-retention policy organisation-wide via an AWS Service Control Policy (SCP) — contact your AWS account manager or cloud team to set this up.
+You can also enforce a zero-retention policy organization-wide via an AWS Service Control Policy (SCP) — contact your AWS account manager or cloud team to set this up.
 
 #### `provider_data_share` Mode and Model Availability
 
 Certain models — for example, models that require provider-side safety review — are only accessible if your account is configured to share inference data with the model provider. This is an explicit opt-in: most models do not require it, and AWS blocks the request if your retention policy does not permit it.
 
 !!! warning "Understand the implications before enabling `provider_data_share`"
-    When this mode is active, AWS retains and shares your inference data with the relevant model provider per their requirements. Prefer enabling it at the project level rather than account-wide, and verify which models require it before doing so. See the [AWS Bedrock data retention documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/data-retention.html) for configuration steps.
+    When this mode is active, AWS retains and shares your inference data with the relevant model provider per their requirements. Prefer enabling it at the project level rather than account-wide, and verify which models require it before doing so. See the [Amazon Bedrock data retention documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/data-retention.html) for configuration steps.
 
 #### Model Deployment Account Architecture
 
@@ -128,7 +118,7 @@ This means that regardless of the geographic origin of a model, inference runs o
 
 ### Abuse Detection
 
-AWS operates automated abuse detection mechanisms on Amazon Bedrock to identify activity that violates AWS or model provider terms of service. Full details are in the [AWS Bedrock abuse detection documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/abuse-detection.html).
+AWS operates automated abuse detection mechanisms on Amazon Bedrock to identify activity that violates AWS or model provider terms of service. Full details are in the [Amazon Bedrock abuse detection documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/abuse-detection.html).
 
 Key points:
 
@@ -140,7 +130,7 @@ Key points:
 
 ### Encryption at Rest and in Transit
 
-From the [AWS Bedrock FAQs](https://aws.amazon.com/bedrock/faqs/):
+From the [Amazon Bedrock FAQs](https://aws.amazon.com/bedrock/faqs/):
 
 > *"Your data in Amazon Bedrock is always encrypted in transit and at rest, and you can optionally encrypt the data using your own keys."*
 
@@ -204,7 +194,7 @@ S3 is used as temporary storage for multimodal content (images, PDFs, audio file
 
 - **Primary bucket** (`AWS_S3_BUCKET`) — must reside in the same AWS region as the first entry in `AWS_BEDROCK_REGIONS`.
 - **Regional buckets** (`AWS_S3_REGIONAL_BUCKETS`) — for multi-region deployments, one bucket per Bedrock region ensures each region reads and writes data locally. When using the Terraform module, these are created automatically.
-- **Lifecycle policies** — the Terraform module applies a 1-day lifecycle policy to the temporary prefix as a failover safeguard. The application itself removes temporary files as soon as the operation completes, so files rarely remain beyond the duration of a single request.
+- **Lifecycle policies** — the Terraform module applies a 1-day lifecycle policy to the temporary prefix as a failsafe. The application itself removes temporary files as soon as the operation completes, so files rarely remain beyond the duration of a single request.
 
 S3 stores data within the AWS region where each bucket is created. Data does not leave that region unless you explicitly configure replication.
 
@@ -218,7 +208,7 @@ By default, stdapi.ai logs only request metadata — HTTP method, path, status c
 
 Setting `LOG_REQUEST_PARAMS=true` enables full request/response payload logging. This is **disabled by default** and should remain disabled in production environments handling sensitive data. See [Logging & Monitoring](operations_logging_monitoring.md) for details.
 
-### AWS Bedrock Invocation Logging
+### Amazon Bedrock Invocation Logging
 
 Bedrock optionally supports invocation logging — recording model inputs and outputs to S3 or CloudWatch Logs. This feature is **disabled by default** on AWS. When enabled:
 
@@ -338,11 +328,11 @@ Key limits and AWS commitments ([AWS CLOUD Act page](https://aws.amazon.com/comp
 - **Challenge mechanism**: AWS can file a motion to quash or modify requests that would require violating another country's laws, and preserves this right contractually.
 - **Customer notification**: AWS's policy is to notify customers of government data requests unless prohibited by a court order (gag order).
 - **Zero cross-border content disclosures**: AWS publicly reports that it has not disclosed enterprise or government content stored outside the US to the US government since it began reporting this metric in 2020.
-- **Technical barrier**: The [AWS Nitro System](https://aws.amazon.com/ec2/nitro/) restricts all administrative access — including by AWS employees — validated by independent security audit (NCC Group). When customer-managed encryption keys are in use, AWS may be technically unable to hand over intelligible data.
+- **Technical barrier**: The [AWS Nitro System](https://aws.amazon.com/ec2/nitro/) restricts all administrative access — including by AWS employees — validated by independent security audit (NCC Group). Combined with customer-managed encryption (see [FISA Section 702](#fisa-section-702) below), AWS may be technically unable to hand over intelligible data.
 
 ### FISA Section 702
 
-Section 702 of the **Foreign Intelligence Surveillance Act** authorises US intelligence agencies to compel US-based electronic communication service providers to deliver communications of non-US persons located outside the United States — without a per-target warrant. This authority was reauthorised in April 2024 and has no provider challenge mechanism equivalent to the CLOUD Act.
+Section 702 of the **Foreign Intelligence Surveillance Act** authorizes US intelligence agencies to compel US-based electronic communication service providers to deliver communications of non-US persons located outside the United States — without a per-target warrant. This authority was reauthorized in April 2024 and has no provider challenge mechanism equivalent to the CLOUD Act.
 
 The primary technical countermeasure is **customer-managed encryption (CMK)**: if AWS cannot decrypt the data, intelligible content cannot be produced. This is distinct from contractual protections, which cannot override applicable US law.
 
@@ -364,7 +354,7 @@ AWS also incorporates **Standard Contractual Clauses (SCCs)** into its Data Proc
 - :material-check: **Restrict all region settings to compliant regions** — `AWS_BEDROCK_REGIONS` is the primary control; all services default to it, and any optional per-service override must stay within your target geography.
 - :material-check: **Set `AWS_BEDROCK_CROSS_REGION_INFERENCE_GLOBAL=false`** — stdapi.ai will then automatically use geography-pinned inference profiles (`us.*`, `eu.*`, `ap.*`), ensuring cross-region failover never leaves the named geography.
 - :material-check: **Opt out of AWS AI service improvement** via an AWS Organizations policy — one-time console action covering Polly, Transcribe, Comprehend, and Translate.
-- :material-check: **Use a CMK with a restrictive key policy** — the Terraform module creates one by default; this is also the primary technical countermeasure against CLOUD Act and FISA 702 demands (if AWS cannot decrypt the data, intelligible content cannot be produced). For stricter control: bring your own key, limit decrypt to the ECS task role, enable automatic rotation, crypto-shredding for right-to-erasure, or a CloudHSM-backed store for FIPS 140-3 Level 3.
+- :material-check: **Use a CMK with a restrictive key policy** — the Terraform module creates one by default; see [FISA Section 702](#fisa-section-702) for why this is the primary technical countermeasure against CLOUD Act and FISA 702 demands. For stricter control: bring your own key, limit decrypt to the ECS task role, enable automatic rotation, crypto-shredding for right-to-erasure, or a CloudHSM-backed store for FIPS 140-3 Level 3.
 - :material-check: **Confirm `LOG_REQUEST_PARAMS` is disabled** (the default) in production — prompt and response content will then never appear in application logs. If Bedrock invocation logging is enabled for audit purposes, configure a KMS CMK for the S3 or CloudWatch destination.
 - :material-check: **Use AWS PrivateLink** for Bedrock and S3 to keep service calls off the public internet, and **enable TLS 1.3 on the ALB** to activate post-quantum hybrid key exchange.
 - :material-check: **Enable AWS CloudTrail** in all configured regions to monitor API activity across Bedrock, S3, KMS, and AI services.
@@ -394,7 +384,7 @@ Amazon Bedrock carries **SOC 1/2/3**, **PCI-DSS**, and **GDPR** certifications. 
 
 stdapi.ai itself does not process or store payment card data. Your PCI-DSS scoping decision is determined by what data your application sends to the gateway — not by the gateway itself.
 
-For concerns about cross-border data access under US law (CLOUD Act, FISA 702), see [US Law and Cloud Provider Obligations](#us-law-and-cloud-provider-obligations). The primary technical countermeasure is a Customer Managed KMS key — the Terraform module creates one by default.
+For concerns about cross-border data access under US law (CLOUD Act, FISA 702) — including why a Customer Managed KMS key (created by default in the Terraform module) is the primary technical countermeasure — see [US Law and Cloud Provider Obligations](#us-law-and-cloud-provider-obligations).
 
 ### :material-office-building: Government / Public Sector (FedRAMP)
 

@@ -39,21 +39,7 @@ module "stdapi_ai" {
 
 **How to connect to your ALB:**
 
-After deployment, add a target group pointing to port 8000:
-
-```hcl
-resource "aws_lb_target_group" "stdapi" {
-  name        = "stdapi-tg"
-  port        = 8000
-  protocol    = "HTTP"
-  vpc_id      = "vpc-xxxxx"
-  target_type = "ip"
-
-  health_check {
-    path = "/health"
-  }
-}
-```
+After deployment, add a target group pointing to port 8000, with a health check on `/health` — see the full target group example (with recommended health-check thresholds) in the collapsed section below.
 
 ??? example "Full integration example with ALB, IAM policies, and advanced configuration"
 
@@ -294,7 +280,8 @@ resource "aws_lb_target_group" "stdapi" {
     - Access to custom KMS keys for encryption
     - Cross-account resource access via IAM roles
 
-    **Important:** When using `api_key_secretsmanager_secret` or `api_key_ssm_parameter`, you must create and attach an IAM policy granting the ECS task access to the secret/parameter. The module does not automatically create these permissions.
+    !!! warning "Important"
+        When using `api_key_secretsmanager_secret` or `api_key_ssm_parameter`, you must create and attach an IAM policy granting the ECS task access to the secret/parameter. The module does not automatically create these permissions.
 
 ---
 
@@ -315,7 +302,7 @@ Enterprise-ready deployment with HTTPS endpoints, WAF protection, auto-scaling, 
       alb_enabled       = true
       alb_public        = true
 
-      # AWS Bedrock region configuration
+      # Amazon Bedrock region configuration
       # Select regions to get available models in the order of preference
       aws_bedrock_regions = [
         "eu-west-3",
@@ -326,7 +313,7 @@ Enterprise-ready deployment with HTTPS endpoints, WAF protection, auto-scaling, 
 
       # (Optional) In case of regional compliance requirements like GDPR,
       # disable "global" cross-region inference to ensure everything is done in valid regions.
-      # Cross-region inference allows AWS Bedrock to route requests to different regions for better availability.
+      # Cross-region inference allows Amazon Bedrock to route requests to different regions for better availability.
       # In this example, cross-region inferences will be in EU regions only and comply with GDPR
       aws_bedrock_cross_region_inference_global = false
 
@@ -334,7 +321,7 @@ Enterprise-ready deployment with HTTPS endpoints, WAF protection, auto-scaling, 
       # Left unset, a service treats every aws_bedrock_regions entry as a candidate and
       # fails over between them. Pin one when the primary region does not offer the
       # service, to skip a probe that fails on every call — at the cost of no failover.
-      # In this example, AWS Comprehend is not offered on eu-west-3, so we use eu-west-1
+      # In this example, Amazon Comprehend is not offered on eu-west-3, so we use eu-west-1
       aws_comprehend_region = "eu-west-1"
 
       # Authentication (Recommended)
@@ -377,8 +364,8 @@ Enterprise-ready deployment with HTTPS endpoints, WAF protection, auto-scaling, 
 - 5 CloudWatch alarms (memory, health, CPU anomaly, capacity, error logs)
 - Auto-scaling based on load (min defaults to the number of AZs)
 - S3 storage with lifecycle policies
-- Enhanced Container Insights
-- Regional S3 buckets for Bedrock multimodal operations (created automatically)
+- Container Insights enabled by default (set `container_insight = "enhanced"` for additional OS-level and application performance metrics)
+- Regional S3 buckets for Amazon Bedrock multimodal operations (created automatically)
 
 ```mermaid
 %%{init: {'flowchart': {'htmlLabels': true}} }%%
@@ -386,12 +373,12 @@ flowchart LR
   openai["<img src='../styles/logo_openai.svg' style='height:64px;width:auto;vertical-align:middle;' /> OpenAI SDK"] --> alb["<img src='../styles/logo_amazon_load_balancing.svg' style='height:64px;width:auto;vertical-align:middle;' /> ALB + WAF"]
   anthropic["<img src='../styles/logo_anthropic.svg' style='height:64px;width:auto;vertical-align:middle;' /> Anthropic SDK"] --> alb
   alb --> ecs["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai<br/>ECS Fargate"]
-  ecs --> bedrock_primary["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Bedrock<br/>Region 1"]
-  bedrock_primary -.-|multiple regions| bedrock_region_n["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Bedrock<br/>Region N"]
+  ecs --> bedrock_primary["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Bedrock<br/>Region 1"]
+  bedrock_primary -.-|multiple regions| bedrock_region_n["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Bedrock<br/>Region N"]
   ecs --> s3_primary["<img src='../styles/logo_amazon_s3.svg' style='height:64px;width:auto;vertical-align:middle;' /> Regional S3 Bucket<br/>Region 1"]
   s3_primary -.-|multiple regions| s3_region_n["<img src='../styles/logo_amazon_s3.svg' style='height:64px;width:auto;vertical-align:middle;' /> Regional S3 Bucket<br/>Region N"]
-  ecs --> polly["<img src='../styles/logo_amazon_polly.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Polly"]
-  ecs --> transcribe["<img src='../styles/logo_amazon_transcribe.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Transcribe"]
+  ecs --> polly["<img src='../styles/logo_amazon_polly.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Polly"]
+  ecs --> transcribe["<img src='../styles/logo_amazon_transcribe.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Transcribe"]
   ecs --> cloudwatch["<img src='../styles/logo_amazon_cloudwatch.svg' style='height:64px;width:auto;vertical-align:middle;' /> CloudWatch + Alarms"]
 ```
 
@@ -483,11 +470,10 @@ For development, side projects, and non-critical workloads.
 **What you get:**
 
 - Fargate Spot for significant cost reduction
-- Minimal resources (0.25 vCPU, 512 MiB; ARM64 is the Terraform module default)
+- Minimal resources (0.25 vCPU, 512 MiB and ARM64 are the Terraform module defaults — not set explicitly in this example)
 - Reuse existing VPC infrastructure
 - Automated scheduling (runs 8 AM-7 PM weekdays only in UTC)
 - Minimal logging (7-day retention, no Container Insights, no VPC Flow Logs)
-- S3 Intelligent-Tiering for storage optimization
 
 **Trade-offs:** Spot interruptions possible, minimal observability, scheduled availability only
 
@@ -508,7 +494,7 @@ Deploy the stdapi.ai container image directly to AWS ECS without Terraform.
 
 After subscribing, the container image is available from AWS Marketplace ECR:
 
-```
+```text
 709825985650.dkr.ecr.us-east-1.amazonaws.com/j-goutin/stdapi.ai:<version>
 ```
 
@@ -519,15 +505,15 @@ flowchart LR
   anthropic["<img src='../styles/logo_anthropic.svg' style='height:64px;width:auto;vertical-align:middle;' /> Anthropic SDK"] --> alb
   alb --> ecs["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai<br/>ECS (Fargate/EC2)"]
   ecr["<img src='../styles/logo_amazon_marketplace.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Marketplace ECR"] --> ecs
-  ecs --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Bedrock"]
-  ecs --> polly["<img src='../styles/logo_amazon_polly.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Polly"]
-  ecs --> transcribe["<img src='../styles/logo_amazon_transcribe.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Transcribe"]
-  ecs --> s3["<img src='../styles/logo_amazon_s3.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS S3"]
+  ecs --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
+  ecs --> polly["<img src='../styles/logo_amazon_polly.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Polly"]
+  ecs --> transcribe["<img src='../styles/logo_amazon_transcribe.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Transcribe"]
+  ecs --> s3["<img src='../styles/logo_amazon_s3.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon S3"]
 ```
 
 ### ECS Task Definition Example
 
-The example below uses ARM64 architecture, which requires the `-arm64` image tag. Replace `ARM64` with `X86_64` and `-arm64` with `-amd64` for AMD64. Use the untagged image to let ECS select the architecture automatically via the multi-arch manifest.
+The example below uses ARM64 architecture, which requires the `-arm64` image tag. Replace `ARM64` with `X86_64` and `-arm64` with `-amd64` for AMD64. Use a version tag without an architecture suffix (e.g. `:1.14.0`) to let ECS select the architecture automatically via the multi-arch manifest.
 
 ```json
 {
@@ -661,11 +647,11 @@ For the complete list of outputs, see [stdapi-ai/terraform-aws-stdapi-ai/outputs
 
 ## :material-wrench: Troubleshooting
 
-### VPC Endpoint Error: "couldn't find resource" for AWS Comprehend
+### VPC Endpoint Error: "couldn't find resource" for Amazon Comprehend
 
 **Error message:**
 
-```
+```text
 Error: reading EC2 VPC Endpoint Services: couldn't find resource
 
   with module.stdapi_ai.module.vpc.data.aws_vpc_endpoint_service.netdev_vpce_interface["comprehend"],
@@ -673,7 +659,7 @@ Error: reading EC2 VPC Endpoint Services: couldn't find resource
  175: data "aws_vpc_endpoint_service" "netdev_vpce_interface" {
 ```
 
-**Cause:** AWS Comprehend is not available as a VPC endpoint service in your current region.
+**Cause:** Amazon Comprehend is not available as a VPC endpoint service in your current region.
 
 **When this happens:** only on a fully private deployment — one where the module builds the VPC (no `subnet_ids`), `vpc_endpoints_allowed` is left at its default, `aws_bedrock_marketplace_auto_subscribe = false`, and every AWS service resolves to the deployment region. Any other configuration needs internet egress, so no interface endpoint is created and this error cannot occur.
 
@@ -694,6 +680,8 @@ Common regions with Comprehend support: `us-east-1`, `us-west-2`, `eu-west-1`, `
     Pointing any AWS service at another region makes the deployment cross-region, which requires internet egress. **Every** interface VPC endpoint is then dropped and a NAT gateway is provisioned instead — a change in both cost and network exposure, not just for Comprehend.
 
     To keep the private posture, deploy into a region that offers a Comprehend VPC endpoint rather than pinning the service elsewhere.
+
+---
 
 ## :material-arrow-right: Next Steps
 
