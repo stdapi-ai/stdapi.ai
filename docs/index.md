@@ -1,6 +1,6 @@
 ---
 title: stdapi.ai - OpenAI, Anthropic & Cohere Compatible AI Gateway for Amazon Bedrock
-description: Run your favorite OpenAI, Anthropic, and Cohere-compatible apps on Amazon Bedrock. Access 80+ models including Claude, OpenAI GPT, Amazon Nova, Llama for chat, video generation, and content moderation, with stored conversations, enterprise compliance, and pay-per-use pricing. 14-day free trial on AWS Marketplace.
+description: Run your favorite OpenAI, Anthropic, and Cohere-compatible apps on Amazon Bedrock. Access 100+ models including Claude, OpenAI GPT, xAI Grok, Amazon Nova for chat, video generation, and content moderation, with stored conversations, enterprise compliance, and pay-per-use pricing. 14-day free trial on AWS Marketplace.
 keywords: OpenAI API gateway, Anthropic API gateway, Cohere API gateway, AWS Bedrock API, OpenAI compatible API, Anthropic compatible API, Cohere compatible API, AWS AI gateway, OpenAI AWS integration, Anthropic AWS integration, enterprise AI API, AWS Bedrock integration, OpenAI alternative, Anthropic alternative, video generation API, content moderation API, private AI deployment, HIPAA compliant AI
 hide:
   - toc
@@ -10,7 +10,7 @@ hide:
 <div class="hero hero--home" markdown>
 # Run OpenAI, Anthropic & Cohere Apps on Amazon Bedrock
 
-Drop-in API gateway for Amazon Bedrock and AI services. Build private AI products on AWS — without exposing your data to third-party AI providers, without subscriptions, and without rewriting your applications. Your existing OpenAI, Anthropic, and Cohere applications work immediately — just change the base URL. Access 80+ models with enterprise privacy, compliance controls, and pay-per-use AWS pricing.
+Drop-in API gateway for Amazon Bedrock and AI services. Build private AI products on AWS — without exposing your data to third-party AI providers, without subscriptions, and without rewriting your applications. Your existing OpenAI, Anthropic, and Cohere applications work immediately — just change the base URL. Access 100+ models with enterprise privacy, compliance controls, and pay-per-use AWS pricing.
 
 **Two ways to try it:** 14-day free trial on AWS Marketplace for production, or free for local development.
 
@@ -22,7 +22,7 @@ Drop-in API gateway for Amazon Bedrock and AI services. Build private AI product
 
 <div class="grid cards" markdown>
 
-- :material-swap-horizontal: __Change one line, access 80+ models__
+- :material-swap-horizontal: __Change one line, access 100+ models__
   <br>Drop-in replacement for OpenAI, Anthropic, and Cohere SDKs. Works with Open WebUI, n8n, OpenClaw, Claude Code, LangChain, OpenCode, and hundreds of other applications and tools—no code changes beyond the base URL.
 
 - :material-shield-lock: __Your data stays in your AWS account__
@@ -34,8 +34,8 @@ Drop-in API gateway for Amazon Bedrock and AI services. Build private AI product
 - :material-aws: __Purpose-built for Amazon Bedrock__
   <br>Deep integration with prompt caching, reasoning modes, guardrails, service tiers, inference profiles, and prompt routers. Not a generic proxy—built to leverage every Bedrock feature.
 
-- :material-brain: __Claude, GPT, Kimi, and 80+ more__
-  <br>Claude (reasoning), OpenAI GPT, xAI Grok, Kimi, MiniMax, Qwen, Llama, GLM, Nova, Stability AI, and more. Switch models instantly—no vendor lock-in.
+- :material-brain: __Claude, GPT, Kimi, and 100+ more__
+  <br>Claude (reasoning), OpenAI GPT, xAI Grok, Kimi, DeepSeek, Qwen, GLM, Nova, MiniMax, Stability AI, and more. Switch models instantly—no vendor lock-in.
 
 - :material-rocket-launch: __Deploy in 5 minutes__
   <br>3 Terraform commands for production on AWS. Or run Docker locally for development. Production-ready infrastructure with HTTPS, WAF, auto-scaling, and monitoring included.
@@ -176,7 +176,7 @@ Drop-in API gateway for Amazon Bedrock and AI services. Build private AI product
 flowchart LR
   openai["<img src='styles/logo_openai.svg' style='height:64px;width:auto;vertical-align:middle;' /> OpenAI SDK Apps"] --> stdapi["<img src='styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai"]
   anthropic["<img src='styles/logo_anthropic.svg' style='height:64px;width:auto;vertical-align:middle;' /> Anthropic SDK Apps"] --> stdapi
-  stdapi --> bedrock["<img src='styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Bedrock<br/>80+ models"]
+  stdapi --> bedrock["<img src='styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Bedrock<br/>100+ models"]
   stdapi --> services["<img src='styles/logo_amazon.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS AI Services<br/>Polly · Transcribe · Translate"]
 ```
 
@@ -319,7 +319,7 @@ stdapi.ai is an **AWS Qualified Software** solution, verified against AWS techni
 </div>
 
 <div class="cta-banner" markdown>
-<strong>Ready to run 80+ AI models securely on AWS?</strong>
+<strong>Ready to run 100+ AI models securely on AWS?</strong>
 <div class="buttons" markdown>
 [Start 14-Day Free Trial on AWS Marketplace](operations_getting_started.md){ .md-button .md-button--primary }
 [Try Locally with Docker](operations_getting_started_local.md){ .md-button }

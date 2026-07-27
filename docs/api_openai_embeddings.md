@@ -83,7 +83,7 @@ Add provider-specific fields at the top level of your request body alongside sta
 **Cohere Embed v4 - Input Type:**
 ```json
 {
-  "model": "cohere.embed-v4",
+  "model": "cohere.embed-v4:0",
   "input": "Semantic search transforms how we find information",
   "input_type": "search_query"
 }
@@ -110,7 +110,7 @@ Configure default parameters for specific models via the `DEFAULT_MODEL_PARAMS` 
 
 ```bash
 export DEFAULT_MODEL_PARAMS='{
-  "cohere.embed-v4": {
+  "cohere.embed-v4:0": {
     "input_type": "search_document",
     "truncate": "END"
   }
@@ -300,7 +300,7 @@ curl -X POST "$BASE/v1/embeddings" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d "{
-    \"model\": \"cohere.embed-v4\",
+    \"model\": \"cohere.embed-v4:0\",
     \"input\": [
       \"file_name: report.pdf, page: 1\",
       \"data:image/jpeg;base64,$PAGE_1\",
@@ -344,7 +344,7 @@ curl -X POST "$BASE/v1/embeddings" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d "{
-    \"model\": \"cohere.embed-v4\",
+    \"model\": \"cohere.embed-v4:0\",
     \"input\": [
       \"A beautiful sunset over mountains\",
       \"data:image/jpeg;base64,/9j/4AAQSkZJRg...\",

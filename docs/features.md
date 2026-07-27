@@ -12,7 +12,7 @@ stdapi.ai is an **AI gateway purpose-built for AWS**. It brings full OpenAI, Ant
 
 <div class="grid cards" markdown>
 
-- :material-api: **One URL change, 80+ models** — Drop in as an OpenAI, Anthropic, or Cohere replacement
+- :material-api: **One URL change, 100+ models** — Drop in as an OpenAI, Anthropic, or Cohere replacement
 - :material-aws: **Everything stays in your AWS account** — No third-party routing, no data sharing
 - :material-shield-check: **Enterprise compliance built in** — ISO, SOC, HIPAA, GDPR, FedRAMP via AWS
 - :material-rocket-launch: **Production in minutes** — Terraform module on AWS Marketplace, 14-day free trial
@@ -146,7 +146,7 @@ stdapi.ai maps as many parameters as possible to Bedrock equivalents — across 
 
 ---
 
-## :material-brain: 80+ Models Across 10+ Providers
+## :material-brain: 100+ Models Across 10+ Providers
 
 Access every model available on Amazon Bedrock through a single, consistent API — including OpenAI GPT, xAI Grok, and [other frontier models](#bedrock-mantle-models).
 
@@ -333,7 +333,7 @@ Conversion preserves the core request semantics (messages, tools, sampling, stre
 | **OpenAI GPT** (frontier models)                | Responses                    |
 | **Anthropic Claude**                            | Messages                     |
 | **xAI Grok · OpenAI gpt-oss · Google Gemma 4**  | Chat Completions + Responses |
-| **Other open-weight models** (Gemma 3, Qwen, GLM, Mistral, DeepSeek, MiniMax, Kimi, Nemotron, Palmyra) | Chat Completions             |
+| **Other open-weight models** (Gemma, Qwen, GLM, Mistral, DeepSeek, MiniMax, Kimi, Nemotron, Palmyra) | Chat Completions             |
 
 !!! warning "Response IDs are stdapi.ai-specific"
     stdapi.ai response IDs embed the serving AWS region, so conversation turns chained with `previous_response_id` stay region-local. These IDs **cannot** be used directly against the Bedrock Mantle API, and raw Mantle response IDs are not accepted by stdapi.ai.

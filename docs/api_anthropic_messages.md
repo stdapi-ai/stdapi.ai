@@ -346,7 +346,7 @@ Server tools are built-in capabilities that foundation models can use directly w
 
 #### ![Amazon Nova](styles/logo_amazon_nova.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Nova Tools
 
-| Tool | Anthropic Tool Name | Amazon Nova 2 | Amazon Nova Premier |
+| Tool | Anthropic Tool Name | Amazon Nova 2 | Amazon Nova Premier (legacy) |
 |------|---------------------|:-------------:|:-------------------:|
 | Web Grounding | `web_search` | :material-check-circle:{ .success } | :material-check-circle:{ .success } |
 | Code Interpreter | `code_execution` | :material-check-circle:{ .success } | :material-close-circle:{ .unsupported } |

@@ -151,7 +151,6 @@ This API supports dynamic model name aliases matching official provider APIs. Mo
 **Examples (OpenAI GPT OSS models supported by Bedrock):**
 
 - `gpt-oss-20b` → `openai.gpt-oss-20b-1:0`
-- `gpt-oss-safeguard-20b` → `openai.gpt-oss-safeguard-20b`
 
 ## Advanced Features
 
@@ -355,7 +354,7 @@ Add system tools to your `tools` array as normal. System tools don't require par
 
 #### ![Amazon Nova](styles/logo_amazon_nova.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Nova Tools
 
-| Tool | `function.name` | Amazon Nova 2 | Amazon Nova Premier | API Support |
+| Tool | `function.name` | Amazon Nova 2 | Amazon Nova Premier (legacy) | API Support |
 |------|-----------------|:-------------:|:-------------------:|:-----------:|
 | Web Grounding | `nova_grounding` | :material-check-circle:{ .success } | :material-check-circle:{ .success } | :material-check-circle:{ .success } |
 | Code Interpreter | `nova_code_interpreter` | :material-check-circle:{ .success } | :material-close-circle:{ .unsupported } | :material-close-circle:{ .unsupported } |

@@ -34,7 +34,7 @@ n8n is a powerful workflow automation platform that enables you to connect any a
   <br>stdapi.ai works with n8n's Anthropic nodes. Templates and workflows designed for Anthropic Claude run on Amazon Bedrock—zero modifications needed.
 
 - :material-aws: __Access Amazon Bedrock Models__
-  <br>Claude, Nova, Llama, DeepSeek, Stable Diffusion, and 80+ models available in n8n workflows. Switch models without changing automation logic.
+  <br>Claude, Nova, Llama, DeepSeek, Stable Diffusion, and 100+ models available in n8n workflows. Switch models without changing automation logic.
 
 - :material-graph-outline: __Automate Business Processes__
   <br>Connect Amazon Bedrock AI to Slack, Salesforce, Google Workspace, databases, and hundreds of other services. Build intelligent automation with no-code drag-and-drop.

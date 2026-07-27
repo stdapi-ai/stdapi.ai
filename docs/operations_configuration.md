@@ -3662,7 +3662,7 @@ Configure default service tiers applied automatically to specific Bedrock models
     **Examples:**
 
     - `amazon.nova-pro-v1:0` supports: `default`, `flex`, `priority` (not `reserved`)
-    - `amazon.nova-premier-v1:0` supports: `default`, `flex`, `priority`, `reserved`
+    - `amazon.nova-premier-v1:0` (legacy) supports: `default`, `flex`, `priority`, `reserved`
 
 !!! info "Tier Precedence"
     Explicit request parameters always take precedence over configured defaults.
@@ -3789,7 +3789,7 @@ export MODEL_ALIASES='{
   "gpt-4o": "anthropic.claude-sonnet-5",
   "gpt-4o-mini": "anthropic.claude-haiku-4-5-20251001-v1:0",
   "dall-e-3": "amazon.nova-canvas-v1:0",
-  "dall-e-2": "stability.stable-image-ultra-v1:0"
+  "dall-e-2": "stability.stable-image-ultra-v1:1"
 }'
 ```
 

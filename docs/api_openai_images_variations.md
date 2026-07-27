@@ -79,9 +79,12 @@ Create variations of existing images using Amazon Bedrock image models through a
 
 | Model                             | Supported Task Types                                       | Notes                                                                                                       |
 |-----------------------------------|------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------|
-| amazon.nova-canvas-v1:0           | `IMAGE_VARIATION`, `TEXT_IMAGE`, `COLOR_GUIDED_GENERATION` | Supports standard variations plus text-guided conditioning and color-guided generation with 8 style presets |
-| amazon.titan-image-generator-v1   | `IMAGE_VARIATION`                                          | Basic variation support with similarity control                                                             |
-| amazon.titan-image-generator-v2:0 | `IMAGE_VARIATION`, `TEXT_IMAGE`, `COLOR_GUIDED_GENERATION` | Enhanced with text-guided conditioning (CANNY_EDGE, SEGMENTATION) and color-guided generation               |
+| amazon.nova-canvas-v1:0 (legacy)  | `IMAGE_VARIATION`, `TEXT_IMAGE`, `COLOR_GUIDED_GENERATION` | Supports standard variations plus text-guided conditioning and color-guided generation with 8 style presets |
+| amazon.titan-image-generator-v1 (legacy)  | `IMAGE_VARIATION`                                          | Basic variation support with similarity control                                                             |
+| amazon.titan-image-generator-v2:0 (legacy) | `IMAGE_VARIATION`, `TEXT_IMAGE`, `COLOR_GUIDED_GENERATION` | Enhanced with text-guided conditioning (CANNY_EDGE, SEGMENTATION) and color-guided generation               |
+
+!!! note "Legacy Amazon Image Models"
+    AWS has scheduled `amazon.nova-canvas-v1:0` and the Titan image models to reach end of life on September 30, 2026. Deployments with existing access can keep using them until then (legacy models are hidden unless [`AWS_BEDROCK_LEGACY=true`](operations_configuration.md#bedrock-legacy)); the Stability AI Stable Image family is the long-term successor.
 
 ### ![Stability AI](styles/logo_stabilityai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Stability AI Models
 

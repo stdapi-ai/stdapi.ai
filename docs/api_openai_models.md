@@ -1,6 +1,6 @@
 ---
 title: Models API - List Amazon Bedrock Available Models
-description: Discover and list available Amazon Bedrock models through OpenAI-compatible API. Browse 80+ models including Claude, Nova, Llama, and more across all configured regions.
+description: Discover and list available Amazon Bedrock models through OpenAI-compatible API. Browse 100+ models including Claude, Nova, Llama, and more across all configured regions.
 keywords: Amazon Bedrock models, available AI models, list models API, Claude models, OpenAI models API, AI model catalog, foundation models AWS, model discovery
 ---
 

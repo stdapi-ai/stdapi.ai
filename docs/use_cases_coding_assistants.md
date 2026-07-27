@@ -108,7 +108,7 @@ Most AI coding assistants follow a similar configuration pattern. The exact menu
 
     - **Advanced reasoning & architecture**: Anthropic Claude Opus or Fable
     - **Complex problem-solving**: Kimi thinking models
-    - **Specialized coding tasks**: Qwen3 Coder, Mistral Devstral, Mistral Codestral
+    - **Specialized coding tasks**: Qwen3 Coder, Mistral Devstral
     - **Fast completions**: Amazon Nova Micro or Nova Lite
 
     **Configuration tips:**
@@ -312,8 +312,8 @@ Use `ANTHROPIC_CUSTOM_MODEL_OPTION` to add a single custom entry to the `/model`
 {
   "env": {
     "ANTHROPIC_CUSTOM_MODEL_OPTION": "moonshot.kimi-k2-thinking",
-    "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME": "Kimi K2",
-    "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION": "Moonshot Kimi K2 via stdapi.ai"
+    "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME": "Kimi K2 Thinking",
+    "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION": "Moonshot Kimi K2 Thinking via stdapi.ai"
   }
 }
 ```

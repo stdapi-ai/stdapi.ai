@@ -90,9 +90,12 @@ Generate images with Amazon Bedrock image models like Stability AI and Amazon No
 
 | Model                             | Supported Task Types                    | Notes                                                                                       |
 |-----------------------------------|-----------------------------------------|---------------------------------------------------------------------------------------------|
-| amazon.nova-canvas-v1:0           | `TEXT_IMAGE`, `COLOR_GUIDED_GENERATION` | Supports standard text-to-image generation and color-guided generation with 8 style presets |
-| amazon.titan-image-generator-v1   | `TEXT_IMAGE`                            | Basic text-to-image generation                                                              |
-| amazon.titan-image-generator-v2:0 | `TEXT_IMAGE`, `COLOR_GUIDED_GENERATION` | Enhanced text-to-image generation with color-guided generation support                      |
+| amazon.nova-canvas-v1:0 (legacy)  | `TEXT_IMAGE`, `COLOR_GUIDED_GENERATION` | Supports standard text-to-image generation and color-guided generation with 8 style presets |
+| amazon.titan-image-generator-v1 (legacy)  | `TEXT_IMAGE`                            | Basic text-to-image generation                                                              |
+| amazon.titan-image-generator-v2:0 (legacy) | `TEXT_IMAGE`, `COLOR_GUIDED_GENERATION` | Enhanced text-to-image generation with color-guided generation support                      |
+
+!!! note "Legacy Amazon Image Models"
+    AWS has scheduled `amazon.nova-canvas-v1:0` and the Titan image models to reach end of life on September 30, 2026. Deployments with existing access can keep using them until then (legacy models are hidden unless [`AWS_BEDROCK_LEGACY=true`](operations_configuration.md#bedrock-legacy)); the Stability AI Stable Image family is the long-term successor.
 
 ### ![Stability AI](styles/logo_stabilityai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Stability AI Models
 
@@ -100,7 +103,7 @@ Generate images with Amazon Bedrock image models like Stability AI and Amazon No
 |-----------------------------------|----------------------|---------------------------------------------------|
 | stability.sd3-5-large-v1:0        | `TEXT_IMAGE`         | Stable Diffusion 3.5 Large - high quality output  |
 | stability.stable-image-core-v1:1  | `TEXT_IMAGE`         | Stable Image Core - balanced quality and speed    |
-| stability.stable-image-ultra-v1:0 | `TEXT_IMAGE`         | Stable Image Ultra - premium quality and detail   |
+| stability.stable-image-ultra-v1:1 | `TEXT_IMAGE`         | Stable Image Ultra - premium quality and detail   |
 
 !!! info "No Built-In Aliases for OpenAI Image Model Names"
     OpenAI's default image model names (`dall-e-2`, `dall-e-3`, `gpt-image-1`) have **no built-in alias**, so requests using them fail with a model-not-found error — the most common first-call issue. Pass one of the model IDs above, or map the OpenAI names to your preferred models with [`MODEL_ALIASES`](operations_configuration.md#model-aliases).
@@ -234,7 +237,7 @@ curl -X POST "$BASE/v1/images/generations" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "amazon.titan-image-generator-v2:0",
+    "model": "amazon.nova-canvas-v1:0",
     "prompt": "A beautiful landscape with mountains"
   }'
 ```
@@ -270,7 +273,7 @@ curl -X POST "$BASE/v1/images/generations" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "amazon.titan-image-generator-v2:0",
+    "model": "amazon.nova-canvas-v1:0",
     "prompt": "Nature scene with colors",
     "taskType": "COLOR_GUIDED_GENERATION",
     "colorGuidedGenerationParams": {
@@ -291,7 +294,7 @@ curl -X POST "$BASE/v1/images/generations" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "stability.stable-image-ultra-v1:0",
+    "model": "stability.stable-image-ultra-v1:1",
     "prompt": "A photorealistic mountain landscape at sunset"
   }'
 ```
@@ -310,7 +313,7 @@ curl -X POST "$BASE/v1/images/generations" \
 |-----------------------------------|-----------------|---------------------------------------|
 | stability.sd3-5-large-v1:0        | png, jpeg, webp | High quality, versatile compositions  |
 | stability.stable-image-core-v1:1  | png, jpeg       | Balanced quality and speed            |
-| stability.stable-image-ultra-v1:0 | png, jpeg       | Premium quality and detail            |
+| stability.stable-image-ultra-v1:1 | png, jpeg       | Premium quality and detail            |
 
 !!! info "Full Parameter Reference"
     For all Stability AI parameters, see [Stability AI documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-stability-diffusion.html)

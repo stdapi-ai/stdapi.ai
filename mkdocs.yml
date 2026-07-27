@@ -1,6 +1,6 @@
 ---
 site_name: stdapi.ai
-site_description: "Deploy OpenAI, Anthropic, and Cohere-compatible applications on Amazon Bedrock with no code changes. Access 80+ models including Claude, OpenAI GPT, Amazon Nova, Llama for chat, video generation, and content moderation, with enterprise compliance, pay-per-use pricing, and AWS data sovereignty."
+site_description: "Deploy OpenAI, Anthropic, and Cohere-compatible applications on Amazon Bedrock with no code changes. Access 100+ models including Claude, OpenAI GPT, xAI Grok, Amazon Nova for chat, video generation, and content moderation, with enterprise compliance, pay-per-use pricing, and AWS data sovereignty."
 site_url: https://stdapi.ai
 site_author: JGoutin-dev
 exclude_docs: |

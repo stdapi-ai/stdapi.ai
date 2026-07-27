@@ -107,9 +107,12 @@ Edit images using inpainting with Amazon Bedrock image models through an OpenAI-
 
 | Model                             | Supported Task Types                                                              | Mask Support                                                                    | Notes                                                                               |
 |-----------------------------------|-----------------------------------------------------------------------------------|---------------------------------------------------------------------------------|-------------------------------------------------------------------------------------|
-| amazon.nova-canvas-v1:0           | `TEXT_IMAGE`, `INPAINTING`, `OUTPAINTING`, `BACKGROUND_REMOVAL`, `VIRTUAL_TRY_ON` | ✅ Required for inpainting/outpainting<br>✅ Used as reference for virtual try-on | Supports multiple editing modes including advanced virtual try-on with 3 mask types |
-| amazon.titan-image-generator-v1   | `INPAINTING`, `OUTPAINTING`                                                       | ✅ Required for inpainting/outpainting                                           | Supports text-based mask prompts as alternative to mask images                      |
-| amazon.titan-image-generator-v2:0 | `INPAINTING`, `OUTPAINTING`, `BACKGROUND_REMOVAL`                                 | ✅ Required for inpainting/outpainting<br>❌ Rejected for background removal      | Enhanced features including background removal without mask                         |
+| amazon.nova-canvas-v1:0 (legacy)  | `TEXT_IMAGE`, `INPAINTING`, `OUTPAINTING`, `BACKGROUND_REMOVAL`, `VIRTUAL_TRY_ON` | ✅ Required for inpainting/outpainting<br>✅ Used as reference for virtual try-on | Supports multiple editing modes including advanced virtual try-on with 3 mask types |
+| amazon.titan-image-generator-v1 (legacy)  | `INPAINTING`, `OUTPAINTING`                                                       | ✅ Required for inpainting/outpainting                                           | Supports text-based mask prompts as alternative to mask images                      |
+| amazon.titan-image-generator-v2:0 (legacy) | `INPAINTING`, `OUTPAINTING`, `BACKGROUND_REMOVAL`                                 | ✅ Required for inpainting/outpainting<br>❌ Rejected for background removal      | Enhanced features including background removal without mask                         |
+
+!!! note "Legacy Amazon Image Models"
+    AWS has scheduled `amazon.nova-canvas-v1:0` and the Titan image models to reach end of life on September 30, 2026. Deployments with existing access can keep using them until then (legacy models are hidden unless [`AWS_BEDROCK_LEGACY=true`](operations_configuration.md#bedrock-legacy)); the Stability AI Stable Image family is the long-term successor.
 
 !!! info "Amazon Nova Canvas Default Behavior"
     **`amazon.nova-canvas-v1:0`** automatically selects the task type based on the presence of a mask when no `taskType` is explicitly provided:
@@ -454,7 +457,7 @@ curl -X POST "$BASE/v1/images/edits" \
   -F image=@source.png \
   -F mask=@mask.png \
   -F prompt="A beautiful garden with flowers" \
-  -F model="amazon.titan-image-generator-v2:0"
+  -F model="amazon.nova-canvas-v1:0"
 ```
 
 **Parameter Mapping:**
@@ -493,7 +496,7 @@ curl -X POST "$BASE/v1/images/edits" \
   -H "Content-Type: multipart/form-data" \
   -F image=@photo.png \
   -F prompt="Extend with a forest" \
-  -F model="amazon.titan-image-generator-v2:0" \
+  -F model="amazon.nova-canvas-v1:0" \
   -F taskType="OUTPAINTING"
 
 # Background Removal (v2 only, no prompt needed)
@@ -501,7 +504,7 @@ curl -X POST "$BASE/v1/images/edits" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: multipart/form-data" \
   -F image=@photo.png \
-  -F model="amazon.titan-image-generator-v2:0" \
+  -F model="amazon.nova-canvas-v1:0" \
   -F taskType="BACKGROUND_REMOVAL"
 ```
 

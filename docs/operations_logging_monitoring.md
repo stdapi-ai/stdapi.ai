@@ -143,7 +143,7 @@ Usage is reported as a nested `usage` list on `request` / `request_stream` event
 | Field                       | Type | Description                                                                                            |
 |:----------------------------|:-----|:-------------------------------------------------------------------------------------------------------|
 | `service`                   | str | AWS service/API: `bedrock-runtime`, `polly`, `transcribe`, `translate`, `comprehend`                  |
-| `model`                     | str | Model identifier (e.g., `amazon.titan-embed-v1`, `amazon.transcribe`)                                 |
+| `model`                     | str | Model identifier (e.g., `amazon.titan-embed-text-v2:0`, `amazon.transcribe`)                                 |
 | `operation`                 | str | Request route path (e.g., `/v1/chat/completions`, `/v1/embeddings`, `/v1/audio/speech`)              |
 | `region`                    | str | AWS region that served the request (part of the aggregation key)                                       |
 | `tier`                      | str | Service tier that actually served the call (AWS-reported when available, else as requested): `standard`, `flex`, `priority`, `batch` |

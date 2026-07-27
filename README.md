@@ -5,7 +5,7 @@
 
 **OpenAI, Anthropic & Cohere Compatible API Gateway for Amazon Bedrock and AWS AI Services**
 
-Run your favorite OpenAI, Anthropic, and Cohere-compatible applications on Amazon Bedrock. Access 80+ models including Claude, OpenAI GPT, xAI Grok, Kimi, MiniMax, Qwen with enterprise privacy, compliance controls, and pay-per-use AWS pricing.
+Run your favorite OpenAI, Anthropic, and Cohere-compatible applications on Amazon Bedrock. Access 100+ models including Claude, OpenAI GPT, xAI Grok, Kimi, DeepSeek, Qwen with enterprise privacy, compliance controls, and pay-per-use AWS pricing.
 
 ---
 
@@ -119,7 +119,7 @@ Prefer a hands-off setup? A [managed deployment service](https://aws.amazon.com/
 - **🌍 Multiply quota across regions** — Each AWS region has independent quota. 3 regions = 3× tokens per minute. Automatic routing and failover—no client changes.
 - **💰 Pay only what you use** — Amazon Bedrock rates, no markup, no subscriptions or monthly minimums.
 - **⚡ Advanced Bedrock features** — Reasoning modes (Claude, Nova), prompt caching, guardrails, service tiers, inference profiles, prompt routers, stored conversations—all through standard OpenAI and Anthropic API parameters.
-- **🧠 80+ models** — Claude, OpenAI GPT, xAI Grok, Kimi, MiniMax, Qwen, GLM, Nova, Llama, Stability AI, and more. Switch instantly—no vendor lock-in.
+- **🧠 100+ models** — Claude, OpenAI GPT, xAI Grok, Kimi, DeepSeek, Qwen, GLM, Nova, Llama, Stability AI, and more. Switch instantly—no vendor lock-in.
 - **🎨 Complete multi-modal API** — Chat, embeddings, image generation/editing/variations, video generation, audio speech/transcription/translation, content moderation. Amazon Polly, Transcribe, Translate unified under OpenAI-compatible endpoints.
 - **📊 Full observability** — OpenTelemetry integration, request/response logging, real-time AWS cost tracking per request, Swagger and ReDoc API documentation.
 - **🤖 Integrated MCP server** — Every API endpoint exposed as a Model Context Protocol tool. AI agents connect directly—no HTTP client code required. Streamable HTTP and SSE transports with configurable tool selection.
@@ -234,7 +234,7 @@ We welcome contributions! Whether it's bug reports, new features, documentation 
 
 <div align="center">
 
-**Ready to run 80+ AI models securely on AWS?**
+**Ready to run 100+ AI models securely on AWS?**
 
 [Start 14-Day Free Trial on AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo) · [Deployment guide](https://stdapi.ai/operations_getting_started/) · [Terraform examples](https://github.com/stdapi-ai/samples) · [Try Locally with Docker](#-try-it-locally-with-docker)
 
