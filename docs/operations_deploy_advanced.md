@@ -331,8 +331,10 @@ Enterprise-ready deployment with HTTPS endpoints, WAF protection, auto-scaling, 
       aws_bedrock_cross_region_inference_global = false
 
       # AI services region extra configuration
-      # Required if a service or a feature is not available in your main region
-      # In this example, AWS Comprehend is not available on eu-west-3, so we use eu-west-1
+      # Left unset, a service treats every aws_bedrock_regions entry as a candidate and
+      # fails over between them. Pin one when the primary region does not offer the
+      # service, to skip a probe that fails on every call — at the cost of no failover.
+      # In this example, AWS Comprehend is not offered on eu-west-3, so we use eu-west-1
       aws_comprehend_region = "eu-west-1"
 
       # Authentication (Recommended)
@@ -543,7 +545,7 @@ The example below uses ARM64 architecture, which requires the `-arm64` image tag
   "containerDefinitions": [
     {
       "name": "main",
-      "image": "709825985650.dkr.ecr.us-east-1.amazonaws.com/j-goutin/stdapi.ai:1.0.1-arm64",
+      "image": "709825985650.dkr.ecr.us-east-1.amazonaws.com/j-goutin/stdapi.ai:1.14.0-arm64",
       "essential": true,
       "readonlyRootFilesystem": true,
       "portMappings": [
@@ -673,6 +675,8 @@ Error: reading EC2 VPC Endpoint Services: couldn't find resource
 
 **Cause:** AWS Comprehend is not available as a VPC endpoint service in your current region.
 
+**When this happens:** only on a fully private deployment — one where the module builds the VPC (no `subnet_ids`), `vpc_endpoints_allowed` is left at its default, `aws_bedrock_marketplace_auto_subscribe = false`, and every AWS service resolves to the deployment region. Any other configuration needs internet egress, so no interface endpoint is created and this error cannot occur.
+
 **Solution:** Set the `aws_comprehend_region` variable to a region where Comprehend is available:
 
 ```hcl
@@ -685,6 +689,11 @@ module "stdapi_ai" {
 ```
 
 Common regions with Comprehend support: `us-east-1`, `us-west-2`, `eu-west-1`, `eu-central-1`
+
+!!! warning "This fix ends the fully private deployment"
+    Pointing any AWS service at another region makes the deployment cross-region, which requires internet egress. **Every** interface VPC endpoint is then dropped and a NAT gateway is provisioned instead — a change in both cost and network exposure, not just for Comprehend.
+
+    To keep the private posture, deploy into a region that offers a Comprehend VPC endpoint rather than pinning the service elsewhere.
 
 ## :material-arrow-right: Next Steps
 
