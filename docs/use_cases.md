@@ -121,7 +121,7 @@ Build self-directed AI agents that can plan, execute, and refine complex tasks a
 - **Task automation** - Self-improving workflows that adapt to results
 - **Code agents** - Autonomous development and testing systems
 
-**Compatible frameworks:** OpenClaw, Hermes Agent, LangChain, LangGraph, LlamaIndex, CrewAI, OpenAI Agents SDK, Pydantic AI
+**Compatible frameworks:** OpenClaw, Hermes Agent, LangChain, LangGraph, LlamaIndex, CrewAI, OpenAI Agents SDK, Pydantic AI, Strands Agents
 
 All agent frameworks that support OpenAI or Anthropic SDKs work immediately — point the SDK's base URL to stdapi.ai. See the [API overview](api_overview.md) for connection details.
 

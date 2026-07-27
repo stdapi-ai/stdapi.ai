@@ -433,7 +433,7 @@ stdapi.ai is a drop-in replacement in hundreds of applications and tools. Change
   <br>n8n, Langflow, Dify, Flowise — connect AI to your business processes
 
 - :material-robot: **Agent Frameworks**
-  <br>OpenClaw, Hermes Agent, LangChain, LangGraph, CrewAI, OpenAI Agents SDK — multi-agent systems on Bedrock
+  <br>OpenClaw, Hermes Agent, LangChain, LangGraph, CrewAI, OpenAI Agents SDK, Strands Agents — multi-agent systems on Bedrock
 
 - :material-forum: **Team Chatbots**
   <br>Slack, Discord, Microsoft Teams — AI assistants in your team's communication tools
