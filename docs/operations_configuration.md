@@ -80,7 +80,8 @@ export AWS_S3_BUCKET=my-stdapi-us-east-1-bucket
 # Optional: Regional buckets for async/batch inference in other regions
 export AWS_S3_REGIONAL_BUCKETS='{"us-west-2": "my-stdapi-us-west-2-bucket", "eu-west-1": "my-stdapi-eu-west-1-bucket"}'
 
-# AWS AI services regions (optional - defaults to first AWS_BEDROCK_REGIONS if not specified)
+# AWS AI services regions (optional - when unset, every AWS_BEDROCK_REGIONS entry is a
+# candidate with automatic failover; set one to pin the service to a single region)
 export AWS_POLLY_REGION=us-east-1           # Text-to-speech
 export AWS_TRANSCRIBE_REGION=us-east-1      # Speech-to-text (audio transcription)
 export AWS_COMPREHEND_REGION=us-east-1      # Language detection & moderation
@@ -1573,7 +1574,7 @@ export AWS_BEDROCK_MODEL_ARN_MAPPING='{
 ### Other AWS Services
 
 !!! note "Optional Configuration"
-    Each service region is optional and defaults to the first region in `AWS_BEDROCK_REGIONS` if not specified.
+    Each service region is optional. Left unset, the service treats every `AWS_BEDROCK_REGIONS` entry as a candidate and fails over between them; setting one pins the service to that single region, with no failover.
 
 #### `AWS_POLLY_REGION` { #aws-polly-region }
 
@@ -1602,7 +1603,7 @@ export AWS_POLLY_REGION=us-east-1
 :   All regions in `AWS_BEDROCK_REGIONS`, tried in order with automatic failover
 
 :octicons-workflow-24: **Behavior**
-:   When unset, Comprehend calls try each `AWS_BEDROCK_REGIONS` entry in order and fail over to the next region on region-level errors (throttling, service unavailability, network issues). Setting an explicit region pins Comprehend to that single region with no failover.
+:   When unset, Comprehend calls try each `AWS_BEDROCK_REGIONS` entry in order and fail over to the next region on region-level errors (throttling, service unavailability, network issues, or a region that does not offer Comprehend or the requested operation). Setting an explicit region pins Comprehend to that single region with no failover.
 
 ```bash
 export AWS_COMPREHEND_REGION=us-east-1
@@ -1635,7 +1636,7 @@ export AWS_TRANSCRIBE_REGION=us-east-1
 :   All regions in `AWS_BEDROCK_REGIONS`, tried in order with automatic failover
 
 :octicons-workflow-24: **Behavior**
-:   When unset, translation calls try each `AWS_BEDROCK_REGIONS` entry in order and fail over to the next region on region-level errors (throttling, service unavailability, network issues). Setting an explicit region pins Translate to that single region with no failover.
+:   When unset, translation calls try each `AWS_BEDROCK_REGIONS` entry in order and fail over to the next region on region-level errors (throttling, service unavailability, network issues, or a region that does not offer Translate). Setting an explicit region pins Translate to that single region with no failover.
 
 ```bash
 export AWS_TRANSLATE_REGION=us-east-1

@@ -183,7 +183,7 @@ This applies to providers from every geography, for example:
 
 ## :material-microphone: AWS AI Services
 
-Amazon Polly, Transcribe, Comprehend, and Translate each run in an independently configurable region. By default all four services use the first region in `AWS_BEDROCK_REGIONS`, so pointing `AWS_BEDROCK_REGIONS` to your target geography is usually sufficient.
+Amazon Polly, Transcribe, Comprehend, and Translate each run in an independently configurable region. By default all four treat every `AWS_BEDROCK_REGIONS` entry as a candidate and fail over between them, so pointing `AWS_BEDROCK_REGIONS` to your target geography is usually sufficient.
 
 ### AWS AI Service Improvement Opt-Out
 
@@ -261,6 +261,9 @@ Security Hub Foundational Security Best Practices control mapping, GuardDuty Run
 | `AWS_TRANSCRIBE_S3_BUCKET`                  | S3 bucket for Transcribe audio files                          | Must be in the same region as `AWS_TRANSCRIBE_REGION` |
 | `AWS_COMPREHEND_REGION`                     | Comprehend service region                                     | Pin to your target geography                          |
 | `AWS_TRANSLATE_REGION`                      | Translate service region                                      | Pin to your target geography                          |
+
+!!! warning "Service regions are unpinned by default"
+    Left unset, `AWS_POLLY_REGION`, `AWS_TRANSCRIBE_REGION`, `AWS_COMPREHEND_REGION` and `AWS_TRANSLATE_REGION` make every [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) entry a candidate, with automatic failover between them. Restrict `AWS_BEDROCK_REGIONS` to compliant regions, or pin each service explicitly, so no request can be served outside your target geography.
 
 ---
 
