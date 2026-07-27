@@ -15,6 +15,8 @@ keywords: Files API, Anthropic files, file upload, S3 file storage, Anthropic me
     export BASE="https://your-host/anthropic"  # <scheme>://<host> + ANTHROPIC_ROUTES_PREFIX
     ```
 
+    `ANTHROPIC_ROUTES_PREFIX` must always be a non-empty path and is validated at startup to differ from `OPENAI_ROUTES_PREFIX` (the server refuses to start otherwise). This Anthropic-compatible Files API is therefore always served on its own path, distinct from the [OpenAI-compatible Files API](api_openai_files.md).
+
 Upload and manage files via an Anthropic-compatible interface. Files are stored in Amazon S3 and can be referenced directly in Messages requests as document or image sources.
 
 <div class="grid cards" markdown>

@@ -26,7 +26,7 @@ from stdapi.monitoring import log_request_params, log_response_params
 from stdapi.types.anthropic_messages import ModelInfo, ModelListResponse
 
 if SETTINGS.anthropic_routes_prefix != SETTINGS.openai_routes_prefix:
-    router: APIRouter = APIRouter(
+    _router = APIRouter(
         prefix=f"{SETTINGS.anthropic_routes_prefix}/v1", tags=["Models", TAG_ANTHROPIC]
     )
 
@@ -54,7 +54,7 @@ if SETTINGS.anthropic_routes_prefix != SETTINGS.openai_routes_prefix:
             type="model",
         )
 
-    @router.get(
+    @_router.get(
         "/models",
         summary="List available text generation models (Anthropic format)",
         operation_id="anthropic_model_list",
@@ -162,7 +162,7 @@ if SETTINGS.anthropic_routes_prefix != SETTINGS.openai_routes_prefix:
             )
         )
 
-    @router.get(
+    @_router.get(
         "/models/{model_id}",
         summary="Retrieve details for a specific model by ID (Anthropic format)",
         operation_id="anthropic_model_get",
@@ -197,14 +197,16 @@ if SETTINGS.anthropic_routes_prefix != SETTINGS.openai_routes_prefix:
         response_model_exclude_none=True,
     )
     async def retrieve_model(
-        model_id: str = Path(  # noqa: FAST002
-            ...,
-            description="The ID of the model to retrieve.",
-            examples=["amazon.nova-micro-v1:0"],
-            min_length=1,
-            max_length=255,
-            str_strip_whitespace=True,
-        ),
+        model_id: Annotated[
+            str,
+            Path(
+                description="The ID of the model to retrieve.",
+                examples=["amazon.nova-micro-v1:0"],
+                min_length=1,
+                max_length=255,
+                str_strip_whitespace=True,
+            ),
+        ],
         _: Annotated[None, Depends(authenticate)] = None,
     ) -> ModelInfo:
         """Retrieve a specific model by its ID.
@@ -226,3 +228,9 @@ if SETTINGS.anthropic_routes_prefix != SETTINGS.openai_routes_prefix:
                 await validate_model(model_id, bedrock_only=False)
             )
         )
+
+    router: APIRouter | None = _router
+
+else:
+    # Same base path as the OpenAI Models API: skip registration, OpenAI routes win.
+    router = None

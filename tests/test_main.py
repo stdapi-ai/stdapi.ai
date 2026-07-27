@@ -243,3 +243,49 @@ class TestBotocoreConnectionErrorHandler:
         body = bytes(response.body).decode()
         assert "The upstream service is temporarily unavailable." in body
         assert "vpce-0abc123" not in body
+
+
+class TestSharedPrefixRouterOptOut:
+    """Anthropic routers opt out when their prefix equals the OpenAI prefix."""
+
+    def test_colliding_routers_disabled_and_discovery_skips_them(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With a shared base path, colliding Anthropic routers are disabled.
+
+        Their modules expose ``router = None``, discovery skips them instead of
+        raising, and the resulting app has no duplicate path/method pairs.
+        """
+        from collections import Counter  # noqa: PLC0415
+        from importlib import reload  # noqa: PLC0415
+
+        from fastapi import FastAPI  # noqa: PLC0415
+        from fastapi.routing import APIRoute  # noqa: PLC0415
+
+        from stdapi.config import SETTINGS  # noqa: PLC0415
+        from stdapi.routes import (  # noqa: PLC0415
+            anthropic_files,
+            anthropic_models,
+            discover_routers,
+        )
+
+        monkeypatch.setattr(SETTINGS, "openai_routes_prefix", "")
+        monkeypatch.setattr(SETTINGS, "anthropic_routes_prefix", "")
+        try:
+            assert reload(anthropic_files).router is None
+            assert reload(anthropic_models).router is None
+            app = FastAPI()
+            discover_routers(app)
+            methods_seen = Counter(
+                (route.path, method)
+                for route in app.routes
+                if isinstance(route, APIRoute)
+                for method in route.methods or ()
+            )
+            assert not [key for key, count in methods_seen.items() if count > 1]
+        finally:
+            monkeypatch.undo()
+            reload(anthropic_files)
+            reload(anthropic_models)
+        assert anthropic_files.router is not None
+        assert anthropic_models.router is not None

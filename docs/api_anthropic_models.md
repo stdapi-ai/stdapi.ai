@@ -17,7 +17,7 @@ Discover and list available Amazon Bedrock text models through an Anthropic-comp
     export BASE="https://your-host/anthropic"  # <scheme>://<host> + ANTHROPIC_ROUTES_PREFIX
     ```
 
-    **Note:** If `ANTHROPIC_ROUTES_PREFIX` is set to the same value as `OPENAI_ROUTES_PREFIX`, this Anthropic-compatible Models API route will be disabled to avoid conflicts with the OpenAI-compatible Models API.
+    **Note:** `ANTHROPIC_ROUTES_PREFIX` must always be a non-empty path and is validated at startup to differ from `OPENAI_ROUTES_PREFIX` (the server refuses to start otherwise). This Anthropic-compatible Models API is therefore always served on its own path, distinct from the [OpenAI-compatible Models API](api_openai_models.md).
 
 ## Why Use the Models API?
 

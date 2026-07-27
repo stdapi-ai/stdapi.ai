@@ -1,19 +1,7 @@
 """FastAPI routers auto-discovery for the routes package.
 
-This package initializer discovers submodules in stdapi.routes, imports them,
-and collects any top-level variable named "router" that is an instance of
-fastapi.APIRouter. The discovered routers are exposed via the ROUTERS list
-and the list_routers() helper.
-
-Design:
-- On import, iterate over sibling modules and import them if not private.
-- If a module defines a top-level variable named "router" which is an
-  APIRouter, add it to the ROUTERS registry.
-- Idempotent: importing the package multiple times does not duplicate entries.
-
-Note:
-- Startup functions (like initialize_voices in audio_speech) are not handled
-  by this mechanism and should be wired where needed (e.g., in lifespan).
+Only the modules' ``router`` is discovered: anything a route needs at startup
+is wired separately, in the lifespan in stdapi/main.py.
 """
 
 from importlib import import_module
@@ -25,11 +13,10 @@ if TYPE_CHECKING:
 
 
 def discover_routers(app: FastAPI) -> None:
-    """Discover submodules and include their routers into the FastAPI app.
+    """Discover submodules and include their ``router`` into the FastAPI app.
 
-    Iterates over stdapi.routes submodules, imports each non-private module, and
-    includes its top-level variable named "router" into the provided FastAPI
-    application.
+    A module may set ``router = None`` to opt out of registration (e.g. when its
+    routes would collide with another provider's at the same prefix).
 
     Args:
         app: The FastAPI application into which discovered routers are included.
@@ -46,7 +33,14 @@ def discover_routers(app: FastAPI) -> None:
             continue
         module = import_module(f"{__name__}.{name}")
         try:
-            app.include_router(module.router)
-        except (TypeError, AttributeError) as exc:  # pragma: no cover
+            router = module.router
+        except AttributeError as exc:  # pragma: no cover
+            msg = f"Module {__name__}.{name} has an invalid 'router'"
+            raise ImportError(msg) from exc
+        if router is None:
+            continue
+        try:
+            app.include_router(router)
+        except TypeError as exc:  # pragma: no cover
             msg = f"Module {__name__}.{name} has an invalid 'router'"
             raise ImportError(msg) from exc

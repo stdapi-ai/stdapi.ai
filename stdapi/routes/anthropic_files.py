@@ -33,7 +33,7 @@ def _strip(fid: str) -> str:
     return fid[5:]
 
 
-router = APIRouter(
+_router = APIRouter(
     prefix=f"{SETTINGS.anthropic_routes_prefix}/v1", tags=["Files", TAG_ANTHROPIC]
 )
 
@@ -62,7 +62,7 @@ def _to_file_metadata(record: FileRecord) -> FileMetadata:
     )
 
 
-@router.post(
+@_router.post(
     "/files",
     summary="Upload a file for use in other API endpoints (Anthropic format)",
     operation_id="anthropic_file",
@@ -139,7 +139,7 @@ async def upload(
     return log_response_params(_to_file_metadata(await upload_file(InputFile(file))))
 
 
-@router.get(
+@_router.get(
     "/files",
     summary="List uploaded files (Anthropic format)",
     operation_id="anthropic_file_list",
@@ -205,7 +205,7 @@ async def list_files_endpoint(
     )
 
 
-@router.get(
+@_router.get(
     "/files/{file_id}",
     summary="Retrieve metadata for an uploaded file (Anthropic format)",
     operation_id="anthropic_files_get",
@@ -231,7 +231,7 @@ async def retrieve_file(
     return log_response_params(_to_file_metadata(await get_file(_strip(file_id))))
 
 
-@router.delete(
+@_router.delete(
     "/files/{file_id}",
     summary="Delete an uploaded file (Anthropic format)",
     operation_id="anthropic_files_delete",
@@ -259,7 +259,7 @@ async def delete_file_endpoint(
     return log_response_params(DeletedFile(id=f"file_{payload}"))
 
 
-@router.get(
+@_router.get(
     "/files/{file_id}/content",
     summary="Download the raw content of an uploaded file (Anthropic format)",
     operation_id="anthropic_file_content",
@@ -283,3 +283,11 @@ async def get_content(
     log_request_params({"file_id": file_id})
     stream, content_type = await get_file_content(_strip(file_id))
     return StreamingResponse(stream, media_type=content_type)
+
+
+#: Disabled when sharing the OpenAI base path: the /v1/files paths would collide.
+router: APIRouter | None = (
+    None
+    if SETTINGS.anthropic_routes_prefix == SETTINGS.openai_routes_prefix
+    else _router
+)
