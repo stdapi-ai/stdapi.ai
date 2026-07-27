@@ -99,7 +99,7 @@ Generate images with Amazon Bedrock image models like Stability AI and Amazon No
 | Model                             | Supported Task Types | Notes                                             |
 |-----------------------------------|----------------------|---------------------------------------------------|
 | stability.sd3-5-large-v1:0        | `TEXT_IMAGE`         | Stable Diffusion 3.5 Large - high quality output  |
-| stability.stable-image-core-v1:0  | `TEXT_IMAGE`         | Stable Image Core - balanced quality and speed    |
+| stability.stable-image-core-v1:1  | `TEXT_IMAGE`         | Stable Image Core - balanced quality and speed    |
 | stability.stable-image-ultra-v1:0 | `TEXT_IMAGE`         | Stable Image Ultra - premium quality and detail   |
 
 !!! info "No Built-In Aliases for OpenAI Image Model Names"
@@ -135,7 +135,7 @@ Configure default parameters for specific models via the `DEFAULT_MODEL_PARAMS` 
 
 ```bash
 export DEFAULT_MODEL_PARAMS='{
-  "stability.stable-image-core-v1:0": {
+  "stability.stable-image-core-v1:1": {
     "negative_prompt": "blurry, low quality, watermark"
   }
 }'
@@ -152,7 +152,7 @@ export DEFAULT_MODEL_PARAMS='{
 **Stability AI - Negative Prompts:**
 ```json
 {
-  "model": "stability.stable-image-core-v1:0",
+  "model": "stability.stable-image-core-v1:1",
   "prompt": "A serene mountain landscape at sunset",
   "negative_prompt": "blurry, distorted, low quality, watermark"
 }
@@ -309,7 +309,7 @@ curl -X POST "$BASE/v1/images/generations" \
 | Model                             | Output Formats  | Best For                              |
 |-----------------------------------|-----------------|---------------------------------------|
 | stability.sd3-5-large-v1:0        | png, jpeg, webp | High quality, versatile compositions  |
-| stability.stable-image-core-v1:0  | png, jpeg       | Balanced quality and speed            |
+| stability.stable-image-core-v1:1  | png, jpeg       | Balanced quality and speed            |
 | stability.stable-image-ultra-v1:0 | png, jpeg       | Premium quality and detail            |
 
 !!! info "Full Parameter Reference"
