@@ -1,12 +1,12 @@
 ---
-title: Messages API - AWS Bedrock with Anthropic Compatibility
-description: Anthropic-compatible Messages API for AWS Bedrock models including Claude, Nova, Llama. Supports streaming, extended thinking, tool calling, prompt caching, and multi-modal inputs.
+title: Messages API - Amazon Bedrock with Anthropic Compatibility
+description: Anthropic-compatible Messages API for Amazon Bedrock models including Claude, Nova, Llama. Supports streaming, extended thinking, tool calling, prompt caching, and multi-modal inputs.
 keywords: anthropic messages API, claude messages API, AWS Bedrock chat, streaming messages API, AI assistant API, anthropic API, tool calling API, multi-modal messages
 ---
 
-# Messages API
+# Messages API (Anthropic Compatible)
 
-Generate conversational AI responses with AWS Bedrock foundation models—including Claude, Nova, Llama, and more—through an Anthropic-compatible Messages API interface.
+Generate conversational AI responses with Amazon Bedrock foundation models—including Claude, Nova, Llama, and more—through an Anthropic-compatible Messages API interface.
 
 !!! warning "Route Prefix & Base URL"
     By default, all Anthropic-compatible routes are prefixed with `/anthropic`. This means the Messages API is available at `/anthropic/v1/messages` instead of `/v1/messages`. You can customize this prefix using the `ANTHROPIC_ROUTES_PREFIX` configuration variable documented in [Operations Configuration](operations_configuration.md#anthropic-routes-prefix).
@@ -28,7 +28,7 @@ Generate conversational AI responses with AWS Bedrock foundation models—includ
   <br>Process text, images, videos, and documents together. Support for URLs, data URIs, and direct S3 references.
 
 - :material-shield-check: __Built-In Safety__
-  <br>AWS Bedrock Guardrails provide content filtering and safety policies.
+  <br>Bedrock Guardrails provide content filtering and safety policies.
 
 - :material-aws: __AWS Scale & Reliability__
   <br>Run on AWS infrastructure with service tiers for optimized latency. Multi-region model access for availability and performance.
@@ -37,10 +37,10 @@ Generate conversational AI responses with AWS Bedrock foundation models—includ
 
 ## Quick Start: Available Endpoints
 
-| Endpoint                    | Method | What It Does                               | Powered By                                   | MCP Tool                         |
-|-----------------------------|--------|--------------------------------------------|----------------------------------------------|----------------------------------|
-| `/v1/messages`              | POST   | Conversational AI with multi-modal support | AWS Bedrock Converse API · Bedrock Mantle    | `anthropic_message`              |
-| `/v1/messages/count_tokens` | POST   | Count tokens in a message without sending  | AWS Bedrock CountTokens API · Bedrock Mantle | `anthropic_message_count_tokens` |
+| Endpoint                    | Method | What It Does                               | Powered By                                                                    | MCP Tool                         |
+|-----------------------------|--------|--------------------------------------------|-------------------------------------------------------------------------------|----------------------------------|
+| `/v1/messages`              | `POST` | Conversational AI with multi-modal support | Bedrock Converse API · [Amazon Bedrock Mantle](features.md#bedrock-mantle-models) | `anthropic_message`              |
+| `/v1/messages/count_tokens` | `POST` | Count tokens in a message without sending  | Bedrock CountTokens API · Bedrock Mantle                                      | `anthropic_message_count_tokens` |
 
 ## Feature Compatibility
 
@@ -63,7 +63,7 @@ Generate conversational AI responses with AWS Bedrock foundation models—includ
 | Tool choice `none`                    |   :material-minus-circle:{ .partial }    | Remove tools from request instead                                                            |
 | Parallel tool calls                   |       :material-cog:{ .model-dep }       | Multiple tools in one turn                                                                   |
 | Web search tool (`web_search`)        |       :material-cog:{ .model-dep }       | Available on models with system tool support (e.g., Amazon Nova 2)                           |
-| Claude server tools                   |       :material-cog:{ .model-dep }       | Bash, text editor, computer use (Claude 3.5+), memory (Claude 3.7-4.5)                       |
+| Claude server tools                   |       :material-cog:{ .model-dep }       | Bash, text editor, computer use (Claude 3.5+), memory (Claude 3.7+)                          |
 | **Generation Control**                |                                          |                                                                                              |
 | `max_tokens`                          |   :material-check-circle:{ .success }    | Output length limits. Optional on this gateway (divergence from the Anthropic API, which requires it): the model's default output limit applies when omitted |
 | `temperature`                         |       :material-cog:{ .model-dep }       | Mapped to Bedrock inference params                                                           |
@@ -83,7 +83,7 @@ Generate conversational AI responses with AWS Bedrock foundation models—includ
 | Cache creation tokens                 |   :material-check-circle:{ .success }    | Prompt caching metrics (streaming and non-streaming)                                         |
 | Cache read tokens                     |   :material-check-circle:{ .success }    | Prompt caching metrics                                                                       |
 | **Other**                             |                                          |                                                                                              |
-| Metadata                              |   :material-minus-circle:{ .partial }    | Logged                                                                                       |
+| Metadata                              |   :material-minus-circle:{ .partial }    | Converse path: logged only. Mantle path: `metadata.user_id` is forwarded upstream            |
 | Bedrock Guardrails                    | :material-plus-circle:{ .extra-feature } | Content safety policies                                                                      |
 | Service tiers                         |   :material-check-circle:{ .success }    | Mapped to Bedrock service tiers and latency options                                          |
 
@@ -103,7 +103,7 @@ Generate conversational AI responses with AWS Bedrock foundation models—includ
 
 ## Model Support
 
-All models supported by AWS Bedrock Converse and Converse Stream API are supported, plus every model served by [Amazon Bedrock Mantle](features.md#bedrock-mantle-models) when enabled — including OpenAI GPT-5.x, xAI Grok, and Google Gemma 4. Requests to Mantle models are passed through natively or converted automatically depending on the model's upstream API support — see [Bedrock Mantle](#bedrock-mantle) below.
+All models supported by the Bedrock Converse and ConverseStream APIs are supported, plus every model served by [Bedrock Mantle](features.md#bedrock-mantle-models) when enabled — including OpenAI GPT-5.x, xAI Grok, and Google Gemma 4. Requests to Mantle models are passed through natively or converted automatically depending on the model's upstream API support — see [Bedrock Mantle](#bedrock-mantle) below.
 
 ### Bedrock Mantle
 
@@ -126,7 +126,7 @@ Mantle-only Claude models are passed through to the upstream Anthropic Messages 
 
 ### ![Claude](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Claude Models Name Aliases
 
-This API supports dynamic model name aliases matching the official Anthropic API. You can use Claude model names exactly as they appear in [Anthropic's documentation](https://docs.anthropic.com/en/docs/about-claude/models), and they will be automatically resolved to the corresponding AWS Bedrock model identifiers.
+This API supports dynamic model name aliases matching the official Anthropic API. You can use Claude model names exactly as they appear in [Anthropic's documentation](https://docs.anthropic.com/en/docs/about-claude/models), and they will be automatically resolved to the corresponding Bedrock model identifiers.
 
 **Examples:**
 
@@ -150,7 +150,7 @@ Reduce costs and improve response times by caching frequently-used prompt compon
 - **Amazon Nova**: Support for system and messages caching
 
 !!! info "Documentation"
-    See [AWS Bedrock Prompt Caching - Supported Models](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html#prompt-caching-models) for the complete list of models supporting prompt caching.
+    See [Amazon Bedrock Prompt Caching - Supported Models](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html#prompt-caching-models) for the complete list of models supporting prompt caching.
 
 !!! warning "Cache Creation Costs"
     Cache creation incurs a higher cost than regular token processing. Only use prompt caching when you expect a high cache hit ratio across multiple requests with similar prompts.
@@ -250,9 +250,9 @@ In subsequent requests with cache hits:
 System prompts define the AI assistant's behavior, personality, and instructions (e.g., "You are a helpful assistant"). Most models support system prompts.
 
 !!! warning "Unsupported Models"
-    Some models don't support system prompts (`mistral.mistral-7b-instruct-v0:2`, `mistral.mistral-8x7b-instruct-v0:1`). By default, **stdapi.ai silently drops system messages** for these models, allowing cross-model compatibility. To receive errors instead, configure [`DROP_UNSUPPORTED_SYSTEM_PROMPT=false`](operations_configuration.md#drop-unsupported-system-prompt).
+    Some models don't support system prompts (`mistral.mistral-7b-instruct-v0:2`, `mistral.mixtral-8x7b-instruct-v0:1`). By default, **stdapi.ai silently drops system messages** for these models, allowing cross-model compatibility. To receive errors instead, configure [`DROP_UNSUPPORTED_SYSTEM_PROMPT=false`](operations_configuration.md#drop-unsupported-system-prompt).
 
-### ![AWS S3](styles/logo_amazon_s3.svg){ style="height: 1.2em; vertical-align: text-bottom;" } S3 Image Support
+### ![Amazon S3](styles/logo_amazon_s3.svg){ style="height: 1.2em; vertical-align: text-bottom;" } S3 Image Support
 
 Access images directly from your S3 buckets without generating pre-signed URLs or downloading files locally.
 
@@ -374,7 +374,7 @@ curl -X POST "$BASE/v1/messages" \
 ```
 
 !!! warning "Region Compatibility"
-    Web grounding is only available in US AWS Bedrock regions. To ensure all requests are routed to a US region, restrict the model using [`AWS_BEDROCK_MODEL_REGION_RESTRICT`](operations_configuration.md#bedrock-model-region-restrict):
+    Web grounding is only available in US Bedrock regions. To ensure all requests are routed to a US region, restrict the model using [`AWS_BEDROCK_MODEL_REGION_RESTRICT`](operations_configuration.md#bedrock-model-region-restrict):
 
     ```bash
     export AWS_BEDROCK_MODEL_REGION_RESTRICT='{"amazon.nova-": ["us-east-1"]}'
@@ -422,12 +422,14 @@ Anthropic Claude models support server-side tools that are executed by the model
 
 **Supported Tools by Model:**
 
-| Tool | Claude 3.5 Sonnet v2 | Claude 3.7+ |
-|------|:---------------------:|:-----------:|
-| `bash` | :material-check-circle:{ .success } | :material-check-circle:{ .success } |
-| `text_editor` (`str_replace_based_edit_tool` or `str_replace_editor`) | :material-check-circle:{ .success } | :material-check-circle:{ .success } |
-| `computer` | :material-check-circle:{ .success } | :material-check-circle:{ .success } |
-| `memory` | :material-close-circle:{ .unsupported } | :material-check-circle:{ .success } |
+| Tool | Claude 3.5 Sonnet v2 | Claude 3.7 – 4.5 | Claude 4.6+ |
+|------|:---------------------:|:----------------:|:-----------:|
+| `bash` | :material-check-circle:{ .success } | :material-check-circle:{ .success } | :material-check-circle:{ .success } |
+| `text_editor` (`str_replace_based_edit_tool` or `str_replace_editor`) | :material-check-circle:{ .success } | :material-check-circle:{ .success } | :material-check-circle:{ .success } |
+| `computer` | :material-check-circle:{ .success } | :material-check-circle:{ .success } | :material-check-circle:{ .success } |
+| `memory` | :material-close-circle:{ .unsupported } | :material-check-circle:{ .success } | :material-check-circle:{ .success } |
+
+On Claude 4.6 and later, a bare `computer` tool is promoted to the newer `computer_20251124` tool type — except on Claude Opus 5 and later, which support no computer-use tool version: there, `computer` is passed through as a regular custom tool instead of a server tool.
 
 **Usage:**
 
@@ -435,7 +437,6 @@ Anthropic Claude models support server-side tools that are executed by the model
 curl -X POST "$BASE/v1/messages" \
   -H "x-api-key: $ANTHROPIC_API_KEY" \
   -H "anthropic-version: 2023-06-01" \
-  -H "anthropic-beta: computer-use-2025-01-24" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "anthropic.claude-sonnet-5",
@@ -453,7 +454,8 @@ curl -X POST "$BASE/v1/messages" \
 !!! tip "Beta Headers"
     Claude server tools require specific `anthropic-beta` flags on Bedrock. On the classic Bedrock (Converse) path these flags are **automatically injected** when the corresponding server tools are included in the request — no manual header required (on the [Mantle](#bedrock-mantle) path they are not auto-injected; pass them yourself):
 
-    - `bash`, `text_editor`, `computer` → `computer-use-2024-10-22` (Claude 3.5) or `computer-use-2025-01-24` (Claude 3.7+)
+    - `bash`, `text_editor` → `computer-use-2024-10-22` (Claude 3.5) or `computer-use-2025-01-24` (Claude 3.7+)
+    - `computer` → `computer-use-2024-10-22` (Claude 3.5), `computer-use-2025-01-24` (Claude 3.7 – 4.5), or `computer-use-2025-11-24` (Claude 4.6+, tool type `computer_20251124`)
     - `memory` → `context-management-2025-06-27` (Claude 3.7+)
 
     You can still pass additional `anthropic-beta` flags via the HTTP header or request body for non-tool beta features (e.g., `output-128k-2025-02-19`).
@@ -475,14 +477,14 @@ Requests using these tools on Converse-served Claude models will return a `400 B
 
 ### Provider-Specific Parameters
 
-Unlock advanced model capabilities by passing provider-specific parameters directly in your requests. These parameters are forwarded to AWS Bedrock and allow you to access features unique to each foundation model provider.
+Unlock advanced model capabilities by passing provider-specific parameters directly in your requests. These parameters are forwarded to Bedrock and allow you to access features unique to each foundation model provider.
 
 !!! info "Documentation"
     See [Bedrock Model Parameters](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters.html) for the complete list of available parameters per model.
 
 **How It Works:**
 
-Add provider-specific fields at the top level of your request body alongside standard Anthropic parameters. The API automatically forwards these to the appropriate model provider via AWS Bedrock.
+Add provider-specific fields at the top level of your request body alongside standard Anthropic parameters. The API automatically forwards these to the appropriate model provider via Bedrock.
 
 **Configuration Options:**
 
@@ -497,7 +499,7 @@ Configure default parameters for specific models via the `DEFAULT_MODEL_PARAMS` 
 ```bash
 export DEFAULT_MODEL_PARAMS='{
   "anthropic.claude-sonnet-4-5-20250929-v1:0": {
-    "anthropic_beta": ["extended-thinking-2024-12-12"]
+    "anthropic_beta": ["output-128k-2025-02-19"]
   }
 }'
 ```
@@ -507,8 +509,8 @@ export DEFAULT_MODEL_PARAMS='{
 
 **Behavior:**
 
-- ✅ **Compatible parameters**: Forwarded to the model and applied
-- ⚠️ **Unsupported parameters**: Return HTTP 400 with an error message
+- :material-check-circle:{ .success } **Compatible parameters**: Forwarded to the model and applied
+- :material-close-circle:{ .unsupported } **Unsupported parameters**: Return HTTP 400 with an error message
 
 #### ![Claude](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Anthropic Claude Features
 
@@ -516,20 +518,22 @@ Enable cutting-edge Claude capabilities including extended thinking and reasonin
 
 ##### Extended Thinking
 
-Enable extended thinking by passing the `anthropic-beta` header, just like the official Anthropic API:
+Enable extended thinking with the first-class `thinking` request parameter, just like the official Anthropic API — no beta header is required:
 
 ```bash
 curl -X POST "$BASE/v1/messages" \
   -H "x-api-key: $ANTHROPIC_API_KEY" \
   -H "anthropic-version: 2023-06-01" \
-  -H "anthropic-beta: extended-thinking-2024-12-12" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "anthropic.claude-sonnet-5",
-    "max_tokens": 1024,
+    "max_tokens": 2048,
+    "thinking": {"type": "enabled", "budget_tokens": 1024},
     "messages": [{"role":"user","content":"Solve a complex problem"}]
   }'
 ```
+
+`thinking` accepts `{"type": "enabled", "budget_tokens": <n>}` (the budget must be less than `max_tokens`), `{"type": "disabled"}`, or `{"type": "adaptive"}`. Alternatively, control reasoning depth with `output_config.effort` (`low`, `medium`, `high`, `xhigh`, `max`).
 
 **Response with Thinking:**
 
@@ -555,13 +559,13 @@ When extended thinking is enabled, the response includes thinking content blocks
 ```
 
 !!! tip "Server-Wide Configuration"
-    You can also configure beta flags server-wide using the `DEFAULT_MODEL_PARAMS` environment variable (see [Provider-Specific Parameters](#provider-specific-parameters)).
+    You can also configure default model parameters server-wide using the `DEFAULT_MODEL_PARAMS` environment variable (see [Provider-Specific Parameters](#provider-specific-parameters)).
 
 !!! warning "Unsupported Beta Flags"
     Unsupported flags that would change output return HTTP 400 errors.
 
 !!! info "Documentation"
-    See [Using Claude on AWS Bedrock](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-request-response.html) for more details on Claude-specific parameters.
+    See [Using Claude on Amazon Bedrock](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-request-response.html) for more details on Claude-specific parameters.
 
 ## Available Request Headers
 
@@ -584,9 +588,9 @@ This endpoint supports standard Bedrock headers for enhanced control over your r
 
 ### Model-Specific Headers
 
-| Header           | Purpose                        | Valid Values                                                                                       | Models           |
-|------------------|--------------------------------|----------------------------------------------------------------------------------------------------|------------------|
-| `anthropic-beta` | Enable Anthropic beta features | Comma-separated feature names (e.g., `extended-thinking-2024-12-12,context-management-2025-06-27`) | Anthropic Claude |
+| Header           | Purpose                        | Valid Values                                                                                     | Models           |
+|------------------|--------------------------------|---------------------------------------------------------------------------------------------------|------------------|
+| `anthropic-beta` | Enable Anthropic beta features | Comma-separated feature names (e.g., `computer-use-2025-01-24,context-management-2025-06-27`)     | Anthropic Claude |
 
 **Example with all headers:**
 
@@ -613,7 +617,7 @@ curl -X POST "$BASE/v1/messages" \
     - [Bedrock Guardrails Configuration](operations_configuration.md#bedrock-guardrails)
     - [Service Tier and Performance Configuration](operations_configuration.md#bedrock-service-tier-and-performance-configuration)
 
-## Model-specific features
+## Model-Specific Features
 
 ### ![TwelveLabs](styles/logo_twelvelabs.svg){ style="height: 1.2em; vertical-align: text-bottom;" } TwelveLabs Pegasus
 
@@ -630,8 +634,8 @@ curl -X POST "$BASE/v1/messages" \
 **Video input formats**: `data:video/mp4;base64,…`, `https://…`, `s3://bucket/key`, or `file-id:…`. Videos above 18.75 MB are automatically uploaded to S3.
 
 ```bash
-curl https://api.example.com/v1/messages \
-  -H "x-api-key: $API_KEY" \
+curl -X POST "$BASE/v1/messages" \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
   -H "anthropic-version: 2023-06-01" \
   -H "Content-Type: application/json" \
   -d '{

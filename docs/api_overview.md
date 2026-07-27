@@ -1,20 +1,21 @@
 ---
-title: API Overview - OpenAI & Anthropic Compatible AWS Bedrock API
-description: Complete API documentation for stdapi.ai OpenAI and Anthropic compatible gateway. Access AWS Bedrock models, chat completions, messages, embeddings, image generation, and audio APIs with SDK compatibility.
+title: API Overview - OpenAI, Anthropic & Cohere Compatible Amazon Bedrock API
+description: Complete API documentation for the stdapi.ai OpenAI-, Anthropic-, and Cohere-compatible gateway. Access Amazon Bedrock models, chat completions, messages, embeddings, image generation, and audio APIs with SDK compatibility.
 keywords: OpenAI API documentation, Anthropic API documentation, AWS Bedrock API reference, OpenAI SDK compatibility, Anthropic SDK compatibility, chat completions API, responses API, messages API, embeddings API, image generation API, audio API AWS, OpenAI compatible endpoints, Anthropic compatible endpoints
 ---
 
 # :material-api: API Overview
 
-stdapi.ai provides OpenAI and Anthropic compatible APIs backed by AWS Bedrock and AWS AI services. Any application that works with OpenAI or Anthropic works with stdapi.ai by simply changing the API endpoint.
+stdapi.ai provides OpenAI-, Anthropic-, and Cohere-compatible APIs backed by Amazon Bedrock and AWS AI services. Any application that works with OpenAI, Anthropic, or Cohere works with stdapi.ai by simply changing the API endpoint.
 
-## :material-book-open-variant: Interactive Documentation
+## :material-book-open-variant: Documentation & Tooling
 
-stdapi.ai provides multiple interfaces for exploring and testing the API—choose the one that fits your workflow:
+stdapi.ai provides multiple resources for exploring and testing the API—choose the one that fits your workflow:
 
 ### :material-book-open-variant: Documentation Resources
 
-* **[Complete API Reference](api_reference.md)** – In-depth guides for every endpoint with parameter details
+* **Per-endpoint guides** – The pages in this section (linked from the [endpoint tables below](#supported-endpoints)) with parameter details, feature tables, and examples
+* **[API Reference](api_reference.md)** – Browsable rendering of the full OpenAPI specification (request/response schemas for every endpoint)
 * **[OpenAPI Specification](openapi.yml)** – Full machine-readable schema for integration and tooling
 
 ### :material-play-circle: Live API Playground
@@ -35,23 +36,28 @@ stdapi.ai provides multiple interfaces for exploring and testing the API—choos
 |-------------------|-----------------------------------|-----------------------------------------------------------------------------|--------------------------------------------------------|
 | **💬 Chat**       | `POST /v1/chat/completions`       | Multi-modal conversations with text, images, video, documents               | [Chat Completions →](api_openai_chat_completions.md)   |
 |                   | `GET/DELETE /v1/chat/completions/{id}` | Retrieve or delete stored chat completions                             | [Chat Completions →](api_openai_chat_completions.md)   |
+|                   | `GET /v1/chat/completions/{id}/messages` | List the messages of a stored chat completion                        | [Chat Completions →](api_openai_chat_completions.md)   |
 |                   | `POST /v1/completions`            | Simple prompt-to-text completion — recommended for MCP and text-only agents | [Completions →](api_openai_completions.md)             |
 |                   | `POST /v1/responses`              | Stateless conversational AI with tool calling and streaming                 | [Responses →](api_openai_responses.md)                 |
 |                   | `POST /v1/responses/input_tokens` | Count input tokens without generating a response                            | [Responses →](api_openai_responses.md)                 |
 |                   | `POST /v1/responses/compact`      | Compact a conversation into a reusable summary item                         | [Responses →](api_openai_responses.md)                 |
-|                   | `GET/DELETE /v1/responses/{id}`   | Retrieve, continue, or delete stored responses                              | [Responses →](api_openai_responses.md)                 |
+|                   | `GET/DELETE /v1/responses/{id}`   | Retrieve or delete stored responses                                         | [Responses →](api_openai_responses.md)                 |
+|                   | `GET /v1/responses/{id}/input_items` | List the input items of a stored response                                | [Responses →](api_openai_responses.md)                 |
 | **🎨 Images**     | `POST /v1/images/generations`     | Text-to-image generation                                                    | [Generations →](api_openai_images_generations.md)      |
 |                   | `POST /v1/images/edits`           | Image editing and transformations                                           | [Edits →](api_openai_images_edits.md)                  |
 |                   | `POST /v1/images/variations`      | Generate image variations                                                   | [Variations →](api_openai_images_variations.md)        |
 | **🎬 Videos**     | `POST/GET/DELETE /v1/videos`      | Asynchronous text/image-to-video generation jobs                            | [Videos →](api_openai_videos.md)                       |
+|                   | `GET /v1/videos/{id}/content`     | Download generated video content                                            | [Videos →](api_openai_videos.md)                       |
 | **🔊 Audio**      | `POST /v1/audio/speech`           | Text-to-speech synthesis                                                    | [Text to Speech →](api_openai_audio_speech.md)         |
 |                   | `POST /v1/audio/transcriptions`   | Speech-to-text transcription                                                | [Transcriptions →](api_openai_audio_transcriptions.md) |
 |                   | `POST /v1/audio/translations`     | Speech-to-English translation                                               | [Translations →](api_openai_audio_translations.md)     |
 | **🧠 Embeddings** | `POST /v1/embeddings`             | Vector embeddings for semantic search                                       | [Embeddings →](api_openai_embeddings.md)               |
-| **🛡️ Moderations** | `POST /v1/moderations`           | Content safety classification via AWS Bedrock Guardrails or Amazon Comprehend | [Moderations →](api_openai_moderations.md)             |
+| **🛡️ Moderations** | `POST /v1/moderations`           | Content safety classification via Bedrock Guardrails or Amazon Comprehend   | [Moderations →](api_openai_moderations.md)             |
 | **📋 Models**     | `GET /v1/models`                  | List available models                                                       | [Models →](api_openai_models.md)                       |
+|                   | `GET /v1/models/{model}`          | Retrieve details for one model                                              | [Models →](api_openai_models.md)                       |
 | **📁 Files**      | `POST/GET/DELETE /v1/files`       | Upload, list, retrieve, download, delete files                              | [Files →](api_openai_files.md)                         |
 |                   | `POST /v1/uploads`                | Multipart upload sessions for large files                                   | [Files →](api_openai_files.md)                         |
+|                   | `POST /v1/uploads/{id}/parts`, `…/complete`, `…/cancel` | Add parts to, complete, or cancel an upload session   | [Files →](api_openai_files.md)                         |
 
 ### :material-magnify: stdapi.ai Native Extensions
 
@@ -81,7 +87,7 @@ stdapi.ai provides multiple interfaces for exploring and testing the API—choos
 
 ## :material-tools: MCP (Model Context Protocol)
 
-When `ENABLE_MCP_STREAMABLE_HTTP=true` or `ENABLE_MCP_SSE=true` is configured, stdapi.ai exposes all its endpoints as MCP tools. The tool names follow the pattern `provider_action`.
+When `ENABLE_MCP_STREAMABLE_HTTP=true` or `ENABLE_MCP_SSE=true` is configured, stdapi.ai exposes all its endpoints as MCP tools. OpenAI-, Anthropic-, and Cohere-compatible tool names follow the pattern `provider_action`; the native extension tools use their bare names (`search_models`, `model_pricing`).
 
 !!! tip "JSON body support for file and audio tools"
     MCP tools send JSON bodies — they cannot construct `multipart/form-data`. All file upload, audio, and upload-part tools therefore accept the file or audio content as a base64 string, data URI (`data:<mime>;base64,<data>`), HTTPS URL, or S3 URI in the `file` / `data` field instead of a binary attachment — as do the video generation tool's `input_reference` image and the moderation tool's `image_url` inputs. The full multipart upload workflow (`openai_upload` → `openai_upload_part` → `openai_upload_complete`) is fully MCP-compatible this way.
@@ -151,7 +157,7 @@ When `ENABLE_MCP_STREAMABLE_HTTP=true` or `ENABLE_MCP_SSE=true` is configured, s
 
 ## :material-connection: Using stdapi.ai
 
-stdapi.ai is a **drop-in replacement** for both OpenAI and Anthropic APIs. Any application that works with either provider—chatbots, coding assistants, automation tools, custom scripts—works with stdapi.ai by simply changing the API base URL.
+stdapi.ai is a **drop-in replacement** for the OpenAI, Anthropic, and Cohere APIs. Any application that works with one of these providers—chatbots, coding assistants, automation tools, custom scripts—works with stdapi.ai by simply changing the API base URL.
 
 ### ![OpenAI](styles/logo_openai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Using the OpenAI-Compatible API
 
@@ -159,7 +165,7 @@ stdapi.ai is a **drop-in replacement** for both OpenAI and Anthropic APIs. Any a
 
 1. **Replace the OpenAI API URL** with your stdapi.ai deployment URL
 2. **Use the same authentication mechanism** (Bearer token in the `Authorization` header)
-3. **Use AWS Bedrock model IDs** (e.g., `amazon.nova-micro-v1:0`) or any configured model alias
+3. **Use Bedrock model IDs** (e.g., `amazon.nova-micro-v1:0`) or any configured model alias
 
 That's it. Your application continues to work without any code changes—just point it to stdapi.ai instead of OpenAI.
 
@@ -179,7 +185,7 @@ Your Anthropic SDK applications continue to work without any code changes—just
 
 1. **Replace the Cohere API URL** (`https://api.cohere.com`) with your stdapi.ai deployment URL + `/cohere` (e.g., `https://your-endpoint.com/cohere`)
 2. **Use the same authentication mechanism** (Bearer token in the `Authorization` header)
-3. **Use AWS Bedrock model IDs** (e.g., `cohere.rerank-v3-5:0`, `cohere.embed-v4:0`)
+3. **Use Bedrock model IDs** (e.g., `cohere.rerank-v3-5:0`, `cohere.embed-v4:0`)
 
 Your Cohere rerank and embed integrations continue to work without any code changes—just point them to stdapi.ai instead of Cohere.
 

@@ -6,7 +6,7 @@ keywords: Files API, Anthropic files, file upload, S3 file storage, Anthropic me
 
 # Files API (Anthropic Compatible)
 
-!!! note "Route Prefix & Base URL"
+!!! warning "Route Prefix & Base URL"
     By default, all Anthropic-compatible routes are prefixed with `/anthropic`. This means the Files API is available at `/anthropic/v1/files` instead of `/v1/files`. You can customize this prefix using the `ANTHROPIC_ROUTES_PREFIX` configuration variable documented in [Operations Configuration](operations_configuration.md#anthropic-routes-prefix).
 
     The `curl` examples below use a `$BASE` variable that **must include this prefix** — set it to your scheme and host followed by `ANTHROPIC_ROUTES_PREFIX`:
@@ -23,7 +23,7 @@ Upload and manage files via an Anthropic-compatible interface. Files are stored 
   <br>Upload any file with a single `multipart/form-data` request. Files are immediately available for use in inference.
 
 - :material-swap-vertical: __Bidirectional Pagination__
-  <br>Traverse your file list in both directions using `after_id` and `before_id` cursors, just like the Anthropic SDK's `Page<T>` interface.
+  <br>Traverse your file list in both directions using `after_id` and `before_id` cursors, matching the official Files API pagination.
 
 - :material-file-document-multiple: __Messages Integration__
   <br>Reference uploaded files directly in Messages requests as document or image source blocks using `"type": "file"`.
@@ -35,13 +35,13 @@ Upload and manage files via an Anthropic-compatible interface. Files are stored 
 
 ## Available Endpoints
 
-| Endpoint                      | Method   | Description                    | MCP Tool               |
-|-------------------------------|----------|--------------------------------|------------------------|
-| `/v1/files`                   | `POST`   | Upload a file                  | `anthropic_file`       |
-| `/v1/files`                   | `GET`    | List files with pagination     | `anthropic_file_list`  |
-| `/v1/files/{file_id}`         | `GET`    | Retrieve file metadata         | `anthropic_files_get`  |
-| `/v1/files/{file_id}`         | `DELETE` | Delete a file                  | `anthropic_files_delete` |
-| `/v1/files/{file_id}/content` | `GET`    | Download raw file bytes        | `anthropic_file_content` |
+| Endpoint                      | Method   | What It Does               | Powered By | MCP Tool                 |
+|-------------------------------|----------|----------------------------|------------|--------------------------|
+| `/v1/files`                   | `POST`   | Upload a file              | Amazon S3  | `anthropic_file`         |
+| `/v1/files`                   | `GET`    | List files with pagination | Amazon S3  | `anthropic_file_list`    |
+| `/v1/files/{file_id}`         | `GET`    | Retrieve file metadata     | Amazon S3  | `anthropic_files_get`    |
+| `/v1/files/{file_id}`         | `DELETE` | Delete a file              | Amazon S3  | `anthropic_files_delete` |
+| `/v1/files/{file_id}/content` | `GET`    | Download raw file bytes    | Amazon S3  | `anthropic_file_content` |
 
 ## Feature Compatibility
 
@@ -73,6 +73,9 @@ Upload and manage files via an Anthropic-compatible interface. Files are stored 
 </div>
 
 ## Quick Start
+
+!!! info "Optional Anthropic headers"
+    The `anthropic-version` and `anthropic-beta: files-api-2025-04-14` headers sent by the official Anthropic SDKs are accepted and ignored by this gateway — the Files API works without them. The examples below include them only for parity with SDK-generated requests.
 
 ### Upload a File
 
@@ -203,7 +206,7 @@ curl -X POST "$BASE/v1/messages" \
           },
           {
             "type": "text",
-            "text": "Summarise this document."
+            "text": "Summarize this document."
           }
         ]
       }
@@ -279,7 +282,7 @@ curl -X DELETE "$BASE/v1/files/$FILE_ID" \
 
 The native `{"type": "file", "file_id": "..."}` source shown above is the Anthropic-compatible way to reference an uploaded file in Messages content blocks. For **string-overloaded** file fields that already accept URI schemes like `s3://`, `https://`, or `data:` — for example image and document content blocks with `source.type` `url` or `base64` — this implementation defines an additional project-local URI scheme:
 
-```
+```text
 file-id:<file-id>
 ```
 
@@ -291,7 +294,7 @@ file-id:<file-id>
     * **Where rejected:** the Files API ingest endpoint (`POST /v1/files`) returns **400** for `file-id:` inputs, because resolving it there would silently clone an existing file.
     * **Detection:** match is **case-sensitive** (`file-id:`, lowercase) with no whitespace stripping; the payload after the prefix must be a valid Files API ID, otherwise the request fails with `400 invalid_request_error`. A missing or expired file returns `404 not_found`.
 
-### Worked example — send an uploaded image in Messages
+### Worked Example — Send an Uploaded Image in Messages
 
 ```bash
 # 1. Upload the file once.
@@ -321,11 +324,13 @@ See the [OpenAI Files API documentation](api_openai_files.md#referencing-uploade
 
 ## Error Reference
 
-| HTTP | Cause                             |
-|------|-----------------------------------|
-| 400  | Invalid filename characters       |
-| 404  | File not found or already deleted |
-| 503  | `AWS_S3_BUCKET` is not configured |
+| HTTP | Cause                                                                               |
+|------|-------------------------------------------------------------------------------------|
+| 400  | Invalid filename characters                                                         |
+| 400  | `file-id:` URI passed to the upload endpoint (`POST /v1/files`)                     |
+| 400  | Malformed ID after the `file-id:` prefix in a Messages content block                |
+| 404  | File not found or already deleted                                                   |
+| 503  | `AWS_S3_BUCKET` is not configured                                                   |
 
 ## Configuration
 

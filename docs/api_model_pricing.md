@@ -12,7 +12,7 @@ Query the exact AWS unit prices for one or more models, straight from the same A
 
 | Endpoint | Method | MCP Tool |
 |----------|--------|----------|
-| `/model_pricing` | GET | `model_pricing` |
+| `/model_pricing` | `GET` | `model_pricing` |
 
 ## How It Works
 
@@ -35,7 +35,7 @@ All parameters are optional and combine with **AND** logic.
 | `tier`      | `string`  | Only this service tier: `standard`, `flex`, `priority`, `batch`                                          |
 | `dimension` | `string`  | Repeatable. Only these billed dimensions (e.g. `input_tokens`, `output_tokens`, `output_images`)         |
 | `variants`  | `boolean` | `false` = base price card only: standard tier without cache-TTL, routing, or long-context rows (media spec rows are kept) |
-| `currency`  | `string`  | Only prices in this ISO currency code, case-insensitive; must be a currency present in the catalog (e.g. `USD`, `EUR` on EUSC) |
+| `currency`  | `string`  | Only prices in this ISO currency code, case-insensitive; must be a currency present in the catalog (e.g. `USD`, `EUR` on the AWS European Sovereign Cloud (EUSC)) |
 | `routing`   | `string`  | Only this published serving-profile price variant: `global`, `latency`. Row `routing` values enriched for display (geography prefixes, AWS regions) cannot be filtered on — use `region` for those |
 | `context`   | `string`  | Only this context-length bucket: `long` (prompts beyond 200K tokens)                                     |
 | `all_prices` | `boolean` | `true` = the full published price table; `false` (default) = only the prices matching the server's configuration |
@@ -47,7 +47,7 @@ One `ModelPricing` object per requested model, in request order (duplicates remo
 | Field | Description |
 |-------|-------------|
 | `id` | The model ID as requested |
-| `service` | AWS service/API the prices apply to (e.g. `bedrock-runtime`) |
+| `service` | AWS service/API the prices apply to (e.g. `bedrock-runtime`). Note: this uses AWS API endpoint identifiers, a different vocabulary from the display names in the [`search_models`](api_search_models.md) `service` field — both match the code, but the values are not comparable |
 | `default_tier` | Service tier this server applies to the model by default ([`DEFAULT_MODEL_SERVICE_TIERS`](operations_configuration.md#default-model-service-tiers)) |
 | `default_routings` | Serving profiles this server can use for the model across its configured regions, in configured-region order: `global`, geography prefixes (`eu`, `us`, …), or AWS regions |
 | `prices` | Price rows, sorted by region then remaining axes; empty when AWS publishes none |
@@ -67,6 +67,12 @@ Each row in `prices` (axes are omitted when not applicable):
 | `currency` | ISO currency code (`USD` commercially, `EUR` on EUSC) |
 
 ## Examples
+
+The `curl` examples below use a `$BASE` variable set to your scheme and host — native routes such as `/model_pricing` are not prefixed:
+
+```bash
+export BASE="https://your-host"
+```
 
 **Base price card of a shortlist:**
 

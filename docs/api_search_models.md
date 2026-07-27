@@ -1,6 +1,6 @@
 ---
-title: Search Models API - Discover AWS Bedrock Models by Capability
-description: Search and filter available AWS Bedrock models by modality, route, MCP tool, region, streaming support, and legacy status. Designed for AI agents that need to discover the right model before calling other endpoints.
+title: Search Models API - Discover Amazon Bedrock Models by Capability
+description: Search and filter available Amazon Bedrock models by modality, route, MCP tool, region, streaming support, and legacy status. Designed for AI agents that need to discover the right model before calling other endpoints.
 keywords: AWS Bedrock model search, model discovery API, filter models by modality, MCP model discovery, available models API, AI agent model selection
 ---
 
@@ -12,7 +12,7 @@ Discover available models by capability — filter by modality, route, region, s
 
 | Endpoint | Method | MCP Tool |
 |----------|--------|----------|
-| `/search_models` | GET | `search_models` |
+| `/search_models` | `GET` | `search_models` |
 
 ## How It Works
 
@@ -24,8 +24,8 @@ All query parameters are optional. Parameters combine with **AND** logic — onl
 
 | Parameter           | Type      | Description                                                                                                                                                              |
 |---------------------|-----------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `input_modalities`  | `string`  | Filter by input modality: `TEXT`, `IMAGE`, `VIDEO`, `AUDIO`, `SPEECH`                                                                                                    |
-| `output_modalities` | `string`  | Filter by output modality: `TEXT`, `IMAGE`, `VIDEO`, `SPEECH`, `EMBEDDING`, `RERANKING`, `MODERATION`                                                                    |
+| `input_modalities`  | `string`  | Repeatable. Filter by input modality: `TEXT`, `IMAGE`, `VIDEO`, `AUDIO`, `SPEECH`                                                                                        |
+| `output_modalities` | `string`  | Repeatable. Filter by output modality: `TEXT`, `IMAGE`, `VIDEO`, `SPEECH`, `EMBEDDING`, `RERANKING`, `MODERATION`                                                        |
 | `route`             | `string`  | Filter to models supporting a route path (e.g. `/v1/chat/completions`) **or** an MCP tool name (e.g. `openai_chat_completion`) — both formats are accepted transparently |
 | `region`            | `string`  | Filter to models available in a specific AWS region (e.g. `us-east-1`)                                                                                                   |
 | `streaming`         | `boolean` | `true` = streaming-capable models only, `false` = non-streaming only                                                                                                     |
@@ -40,10 +40,10 @@ Each item in the returned list is a `ModelDetails` object:
 
 | Field | Description |
 |-------|-------------|
-| `id` | AWS Bedrock model ID — pass this to other endpoints |
+| `id` | Amazon Bedrock model ID — pass this to other endpoints |
 | `name` | Human-readable model name |
 | `provider` | Model provider (e.g. `Anthropic`, `Amazon`, `Meta`) |
-| `service` | AWS service serving the model (e.g. `AWS Bedrock Runtime`, `AWS Bedrock Mantle`, `AWS Comprehend`) |
+| `service` | AWS service serving the model (e.g. `AWS Bedrock Runtime`, `AWS Bedrock Mantle`, `Amazon Comprehend`) |
 | `input_modalities` | List of accepted input types |
 | `output_modalities` | List of produced output types |
 | `aliases` | Alternate model names accepted by the `model` parameter of the other endpoints (if any) |
@@ -55,6 +55,12 @@ Each item in the returned list is a `ModelDetails` object:
 | `inference_profiles` | Per-region inference profile IDs as a `region → profile ID` mapping (if any) |
 
 ## Examples
+
+The `curl` examples below use a `$BASE` variable set to your scheme and host — native routes such as `/search_models` are not prefixed:
+
+```bash
+export BASE="https://your-host"
+```
 
 **All models accepting TEXT input:**
 
@@ -97,15 +103,15 @@ curl -G "$BASE/search_models" \
   -H "Authorization: Bearer $API_KEY"
 ```
 
-## Error Responses
+## Status Codes
 
 | Status | Cause |
 |--------|-------|
-| `400` | Unknown modality name, route path, or MCP tool name — no model matches the filter |
-| `200` | Empty list — valid filters, but no model satisfies all of them simultaneously |
+| `200` | Success — valid filters that match zero models still return `200` with an empty list |
+| `400` | Unrecognized filter value: unknown modality name, route path, or MCP tool name |
 
 !!! tip "Empty list vs. 400"
-    A `400` is returned only when a filter value is completely unrecognised (e.g. a typo in a modality name). A valid combination of filters that happens to match zero models still returns `200` with an empty list.
+    A `400` is returned only when a filter value is completely unrecognized (e.g. a typo in a modality name). A valid combination of filters that happens to match zero models still returns `200` with an empty list.
 
 ## Using `search_models` as an MCP Tool
 

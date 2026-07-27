@@ -1,16 +1,16 @@
 ---
-title: Embed API - AWS Bedrock Vector Embeddings (Cohere Compatible)
-description: Generate vector embeddings with AWS Bedrock embedding models using a Cohere-compatible API. Semantic search, RAG, and multimodal embeddings through the Cohere v2 Embed interface.
+title: Embed API - Amazon Bedrock Vector Embeddings (Cohere Compatible)
+description: Generate vector embeddings with Amazon Bedrock embedding models using a Cohere-compatible API. Semantic search, RAG, and multimodal embeddings through the Cohere v2 Embed interface.
 keywords: Cohere embed API, vector embeddings AWS, semantic search API, RAG embeddings, Cohere compatible API, AWS Bedrock embeddings, input_type embeddings
 ---
 
 # Embed API (Cohere Compatible)
 
-Generate vector embeddings for semantic search and RAG applications with AWS Bedrock embedding models through a Cohere-compatible interface.
+Generate vector embeddings for semantic search and RAG applications with Amazon Bedrock embedding models through a Cohere-compatible interface.
 
 This is an alternate route to the [OpenAI-compatible Embeddings API](api_openai_embeddings.md): both are served by the same embedding backends and models, so anything supported there is supported here.
 
-!!! info "Route Prefix Configuration"
+!!! warning "Route Prefix & Base URL"
     By default, all Cohere-compatible routes are prefixed with `/cohere`. This means the Embed API is available at `/cohere/v2/embed` instead of `/v2/embed`. You can customize this prefix using the `COHERE_ROUTES_PREFIX` configuration variable documented in [Operations Configuration](operations_configuration.md#cohere-routes-prefix).
 
     The `curl` examples below use a `$BASE` variable that **must include this prefix** — set it to your scheme and host followed by `COHERE_ROUTES_PREFIX`:
@@ -19,12 +19,30 @@ This is an alternate route to the [OpenAI-compatible Embeddings API](api_openai_
     export BASE="https://your-host/cohere"  # <scheme>://<host> + COHERE_ROUTES_PREFIX
     ```
 
+## Why Choose Embed?
+
+<div class="grid cards" markdown>
+
+- :material-magnify: __Semantic Search__
+  <br>Turn texts and images into dense vectors for similarity search that understands meaning, not just keywords.
+
+- :material-book-open-page-variant: __Higher RAG Quality__
+  <br>Build retrieval pipelines on high-quality embeddings, with `input_type` tuning for queries versus documents.
+
+- :material-swap-horizontal: __Drop-in Cohere Compatibility__
+  <br>Follows the Cohere v2 Embed API shape. Existing Cohere embed integrations work by changing the base URL.
+
+- :material-cloud-lock: __Private AWS Backend__
+  <br>Served entirely by Bedrock embedding models in your own AWS account — no traffic to third-party endpoints.
+
+</div>
+
 ## Quick Start: Available Endpoints
 
-| Endpoint    | Method | What It Does                                           | Powered By                   | MCP Tool          |
-|-------------|--------|--------------------------------------------------------|------------------------------|-------------------|
-| `/v2/embed` | POST   | Transform texts and images into semantic float vectors | AWS Bedrock Embedding Models | `cohere_embed`    |
-| `/v1/embed` | POST   | Legacy v1 embed for older SDKs and integrations        | AWS Bedrock Embedding Models | `cohere_embed_v1` |
+| Endpoint    | Method | What It Does                                           | Powered By               | MCP Tool          |
+|-------------|--------|--------------------------------------------------------|--------------------------|-------------------|
+| `/v2/embed` | `POST` | Transform texts and images into semantic float vectors | Bedrock embedding models | `cohere_embed`    |
+| `/v1/embed` | `POST` | Legacy v1 embed for older SDKs and integrations        | Bedrock embedding models | `cohere_embed_v1` |
 
 **Example request:**
 
@@ -64,14 +82,14 @@ curl -X POST "$BASE/v2/embed" \
 |-------------------------------|:----------------------------------------:|--------------------------------------------------------------------|
 | **Input**                     |                                          |                                                                    |
 | `texts`                       |   :material-check-circle:{ .success }    | Full support                                                       |
-| `images` (data URIs)          |       :material-cog:{ .model-dep }       | Multimodal models only; URLs and S3 URIs also accepted             |
-| `inputs` (fused text + image) | :material-close-circle:{ .unsupported }  | Use `texts` or `images` instead                                    |
+| `images`                      |       :material-cog:{ .model-dep }       | Multimodal models only; data URIs, plus URLs and S3 URIs           |
+| `inputs` (fused text + image) | :material-close-circle:{ .unsupported }  | Rejected with 400 — use `texts` or `images` instead                |
 | **Model Parameters**          |                                          |                                                                    |
 | `input_type`                  |       :material-cog:{ .model-dep }       | Applied to Cohere models; no equivalent on other providers         |
 | `output_dimension`            |       :material-cog:{ .model-dep }       | Some models support dimension reduction                            |
 | `truncate`, `max_tokens`      |       :material-cog:{ .model-dep }       | Cohere models only                                                 |
-| `embedding_types`             | :material-close-circle:{ .unsupported }  | Only `float` embeddings are returned                               |
-| `priority`                    | :material-close-circle:{ .unsupported }  | Accepted but ignored — not applicable on AWS Bedrock               |
+| `embedding_types`             |   :material-minus-circle:{ .partial }    | Only `["float"]` is accepted; other types return 400               |
+| `priority`                    | :material-close-circle:{ .unsupported }  | Accepted but ignored — request scheduling priority is not applicable on Bedrock |
 | Extra model-specific params   | :material-plus-circle:{ .extra-feature } | Extra fields are forwarded as additional model request parameters  |
 | **Output**                    |                                          |                                                                    |
 | `images` metadata array       | :material-close-circle:{ .unsupported }  | Image dimensions are not echoed in the response                    |
@@ -86,6 +104,7 @@ curl -X POST "$BASE/v2/embed" \
 
 * :material-check-circle:{ .success } **Supported** — Fully compatible with the Cohere API
 * :material-cog:{ .model-dep } **Available on Select Models** — Check your model's capabilities
+* :material-minus-circle:{ .partial } **Partial** — Supported with limitations
 * :material-close-circle:{ .unsupported } **Unsupported** — Not available in this implementation
 * :material-plus-circle:{ .extra-feature } **Extra Feature** — Enhanced capability beyond the Cohere API
 
@@ -93,7 +112,7 @@ curl -X POST "$BASE/v2/embed" \
 
 ## Cohere v1 Embed API (Legacy)
 
-The legacy `/v1/embed` endpoint is also available for older Cohere SDKs (`cohere.Client`) and third-party integrations that predate the v2 API. It shares the same AWS Bedrock backend and model support as `/v2/embed`; new clients should prefer the v2 endpoint.
+The legacy `/v1/embed` endpoint is also available for older Cohere SDKs (`cohere.Client`) and third-party integrations that predate the v2 API. It shares the same Bedrock backend and model support as `/v2/embed`; new clients should prefer the v2 endpoint.
 
 **Differences from the v2 endpoint:**
 
@@ -136,8 +155,13 @@ curl -X POST "$BASE/v1/embed" \
 }
 ```
 
-## Notes
+## How It Works
 
-- Requests are billed through AWS Bedrock (per token), not in Cohere search units; `billed_units.input_tokens` reports the Bedrock-metered input tokens.
+Requests are served by the same Bedrock embedding backends as the [OpenAI-compatible Embeddings API](api_openai_embeddings.md), with automatic multi-region routing and failover across the regions where the selected model is available.
+
 - When both `texts` and `images` are provided, embeddings are returned in request order: all texts first, then all images.
 - Guardrail and performance headers available on the [OpenAI-compatible Embeddings API](api_openai_embeddings.md#available-request-headers) work on this route too.
+
+## Billing
+
+Requests are billed through Bedrock (per token), not in Cohere search units; `billed_units.input_tokens` reports the Bedrock-metered input tokens. Usage appears in [usage logs and cost tracking](operations_logging_monitoring.md) as `input_tokens`.
