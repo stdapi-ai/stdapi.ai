@@ -1,14 +1,14 @@
 ---
-title: Text to Speech API - AWS Polly with OpenAI Compatibility
-description: Generate natural-sounding speech from text using AWS Polly. OpenAI-compatible TTS API with 60+ voices, 30+ languages, and SSML support.
+title: Text to Speech API - Amazon Polly with OpenAI Compatibility
+description: Generate natural-sounding speech from text using Amazon Polly. OpenAI-compatible TTS API with 60+ voices, 30+ languages, and SSML support.
 keywords: text to speech API, TTS API AWS, AWS Polly API, voice synthesis API, OpenAI TTS, neural voices, speech generation, audio synthesis
 ---
 
 # Text to Speech API
 
-Generate natural-sounding speech from text with AWS Polly through an OpenAI-compatible interface.
+Generate natural-sounding speech from text with Amazon Polly through an OpenAI-compatible interface.
 
-## Why Choose Text to Speech?
+## Why Choose the Text to Speech API?
 
 <div class="grid cards" markdown>
 
@@ -19,7 +19,7 @@ Generate natural-sounding speech from text with AWS Polly through an OpenAI-comp
   <br>Professional narration to conversational voices. Use OpenAI voice names with automatic language detection or specify any Polly voice ID directly.
 
 - :material-auto-fix: __Automatic Language Detection__
-  <br>Using OpenAI voice names? AWS Comprehend automatically detects your content's language and selects an appropriate Polly voice—matching language, gender, and quality.
+  <br>Using OpenAI voice names? Amazon Comprehend automatically detects your content's language and selects an appropriate Polly voice—matching language, gender, and quality.
 
 - :material-xml: __Advanced Control with SSML__
   <br>Fine-tune pronunciation, emphasis, pauses, and prosody with SSML markup for complex audio requirements.
@@ -28,9 +28,9 @@ Generate natural-sounding speech from text with AWS Polly through an OpenAI-comp
 
 ## Quick Start: Available Endpoint
 
-| Endpoint            | Method | What It Does                           | Powered By                 | MCP Tool           |
-|---------------------|--------|----------------------------------------|----------------------------|--------------------|
-| `/v1/audio/speech`  | POST   | Turn text into natural-sounding speech | AWS Polly + AWS Comprehend | `openai_audio_speech` |
+| Endpoint            | Method | What It Does                           | Powered By                       | MCP Tool           |
+|---------------------|--------|----------------------------------------|----------------------------------|--------------------|
+| `/v1/audio/speech`  | `POST` | Turn text into natural-sounding speech | Amazon Polly + Amazon Comprehend | `openai_audio_speech` |
 
 ## Feature Compatibility
 
@@ -54,9 +54,9 @@ Generate natural-sounding speech from text with AWS Polly through an OpenAI-comp
 | WAV                         |   :material-check-circle:{ .success }    | Encoded from PCM                                                |
 | OGG (Vorbis)                | :material-plus-circle:{ .extra-feature } | Native Polly format                                             |
 | **Control**                 |                                          |                                                                 |
-| `speed` parameter           |   :material-check-circle:{ .success }    | 0.2x to 2.0x playback speed                                     |
-| `instructions` parameter    | :material-close-circle:{ .unsupported }  | Accepted for OpenAI API compatibility but ignored by AWS Polly  |
-| Extra model-specific params | :material-plus-circle:{ .extra-feature } | Extra model-specific parameters not supported by the OpenAI API |
+| `speed` parameter           |   :material-check-circle:{ .success }    | 0.2x to 2.0x playback speed; rejected with SSML input (set the speed in SSML instead) |
+| `instructions` parameter    | :material-close-circle:{ .unsupported }  | Accepted for OpenAI API compatibility and ignored (no Amazon Polly equivalent) |
+| Extra model-specific params | :material-plus-circle:{ .extra-feature } | Extra model-specific parameters via JSON body                   |
 | **Streaming**               |                                          |                                                                 |
 | Byte streaming              |   :material-check-circle:{ .success }    | Default streaming mode                                          |
 | SSE streaming               |   :material-check-circle:{ .success }    | Event-based streaming                                           |
@@ -75,36 +75,40 @@ Generate natural-sounding speech from text with AWS Polly through an OpenAI-comp
 
 </div>
 
-## Advanced Features
+## Model Support
 
-### ![AWS Polly](styles/logo_amazon_polly.svg){ style="height: 1.2em; vertical-align: text-bottom;" } OpenAI-Compatible with AWS Power
+### ![Amazon Polly](styles/logo_amazon_polly.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Polly Models
 
-**Models & Voices:**
+| Model                     | Polly Engine | Notes                                              |
+|---------------------------|--------------|----------------------------------------------------|
+| `amazon.polly-standard`   | Standard     | Lowest cost, widest language coverage              |
+| `amazon.polly-neural`     | Neural       | Higher-quality, natural-sounding voices            |
+| `amazon.polly-long-form`  | Long-form    | Expressive voices for narration-length content     |
+| `amazon.polly-generative` | Generative   | Most human-like, conversational voices             |
 
-- Use `amazon.polly-standard`, `amazon.polly-neural`, `amazon.polly-long-form`, or `amazon.polly-generative` (instead of `tts-1`/`tts-1-hd`)
-- **Or use OpenAI model names directly**: `tts-1` (maps to `amazon.polly-standard`) and `tts-1-hd` (maps to `amazon.polly-neural`) work out of the box
-- OpenAI voice names work with automatic language detection and intelligent voice selection
-- Or specify any [Polly voice ID](https://docs.aws.amazon.com/polly/latest/dg/voicelist.html) directly for 60+ voices across 30+ languages
+Each engine supports a different subset of voices and languages — see the [Polly voice list](https://docs.aws.amazon.com/polly/latest/dg/voicelist.html) for details. OpenAI voice names work with every model through automatic language detection and voice selection, or specify any Polly voice ID directly for 60+ voices across 30+ languages.
 
 !!! tip "OpenAI Model Compatibility"
-    stdapi.ai includes built-in model aliases that map OpenAI model names to AWS Polly engines:
+    stdapi.ai includes built-in model aliases that map OpenAI model names to Amazon Polly engines:
 
     - `tts-1` → `amazon.polly-standard`
     - `tts-1-hd` → `amazon.polly-neural`
 
     These aliases enable seamless compatibility with OpenAI-based tools and applications without any configuration changes. You can also [customize or override these aliases](operations_configuration.md#model-aliases) to suit your needs.
 
-**Enhanced Features:**
+## Advanced Features
 
-- **SSML Support** :material-star-circle:{ .highlight }: Fine-grained control over pronunciation, emphasis, pauses, and prosody — [SSML docs](https://docs.aws.amazon.com/polly/latest/dg/ssml.html)
-- **Flexible Formats**: mp3, ogg, wav, flac, aac, opus (some transcoded server-side via ffmpeg)
+### ![Amazon Polly](styles/logo_amazon_polly.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Polly Features
+
+- **SSML Support** :material-star-circle:{ .highlight }: Fine-grained control over pronunciation, emphasis, pauses, and prosody — [SSML docs](https://docs.aws.amazon.com/polly/latest/dg/ssml.html). With SSML input, the `speed` parameter is rejected: set the speaking rate with SSML `<prosody>` instead.
+- **Flexible Formats**: mp3, ogg, wav, flac, aac, opus, pcm — non-native formats are transcoded server-side
 - **Streaming Options**: Raw bytes (default) or SSE events with `stream_format: "sse"`
 - **Speed Control**: Adjust playback from 0.2x to 2.0x
-- **Character-Based Billing**: Usage tracks character counts—the native billing unit for AWS Polly and AWS Comprehend—rather than OpenAI-style tokens
+- **Character-Based Billing**: Usage tracks character counts—the native billing unit for Amazon Polly and Amazon Comprehend—rather than OpenAI-style tokens
 
 !!! tip "Performance Tips: Optimize Speed & Cost"
     - **Use native Polly formats** (mp3, ogg, PCM) to skip server-side conversion
-    - **Specify a Polly voice ID** to bypass language detection—faster responses, no AWS Comprehend charges
+    - **Specify a Polly voice ID** to bypass language detection—faster responses, no Amazon Comprehend charges
     - **Configure a default language** via `DEFAULT_TTS_LANGUAGE` environment variable to skip language detection for all requests using OpenAI voice names
 
 !!! info "Language Detection Behavior"
@@ -128,11 +132,11 @@ Generate natural-sounding speech from text with AWS Polly through an OpenAI-comp
 
 ### Provider-Specific Parameters
 
-Unlock advanced AWS Polly capabilities by passing provider-specific parameters directly in your requests. These parameters are forwarded to AWS Polly's `synthesize_speech` API and allow you to access features unique to Polly.
+Unlock advanced Amazon Polly capabilities by passing provider-specific parameters directly in your requests. These parameters are forwarded to Polly's `SynthesizeSpeech` API and allow you to access features unique to Polly.
 
 **How It Works:**
 
-Add provider-specific fields at the top level of your request body alongside standard OpenAI parameters. The API automatically forwards these to AWS Polly.
+Add provider-specific fields at the top level of your request body alongside standard OpenAI parameters. The API automatically forwards these to Amazon Polly.
 
 **Examples:**
 
@@ -144,7 +148,7 @@ Apply custom pronunciation lexicons to your speech synthesis:
 {
   "model": "amazon.polly-neural",
   "voice": "Joanna",
-  "input": "AWS Polly uses lexicons for custom pronunciation.",
+  "input": "Amazon Polly uses lexicons for custom pronunciation.",
   "response_format": "mp3",
   "LexiconNames": ["MyCustomLexicon"]
 }
@@ -152,7 +156,7 @@ Apply custom pronunciation lexicons to your speech synthesis:
 
 **Sample Rate:**
 
-Specify custom audio sample rate (8000, 16000, 22050, 24000, 44100, or 48000 Hz):
+Specify custom audio sample rate (8000, 16000, 22050, or 24000 Hz; PCM output supports 8000 and 16000 only):
 
 ```json
 {
@@ -200,15 +204,14 @@ export DEFAULT_MODEL_PARAMS='{
 
 **Behavior:**
 
-- ✅ **Compatible parameters**: Forwarded to Polly and applied
-- ⚠️ **Unsupported parameters**: Return HTTP 400 with an error message
+**Compatible parameters** are forwarded to Polly and applied; **unsupported parameters** return HTTP 400 with an error message.
 
 **Available Parameters:**
 
-The following parameters from the AWS Polly [SynthesizeSpeech API](https://docs.aws.amazon.com/polly/latest/dg/API_SynthesizeSpeech.html) can be used:
+The following parameters from the Amazon Polly [SynthesizeSpeech API](https://docs.aws.amazon.com/polly/latest/dg/API_SynthesizeSpeech.html) can be used:
 
 - `LexiconNames` (list): Apply pronunciation lexicons
-- `SampleRate` (string): Audio sample rate in Hz
+- `SampleRate` (string): Audio sample rate in Hz — `8000`, `16000`, `22050`, or `24000` (`pcm` output: `8000` or `16000`)
 - `LanguageCode` (string): Language code for bilingual voices only (e.g., `en-IN`, `hi-IN`)
 
 ## Try It Now

@@ -1,14 +1,14 @@
 ---
-title: Images Edits API - AWS Bedrock Image Editing
-description: Edit and transform images with AWS Bedrock image models. OpenAI-compatible API for image modifications, inpainting, and transformations.
+title: Images Edits API - Amazon Bedrock Image Editing
+description: Edit and transform images with Amazon Bedrock image models. OpenAI-compatible API for image modifications, inpainting, and transformations.
 keywords: image editing API, AI image editor, inpainting API, image modification API, AWS image editing, OpenAI image edit, image transformation API
 ---
 
 # Images API - Image Editing
 
-Edit images using inpainting with AWS Bedrock image models through an OpenAI-compatible interface.
+Edit images using inpainting with Amazon Bedrock image models through an OpenAI-compatible interface.
 
-## Why Choose Image Editing?
+## Why Choose the Image Editing API?
 
 <div class="grid cards" markdown>
 
@@ -22,15 +22,15 @@ Edit images using inpainting with AWS Bedrock image models through an OpenAI-com
   <br>Use transparency or explicit masks to define edit regions.
 
 - :material-aws: __Scalable Infrastructure__
-  <br>Edit images at scale with AWS Bedrock infrastructure.
+  <br>Edit images at scale with Amazon Bedrock infrastructure.
 
 </div>
 
 ## Quick Start: Available Endpoint
 
-| Endpoint           | Method | What It Does                            | Powered By               | MCP Tool           |
-|--------------------|--------|-----------------------------------------|--------------------------|--------------------|
-| `/v1/images/edits` | POST   | Edit images using prompts and masks     | AWS Bedrock Image Models | `openai_image_edit` |
+| Endpoint           | Method | What It Does                            | Powered By                  | MCP Tool           |
+|--------------------|--------|-----------------------------------------|-----------------------------|--------------------|
+| `/v1/images/edits` | `POST` | Edit images using prompts and masks     | Amazon Bedrock Image Models | `openai_image_edit` |
 
 ## Feature Compatibility
 
@@ -42,34 +42,34 @@ Edit images using inpainting with AWS Bedrock image models through an OpenAI-com
 | Image-to-image (`/edits`)      |   :material-check-circle:{ .success }    | Edit images with prompts and masks                                                                                                             |
 | **Request Formats**            |                                          |                                                                                                                                                |
 | Multipart form-data            |   :material-check-circle:{ .success }    | Binary file uploads via `image` / `image[]` / `mask` fields                                                                                    |
-| JSON body                      |   :material-check-circle:{ .success }    | Structured `images` array with Files API IDs or URLs                                                                                           |
+| JSON body                      | :material-plus-circle:{ .extra-feature } | Structured `images` array with Files API IDs or URLs (the OpenAI edits API is multipart-only)                                                  |
 | **Parameters**                 |                                          |                                                                                                                                                |
-| `image` / `image[]`            |   :material-check-circle:{ .success }    | PNG image(s) to edit (multipart: binary upload, 1+ images)                                                                                     |
+| `image` / `image[]`            |   :material-check-circle:{ .success }    | PNG image(s) to edit; most models accept exactly one source image and reject requests providing more with an error                             |
 | `images` (JSON)                |   :material-check-circle:{ .success }    | Array of `{file_id}` or `{image_url}` references (JSON body)                                                                                   |
 | `prompt`                       |   :material-check-circle:{ .success }    | Text description of desired changes                                                                                                            |
-| `mask`                         |   :material-check-circle:{ .success }    | Optional mask defining edit regions                                                                                                            |
+| `mask`                         |   :material-check-circle:{ .success }    | Optional mask defining edit regions; models that do not use a mask reject requests that include one                                            |
 | `n` (number of images)         |   :material-check-circle:{ .success }    | Multiple images per request; accepted range is 1-10, but the effective maximum is model-dependent (e.g. Amazon Titan and Nova Canvas cap at 5) |
 | `size` (WIDTHxHEIGHT)          |   :material-check-circle:{ .success }    | Output dimensions (default: 1024x1024, format validated)                                                                                       |
 | `model`                        |   :material-check-circle:{ .success }    | Required parameter                                                                                                                             |
 | `response_format`              |   :material-check-circle:{ .success }    | `url` or `b64_json` (default: `url`)                                                                                                           |
 | `output_format`                |   :material-check-circle:{ .success }    | `png`, `jpeg`, or `webp` (model-specific)                                                                                                      |
 | `output_compression`           |   :material-check-circle:{ .success }    | Compression level 1-100% (default: 100)                                                                                                        |
-| `quality`                      |   :material-check-circle:{ .success }    | Quality setting (default: `auto`, model-specific values)                                                                                       |
+| `quality`                      |       :material-cog:{ .model-dep }       | Quality setting (default: `auto`, supports OpenAI & model-specific)                                                                            |
 | `stream`                       |   :material-check-circle:{ .success }    | Generate images in streaming mode with partial results                                                                                         |
 | `partial_images`               |       :material-cog:{ .model-dep }       | Number of partial images in stream (0-3, model-specific)                                                                                       |
-| `background`                   |   :material-minus-circle:{ .partial }    | Accepts `auto` (default) and `opaque`; `transparent` is unsupported                                                                            |
-| `input_fidelity`               | :material-close-circle:{ .unsupported }  | Ignored, always `low`                                                                                                                          |
+| `background`                   |   :material-minus-circle:{ .partial }    | Accepts `auto` (default) and `opaque`; `transparent` is unsupported — responses report `opaque`                                                |
+| `input_fidelity`               | :material-close-circle:{ .unsupported }  | Accepted for OpenAI API compatibility and ignored (always behaves as `low`)                                                                    |
 | **Output**                     |                                          |                                                                                                                                                |
-| URL response format            |   :material-check-circle:{ .success }    | Temporary URLs to edited images (requires AWS_S3_BUCKET)                                                                                       |
+| URL response format            |   :material-check-circle:{ .success }    | Temporary presigned URLs, valid for 60 minutes (requires AWS_S3_BUCKET)                                                                        |
 | Base64 JSON format             |   :material-check-circle:{ .success }    | Inline base64-encoded images                                                                                                                   |
 | PNG format                     |   :material-check-circle:{ .success }    | Lossless image output                                                                                                                          |
 | JPEG format                    |       :material-cog:{ .model-dep }       | Lossy compression (model-specific)                                                                                                             |
-| WEBP format                    |       :material-cog:{ .model-dep }       | Modern format with compression (model-specific)                                                                                                |
+| WebP format                    |       :material-cog:{ .model-dep }       | Modern format with compression (model-specific)                                                                                                |
 | Streaming response             |   :material-check-circle:{ .success }    | Server-sent events with partial and final images                                                                                               |
 | **Usage tracking**             |                                          |                                                                                                                                                |
-| Input text tokens              |   :material-check-circle:{ .success }    | Sourced from AWS billing when available                                                                                                                          |
-| Input image tokens             |   :material-check-circle:{ .success }    | Count of input images (image + mask)                                                                                                           |
-| Output image tokens            |   :material-check-circle:{ .success }    | Image count (billing unit)                                                                                                                     |
+| Input text tokens              |   :material-check-circle:{ .success }    | Sourced from AWS billing data when available; remainder after subtracting image tokens                                                         |
+| Input image tokens             |   :material-check-circle:{ .success }    | Count of input images (image files + mask file), capped at the billed input tokens                                                             |
+| Output image tokens            |   :material-check-circle:{ .success }    | Sourced from AWS billing data when available; falls back to the image count (`n`)                                                              |
 | **Other**                      |                                          |                                                                                                                                                |
 | `user`                         |   :material-minus-circle:{ .partial }    | Logged but not used for abuse monitoring                                                                                                       |
 | Extra parameters via form data | :material-plus-circle:{ .extra-feature } | Provider-specific parameters passed through                                                                                                    |
@@ -88,6 +88,8 @@ Edit images using inpainting with AWS Bedrock image models through an OpenAI-com
 
 </div>
 
+## Model Support
+
 !!! info "Model Support"
     **Inpainting** (mask-based editing) is supported by **Amazon Nova Canvas**, **Amazon Titan Image Generator**, and **Stability AI** inpaint models.
 
@@ -101,18 +103,13 @@ Edit images using inpainting with AWS Bedrock image models through an OpenAI-com
 
     **Background removal** is supported by **Amazon Titan Image Generator v2**, **Amazon Nova Canvas**, and **Stability AI** remove background model.
 
-!!! warning "Configuration Required"
-    You must configure the `AWS_S3_BUCKET` environment variable with a bucket to use the URL response format.
-
-## Supported Models
-
 ### ![Amazon](styles/logo_amazon.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Models
 
 | Model                             | Supported Task Types                                                              | Mask Support                                                                    | Notes                                                                               |
 |-----------------------------------|-----------------------------------------------------------------------------------|---------------------------------------------------------------------------------|-------------------------------------------------------------------------------------|
 | amazon.nova-canvas-v1:0           | `TEXT_IMAGE`, `INPAINTING`, `OUTPAINTING`, `BACKGROUND_REMOVAL`, `VIRTUAL_TRY_ON` | ✅ Required for inpainting/outpainting<br>✅ Used as reference for virtual try-on | Supports multiple editing modes including advanced virtual try-on with 3 mask types |
 | amazon.titan-image-generator-v1   | `INPAINTING`, `OUTPAINTING`                                                       | ✅ Required for inpainting/outpainting                                           | Supports text-based mask prompts as alternative to mask images                      |
-| amazon.titan-image-generator-v2:0 | `INPAINTING`, `OUTPAINTING`, `BACKGROUND_REMOVAL`                                 | ✅ Required for inpainting/outpainting<br>❌ Not used for background removal      | Enhanced features including background removal without mask                         |
+| amazon.titan-image-generator-v2:0 | `INPAINTING`, `OUTPAINTING`, `BACKGROUND_REMOVAL`                                 | ✅ Required for inpainting/outpainting<br>❌ Rejected for background removal      | Enhanced features including background removal without mask                         |
 
 !!! info "Amazon Nova Canvas Default Behavior"
     **`amazon.nova-canvas-v1:0`** automatically selects the task type based on the presence of a mask when no `taskType` is explicitly provided:
@@ -124,41 +121,41 @@ Edit images using inpainting with AWS Bedrock image models through an OpenAI-com
 
 #### Image-to-Image Models
 
-| Model                             | Prompt Usage           | Mask Usage | Extra Parameters Required | Notes                             |
-|-----------------------------------|------------------------|------------|---------------------------|-----------------------------------|
-| stability.sd3-5-large-v1:0        | Guides transformation  | Not used   | None                      | Transform images with prompt      |
+| Model                             | Prompt Usage           | Mask Usage           | Extra Parameters Required | Notes                             |
+|-----------------------------------|------------------------|----------------------|---------------------------|-----------------------------------|
+| stability.sd3-5-large-v1:0        | Guides transformation  | Rejected if provided | None                      | Transform images with prompt      |
 
 #### Upscale Models
 
-| Model                                      | Prompt Usage           | Mask Usage | Extra Parameters Required | Notes                                   |
-|--------------------------------------------|------------------------|------------|---------------------------|-----------------------------------------|
-| stability.stable-creative-upscale-v1:0     | Guides upscaling       | Not used   | None                      | Prompt-guided upscaling with creativity |
-| stability.stable-conservative-upscale-v1:0 | Guides upscaling       | Not used   | None                      | Detail-preserving upscaling             |
-| stability.stable-fast-upscale-v1:0         | **Not used**           | Not used   | None                      | Fast 4x upscaling without prompt        |
+| Model                                      | Prompt Usage           | Mask Usage           | Extra Parameters Required | Notes                                   |
+|--------------------------------------------|------------------------|----------------------|---------------------------|-----------------------------------------|
+| stability.stable-creative-upscale-v1:0     | Guides upscaling       | Rejected if provided | None                      | Prompt-guided upscaling with creativity |
+| stability.stable-conservative-upscale-v1:0 | Guides upscaling       | Rejected if provided | None                      | Detail-preserving upscaling             |
+| stability.stable-fast-upscale-v1:0         | **Not used**           | Rejected if provided | None                      | Fast 4x upscaling without prompt        |
 
 #### Edit Models
 
 | Model                                         | Prompt Usage              | Mask Usage                   | Extra Parameters Required | Notes                            |
 |-----------------------------------------------|---------------------------|------------------------------|---------------------------|----------------------------------|
 | stability.stable-image-inpaint-v1:0           | Guides inpainting         | Optional (marks edit region) | None                      | Fill masked regions              |
-| stability.stable-outpaint-v1:0                | Guides outpainting        | Not used                     | None                      | Extend image beyond borders      |
-| stability.stable-image-search-recolor-v1:0    | Describes new color       | Not used                     | `select_prompt`           | Recolor objects by search prompt |
-| stability.stable-image-search-replace-v1:0    | Describes replacement     | Not used                     | `search_prompt`           | Replace objects by search prompt |
+| stability.stable-outpaint-v1:0                | Guides outpainting        | Rejected if provided         | None                      | Extend image beyond borders      |
+| stability.stable-image-search-recolor-v1:0    | Describes new color       | Rejected if provided         | `select_prompt`           | Recolor objects by search prompt |
+| stability.stable-image-search-replace-v1:0    | Describes replacement     | Rejected if provided         | `search_prompt`           | Replace objects by search prompt |
 | stability.stable-image-erase-object-v1:0      | **Not used**              | Required (marks object)      | None                      | Remove objects with mask         |
-| stability.stable-image-remove-background-v1:0 | **Not used**              | Not used                     | None                      | Automatic background removal     |
+| stability.stable-image-remove-background-v1:0 | **Not used**              | Rejected if provided         | None                      | Automatic background removal     |
 
 #### Control Models
 
-| Model                                         | Prompt Usage         | Mask Usage | Extra Parameters Required | Notes                           |
-|-----------------------------------------------|----------------------|------------|---------------------------|---------------------------------|
-| stability.stable-image-control-sketch-v1:0    | Guides generation    | Not used   | None                      | Generate from sketch            |
-| stability.stable-image-control-structure-v1:0 | Guides generation    | Not used   | None                      | Structure-preserving generation |
+| Model                                         | Prompt Usage         | Mask Usage           | Extra Parameters Required | Notes                           |
+|-----------------------------------------------|----------------------|----------------------|---------------------------|---------------------------------|
+| stability.stable-image-control-sketch-v1:0    | Guides generation    | Rejected if provided | None                      | Generate from sketch            |
+| stability.stable-image-control-structure-v1:0 | Guides generation    | Rejected if provided | None                      | Structure-preserving generation |
 
 #### Style Models
 
 | Model                                   | Prompt Usage          | Mask Usage                             | Extra Parameters Required | Notes                         |
 |-----------------------------------------|-----------------------|----------------------------------------|---------------------------|-------------------------------|
-| stability.stable-image-style-guide-v1:0 | Guides style          | Not used                               | None                      | Extract and apply style       |
+| stability.stable-image-style-guide-v1:0 | Guides style          | Rejected if provided                   | None                      | Extract and apply style       |
 | stability.stable-style-transfer-v1:0    | Guides style transfer | Required (repurposed as `style_image`) | None                      | Transfer style between images |
 
 !!! note "Output Formats"
@@ -174,11 +171,19 @@ Edit images using inpainting with AWS Bedrock image models through an OpenAI-com
 
     All other Stability models use only standard OpenAI parameters (`image`, `prompt`, and optionally `mask`).
 
-## Request Formats
+!!! info "No Built-In Aliases for OpenAI Image Model Names"
+    OpenAI's default image model names (`dall-e-2`, `dall-e-3`, `gpt-image-1`) have **no built-in alias**, so requests using them fail with a model-not-found error — the most common first-call issue. Pass one of the model IDs above, or map the OpenAI names to your preferred models with [`MODEL_ALIASES`](operations_configuration.md#model-aliases).
+
+!!! warning "Configuration Required"
+    You must configure the `AWS_S3_BUCKET` environment variable with a bucket to use the URL response format.
+
+## Advanced Features
+
+### Request Formats
 
 The `/v1/images/edits` endpoint accepts two request formats:
 
-### Multipart Form-Data (Binary Uploads)
+#### Multipart Form-Data (Binary Uploads)
 
 The classic format — upload image files directly. Use `image` (single) or `image[]` (multiple) for source images and `mask` for the optional edit mask.
 
@@ -191,7 +196,7 @@ curl -X POST "$BASE/v1/images/edits" \
   -F model="amazon.nova-canvas-v1:0"
 ```
 
-### JSON Body (Files API or URL References)
+#### JSON Body (Files API or URL References) :material-plus-circle:{ .extra-feature }
 
 The modern format — reference images already stored in the Files API or accessible via URL. Send `Content-Type: application/json` with an `images` array, where each element has either `file_id` or `image_url`:
 
@@ -233,9 +238,9 @@ Exactly one of `file_id` or `image_url` must be provided per `ImageRef`.
 !!! tip "Workflow Integration"
     The JSON body format works seamlessly with the [Files API](api_openai_files.md): upload images once, reuse them across multiple edit requests by file ID without re-uploading.
 
-## How Image Editing Works
+### How Image Editing Works
 
-### ![Stability AI](styles/logo_stabilityai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Image-to-Image (Stability AI Models)
+#### ![Stability AI](styles/logo_stabilityai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Image-to-Image (Stability AI Models)
 
 Stability AI models support image-to-image transformation without masks. The source image is transformed according to the prompt:
 
@@ -252,7 +257,7 @@ curl -X POST "$BASE/v1/images/edits" \
 !!! warning "Mask Not Supported"
     Stability AI image-to-image models do not support mask-based editing. Providing a `mask` parameter will result in an error.
 
-### ![Stability AI](styles/logo_stabilityai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Upscale (Stability AI)
+#### ![Stability AI](styles/logo_stabilityai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Upscale (Stability AI)
 
 Upscale models increase image resolution while preserving quality:
 
@@ -270,7 +275,7 @@ curl -X POST "$BASE/v1/images/edits" \
     - No prompt parameter needed or used
     - Best for enlarging photos and preserving original content
 
-### ![Stability AI](styles/logo_stabilityai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Style Transfer (Stability AI)
+#### ![Stability AI](styles/logo_stabilityai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Style Transfer (Stability AI)
 
 Apply visual characteristics from one image to another. The `mask` parameter is used to pass the style reference image:
 
@@ -291,9 +296,9 @@ curl -X POST "$BASE/v1/images/edits" \
     - **`mask`** (required): Maps to `style_image` - the reference style image
     - **`prompt`**: Guides the style application process
 
-### Inpainting with Masks (Amazon Models)
+#### Inpainting with Masks (Amazon Models)
 
-#### With Transparent Areas (Automatic Mask)
+**With Transparent Areas (Automatic Mask):**
 
 If your source image has transparent regions (alpha channel), those areas will automatically be used as the edit mask:
 
@@ -310,7 +315,7 @@ curl -X POST "$BASE/v1/images/edits" \
 
 **Image format**: PNG with alpha channel where transparent pixels indicate regions to edit.
 
-#### With Explicit Mask
+**With Explicit Mask:**
 
 For more control, provide an explicit mask image where transparent areas indicate regions to edit:
 
@@ -328,19 +333,305 @@ curl -X POST "$BASE/v1/images/edits" \
 
 **Mask format**: PNG with alpha channel where transparent pixels indicate regions to edit, opaque pixels are preserved.
 
+### Provider-Specific Parameters
+
+#### ![Amazon Nova](styles/logo_amazon_nova.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Nova Canvas
+
+**Basic Usage (Standard OpenAI Parameters):**
+
+```bash
+# Inpainting with mask
+curl -X POST "$BASE/v1/images/edits" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: multipart/form-data" \
+  -F image=@source.png \
+  -F mask=@mask.png \
+  -F prompt="A sunset over mountains" \
+  -F model="amazon.nova-canvas-v1:0"
+```
+
+**Parameter Mapping:**
+
+| OpenAI Parameter    | Maps to                                | Notes                                                       |
+|---------------------|----------------------------------------|-------------------------------------------------------------|
+| `prompt`            | Depends on `taskType`                  | See taskType-specific mapping below                         |
+| `image` / `image[]` | Depends on `taskType`                  | See taskType-specific mapping below (single image required) |
+| `mask`              | Depends on `taskType`                  | See taskType-specific mapping below                         |
+| `size`              | `imageGenerationConfig.width/height`   | Output dimensions (320-4096)                                |
+| `quality`           | `imageGenerationConfig.quality`        | "high" → "premium"                                          |
+| `n`                 | `imageGenerationConfig.numberOfImages` | 1-5 images                                                  |
+
+**TaskType-Specific Parameter Mapping:**
+
+| taskType                          | `prompt` maps to                                              | `image` maps to                    | `mask` maps to                      |
+|-----------------------------------|---------------------------------------------------------------|------------------------------------|-------------------------------------|
+| `TEXT_IMAGE` (default, no mask)   | `textToImageParams.text`                                      | `textToImageParams.conditionImage` | Not used                            |
+| `INPAINTING` (default with mask)  | `inPaintingParams.text`                                       | `inPaintingParams.image`           | `inPaintingParams.maskImage`        |
+| `OUTPAINTING`                     | `outPaintingParams.text`                                      | `outPaintingParams.image`          | `outPaintingParams.maskImage`       |
+| `BACKGROUND_REMOVAL`              | Not used                                                      | `backgroundRemovalParams.image`    | Rejected if provided                |
+| `VIRTUAL_TRY_ON` (PROMPT)         | `promptBasedMask.maskPrompt`                                  | `virtualTryOnParams.sourceImage`   | `virtualTryOnParams.referenceImage` |
+| `VIRTUAL_TRY_ON` (GARMENT)        | `garmentBasedMask.garmentClass`                               | `virtualTryOnParams.sourceImage`   | `virtualTryOnParams.referenceImage` |
+| `VIRTUAL_TRY_ON` (IMAGE)          | `imageBasedMask.maskImage` (Base64 encoded image or data URI) | `virtualTryOnParams.sourceImage`   | `virtualTryOnParams.referenceImage` |
+
+**Advanced Task Types (with form fields):**
+
+Default `taskType` is `"INPAINTING"` when a mask is provided, `"TEXT_IMAGE"` otherwise.
+
+Available task types:
+
+- `"TEXT_IMAGE"` - Prompt-driven transformation using the source image as condition
+- `"INPAINTING"` - Fill masked regions
+- `"OUTPAINTING"` - Extend image beyond borders
+- `"BACKGROUND_REMOVAL"` - Remove background
+- `"VIRTUAL_TRY_ON"` - Virtual fashion try-on
+
+```bash
+# Outpainting
+curl -X POST "$BASE/v1/images/edits" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: multipart/form-data" \
+  -F image=@photo.png \
+  -F prompt="Extend with a garden" \
+  -F model="amazon.nova-canvas-v1:0" \
+  -F taskType="OUTPAINTING"
+
+# Background Removal (no prompt needed)
+curl -X POST "$BASE/v1/images/edits" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: multipart/form-data" \
+  -F image=@photo.png \
+  -F model="amazon.nova-canvas-v1:0" \
+  -F taskType="BACKGROUND_REMOVAL"
+
+# Virtual Try-On - Prompt-Based (default)
+# image: person photo, mask: garment image, prompt: area description
+curl -X POST "$BASE/v1/images/edits" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: multipart/form-data" \
+  -F image=@person.png \
+  -F mask=@garment.png \
+  -F prompt="upper body area" \
+  -F model="amazon.nova-canvas-v1:0" \
+  -F taskType="VIRTUAL_TRY_ON"
+
+# Virtual Try-On - Garment-Based
+# image: person photo, mask: garment image, prompt: garment class
+curl -X POST "$BASE/v1/images/edits" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: multipart/form-data" \
+  -F image=@person.png \
+  -F mask=@garment.png \
+  -F prompt="UPPER_BODY" \
+  -F model="amazon.nova-canvas-v1:0" \
+  -F taskType="VIRTUAL_TRY_ON" \
+  -F "virtualTryOnParams[maskType]=GARMENT"
+
+# Virtual Try-On - Image-Based Mask
+# image: person photo, mask: garment image, prompt: base64 mask image
+curl -X POST "$BASE/v1/images/edits" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: multipart/form-data" \
+  -F image=@person.png \
+  -F mask=@garment.png \
+  -F prompt="BASE64_MASK_IMAGE" \
+  -F model="amazon.nova-canvas-v1:0" \
+  -F taskType="VIRTUAL_TRY_ON" \
+  -F "virtualTryOnParams[maskType]=IMAGE"
+```
+
+!!! info "Full Parameter Reference"
+    For all available parameters and task types, see [Amazon Nova Canvas documentation](https://docs.aws.amazon.com/nova/latest/userguide/image-generation.html)
+
+#### ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Titan Image Generator
+
+**Basic Usage (Standard OpenAI Parameters):**
+
+```bash
+# Inpainting with mask
+curl -X POST "$BASE/v1/images/edits" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: multipart/form-data" \
+  -F image=@source.png \
+  -F mask=@mask.png \
+  -F prompt="A beautiful garden with flowers" \
+  -F model="amazon.titan-image-generator-v2:0"
+```
+
+**Parameter Mapping:**
+
+| OpenAI Parameter    | Maps to                                | Notes                                                       |
+|---------------------|----------------------------------------|-------------------------------------------------------------|
+| `prompt`            | Depends on `taskType`                  | See taskType-specific mapping below                         |
+| `image` / `image[]` | Depends on `taskType`                  | See taskType-specific mapping below (single image required) |
+| `mask`              | Depends on `taskType`                  | See taskType-specific mapping below                         |
+| `size`              | `imageGenerationConfig.width/height`   | Fixed sizes (512-2048)                                      |
+| `quality`           | `imageGenerationConfig.quality`        | "high" → "premium"                                          |
+| `n`                 | `imageGenerationConfig.numberOfImages` | 1-5 images                                                  |
+
+**TaskType-Specific Parameter Mapping:**
+
+| taskType               | `prompt` maps to         | `image` maps to                 | `mask` maps to                |
+|------------------------|--------------------------|---------------------------------|-------------------------------|
+| `INPAINTING` (default) | `inPaintingParams.text`  | `inPaintingParams.image`        | `inPaintingParams.maskImage`  |
+| `OUTPAINTING`          | `outPaintingParams.text` | `outPaintingParams.image`       | `outPaintingParams.maskImage` |
+| `BACKGROUND_REMOVAL`   | Not used                 | `backgroundRemovalParams.image` | Rejected if provided          |
+
+**Advanced Task Types (with form fields):**
+
+Default `taskType` is `"INPAINTING"`.
+
+Available task types:
+
+- `"INPAINTING"` - Fill masked regions
+- `"OUTPAINTING"` - Extend image beyond borders
+- `"BACKGROUND_REMOVAL"` (v2 only) - Remove background
+
+```bash
+# Outpainting
+curl -X POST "$BASE/v1/images/edits" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: multipart/form-data" \
+  -F image=@photo.png \
+  -F prompt="Extend with a forest" \
+  -F model="amazon.titan-image-generator-v2:0" \
+  -F taskType="OUTPAINTING"
+
+# Background Removal (v2 only, no prompt needed)
+curl -X POST "$BASE/v1/images/edits" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: multipart/form-data" \
+  -F image=@photo.png \
+  -F model="amazon.titan-image-generator-v2:0" \
+  -F taskType="BACKGROUND_REMOVAL"
+```
+
+!!! info "Full Parameter Reference"
+    For all available parameters and task types, see [Amazon Titan Image Generator documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-image.html)
+
+#### ![Stability AI](styles/logo_stabilityai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Stability AI Models
+
+**Basic Usage (Standard OpenAI Parameters):**
+
+Most Stability AI models work with standard OpenAI parameters:
+
+```bash
+# Image-to-image transformation
+curl -X POST "$BASE/v1/images/edits" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: multipart/form-data" \
+  -F image=@photo.png \
+  -F prompt="A dramatic cinematic scene" \
+  -F model="stability.sd3-5-large-v1:0"
+```
+
+**Parameter Mapping:**
+
+All Stability AI models use standard OpenAI parameters directly:
+
+| OpenAI Parameter    | Stability Parameter | Notes                                              |
+|---------------------|---------------------|----------------------------------------------------|
+| `image` / `image[]` | `image`             | Base64-encoded input image (single image required) |
+| `prompt`            | `prompt`            | Text description (may be unused for some models)   |
+| `mask`              | `mask`              | Base64-encoded mask (model-specific)               |
+| `n`                 | Multiple requests   | Generates N images via multiple API calls          |
+| `size`              | Model-specific      | Some models support width/height                   |
+
+**Model-Specific Parameters:**
+
+| Model(s)                              | Required Form Fields     | OpenAI `mask` Maps To | Notes                                    |
+|---------------------------------------|--------------------------|-----------------------|------------------------------------------|
+| `stable-image-search-recolor-v1:0`    | `select_prompt` (string) | Not used              | Identifies object to recolor             |
+| `stable-image-search-replace-v1:0`    | `search_prompt` (string) | Not used              | Identifies object to find and replace    |
+| `stable-style-transfer-v1:0`          | None (uses `mask` param) | `style_image`         | Mask parameter repurposed as style image |
+| `stable-image-erase-object-v1:0`      | None                     | `mask` (required)     | Prompt not used                          |
+| `stable-image-remove-background-v1:0` | None                     | Not used              | Prompt not used                          |
+| `stable-fast-upscale-v1:0`            | None                     | Not used              | Prompt not used                          |
+
+**Examples:**
+
+```bash
+# Search & Replace - requires search_prompt form field
+curl -X POST "$BASE/v1/images/edits" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: multipart/form-data" \
+  -F image=@input.png \
+  -F prompt="a red car" \
+  -F model="stability.stable-image-search-replace-v1:0" \
+  -F search_prompt="blue car"
+
+# Search & Recolor - requires select_prompt form field
+curl -X POST "$BASE/v1/images/edits" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: multipart/form-data" \
+  -F image=@input.png \
+  -F prompt="bright red color" \
+  -F model="stability.stable-image-search-recolor-v1:0" \
+  -F select_prompt="car"
+
+# Style Transfer - mask parameter is style image
+curl -X POST "$BASE/v1/images/edits" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: multipart/form-data" \
+  -F image=@content.png \
+  -F mask=@style.png \
+  -F prompt="Apply artistic style" \
+  -F model="stability.stable-style-transfer-v1:0"
+
+# Erase Object - no prompt needed, mask required
+curl -X POST "$BASE/v1/images/edits" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: multipart/form-data" \
+  -F image=@input.png \
+  -F mask=@object_mask.png \
+  -F model="stability.stable-image-erase-object-v1:0"
+
+# Remove Background - no prompt needed
+curl -X POST "$BASE/v1/images/edits" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: multipart/form-data" \
+  -F image=@input.png \
+  -F model="stability.stable-image-remove-background-v1:0"
+
+# Fast Upscale - no prompt needed
+curl -X POST "$BASE/v1/images/edits" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: multipart/form-data" \
+  -F image=@low_res.png \
+  -F model="stability.stable-fast-upscale-v1:0"
+```
+
+!!! info "Full Parameter Reference"
+    For all Stability AI parameters, see [Stability AI documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-stability-diffusion.html)
+
+## Available Request Headers
+
+This endpoint supports the same standard Bedrock headers as the other images endpoints: guardrail headers (`X-Amzn-Bedrock-GuardrailIdentifier`, `X-Amzn-Bedrock-GuardrailVersion`, `X-Amzn-Bedrock-Trace`) and performance headers (`X-Amzn-Bedrock-Service-Tier`, `X-Amzn-Bedrock-PerformanceConfig-Latency`). All headers are optional and can be combined as needed.
+
+See the [Images Generation API headers reference](api_openai_images_generations.md#available-request-headers) for the header tables, valid values, and configuration links.
+
+**Example with headers:**
+
+```bash
+curl -X POST "$BASE/v1/images/edits" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "X-Amzn-Bedrock-Service-Tier: priority" \
+  -F image=@source.png \
+  -F prompt="A red apple on a wooden table" \
+  -F model="amazon.nova-canvas-v1:0"
+```
+
 ## Try It Now
 
 ### ![Stability AI](styles/logo_stabilityai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Image-to-Image with Stability AI
 
 ```bash
-# Transform image with default strength (0.5)
+# Transform image with default strength (0.35)
 curl -X POST "$BASE/v1/images/edits" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: multipart/form-data" \
   -F image=@photo.png \
   -F prompt="Transform into a watercolor painting" \
   -F model="stability.sd3-5-large-v1:0"
-
 ```
 
 ### ![Stability AI](styles/logo_stabilityai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Upscale with Stability AI
@@ -444,12 +735,14 @@ curl -X POST "$BASE/v1/images/edits" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -F image=@image.png \
   -F prompt="A sunny day with blue sky" \
-  -F model="amazon.nova-canvas-v1:0"
+  -F model="amazon.nova-canvas-v1:0" \
+  -F response_format="b64_json"
 ```
 
-### Multiple Variations
+### Multiple Edited Images
 
 ```bash
+# Generate three edited images from the same source (n parameter)
 curl -X POST "$BASE/v1/images/edits" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -F image=@image.png \
@@ -476,11 +769,9 @@ curl -X POST "$BASE/v1/images/edits" \
 ```
 
 !!! warning "Model Support for Multiple Images"
-    Not all models support multiple input images. Currently, models that do not support multiple images will only use the first image and raise an error if more than one is provided. Check model documentation for multi-image composition support.
+    Not all models support multiple input images. Models that accept only a single source image reject requests providing more than one with an error. Check model documentation for multi-image composition support.
 
-## Additional Examples
-
-### Inpainting with Control Models
+### Generate from Sketch or Structure (Control Models)
 
 ```bash
 # Control Sketch - generate from sketch
@@ -500,7 +791,7 @@ curl -X POST "$BASE/v1/images/edits" \
   -F model="stability.stable-image-control-structure-v1:0"
 ```
 
-### Inpainting with Mask
+### Inpainting & Outpainting with Stability AI
 
 ```bash
 # Stability AI Inpainting - mask marks edit region
@@ -533,280 +824,6 @@ curl -X POST "$BASE/v1/images/edits" \
   -F model="stability.stable-image-style-guide-v1:0"
 ```
 
-## Advanced Features
+---
 
-### Provider-Specific Parameters
-
-#### ![Amazon Nova](styles/logo_amazon_nova.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Nova Canvas
-
-**Basic Usage (Standard OpenAI Parameters):**
-
-```bash
-# Inpainting with mask
-curl -X POST "$BASE/v1/images/edits" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: multipart/form-data" \
-  -F image=@source.png \
-  -F mask=@mask.png \
-  -F prompt="A sunset over mountains" \
-  -F model="amazon.nova-canvas-v1:0"
-```
-
-**Parameter Mapping:**
-
-| OpenAI Parameter    | Maps to                                | Notes                                                  |
-|---------------------|----------------------------------------|--------------------------------------------------------|
-| `prompt`            | Depends on `taskType`                  | See taskType-specific mapping below                    |
-| `image` / `image[]` | Depends on `taskType`                  | See taskType-specific mapping below (first image used) |
-| `mask`              | Depends on `taskType`                  | See taskType-specific mapping below                    |
-| `size`              | `imageGenerationConfig.width/height`   | Output dimensions (320-4096)                           |
-| `quality`           | `imageGenerationConfig.quality`        | "high" → "premium"                                     |
-| `n`                 | `imageGenerationConfig.numberOfImages` | 1-5 images                                             |
-
-**TaskType-Specific Parameter Mapping:**
-
-| taskType                   | `prompt` maps to                                              | `image` maps to                  | `mask` maps to                      |
-|----------------------------|---------------------------------------------------------------|----------------------------------|-------------------------------------|
-| `INPAINTING` (default)     | `inPaintingParams.text`                                       | `inPaintingParams.image`         | `inPaintingParams.maskImage`        |
-| `OUTPAINTING`              | `outPaintingParams.text`                                      | `outPaintingParams.image`        | `outPaintingParams.maskImage`       |
-| `BACKGROUND_REMOVAL`       | Not used                                                      | `backgroundRemovalParams.image`  | Not used                            |
-| `VIRTUAL_TRY_ON` (PROMPT)  | `promptBasedMask.maskPrompt`                                  | `virtualTryOnParams.sourceImage` | `virtualTryOnParams.referenceImage` |
-| `VIRTUAL_TRY_ON` (GARMENT) | `garmentBasedMask.garmentClass`                               | `virtualTryOnParams.sourceImage` | `virtualTryOnParams.referenceImage` |
-| `VIRTUAL_TRY_ON` (IMAGE)   | `imageBasedMask.maskImage` (Base64 encoded image or data URI) | `virtualTryOnParams.sourceImage` | `virtualTryOnParams.referenceImage` |
-
-**Advanced Task Types (with form fields):**
-
-Default `taskType` is `"INPAINTING"`.
-
-Available task types:
-
-- `"INPAINTING"` - Fill masked regions
-- `"OUTPAINTING"` - Extend image beyond borders
-- `"BACKGROUND_REMOVAL"` - Remove background
-- `"VIRTUAL_TRY_ON"` - Virtual fashion try-on
-
-```bash
-# Outpainting
-curl -X POST "$BASE/v1/images/edits" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: multipart/form-data" \
-  -F image=@photo.png \
-  -F prompt="Extend with a garden" \
-  -F model="amazon.nova-canvas-v1:0" \
-  -F taskType="OUTPAINTING"
-
-# Background Removal (no prompt needed)
-curl -X POST "$BASE/v1/images/edits" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: multipart/form-data" \
-  -F image=@photo.png \
-  -F model="amazon.nova-canvas-v1:0" \
-  -F taskType="BACKGROUND_REMOVAL"
-
-# Virtual Try-On - Prompt-Based (default)
-# image: person photo, mask: garment image, prompt: area description
-curl -X POST "$BASE/v1/images/edits" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: multipart/form-data" \
-  -F image=@person.png \
-  -F mask=@garment.png \
-  -F prompt="upper body area" \
-  -F model="amazon.nova-canvas-v1:0" \
-  -F taskType="VIRTUAL_TRY_ON"
-
-# Virtual Try-On - Garment-Based
-# image: person photo, mask: garment image, prompt: garment class
-curl -X POST "$BASE/v1/images/edits" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: multipart/form-data" \
-  -F image=@person.png \
-  -F mask=@garment.png \
-  -F prompt="UPPER_BODY" \
-  -F model="amazon.nova-canvas-v1:0" \
-  -F taskType="VIRTUAL_TRY_ON" \
-  -F "virtualTryOnParams[maskType]=GARMENT"
-
-# Virtual Try-On - Image-Based Mask
-# image: person photo, mask: garment image, prompt: base64 mask image
-curl -X POST "$BASE/v1/images/edits" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: multipart/form-data" \
-  -F image=@person.png \
-  -F mask=@garment.png \
-  -F prompt="BASE64_MASK_IMAGE" \
-  -F model="amazon.nova-canvas-v1:0" \
-  -F taskType="VIRTUAL_TRY_ON" \
-  -F "virtualTryOnParams[maskType]=IMAGE"
-```
-
-!!! info "Full Parameter Reference"
-    For all available parameters and task types, see [Amazon Nova Canvas documentation](https://docs.aws.amazon.com/nova/latest/userguide/image-generation.html)
-
-#### ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Titan Image Generator
-
-**Basic Usage (Standard OpenAI Parameters):**
-
-```bash
-# Inpainting with mask
-curl -X POST "$BASE/v1/images/edits" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: multipart/form-data" \
-  -F image=@source.png \
-  -F mask=@mask.png \
-  -F prompt="A beautiful garden with flowers" \
-  -F model="amazon.titan-image-generator-v2:0"
-```
-
-**Parameter Mapping:**
-
-| OpenAI Parameter    | Maps to                                | Notes                                                  |
-|---------------------|----------------------------------------|--------------------------------------------------------|
-| `prompt`            | Depends on `taskType`                  | See taskType-specific mapping below                    |
-| `image` / `image[]` | Depends on `taskType`                  | See taskType-specific mapping below (first image used) |
-| `mask`              | Depends on `taskType`                  | See taskType-specific mapping below                    |
-| `size`              | `imageGenerationConfig.width/height`   | Fixed sizes (512-2048)                                 |
-| `quality`           | `imageGenerationConfig.quality`        | "high" → "premium"                                     |
-| `n`                 | `imageGenerationConfig.numberOfImages` | 1-5 images                                             |
-
-**TaskType-Specific Parameter Mapping:**
-
-| taskType               | `prompt` maps to         | `image` maps to                 | `mask` maps to                |
-|------------------------|--------------------------|---------------------------------|-------------------------------|
-| `INPAINTING` (default) | `inPaintingParams.text`  | `inPaintingParams.image`        | `inPaintingParams.maskImage`  |
-| `OUTPAINTING`          | `outPaintingParams.text` | `outPaintingParams.image`       | `outPaintingParams.maskImage` |
-| `BACKGROUND_REMOVAL`   | Not used                 | `backgroundRemovalParams.image` | Not used                      |
-
-**Advanced Task Types (with form fields):**
-
-Default `taskType` is `"INPAINTING"`.
-
-Available task types:
-
-- `"INPAINTING"` - Fill masked regions
-- `"OUTPAINTING"` - Extend image beyond borders
-- `"BACKGROUND_REMOVAL"` (v2 only) - Remove background
-
-```bash
-# Outpainting
-curl -X POST "$BASE/v1/images/edits" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: multipart/form-data" \
-  -F image=@photo.png \
-  -F prompt="Extend with a forest" \
-  -F model="amazon.titan-image-generator-v2:0" \
-  -F taskType="OUTPAINTING"
-
-# Background Removal (v2 only, no prompt needed)
-curl -X POST "$BASE/v1/images/edits" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: multipart/form-data" \
-  -F image=@photo.png \
-  -F model="amazon.titan-image-generator-v2:0" \
-  -F taskType="BACKGROUND_REMOVAL"
-```
-
-!!! info "Full Parameter Reference"
-    For all available parameters and task types, see [Amazon Titan Image Generator documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-image.html)
-
-#### ![Stability AI](styles/logo_stabilityai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Stability AI Models
-
-**Basic Usage (Standard OpenAI Parameters):**
-
-Most Stability AI models work with standard OpenAI parameters:
-
-```bash
-# Image-to-image transformation
-curl -X POST "$BASE/v1/images/edits" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: multipart/form-data" \
-  -F image=@photo.png \
-  -F prompt="A dramatic cinematic scene" \
-  -F model="stability.sd3-5-large-v1:0"
-```
-
-**Parameter Mapping:**
-
-All Stability AI models use standard OpenAI parameters directly:
-
-| OpenAI Parameter    | Stability Parameter | Notes                                                     |
-|---------------------|---------------------|-----------------------------------------------------------|
-| `image` / `image[]` | `image`             | Base64-encoded input image (first image used if multiple) |
-| `prompt`            | `prompt`            | Text description (may be unused for some models)          |
-| `mask`              | `mask`              | Base64-encoded mask (model-specific)                      |
-| `n`                 | Multiple requests   | Generates N images via multiple API calls                 |
-| `size`              | Model-specific      | Some models support width/height                          |
-
-**Model-Specific Parameters:**
-
-| Model(s)                              | Required Form Fields     | OpenAI `mask` Maps To | Notes                                    |
-|---------------------------------------|--------------------------|-----------------------|------------------------------------------|
-| `stable-image-search-recolor-v1:0`    | `select_prompt` (string) | Not used              | Identifies object to recolor             |
-| `stable-image-search-replace-v1:0`    | `search_prompt` (string) | Not used              | Identifies object to find and replace    |
-| `stable-style-transfer-v1:0`          | None (uses `mask` param) | `style_image`         | Mask parameter repurposed as style image |
-| `stable-image-erase-object-v1:0`      | None                     | `mask` (required)     | Prompt not used                          |
-| `stable-image-remove-background-v1:0` | None                     | Not used              | Prompt not used                          |
-| `stable-fast-upscale-v1:0`            | None                     | Not used              | Prompt not used                          |
-
-**Examples:**
-
-```bash
-# Search & Replace - requires search_prompt form field
-curl -X POST "$BASE/v1/images/edits" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: multipart/form-data" \
-  -F image=@input.png \
-  -F prompt="a red car" \
-  -F model="stability.stable-image-search-replace-v1:0" \
-  -F search_prompt="blue car"
-
-# Search & Recolor - requires select_prompt form field
-curl -X POST "$BASE/v1/images/edits" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: multipart/form-data" \
-  -F image=@input.png \
-  -F prompt="bright red color" \
-  -F model="stability.stable-image-search-recolor-v1:0" \
-  -F select_prompt="car"
-
-# Style Transfer - mask parameter is style image
-curl -X POST "$BASE/v1/images/edits" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: multipart/form-data" \
-  -F image=@content.png \
-  -F mask=@style.png \
-  -F prompt="Apply artistic style" \
-  -F model="stability.stable-style-transfer-v1:0"
-
-# Erase Object - no prompt needed, mask required
-curl -X POST "$BASE/v1/images/edits" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: multipart/form-data" \
-  -F image=@input.png \
-  -F mask=@object_mask.png \
-  -F model="stability.stable-image-erase-object-v1:0"
-
-# Remove Background - no prompt needed
-curl -X POST "$BASE/v1/images/edits" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: multipart/form-data" \
-  -F image=@input.png \
-  -F model="stability.stable-image-remove-background-v1:0"
-
-# Fast Upscale - no prompt needed
-curl -X POST "$BASE/v1/images/edits" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: multipart/form-data" \
-  -F image=@low_res.png \
-  -F model="stability.stable-fast-upscale-v1:0"
-```
-
-!!! info "Full Parameter Reference"
-    For all Stability AI parameters, see [Stability AI documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-stability-diffusion.html)
-
-### Usage Tracking
-
-The API tracks token usage for billing and monitoring:
-
-- **Image tokens**: Count of input images (image files + mask file if provided), capped at the total billed input tokens
-- **Text tokens**: Remainder of the billed input tokens after subtracting image tokens
-- **Output tokens**: Sourced from AWS billing data when available; falls back to the image count (`n`)
+**Ready to transform your images?** Explore available image models in the [Models API](api_openai_models.md).

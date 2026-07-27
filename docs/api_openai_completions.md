@@ -1,22 +1,40 @@
 ---
 title: Completions API - OpenAI-Compatible Text Completion
-description: OpenAI-compatible completions API for AWS Bedrock models including Claude, Nova, Llama. Simple prompt-to-text generation with the smallest token footprint.
-keywords: completions API, OpenAI completions API, text completion API, AWS Bedrock text completion, MCP text completion
+description: OpenAI-compatible completions API for Amazon Bedrock models including Claude, Nova, Llama. Simple prompt-to-text generation with the smallest token footprint.
+keywords: completions API, OpenAI completions API, text completion API, Amazon Bedrock text completion, MCP text completion
 ---
 
 # Completions API
 
-Generate text completions with AWS Bedrock foundation models—including Claude, Nova, Llama, and more—through an OpenAI-compatible interface using the simple completions format.
+Generate text completions with Amazon Bedrock foundation models—including Claude, Nova, Llama, and more—through an OpenAI-compatible interface using the simple completions format.
 
 !!! info "Legacy upstream, first-class here"
 
-    OpenAI labels `/v1/completions` as **legacy** in their platform documentation and recommends new OpenAI projects migrate to `/v1/chat/completions` or `/v1/responses` for vendor compatibility. On stdapi, this endpoint is a **first-class route** with the same quality guarantees as the others — its compact schema and small token footprint make it an excellent pick for MCP-based text agents and simple prompt-to-text workloads.
+    OpenAI labels `/v1/completions` as **legacy** in their platform documentation and recommends new OpenAI projects migrate to `/v1/chat/completions` or `/v1/responses` for vendor compatibility. On stdapi.ai, this endpoint is a **first-class route** with the same quality guarantees as the others — its compact schema and small token footprint make it an excellent pick for MCP-based text agents and simple prompt-to-text workloads.
+
+## Why Choose the Completions API?
+
+<div class="grid cards" markdown>
+
+- :material-feather: __Smallest Token Footprint__
+  <br>The most compact request/response schema of the text APIs — ideal for MCP-based text agents and high-volume prompt-to-text workloads.
+
+- :material-format-list-group: __Batch Prompts__
+  <br>Send multiple independent prompts in one request and get one choice back per prompt, with streaming support.
+
+- :material-file-link: __Multimodal Prompt Inputs__
+  <br>Reference prompts and files via `https://`, `s3://`, `data:`, or `file-id:` URIs — including images, documents, audio, and video.
+
+- :material-aws: __AWS Scale & Reliability__
+  <br>Run on AWS infrastructure with service tiers and multi-region model access for availability and performance.
+
+</div>
 
 ## Quick Start: Available Endpoint
 
 | Endpoint          | Method | What It Does                     | Powered By                                | MCP Tool            |
 |-------------------|--------|----------------------------------|-------------------------------------------|---------------------|
-| `/v1/completions` | POST   | Simple prompt-to-text completion | AWS Bedrock Converse API · Bedrock Mantle | `openai_completion` |
+| `/v1/completions` | `POST`   | Simple prompt-to-text completion | Amazon Bedrock Converse API · Amazon Bedrock Mantle | `openai_completion` |
 
 ## Feature Compatibility
 
@@ -54,7 +72,7 @@ Generate text completions with AWS Bedrock foundation models—including Claude,
 | Streaming with n>1                 |   :material-check-circle:{ .success }    | Deltas interleave; `choices[0].index` identifies each choice     |
 | **Other**                          |                                          |                                                                  |
 | Service tiers                      |   :material-check-circle:{ .success }    | Mapped to Bedrock service tiers; `service_tier` and `prompt_cache_*` are not forwarded when a Mantle request is converted |
-| `user` / `safety_identifier`       |   :material-minus-circle:{ .partial }    | Forwarded to AWS Bedrock as `requestMetadata`; on Mantle, `user` is forwarded as the OpenAI `user` field (as `metadata.user_id` when served via the Anthropic API) and `safety_identifier` is not forwarded |
+| `user` / `safety_identifier`       |   :material-minus-circle:{ .partial }    | Forwarded to Amazon Bedrock as `requestMetadata`; on Mantle, `user` is forwarded as the OpenAI `user` field (as `metadata.user_id` when served via the Anthropic API) and `safety_identifier` is not forwarded |
 
 </div>
 
@@ -63,7 +81,7 @@ Generate text completions with AWS Bedrock foundation models—including Claude,
 **Legend:**
 
 * :material-check-circle:{ .success } **Supported** — Fully compatible with OpenAI API
-* :material-cog:{ .model-dep } **Available on Select Models** — Check your model's capabilities
+* :material-cog:{ .model-dep } **Model-Dependent** — Behavior depends on the model or backend; check the Notes column
 * :material-minus-circle:{ .partial } **Partial** — Supported with limitations
 * :material-close-circle:{ .unsupported } **Unsupported** — Not available in this implementation
 * :material-plus-circle:{ .extra-feature } **Extra Feature** — Enhanced capability beyond OpenAI API
@@ -72,7 +90,7 @@ Generate text completions with AWS Bedrock foundation models—including Claude,
 
 ## Prompt Input Types
 
-_stdapi extends the standard completions interface with multiple input modes:_
+_stdapi.ai extends the standard completions interface with multiple input modes:_
 
 ### String Prompt (Standard)
 
@@ -104,9 +122,9 @@ curl -X POST "$BASE/v1/completions" \
   }'
 ```
 
-### Text + Files: single-request multimodal collapse
+### Text + Files: Single-Request Multimodal Collapse
 
-When the prompt list contains **exactly one text string and one or more file references**, stdapi packs them in input order into a **single multimodal request** and returns **one choice**. The text becomes a `text` block and each file becomes an `image` / `document` / `audio` / `video` Bedrock block (content type auto-detected) — the natural "ask once using these files as context" pattern.
+When the prompt list contains **exactly one text string and one or more file references**, stdapi.ai packs them in input order into a **single multimodal request** and returns **one choice**. The text becomes a `text` block and each file becomes an `image` / `document` / `audio` / `video` Bedrock block (content type auto-detected) — the natural "ask once using these files as context" pattern.
 
 - **Trigger**: list with exactly one `str` element and ≥1 URL elements (`https://`, `s3://`, `data:`, `file-id:`).
 - **Effect**: elements are resolved concurrently, packed as Bedrock content blocks preserving input order, and sent as a single request. You get one `Completion` choice back.
@@ -152,14 +170,14 @@ curl -X POST "$BASE/v1/completions" \
 
 Input order is preserved — place the instruction before, after, or between the files as best fits your use case.
 
-### Files-only prompts
+### Files-Only Prompts
 
-When the prompt is a lone file — or a list of files without any text string — stdapi forwards each file to the model using its detected modality (`image`, `video`, `audio`, `document`). No instruction is injected:
+When the prompt is a lone file — or a list of files without any text string — stdapi.ai forwards each file to the model using its detected modality (`image`, `video`, `audio`, `document`). No instruction is injected:
 
 - `prompt: "<file-id or URL>"` → one request, one choice, with a single media block.
 - `prompt: [<file1>, <file2>, …]` → one request per file (batch), one choice per file, each carrying its own media block.
 
-The request reaches the model as-is; the model returns output or an error depending on whether it supports that modality (for example, Claude handles images and documents, Nova handles images, video, and documents). Use this shape for quick "what is this?" queries where the model's default behaviour is enough; for tighter control over the response, prefer the collapse pattern above with an explicit instruction.
+The request reaches the model as-is; the model returns output or an error depending on whether it supports that modality (for example, Claude handles images and documents, Nova handles images, video, and documents). Use this shape for quick "what is this?" queries where the model's default behavior is enough; for tighter control over the response, prefer the collapse pattern above with an explicit instruction.
 
 ```bash
 IMAGE_B64=$(base64 < screenshot.png | tr -d '\n')
@@ -178,7 +196,7 @@ JSON
 
 ### URL, S3, and Files API Inputs (Extension)
 
-stdapi supports additional input schemes beyond the OpenAI standard:
+stdapi.ai supports additional input schemes beyond the OpenAI standard:
 
 - **`https://`** — Load prompt from an HTTP URL
 - **`s3://bucket/key/file.txt`** — Load directly from S3
@@ -209,7 +227,7 @@ curl -X POST "$BASE/v1/completions" \
 
 #### Using S3 for Prompt Input
 
-Reference files directly in S3 without uploading to stdapi:
+Reference files directly in S3 without uploading to stdapi.ai:
 
 ```bash
 curl -X POST "$BASE/v1/completions" \
@@ -256,7 +274,7 @@ curl -N -X POST "$BASE/v1/completions" \
   }'
 ```
 
-## Model-specific features
+## Model-Specific Features
 
 ### ![TwelveLabs](styles/logo_twelvelabs.svg){ style="height: 1.2em; vertical-align: text-bottom;" } TwelveLabs Pegasus
 
@@ -268,8 +286,8 @@ curl -N -X POST "$BASE/v1/completions" \
 **Video input formats**: `s3://bucket/key`, `https://…`, `data:video/mp4;base64,…`, or `file-id:…`. Videos above 18.75 MB are automatically uploaded to S3.
 
 ```bash
-curl https://api.example.com/v1/completions \
-  -H "Authorization: Bearer $API_KEY" \
+curl -X POST "$BASE/v1/completions" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "twelvelabs.pegasus-1-2-v1:0",
@@ -277,9 +295,34 @@ curl https://api.example.com/v1/completions \
   }'
 ```
 
-## Examples
+## Available Request Headers
 
-### Single Prompt Completion
+This endpoint supports standard Bedrock headers for enhanced control over your requests — they are applied by the shared request middleware, exactly as on the [Chat Completions API](api_openai_chat_completions.md#available-request-headers). All headers are optional and can be combined as needed.
+
+### Content Safety (Guardrails)
+
+| Header                               | Purpose                            | Valid Values                          |
+|--------------------------------------|------------------------------------|---------------------------------------|
+| `X-Amzn-Bedrock-GuardrailIdentifier` | Guardrail ID for content filtering | Your guardrail identifier             |
+| `X-Amzn-Bedrock-GuardrailVersion`    | Guardrail version                  | Version number (e.g., `1`)            |
+| `X-Amzn-Bedrock-Trace`               | Guardrail trace level              | `disabled`, `enabled`, `enabled_full` |
+
+### Performance Optimization
+
+| Header                                     | Purpose                | Valid Values                              |
+|--------------------------------------------|------------------------|-------------------------------------------|
+| `X-Amzn-Bedrock-Service-Tier`              | Service tier selection | `default`, `flex`, `priority`, `reserved` |
+| `X-Amzn-Bedrock-PerformanceConfig-Latency` | Latency optimization   | `standard`, `optimized`                   |
+
+!!! info "Detailed Documentation"
+    For complete information about these headers, configuration options, and use cases, see:
+
+    - [Bedrock Guardrails Configuration](operations_configuration.md#bedrock-guardrails)
+    - [Service Tier and Performance Configuration](operations_configuration.md#bedrock-service-tier-and-performance-configuration)
+
+## Try It Now
+
+Send your first completion in one line — then explore the richer input modes shown in [Prompt Input Types](#prompt-input-types) above:
 
 ```bash
 curl -X POST "$BASE/v1/completions" \
@@ -287,38 +330,11 @@ curl -X POST "$BASE/v1/completions" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "amazon.nova-micro-v1:0",
-    "prompt": "The capital of France is",
+    "prompt": "Say hello world",
     "max_tokens": 20
   }'
 ```
 
-### Batch Prompt Completion
+---
 
-```bash
-curl -X POST "$BASE/v1/completions" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "amazon.nova-micro-v1:0",
-    "prompt": [
-      "One plus one is",
-      "Two plus two is",
-      "Three plus three is"
-    ],
-    "max_tokens": 10
-  }'
-```
-
-### Streaming Completion
-
-```bash
-curl -N -X POST "$BASE/v1/completions" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "amazon.nova-micro-v1:0",
-    "prompt": "Tell me a joke",
-    "max_tokens": 50,
-    "stream": true
-  }'
-```
+**Ready to build with AI?** Check out the [Models API](api_openai_models.md) to see all available foundation models!

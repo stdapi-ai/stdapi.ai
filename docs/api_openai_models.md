@@ -1,22 +1,22 @@
 ---
-title: Models API - List AWS Bedrock Available Models
-description: Discover and list available AWS Bedrock models through OpenAI-compatible API. Browse 80+ models including Claude, Nova, Llama, and more across all configured regions.
-keywords: AWS Bedrock models, available AI models, list models API, Claude models, OpenAI models API, AI model catalog, foundation models AWS, model discovery
+title: Models API - List Amazon Bedrock Available Models
+description: Discover and list available Amazon Bedrock models through OpenAI-compatible API. Browse 80+ models including Claude, Nova, Llama, and more across all configured regions.
+keywords: Amazon Bedrock models, available AI models, list models API, Claude models, OpenAI models API, AI model catalog, foundation models AWS, model discovery
 ---
 
 # Models API
 
-Discover and list available AWS Bedrock models across all configured regions through an OpenAI-compatible interface.
+Discover and list available Amazon Bedrock models across all configured regions through an OpenAI-compatible interface.
 
-## Why Use the Models API?
+## Why Choose the Models API?
 
 <div class="grid cards" markdown>
 
 - :material-view-grid: __Complete Catalog__
-  <br>Browse all available models across AWS Bedrock regions. Chat, embeddings, images, and specialized AI services.
+  <br>Browse all available models across Amazon Bedrock regions. Chat, embeddings, images, and specialized AI services.
 
 - :material-sync: __Always Up-to-Date__
-  <br>Dynamic model discovery automatically shows new models as they become available in AWS Bedrock.
+  <br>Dynamic model discovery automatically shows new models as they become available in Amazon Bedrock.
 
 - :material-map-marker-multiple: __Multi-Region Aggregation__
   <br>Combines models from all configured AWS regions in one list. See which models are available in each region.
@@ -30,14 +30,14 @@ Discover and list available AWS Bedrock models across all configured regions thr
 
 | Endpoint | Method | What It Does | Powered By | MCP Tool |
 |----------|--------|--------------|------------|----------|
-| `/v1/models` | GET | List all available models | AWS Bedrock + AWS AI Services | `openai_model_list` |
-| `/v1/models/{model_id}` | GET | Get details for a specific model | AWS Bedrock + AWS AI Services | `openai_model_get` |
+| `/v1/models` | `GET` | List all available models | Amazon Bedrock + AWS AI Services | `openai_model_list` |
+| `/v1/models/{model_id}` | `GET` | Get details for a specific model | Amazon Bedrock + AWS AI Services | `openai_model_get` |
 
-## OpenAI-Compatible with AWS Bedrock Power
+## OpenAI-Compatible with Amazon Bedrock Power
 
 **Features:**
 
-- **Multi-region aggregation**: Combines models from all configured AWS Bedrock regions
+- **Multi-region aggregation**: Combines models from all configured Amazon Bedrock regions
 - **Comprehensive catalog**: Includes Bedrock foundation models plus specialized models (Transcribe, Polly, etc.)
 
 ### What's Different from OpenAI?
@@ -46,7 +46,7 @@ Discover and list available AWS Bedrock models across all configured regions thr
 - **Model-specific capabilities**: Modalities and context windows vary by model—consult AWS documentation for specifics
 
 !!! info "Created Date (`created`)"
-    The `created` field is a Unix timestamp (integer) representing the time at which the model was released. This value is sourced from the AWS Bedrock model lifecycle metadata (`startOfLifeTime`). If the release date is not available from AWS Bedrock, it defaults to `0` (Unix epoch, January 1, 1970).
+    The `created` field is a Unix timestamp (integer) representing the time at which the model was released. This value is sourced from the Amazon Bedrock model lifecycle metadata (`startOfLifeTime`). If the release date is not available from Amazon Bedrock, it defaults to `0` (Unix epoch, January 1, 1970).
 
 ## Try It Now
 
@@ -62,6 +62,17 @@ curl -X GET "$BASE/v1/models" \
 ```bash
 curl -X GET "$BASE/v1/models/amazon.nova-micro-v1:0" \
   -H "Authorization: Bearer $OPENAI_API_KEY"
+```
+
+**Response:**
+
+```json
+{
+  "id": "amazon.nova-micro-v1:0",
+  "object": "model",
+  "created": 1733212800,
+  "owned_by": "Amazon"
+}
 ```
 
 ---

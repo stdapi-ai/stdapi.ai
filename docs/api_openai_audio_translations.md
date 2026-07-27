@@ -1,14 +1,14 @@
 ---
-title: Speech to English API - AWS Audio Translation
-description: Translate audio from any language to English text using AWS Transcribe + Translate or AWS Bedrock audio models. OpenAI-compatible API with automatic language detection.
+title: Speech to English API - Amazon Audio Translation
+description: Translate audio from any language to English text using Amazon Transcribe + Translate or Amazon Bedrock audio models. OpenAI-compatible API with automatic language detection.
 keywords: audio translation API, speech translation, AWS Translate API, multilingual transcription, audio to English, OpenAI translation, language detection API
 ---
 
 # Speech to English API
 
-Translate audio from any language to English text with AWS Transcribe + Translate or AWS Bedrock audio-capable models through an OpenAI-compatible interface.
+Translate audio from any language to English text with Amazon Transcribe + Translate or Amazon Bedrock audio-capable models through an OpenAI-compatible interface.
 
-## Why Choose Speech to English?
+## Why Choose the Speech to English API?
 
 <div class="grid cards" markdown>
 
@@ -16,7 +16,7 @@ Translate audio from any language to English text with AWS Transcribe + Translat
   <br>Upload audio in any language. AWS automatically detects the source language and translates to English text.
 
 - :material-account-network: __Multiple Translation Options__
-  <br>Choose AWS Transcribe + Translate for traditional pipeline, or use Bedrock audio models with built-in translation capabilities.
+  <br>Choose Amazon Transcribe + Translate for a traditional pipeline, or use Bedrock audio models with built-in translation capabilities.
 
 - :material-file-multiple: __Multiple Output Formats__
   <br>Choose from text, JSON, verbose JSON with timestamps, or translated subtitle files (SRT/VTT).
@@ -28,9 +28,9 @@ Translate audio from any language to English text with AWS Transcribe + Translat
 
 ## Quick Start: Available Endpoint
 
-| Endpoint                 | Method | What It Does                                     | Powered By                                             | MCP Tool                    |
-|--------------------------|--------|--------------------------------------------------|--------------------------------------------------------|-----------------------------|
-| `/v1/audio/translations` | POST   | Transcribe any language and translate to English | AWS Transcribe + Translate or AWS Bedrock Audio Models | `openai_audio_translation` |
+| Endpoint                 | Method | What It Does                                     | Powered By                                                   | MCP Tool                    |
+|--------------------------|--------|--------------------------------------------------|--------------------------------------------------------------|-----------------------------|
+| `/v1/audio/translations` | `POST` | Transcribe any language and translate to English | Amazon Transcribe + Translate or Amazon Bedrock Audio Models | `openai_audio_translation` |
 
 ## Feature Compatibility
 
@@ -40,21 +40,23 @@ Translate audio from any language to English text with AWS Transcribe + Translat
 |-------------------------|:---------------------------------------:|-------------------------------|
 | **Input**               |                                         |                               |
 | Audio file upload       |   :material-check-circle:{ .success }   | Multipart file upload         |
-| JSON body input         | :material-plus-circle:{ .extra-feature }| Base64, data URI, HTTPS URL, or S3 URI — for MCP / AI agents |
-| Auto language detection |   :material-check-circle:{ .success }   | Automatic source detection    |
+| JSON body input         | :material-plus-circle:{ .extra-feature }| Base64, data URI, HTTPS URL, S3 URI, or `file-id:` reference — for MCP / AI agents |
 | **Output Formats**      |                                         |                               |
 | `json`                  |   :material-check-circle:{ .success }   | Structured translation        |
 | `text`                  |   :material-check-circle:{ .success }   | Plain English text            |
-| `verbose_json`          |      :material-cog:{ .model-dep }       | With timestamps               |
-| `srt`                   |      :material-cog:{ .model-dep }       | English subtitles with timing |
-| `vtt`                   |      :material-cog:{ .model-dep }       | English WebVTT subtitles      |
+| `verbose_json`          |      :material-cog:{ .model-dep }       | With timestamps (Amazon Transcribe; not Bedrock models) |
+| `srt`                   |      :material-cog:{ .model-dep }       | English subtitles with timing (Amazon Transcribe; not Bedrock models) |
+| `vtt`                   |      :material-cog:{ .model-dep }       | English WebVTT subtitles (Amazon Transcribe; not Bedrock models) |
+| **Language**            |                                         |                               |
+| Auto language detection |   :material-check-circle:{ .success }   | Automatic source detection    |
 | **Translation**         |                                         |                               |
-| Translation to English  |   :material-check-circle:{ .success }   | Using AWS Translate           |
+| Translation to English  |   :material-check-circle:{ .success }   | Amazon Translate (with `amazon.transcribe`) or native model translation (Bedrock models) |
 | **Advanced**            |                                         |                               |
-| `prompt`                | :material-close-circle:{ .unsupported } | Not available                 |
-| `temperature`           | :material-close-circle:{ .unsupported } | Not available                 |
+| `prompt`                |      :material-cog:{ .model-dep }       | Bedrock models only; rejected by Amazon Transcribe |
+| `temperature`           |      :material-cog:{ .model-dep }       | Bedrock models only; rejected by Amazon Transcribe |
 | **Usage tracking**      |                                         |                               |
-| Input audio duration    |   :material-check-circle:{ .success }   | Seconds (billing unit)        |
+| Input audio duration    |   :material-check-circle:{ .success }   | Seconds (billing unit on Amazon Transcribe) |
+| Output text tokens      |      :material-cog:{ .model-dep }       | On models from Bedrock        |
 
 </div>
 
@@ -64,40 +66,40 @@ Translate audio from any language to English text with AWS Transcribe + Translat
 
 * :material-check-circle:{ .success } **Supported** — Fully compatible with OpenAI API
 * :material-cog:{ .model-dep } **Available on Select Models** — Check your model's capabilities
-* :material-close-circle:{ .unsupported } **Unsupported** — Not available in this implementation
+* :material-plus-circle:{ .extra-feature } **Extra Feature** — Enhanced capability beyond OpenAI API
 
 </div>
 
 ## Model Support
 
-### ![AWS Transcribe](styles/logo_amazon_transcribe.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Models
+### ![Amazon Transcribe](styles/logo_amazon_transcribe.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Models
 
 | Model             | Supported Languages | Notes                                                                                                      |
 |-------------------|---------------------|------------------------------------------------------------------------------------------------------------|
 | amazon.transcribe | 100+                | Full-featured transcription with speaker diarization and subtitle generation at the cost of higher latency |
 
-!!! info "How the pipeline works"
-    `amazon.transcribe` performs translation in two steps: audio is transcribed to text in the source language with AWS Transcribe, then that text is translated to English with AWS Translate. The two calls are chained internally — your request and response use the same OpenAI `/v1/audio/translations` interface.
+!!! info "How the Pipeline Works"
+    `amazon.transcribe` performs translation in two steps: audio is transcribed to text in the source language with Amazon Transcribe, then that text is translated to English with Amazon Translate. The two calls are chained internally — your request and response use the same OpenAI `/v1/audio/translations` interface.
 
 !!! warning "Configuration Required"
     You must configure the `AWS_S3_BUCKET` or `AWS_TRANSCRIBE_S3_BUCKET` environment variable with a bucket in the main AWS region to use this model. This bucket is used for temporary storage during transcription processing.
 
 ### ![Mistral](styles/logo_mistralai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Mistral Models
 
-| Model                           | Supported Languages | Notes                                              |
-|---------------------------------|---------------------|----------------------------------------------------|
-| mistral.voxtral-mini-3b-2507    | 100+                | Compact model for fast transcription               |
-| mistral.voxtral-small-24b-2507  | 100+                | Larger model for enhanced accuracy                 |
+| Model                           | Supported Languages       | Notes                                              |
+|---------------------------------|---------------------------|----------------------------------------------------|
+| mistral.voxtral-mini-3b-2507    | Multilingual (auto-detected) | Compact model for fast transcription            |
+| mistral.voxtral-small-24b-2507  | Multilingual (auto-detected) | Larger model for enhanced accuracy              |
 
 !!! warning "Mistral Voxtral Limitations"
-    Mistral Voxtral models have the following restrictions when running on AWS Bedrock:
+    Mistral Voxtral models have the following restrictions when running on Amazon Bedrock:
 
     - **File size limit**: ~2MB maximum input file size
     - **Audio channels**: Mono channel audio only (single channel)
 
 ## Advanced Features
 
-### ![AWS Transcribe](styles/logo_amazon_transcribe.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Transcribe Features
+### ![Amazon Transcribe](styles/logo_amazon_transcribe.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Transcribe Features
 
 **Model & Features:**
 
@@ -106,18 +108,16 @@ Translate audio from any language to English text with AWS Transcribe + Translat
 - Automatic transcription + translation pipeline in one request
 - Multiple output formats: `text`, `json`, `verbose_json`, `srt`, `vtt`
 - Automatic source language detection (zero configuration)
-- **Smart Subtitle Translation** :material-translate:{ .highlight }: Preserves original
-  timing using intelligent HTML span processing
+- **Smart Subtitle Translation** :material-translate:{ .highlight }: Subtitle timing is preserved during translation
 
 !!! tip "OpenAI Model Compatibility"
-    stdapi.ai includes a built-in model alias that maps the OpenAI model name to AWS Transcribe:
+    stdapi.ai includes a built-in model alias that maps the OpenAI model name to Amazon Transcribe:
 
     - `whisper-1` → `amazon.transcribe`
 
     This alias enables seamless compatibility with OpenAI-based tools and applications without any configuration changes. You can also [customize or override this alias](operations_configuration.md#model-aliases) to suit your needs.
 
-**Note:** The `prompt` and `temperature` parameters are not supported to ensure
-consistent translation accuracy.
+**Note:** With `amazon.transcribe`, the `prompt` and `temperature` parameters are rejected with an error to ensure consistent translation accuracy. Bedrock audio models accept both.
 
 ## Try It Now
 
@@ -182,5 +182,4 @@ curl -OJ -X POST "$BASE/v1/audio/translations" \
 
 ---
 
-**Ready to translate multilingual audio?** Explore available models in
-the [Models API](api_openai_models.md).
+**Ready to translate multilingual audio?** Explore available models in the [Models API](api_openai_models.md).

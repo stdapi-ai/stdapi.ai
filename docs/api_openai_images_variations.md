@@ -1,14 +1,14 @@
 ---
-title: Images Variations API - AWS Bedrock Image Variations
-description: Generate variations of existing images with AWS Bedrock. OpenAI-compatible API for creating alternative versions while maintaining style and composition.
+title: Images Variations API - Amazon Bedrock Image Variations
+description: Generate variations of existing images with Amazon Bedrock. OpenAI-compatible API for creating alternative versions while maintaining style and composition.
 keywords: image variations API, AI image variations, image style transfer, similar images API, AWS image processing, OpenAI variations, image alternatives
 ---
 
 # Images API - Image Variations
 
-Create variations of existing images using AWS Bedrock image models through an OpenAI-compatible interface.
+Create variations of existing images using Amazon Bedrock image models through an OpenAI-compatible interface.
 
-## Why Choose Image Variations?
+## Why Choose the Image Variations API?
 
 <div class="grid cards" markdown>
 
@@ -28,9 +28,9 @@ Create variations of existing images using AWS Bedrock image models through an O
 
 ## Quick Start: Available Endpoint
 
-| Endpoint                | Method | What It Does                           | Powered By               | MCP Tool               |
-|-------------------------|--------|----------------------------------------|--------------------------|------------------------|
-| `/v1/images/variations` | POST   | Create variations of an existing image | AWS Bedrock Image Models | `openai_image_variation` |
+| Endpoint                | Method | What It Does                           | Powered By                  | MCP Tool               |
+|-------------------------|--------|----------------------------------------|-----------------------------|------------------------|
+| `/v1/images/variations` | `POST` | Create variations of an existing image | Amazon Bedrock Image Models | `openai_image_variation` |
 
 ## Feature Compatibility
 
@@ -47,14 +47,14 @@ Create variations of existing images using AWS Bedrock image models through an O
 | `size` (WIDTHxHEIGHT)          |   :material-check-circle:{ .success }    | Output dimensions (default: 1024x1024, format validated)                                                                                                        |
 | `response_format`              |   :material-check-circle:{ .success }    | `url` or `b64_json` (default: `url`)                                                                                                                            |
 | **Output**                     |                                          |                                                                                                                                                                 |
-| URL response format            |   :material-check-circle:{ .success }    | Temporary URLs to variation images (requires AWS_S3_BUCKET)                                                                                                     |
+| URL response format            |   :material-check-circle:{ .success }    | Temporary presigned URLs, valid for 60 minutes (requires AWS_S3_BUCKET)                                                                                         |
 | Base64 JSON format             |   :material-check-circle:{ .success }    | Inline base64-encoded images                                                                                                                                    |
-| PNG format                     |   :material-check-circle:{ .success }    | Lossless image output                                                                                                                                           |
-| JPEG format                    |       :material-cog:{ .model-dep }       | Lossy compression (model-specific)                                                                                                                              |
-| WEBP format                    |       :material-cog:{ .model-dep }       | Modern format with compression (model-specific)                                                                                                                 |
+| PNG format                     |   :material-check-circle:{ .success }    | Default output format                                                                                                                                           |
+| JPEG format                    |       :material-cog:{ .model-dep }       | Via the provider-specific `output_format` extra parameter on supporting models (`/variations` has no `output_format` parameter)                                 |
+| WebP format                    |       :material-cog:{ .model-dep }       | Via the provider-specific `output_format` extra parameter on supporting models (`/variations` has no `output_format` parameter)                                 |
 | **Usage tracking**             |                                          |                                                                                                                                                                 |
 | Input image tokens             |   :material-check-circle:{ .success }    | Count of input images (always 1 for variations)                                                                                                                 |
-| Output image tokens            |   :material-check-circle:{ .success }    | Number of variations generated (`n` parameter)                                                                                                                  |
+| Output image tokens            |   :material-check-circle:{ .success }    | Sourced from AWS billing data when available; falls back to the image count (`n`)                                                                               |
 | **Other**                      |                                          |                                                                                                                                                                 |
 | `user`                         |   :material-minus-circle:{ .partial }    | Logged but not used for abuse monitoring                                                                                                                        |
 | Extra parameters via form data | :material-plus-circle:{ .extra-feature } | Provider-specific parameters passed through                                                                                                                     |
@@ -69,15 +69,11 @@ Create variations of existing images using AWS Bedrock image models through an O
 * :material-check-circle:{ .success } **Supported** — Fully compatible with OpenAI API
 * :material-cog:{ .model-dep } **Available on Select Models** — Check your model's capabilities
 * :material-minus-circle:{ .partial } **Partial** — Supported with limitations
-* :material-close-circle:{ .unsupported } **Unsupported** — Not available in this implementation
 * :material-plus-circle:{ .extra-feature } **Extra Feature** — Enhanced capability beyond OpenAI API
 
 </div>
 
-!!! warning "Configuration Required"
-    You must configure the `AWS_S3_BUCKET` environment variable with a bucket to use the URL response format.
-
-## Supported Models
+## Model Support
 
 ### ![Amazon](styles/logo_amazon.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Models
 
@@ -93,39 +89,11 @@ Create variations of existing images using AWS Bedrock image models through an O
 |----------------------------|-------------------------------|
 | stability.sd3-5-large-v1:0 | Image-to-image transformation |
 
-## Try It Now
+!!! info "No Built-In Aliases for OpenAI Image Model Names"
+    OpenAI's default image model names (`dall-e-2`, `dall-e-3`, `gpt-image-1`) have **no built-in alias**, so requests using them fail with a model-not-found error — the most common first-call issue. Pass one of the model IDs above, or map the OpenAI names to your preferred models with [`MODEL_ALIASES`](operations_configuration.md#model-aliases).
 
-**Create a simple variation:**
-
-```bash
-curl -X POST "$BASE/v1/images/variations" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: multipart/form-data" \
-  -F image=@input.png \
-  -F model="amazon.titan-image-generator-v2:0"
-```
-
-**Create multiple variations:**
-
-```bash
-curl -X POST "$BASE/v1/images/variations" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: multipart/form-data" \
-  -F image=@input.png \
-  -F model="amazon.titan-image-generator-v2:0" \
-  -F n=3
-```
-
-**Base64 response format:**
-
-```bash
-curl -X POST "$BASE/v1/images/variations" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: multipart/form-data" \
-  -F image=@input.png \
-  -F model="amazon.titan-image-generator-v2:0" \
-  -F response_format="b64_json"
-```
+!!! warning "Configuration Required"
+    You must configure the `AWS_S3_BUCKET` environment variable with a bucket to use the URL response format.
 
 ## Advanced Features
 
@@ -240,9 +208,9 @@ curl -X POST "$BASE/v1/images/variations" \
   -F image=@input.png \
   -F model="amazon.titan-image-generator-v2:0" \
   -F taskType="COLOR_GUIDED_GENERATION" \
-  -F "colorGuidedGenerationParams[colors][]=\#FF6B6B" \
-  -F "colorGuidedGenerationParams[colors][]=\#4ECDC4" \
-  -F "colorGuidedGenerationParams[colors][]=\#45B7D1"
+  -F "colorGuidedGenerationParams[colors][]=#FF6B6B" \
+  -F "colorGuidedGenerationParams[colors][]=#4ECDC4" \
+  -F "colorGuidedGenerationParams[colors][]=#45B7D1"
 ```
 
 !!! info "Full Parameter Reference"
@@ -304,9 +272,9 @@ curl -X POST "$BASE/v1/images/variations" \
   -F image=@input.png \
   -F model="amazon.nova-canvas-v1:0" \
   -F taskType="COLOR_GUIDED_GENERATION" \
-  -F "colorGuidedGenerationParams[colors][]=\#FF6B35" \
-  -F "colorGuidedGenerationParams[colors][]=\#F7931E" \
-  -F "colorGuidedGenerationParams[colors][]=\#FDC830"
+  -F "colorGuidedGenerationParams[colors][]=#FF6B35" \
+  -F "colorGuidedGenerationParams[colors][]=#F7931E" \
+  -F "colorGuidedGenerationParams[colors][]=#FDC830"
 ```
 
 !!! info "Full Parameter Reference"
@@ -340,3 +308,57 @@ curl -X POST "$BASE/v1/images/variations" \
 
 !!! info "Full Parameter Reference"
     For all Stability AI parameters, see [Stability AI documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-stability-diffusion.html)
+
+## Available Request Headers
+
+This endpoint supports the same standard Bedrock headers as the other images endpoints: guardrail headers (`X-Amzn-Bedrock-GuardrailIdentifier`, `X-Amzn-Bedrock-GuardrailVersion`, `X-Amzn-Bedrock-Trace`) and performance headers (`X-Amzn-Bedrock-Service-Tier`, `X-Amzn-Bedrock-PerformanceConfig-Latency`). All headers are optional and can be combined as needed.
+
+See the [Images Generation API headers reference](api_openai_images_generations.md#available-request-headers) for the header tables, valid values, and configuration links.
+
+**Example with headers:**
+
+```bash
+curl -X POST "$BASE/v1/images/variations" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "X-Amzn-Bedrock-Service-Tier: priority" \
+  -F image=@input.png \
+  -F model="amazon.nova-canvas-v1:0"
+```
+
+## Try It Now
+
+**Create a simple variation:**
+
+```bash
+curl -X POST "$BASE/v1/images/variations" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: multipart/form-data" \
+  -F image=@input.png \
+  -F model="amazon.titan-image-generator-v2:0"
+```
+
+**Create multiple variations:**
+
+```bash
+curl -X POST "$BASE/v1/images/variations" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: multipart/form-data" \
+  -F image=@input.png \
+  -F model="amazon.titan-image-generator-v2:0" \
+  -F n=3
+```
+
+**Base64 response format:**
+
+```bash
+curl -X POST "$BASE/v1/images/variations" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: multipart/form-data" \
+  -F image=@input.png \
+  -F model="amazon.titan-image-generator-v2:0" \
+  -F response_format="b64_json"
+```
+
+---
+
+**Ready to explore new versions of your images?** Discover available image models in the [Models API](api_openai_models.md).

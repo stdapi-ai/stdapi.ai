@@ -1,19 +1,19 @@
 ---
-title: Speech to Text API - AWS Transcribe & Bedrock Audio Models
-description: Transcribe audio to text with AWS Transcribe or AWS Bedrock audio-capable models. OpenAI-compatible STT API supporting 100+ languages, speaker diarization, and multiple output formats.
+title: Speech to Text API - Amazon Transcribe & Bedrock Audio Models
+description: Transcribe audio to text with Amazon Transcribe or Amazon Bedrock audio-capable models. OpenAI-compatible STT API supporting 100+ languages, speaker diarization, and multiple output formats.
 keywords: speech to text API, audio transcription API, AWS Transcribe API, STT API, OpenAI Whisper alternative, audio to text, transcription service, speaker diarization
 ---
 
 # Speech to Text API
 
-Transcribe audio to text with AWS Transcribe or AWS Bedrock audio-capable models through an OpenAI-compatible interface.
+Transcribe audio to text with Amazon Transcribe or Amazon Bedrock audio-capable models through an OpenAI-compatible interface.
 
-## Why Choose Speech to Text?
+## Why Choose the Speech to Text API?
 
 <div class="grid cards" markdown>
 
 - :material-translate: __Multiple Transcription Options__
-  <br>Choose AWS Transcribe for 100+ languages with speaker diarization, or use Bedrock audio models for advanced capabilities.
+  <br>Choose Amazon Transcribe for 100+ languages with speaker diarization, or use Bedrock audio models for advanced capabilities.
 
 - :material-clock-fast: __Real-Time or Batch__
   <br>Stream transcriptions in real-time via SSE or process files efficiently with either service.
@@ -28,9 +28,9 @@ Transcribe audio to text with AWS Transcribe or AWS Bedrock audio-capable models
 
 ## Quick Start: Available Endpoint
 
-| Endpoint                    | Method | What It Does                             | Powered By                                | MCP Tool                  |
-|-----------------------------|--------|------------------------------------------|-------------------------------------------|---------------------------|
-| `/v1/audio/transcriptions`  | POST   | Convert spoken audio to written text     | AWS Transcribe or AWS Bedrock Audio Models | `openai_audio_transcription` |
+| Endpoint                    | Method | What It Does                             | Powered By                                       | MCP Tool                  |
+|-----------------------------|--------|------------------------------------------|--------------------------------------------------|---------------------------|
+| `/v1/audio/transcriptions`  | `POST` | Convert spoken audio to written text     | Amazon Transcribe or Amazon Bedrock Audio Models | `openai_audio_transcription` |
 
 ## Feature Compatibility
 
@@ -40,30 +40,30 @@ Transcribe audio to text with AWS Transcribe or AWS Bedrock audio-capable models
 |----------------------------|:----------------------------------------:|------------------------------------------------------------------|
 | **Input**                  |                                          |                                                                  |
 | Audio file upload          |   :material-check-circle:{ .success }    | Multipart file upload                                            |
-| JSON body input            | :material-plus-circle:{ .extra-feature } | Base64, data URI, HTTPS URL, or S3 URI — for MCP / AI agents     |
+| JSON body input            | :material-plus-circle:{ .extra-feature } | Base64, data URI, HTTPS URL, S3 URI, or `file-id:` reference — for MCP / AI agents |
 | **Output Formats**         |                                          |                                                                  |
 | `json`                     |   :material-check-circle:{ .success }    | Structured transcription                                         |
 | `text`                     |   :material-check-circle:{ .success }    | Plain text output                                                |
-| `verbose_json`             |       :material-cog:{ .model-dep }       | With timestamps and details (AWS Transcribe; not Bedrock models) |
-| `diarized_json`            |       :material-cog:{ .model-dep }       | With speaker identification (AWS Transcribe; not Bedrock models) |
-| `srt`                      |       :material-cog:{ .model-dep }       | Subtitle format with timing (AWS Transcribe; not Bedrock models) |
-| `vtt`                      |       :material-cog:{ .model-dep }       | WebVTT subtitle format (AWS Transcribe; not Bedrock models)      |
+| `verbose_json`             |       :material-cog:{ .model-dep }       | With timestamps and details (Amazon Transcribe; not Bedrock models) |
+| `diarized_json`            |       :material-cog:{ .model-dep }       | With speaker identification (Amazon Transcribe; not Bedrock models) |
+| `srt`                      |       :material-cog:{ .model-dep }       | Subtitle format with timing (Amazon Transcribe; not Bedrock models) |
+| `vtt`                      |       :material-cog:{ .model-dep }       | WebVTT subtitle format (Amazon Transcribe; not Bedrock models)   |
 | **Language**               |                                          |                                                                  |
 | Language specification     |       :material-cog:{ .model-dep }       | ISO-639-1 language codes                                         |
 | Auto language detection    |   :material-check-circle:{ .success }    | Automatic identification                                         |
 | **Streaming**              |                                          |                                                                  |
-| SSE streaming              |   :material-check-circle:{ .success }    | Event-based streaming                                            |
+| `stream` (SSE streaming)   |   :material-check-circle:{ .success }    | Set `stream: true` to receive incremental results as server-sent events |
 | **Advanced**               |                                          |                                                                  |
-| Timestamp granularity      |   :material-check-circle:{ .success }    | Word or segment level                                            |
-| Speaker diarization        |   :material-check-circle:{ .success }    | Automatic speaker separation                                     |
-| `known_speaker_names`      | :material-close-circle:{ .unsupported }  | Not available                                                    |
-| `known_speaker_references` | :material-close-circle:{ .unsupported }  | Not available                                                    |
-| `chunking_strategy`        |   :material-minus-circle:{ .partial }    | Only `auto` is supported                                         |
-| `temperature`              |       :material-cog:{ .model-dep }       | Bedrock models only; rejected by AWS Transcribe                  |
-| `prompt`                   |       :material-cog:{ .model-dep }       | Bedrock models only; rejected by AWS Transcribe                  |
-| `logprobs`                 |       :material-cog:{ .model-dep }       | Bedrock models only; rejected by AWS Transcribe                  |
+| `timestamp_granularities`  |       :material-cog:{ .model-dep }       | Word or segment level; requires `response_format=verbose_json` (Amazon Transcribe only) |
+| Speaker diarization        |       :material-cog:{ .model-dep }       | Automatic speaker separation; requires `response_format=diarized_json` (Amazon Transcribe only) |
+| `known_speaker_names`      | :material-close-circle:{ .unsupported }  | Rejected with an error if provided                               |
+| `known_speaker_references` | :material-close-circle:{ .unsupported }  | Rejected with an error if provided                               |
+| `chunking_strategy`        |   :material-minus-circle:{ .partial }    | Only `auto` is accepted; other values are rejected               |
+| `temperature`              |       :material-cog:{ .model-dep }       | Bedrock models only; rejected by Amazon Transcribe               |
+| `prompt`                   |       :material-cog:{ .model-dep }       | Bedrock models only; rejected by Amazon Transcribe               |
+| `include` (`logprobs`)     |       :material-cog:{ .model-dep }       | Bedrock models only; requires `response_format=json`; rejected by Amazon Transcribe |
 | **Usage tracking**         |                                          |                                                                  |
-| Input audio duration       |   :material-check-circle:{ .success }    | Seconds (billing unit on AWS Transcribe)                         |
+| Input audio duration       |   :material-check-circle:{ .success }    | Seconds (billing unit on Amazon Transcribe)                      |
 | Output text tokens         |       :material-cog:{ .model-dep }       | On models from Bedrock                                           |
 
 </div>
@@ -76,12 +76,13 @@ Transcribe audio to text with AWS Transcribe or AWS Bedrock audio-capable models
 * :material-cog:{ .model-dep } **Available on Select Models** — Check your model's capabilities
 * :material-minus-circle:{ .partial } **Partial** — Supported with limitations
 * :material-close-circle:{ .unsupported } **Unsupported** — Not available in this implementation
+* :material-plus-circle:{ .extra-feature } **Extra Feature** — Enhanced capability beyond OpenAI API
 
 </div>
 
 ## Model Support
 
-### ![AWS Transcribe](styles/logo_amazon_transcribe.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Models
+### ![Amazon Transcribe](styles/logo_amazon_transcribe.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Models
 
 | Model             | Supported Languages | Notes                                                                                                      |
 |-------------------|---------------------|------------------------------------------------------------------------------------------------------------|
@@ -92,20 +93,20 @@ Transcribe audio to text with AWS Transcribe or AWS Bedrock audio-capable models
 
 ### ![Mistral](styles/logo_mistralai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Mistral Models
 
-| Model                           | Supported Languages | Notes                                              |
-|---------------------------------|---------------------|----------------------------------------------------|
-| mistral.voxtral-mini-3b-2507    | 100+                | Compact model for fast transcription               |
-| mistral.voxtral-small-24b-2507  | 100+                | Larger model for enhanced accuracy                 |
+| Model                           | Supported Languages       | Notes                                              |
+|---------------------------------|---------------------------|----------------------------------------------------|
+| mistral.voxtral-mini-3b-2507    | Multilingual (auto-detected) | Compact model for fast transcription            |
+| mistral.voxtral-small-24b-2507  | Multilingual (auto-detected) | Larger model for enhanced accuracy              |
 
 !!! warning "Mistral Voxtral Limitations"
-    Mistral Voxtral models have the following restrictions when running on AWS Bedrock:
+    Mistral Voxtral models have the following restrictions when running on Amazon Bedrock:
 
     - **File size limit**: ~2MB maximum input file size
     - **Audio channels**: Mono channel audio only (single channel)
 
 ## Advanced Features
 
-### ![AWS Transcribe](styles/logo_amazon_transcribe.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Transcribe Features
+### ![Amazon Transcribe](styles/logo_amazon_transcribe.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Transcribe Features
 
 **Model & Features:**
 
@@ -114,16 +115,16 @@ Transcribe audio to text with AWS Transcribe or AWS Bedrock audio-capable models
 - Auto-detect language or specify it for faster processing
 - Word-level or segment-level timestamps with `verbose_json`
 - **Speaker Diarization** :material-account-multiple:{ .highlight }: Automatically identify and label different speakers with `diarized_json`
-- **Native Subtitles** :material-file-video:{ .highlight }: SRT/VTT files generated directly by AWS Transcribe with precise timing
+- **Native Subtitles** :material-file-video:{ .highlight }: SRT/VTT files generated directly by Amazon Transcribe with precise timing
 
 !!! tip "OpenAI Model Compatibility"
-    stdapi.ai includes a built-in model alias that maps the OpenAI model name to AWS Transcribe:
+    stdapi.ai includes a built-in model alias that maps the OpenAI model name to Amazon Transcribe:
 
     - `whisper-1` → `amazon.transcribe`
 
     This alias enables seamless compatibility with OpenAI-based tools and applications without any configuration changes. You can also [customize or override this alias](operations_configuration.md#model-aliases) to suit your needs.
 
-**Note:** The `prompt`, `temperature`, `chunking_strategy`, `known_speaker_names`, and `known_speaker_references` parameters are not supported to ensure consistent transcription accuracy. AWS Transcribe provides automatic speaker diarization without requiring known speaker references.
+**Note:** With `amazon.transcribe`, the `prompt`, `temperature`, and `include` parameters are rejected with an error to ensure consistent transcription accuracy. The `known_speaker_names` and `known_speaker_references` parameters are unsupported for every model: Amazon Transcribe provides automatic speaker diarization without requiring known speaker references.
 
 !!! tip "Performance Tips: Optimize Speed & Cost"
     - **Specify the language** if you know it—skips auto-detection for faster processing and lower AWS costs
@@ -199,6 +200,18 @@ curl -X POST "$BASE/v1/audio/transcriptions" \
   -F file=@meeting-recording.mp3 \
   -F model=amazon.transcribe \
   -F response_format=diarized_json
+```
+
+**Stream a transcription as SSE events:**
+
+Set `stream=true` to receive the transcript incrementally as server-sent events (`transcript.text.delta` events followed by a final `transcript.text.done` event):
+
+```bash
+curl -N -X POST "$BASE/v1/audio/transcriptions" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -F file=@meeting-recording.mp3 \
+  -F model=amazon.transcribe \
+  -F stream=true
 ```
 
 ---

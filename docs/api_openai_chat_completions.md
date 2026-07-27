@@ -1,14 +1,14 @@
 ---
-title: Chat Completions API - AWS Bedrock with OpenAI Compatibility
-description: OpenAI-compatible chat completions API for AWS Bedrock models including Claude, Nova, Llama. Supports streaming, reasoning modes, prompt caching, and multi-modal inputs.
-keywords: chat completions API, OpenAI chat API, AWS Bedrock chat, streaming chat API, AI chatbot API, Claude API, function calling API, multi-modal chat
+title: Chat Completions API - Amazon Bedrock with OpenAI Compatibility
+description: OpenAI-compatible chat completions API for Amazon Bedrock models including Claude, Nova, Llama. Supports streaming, reasoning modes, prompt caching, and multi-modal inputs.
+keywords: chat completions API, OpenAI chat API, Amazon Bedrock chat, streaming chat API, AI chatbot API, Claude API, function calling API, multi-modal chat
 ---
 
 # Chat Completions API
 
-Generate conversational AI responses with AWS Bedrock foundation models—including Claude, Nova, Llama, and more—through an OpenAI-compatible interface.
+Generate conversational AI responses with Amazon Bedrock foundation models—including Claude, Nova, Llama, and more—through an OpenAI-compatible interface.
 
-## Why Choose Chat Completions?
+## Why Choose the Chat Completions API?
 
 <div class="grid cards" markdown>
 
@@ -19,7 +19,7 @@ Generate conversational AI responses with AWS Bedrock foundation models—includ
   <br>Process text, images, videos, and documents together. Support for URLs, data URIs, and direct S3 references.
 
 - :material-shield-check: __Built-In Safety__
-  <br>AWS Bedrock Guardrails provide content filtering and safety policies.
+  <br>Amazon Bedrock Guardrails provide content filtering and safety policies.
 
 - :material-aws: __AWS Scale & Reliability__
   <br>Run on AWS infrastructure with service tiers for optimized latency. Multi-region model access for availability and performance.
@@ -30,12 +30,12 @@ Generate conversational AI responses with AWS Bedrock foundation models—includ
 
 | Endpoint               | Method | What It Does                               | Powered By               | MCP Tool                  |
 |------------------------|--------|--------------------------------------------|--------------------------|---------------------------|
-| `/v1/chat/completions` | POST   | Conversational AI with multi-modal support | AWS Bedrock Converse API · Bedrock Mantle | `openai_chat_completion` |
-| `/v1/chat/completions` | GET | List stored chat completions | AWS Bedrock Sessions     | `openai_chat_completion_list` |
-| `/v1/chat/completions/{completion_id}` | GET | Retrieve a stored chat completion     | AWS Bedrock Sessions     | `openai_chat_completion_get` |
-| `/v1/chat/completions/{completion_id}` | POST | Update a stored chat completion's metadata | AWS Bedrock Sessions | `openai_chat_completion_update` |
-| `/v1/chat/completions/{completion_id}` | DELETE | Delete a stored chat completion    | AWS Bedrock Sessions     | `openai_chat_completion_delete` |
-| `/v1/chat/completions/{completion_id}/messages` | GET | List the input messages of a stored chat completion | AWS Bedrock Sessions | `openai_chat_completion_messages` |
+| `/v1/chat/completions` | `POST`   | Conversational AI with multi-modal support | Amazon Bedrock Converse API · Amazon Bedrock Mantle | `openai_chat_completion` |
+| `/v1/chat/completions` | `GET` | List stored chat completions | Amazon Bedrock Sessions     | `openai_chat_completion_list` |
+| `/v1/chat/completions/{completion_id}` | `GET` | Retrieve a stored chat completion     | Amazon Bedrock Sessions     | `openai_chat_completion_get` |
+| `/v1/chat/completions/{completion_id}` | `POST` | Update a stored chat completion's metadata | Amazon Bedrock Sessions | `openai_chat_completion_update` |
+| `/v1/chat/completions/{completion_id}` | `DELETE` | Delete a stored chat completion    | Amazon Bedrock Sessions     | `openai_chat_completion_delete` |
+| `/v1/chat/completions/{completion_id}/messages` | `GET` | List the input messages of a stored chat completion | Amazon Bedrock Sessions | `openai_chat_completion_messages` |
 
 ## Feature Compatibility
 
@@ -56,24 +56,24 @@ Generate conversational AI responses with AWS Bedrock foundation models—includ
 | Function calling (`tools`)               |       :material-cog:{ .model-dep }       | Full OpenAI-compatible schema                                   |
 | Legacy `function_call`                   |       :material-cog:{ .model-dep }       | Backward compatibility maintained                               |
 | Parallel tool calls                      |       :material-cog:{ .model-dep }       | Multiple tools in one turn                                      |
-| Disable Parallel tool calls              | :material-close-circle:{ .unsupported }  | `parallel_tool_calls: false` returns `400`; not supported        |
+| Disable parallel tool calls              | :material-close-circle:{ .unsupported }  | `parallel_tool_calls: false` returns `400`; not supported        |
 | Server tools                             | :material-plus-circle:{ .extra-feature } | Provider system tools and Claude server tools                   |
 | **Generation Control**                   |                                          |                                                                 |
 | `max_tokens` / `max_completion_tokens`   |   :material-check-circle:{ .success }    | Output length limits                                            |
 | `temperature`                            |       :material-cog:{ .model-dep }       | Mapped to Bedrock inference params                              |
 | `top_p`                                  |       :material-cog:{ .model-dep }       | Nucleus sampling control                                        |
-| `stop` sequences                         |       :material-cog:{ .model-dep }       | Custom stop strings. Whitespace-only sequences are rejected with `400` (AWS Bedrock limitation) |
+| `stop` sequences                         |       :material-cog:{ .model-dep }       | Custom stop strings. Whitespace-only sequences are rejected with `400` (Amazon Bedrock limitation) |
 | `frequency_penalty` / `presence_penalty` |       :material-cog:{ .model-dep }       | Repetition control                                              |
 | `seed`                                   |       :material-cog:{ .model-dep }       | Deterministic generation                                        |
 | `logit_bias`                             |       :material-cog:{ .model-dep }       | Not all models support biasing                                  |
-| `top_logprobs`                           |       :material-cog:{ .model-dep }       | Token probability output                                        |
+| `top_logprobs`                           |       :material-cog:{ .model-dep }       | Forwarded to the model as a provider-specific field; honored only by models that support it. Usable even though `logprobs` is rejected |
 | `top_k` (From Qwen API)                  |       :material-cog:{ .model-dep }       | Candidate token set size for sampling                           |
-| `reasoning_effort` (OpenAI API-compatible) |       :material-cog:{ .model-dep }       | Reasoning control: none/minimal/low/medium/high/xhigh (all models) |
-| `enable_thinking` (Qwen API-compatible)  |       :material-cog:{ .model-dep }       | Enable/disable thinking mode (all reasoning models)            |
-| `thinking_budget` (Qwen API-compatible)  |       :material-cog:{ .model-dep }       | Thinking token budget (all reasoning models)                   |
-| `thinking` (Moonshot API-compatible)     |       :material-cog:{ .model-dep }       | Thinking config: {"type": "enabled"/"disabled"} (all models)   |
+| `reasoning_effort` (OpenAI API-compatible) |       :material-cog:{ .model-dep }       | Reasoning control: none/minimal/low/medium/high/xhigh (accepted for all models) |
+| `enable_thinking` (Qwen API-compatible)  |       :material-cog:{ .model-dep }       | Enable/disable thinking mode (accepted for all reasoning models) |
+| `thinking_budget` (Qwen API-compatible)  |       :material-cog:{ .model-dep }       | Thinking token budget (accepted for all reasoning models)      |
+| `thinking` (Moonshot API-compatible)     |       :material-cog:{ .model-dep }       | Thinking config: {"type": "enabled"/"disabled"} (accepted for all models) |
 | `n` (multiple choices)                   |   :material-minus-circle:{ .partial }    | Generate multiple responses, not supported with streaming       |
-| `logprobs`                               | :material-close-circle:{ .unsupported }  | Log probabilities                                               |
+| `logprobs`                               | :material-close-circle:{ .unsupported }  | Rejected with `400`; `top_logprobs` (above) remains usable      |
 | `prediction`                             | :material-close-circle:{ .unsupported }  | Static predicted output content                                 |
 | `response_format`                        |       :material-cog:{ .model-dep }       | JSON object or JSON schema output                               |
 | `verbosity`                              | :material-close-circle:{ .unsupported }  | Model verbosity                                                 |
@@ -95,17 +95,29 @@ Generate conversational AI responses with AWS Bedrock foundation models—includ
 | **Other**                                |                                          |                                                                 |
 | Service tiers                            |   :material-check-circle:{ .success }    | Mapped to Bedrock service tiers and latency options             |
 | `metadata`                               |   :material-check-circle:{ .success }    | Echoed in the response, updatable on stored completions, and usable to filter the Bedrock invocation log. Also forwarded to Bedrock `requestMetadata`, whose limits apply: max 16 pairs, values ≤256 characters, restricted character set |
-| `store`                                  |   :material-check-circle:{ .success }    | Persists the completion in AWS Bedrock session storage (non-streaming) |
+| `store`                                  |   :material-check-circle:{ .success }    | Persists the completion in Amazon Bedrock session storage (non-streaming) |
 | List / update stored completions         |   :material-check-circle:{ .success }    | List with `model`/`metadata` filters; metadata update            |
 | `safety_identifier` / `user`             |   :material-minus-circle:{ .partial }    | Logged                                                          |
 | Bedrock Guardrails                       | :material-plus-circle:{ .extra-feature } | Content safety policies — not applied to Mantle-served requests |
-| `moderation`                             |   :material-check-circle:{ .success }    | Applies an AWS Bedrock guardrail; results in the response (non-streaming) — rejected (`400`) on Mantle-served models |
+| `moderation`                             |   :material-check-circle:{ .success }    | Applies an Amazon Bedrock guardrail; results in the response (non-streaming) — rejected (`400`) on Mantle-served models |
+
+</div>
+
+<div class="feature-table" markdown>
+
+**Legend:**
+
+* :material-check-circle:{ .success } **Supported** — Fully compatible with OpenAI API
+* :material-cog:{ .model-dep } **Model-Dependent** — Behavior depends on the model or backend; check the Notes column
+* :material-minus-circle:{ .partial } **Partial** — Supported with limitations
+* :material-close-circle:{ .unsupported } **Unsupported** — Not available in this implementation
+* :material-plus-circle:{ .extra-feature } **Extra Feature** — Enhanced capability beyond OpenAI API
 
 </div>
 
 ## Stored Chat Completions
 
-Set `store: true` to persist a chat completion in [AWS Bedrock session storage](https://docs.aws.amazon.com/bedrock/latest/userguide/sessions.html) — same mechanism, region, and [KMS setting](operations_configuration.md#aws-bedrock-session-encryption-key-arn) as [stored responses](api_openai_responses.md#stored-responses). The returned `id` then works with the full stored-completion surface:
+Set `store: true` to persist a chat completion in [Amazon Bedrock session storage](https://docs.aws.amazon.com/bedrock/latest/userguide/sessions.html) — same mechanism, region, and [KMS setting](operations_configuration.md#aws-bedrock-session-encryption-key-arn) as [stored responses](api_openai_responses.md#stored-responses). The returned `id` then works with the full stored-completion surface:
 
 - `GET /v1/chat/completions` — list stored completions, sorted by creation time (`order`, `after`, `limit`), filterable by `model` and by metadata pairs (`metadata[key]=value`).
 - `GET /v1/chat/completions/{completion_id}` — retrieve the stored completion.
@@ -115,21 +127,9 @@ Set `store: true` to persist a chat completion in [AWS Bedrock session storage](
 
 `store` defaults to **false** on this implementation and is ignored with `stream=true` or when the server lacks the [session storage IAM permissions](operations_configuration.md#bedrock-session-storage-optional) (a warning is recorded in the request log). Listings scan a capped number of sessions (1,000) in the primary Bedrock region; accounts beyond the cap may see incomplete listings.
 
-<div class="feature-table" markdown>
-
-**Legend:**
-
-* :material-check-circle:{ .success } **Supported** — Fully compatible with OpenAI API
-* :material-cog:{ .model-dep } **Available on Select Models** — Check your model's capabilities
-* :material-minus-circle:{ .partial } **Partial** — Supported with limitations
-* :material-close-circle:{ .unsupported } **Unsupported** — Not available in this implementation
-* :material-plus-circle:{ .extra-feature } **Extra Feature** — Enhanced capability beyond OpenAI API
-
-</div>
-
 ## Model Support
 
-All models supported by AWS Bedrock Converse and Converse Stream API are supported, plus every model served by [Amazon Bedrock Mantle](features.md#bedrock-mantle-models) when enabled — including OpenAI GPT-5.x, xAI Grok, and Google Gemma 4. Requests to Mantle models are passed through natively or converted automatically depending on the model's upstream API support — see [Bedrock Mantle](#bedrock-mantle) below.
+All models supported by the Amazon Bedrock Converse and Converse Stream API are supported, plus every model served by [Bedrock Mantle](features.md#bedrock-mantle-models) when enabled — including OpenAI GPT-5.x, xAI Grok, and Google Gemma 4. Requests to Mantle models are passed through natively or converted automatically depending on the model's upstream API support — see [Bedrock Mantle](#bedrock-mantle) below.
 
 ### Bedrock Mantle
 
@@ -146,7 +146,7 @@ Mantle-served requests follow one of three paths, each with its own parameter fi
 
 ### Model Name Aliases
 
-This API supports dynamic model name aliases matching official provider APIs. Models like OpenAI and Anthropic provide dynamic aliases in their official APIs—this gateway supports the same model names, automatically resolving them to AWS Bedrock model identifiers.
+This API supports dynamic model name aliases matching official provider APIs. Models like OpenAI and Anthropic provide dynamic aliases in their official APIs—this gateway supports the same model names, automatically resolving them to Amazon Bedrock model identifiers.
 
 **Examples (OpenAI GPT OSS models supported by Bedrock):**
 
@@ -165,7 +165,7 @@ Reduce costs and improve response times by caching frequently-used prompt compon
 - **Amazon Nova**: Support for system and messages caching
 
 !!! info "Documentation"
-    See [AWS Bedrock Prompt Caching - Supported Models](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html#prompt-caching-models) for the complete list of models supporting prompt caching.
+    See [Amazon Bedrock Prompt Caching - Supported Models](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html#prompt-caching-models) for the complete list of models supporting prompt caching.
 
 !!! warning "Cache Creation Costs"
     Cache creation incurs a higher cost than regular token processing. Only use prompt caching when you expect a high cache hit ratio across multiple requests with similar prompts.
@@ -227,7 +227,7 @@ Enable caching for specific prompt sections using dot-separated values:
 Control how long cached prompts persist using the `prompt_cache_retention` parameter:
 
 !!! info "Model Support"
-    Cache retention configuration is only available on select models. See [AWS Bedrock Prompt Caching - Supported Models](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html#prompt-caching-models) for details on which models support configurable TTL.
+    Cache retention configuration is only available on select models. See [Amazon Bedrock Prompt Caching - Supported Models](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html#prompt-caching-models) for details on which models support configurable TTL.
 
 ```bash
 curl -X POST "$BASE/v1/chat/completions" \
@@ -249,12 +249,12 @@ curl -X POST "$BASE/v1/chat/completions" \
 
 **Available Retention Values:**
 
-- `"in_memory"` - Short-term caching (mapped to 5 minutes on AWS Bedrock)
-- `"24h"` - Long-term caching (mapped to 1 hour on AWS Bedrock)
-- Additional AWS Bedrock values: `"1h"`, `"5m"` (provider-specific)
+- `"in_memory"` - Short-term caching (mapped to 5 minutes on Amazon Bedrock)
+- `"24h"` - Long-term caching (mapped to 1 hour on Amazon Bedrock)
+- Additional Amazon Bedrock values: `"1h"`, `"5m"` (provider-specific)
 
-!!! note "OpenAI to AWS Bedrock Mapping"
-    OpenAI retention values are mapped to AWS Bedrock equivalents for compatibility:
+!!! note "OpenAI to Amazon Bedrock Mapping"
+    OpenAI retention values are mapped to Amazon Bedrock equivalents for compatibility:
 
     - `"in_memory"` → 5 minutes
     - `"24h"` → 1 hour
@@ -283,9 +283,9 @@ In this example, 1,200 tokens were retrieved from cache, with only 300 tokens re
 System prompts define the AI assistant's behavior, personality, and instructions (e.g., "You are a helpful assistant"). Most models support system prompts.
 
 !!! warning "Unsupported Models"
-    Some models don't support system prompts (`mistral.mistral-7b-instruct-v0:2`, `mistral.mistral-8x7b-instruct-v0:1`). By default, **stdapi.ai silently drops system messages** for these models, allowing cross-model compatibility. To receive errors instead, configure [`DROP_UNSUPPORTED_SYSTEM_PROMPT=false`](operations_configuration.md#drop-unsupported-system-prompt).
+    Some models don't support system prompts (`mistral.mistral-7b-instruct-v0:2`, `mistral.mixtral-8x7b-instruct-v0:1`). By default, **stdapi.ai silently drops system messages** for these models, allowing cross-model compatibility. To receive errors instead, configure [`DROP_UNSUPPORTED_SYSTEM_PROMPT=false`](operations_configuration.md#drop-unsupported-system-prompt).
 
-### ![AWS S3](styles/logo_amazon_s3.svg){ style="height: 1.2em; vertical-align: text-bottom;" } S3 Image Support
+### ![Amazon S3](styles/logo_amazon_s3.svg){ style="height: 1.2em; vertical-align: text-bottom;" } S3 Image Support
 
 Access images directly from your S3 buckets without generating pre-signed URLs or downloading files locally.
 
@@ -345,9 +345,9 @@ The string-overloaded `image_url.url`, `file.file_data`, and `input_audio.data` 
 !!! info "Two equivalent ways to reference an uploaded file"
     The OpenAI-native typed path `{"type": "file", "file": {"file_id": "file-…"}}` is unchanged and still preferred when a typed object is acceptable. The `file-id:` URI is the equivalent for the *string-overloaded* `image_url.url` / `file.file_data` / `input_audio.data` fields, where today you would otherwise pass an `s3://`, `https://`, or `data:` URI. See [Referencing Uploaded Files via the `file-id:` URI Scheme](api_openai_files.md#referencing-uploaded-files-via-the-file-id-uri-scheme).
 
-### AWS Bedrock System Tools
+### Amazon Bedrock System Tools
 
-AWS Bedrock system tools are built-in capabilities that foundation models can use directly, without requiring you to implement backend integrations.
+Amazon Bedrock system tools are built-in capabilities that foundation models can use directly, without requiring you to implement backend integrations.
 
 **How to Use:**
 
@@ -369,7 +369,7 @@ Amazon Nova Web Grounding enables models to search the web for current informati
 
 !!! info "Learn More"
     - [Amazon Nova Web Grounding - User Guide](https://docs.aws.amazon.com/nova/latest/userguide/grounding.html)
-    - [Build More Accurate AI Applications with Amazon Nova Web Grounding - Blog Post](https://aws.amazon.com/fr/blogs/aws/build-more-accurate-ai-applications-with-amazon-nova-web-grounding/)
+    - [Build More Accurate AI Applications with Amazon Nova Web Grounding - Blog Post](https://aws.amazon.com/blogs/aws/build-more-accurate-ai-applications-with-amazon-nova-web-grounding/)
 
 **Usage:**
 
@@ -378,7 +378,7 @@ curl -X POST "$BASE/v1/chat/completions" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "amazon.nova-premier-v1:0",
+    "model": "amazon.nova-2-lite-v1:0",
     "messages": [
       {
         "role": "user",
@@ -428,7 +428,7 @@ When using web grounding, the API response includes `annotations` with URL citat
 - **No streaming citations**: URL citation `annotations` are not emitted in streaming responses.
 
 !!! warning "Region Compatibility"
-    Web Grounding is only available in US AWS Bedrock regions. To ensure all requests are routed to a US region, restrict the model using [`AWS_BEDROCK_MODEL_REGION_RESTRICT`](operations_configuration.md#bedrock-model-region-restrict):
+    Web Grounding is only available in US Amazon Bedrock regions. To ensure all requests are routed to a US region, restrict the model using [`AWS_BEDROCK_MODEL_REGION_RESTRICT`](operations_configuration.md#bedrock-model-region-restrict):
 
     ```bash
     export AWS_BEDROCK_MODEL_REGION_RESTRICT='{"amazon.nova-": ["us-east-1"]}'
@@ -447,7 +447,7 @@ Anthropic Claude models support server-side tools (bash, text editor, memory) th
 | Computer | `computer` | :material-close-circle:{ .unsupported } | :material-close-circle:{ .unsupported } |
 | Memory | `memory` | :material-close-circle:{ .unsupported } | :material-check-circle:{ .success } |
 
-!!! danger "Computer Use Not Supported"
+!!! warning "Computer Use Not Supported"
     The computer use workflow requires screenshots to be returned as images inside tool results. The OpenAI Chat Completions API does not support image content in `role: "tool"` messages, so the complete agent loop cannot be implemented. **`computer` is not usable via this route.**
 
 **Usage:**
@@ -501,14 +501,14 @@ curl -X POST "$BASE/v1/chat/completions" \
 
 ### Provider-Specific Parameters
 
-Unlock advanced model capabilities by passing provider-specific parameters directly in your requests. These parameters are forwarded to AWS Bedrock and allow you to access features unique to each foundation model provider.
+Unlock advanced model capabilities by passing provider-specific parameters directly in your requests. These parameters are forwarded to Amazon Bedrock and allow you to access features unique to each foundation model provider.
 
 !!! info "Documentation"
     See [Bedrock Model Parameters](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters.html) for the complete list of available parameters per model.
 
 **How It Works:**
 
-Add provider-specific fields at the top level of your request body alongside standard OpenAI parameters. The API automatically forwards these to the appropriate model provider via AWS Bedrock.
+Add provider-specific fields at the top level of your request body alongside standard OpenAI parameters. The API automatically forwards these to the appropriate model provider via Amazon Bedrock.
 
 **Examples:**
 
@@ -535,7 +535,7 @@ Configure default parameters for specific models via the `DEFAULT_MODEL_PARAMS` 
 ```bash
 export DEFAULT_MODEL_PARAMS='{
   "anthropic.claude-sonnet-5": {
-    "anthropic_beta": ["extended-thinking-2024-12-12"]
+    "anthropic_beta": ["context-management-2025-06-27"]
   }
 }'
 ```
@@ -545,16 +545,16 @@ export DEFAULT_MODEL_PARAMS='{
 
 **Behavior:**
 
-- ✅ **Compatible parameters**: Forwarded to the model and applied
-- ⚠️ **Unsupported parameters**: Return HTTP 400 with an error message
+- :material-check-circle:{ .success } **Compatible parameters**: Forwarded to the model and applied
+- :material-alert-circle:{ .warning } **Unsupported parameters**: Return HTTP 400 with an error message
 
 #### ![Claude](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Anthropic Claude Features
 
-Enable cutting-edge Claude capabilities including extended thinking and reasoning.
+Enable cutting-edge Claude capabilities through Anthropic beta feature flags.
 
 ##### Beta Feature Flags
 
-Enable experimental Claude features like extended thinking by adding the `anthropic_beta` array to your request:
+Enable experimental Claude features like interleaved thinking by adding the `anthropic_beta` array to your request (extended thinking itself is controlled through the [reasoning parameters](#reasoning-control), not a beta flag):
 
 ```bash
 curl -X POST "$BASE/v1/chat/completions" \
@@ -574,12 +574,12 @@ curl -X POST "$BASE/v1/chat/completions" \
     Unsupported flags that would change output return HTTP 400 errors.
 
 !!! info "Documentation"
-    See [Using Claude on AWS Bedrock](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-request-response.html) for more details on Claude-specific parameters.
+    See [Using Claude on Amazon Bedrock](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-request-response.html) for more details on Claude-specific parameters.
 
 
 ### Reasoning Control
 
-This API supports two different approaches to control [AWS Bedrock reasoning](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-reasoning.html) behavior. Reasoning enables foundation models to break down complex tasks into smaller steps ("chain of thought"), improving accuracy for multi-step analysis, math problems, and complex reasoning tasks. Both approaches work with all AWS Bedrock models that support reasoning capabilities.
+This API supports several approaches to control [Amazon Bedrock reasoning](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-reasoning.html) behavior. Reasoning enables foundation models to break down complex tasks into smaller steps ("chain of thought"), improving accuracy for multi-step analysis, math problems, and complex reasoning tasks. All approaches work with all Amazon Bedrock models that support reasoning capabilities.
 
 !!! info "Model Support for Configurable Reasoning"
     Not all reasoning-capable models support configurable reasoning control. Support varies by model:
@@ -589,9 +589,9 @@ This API supports two different approaches to control [AWS Bedrock reasoning](ht
     - **Amazon Nova 2 models**: `reasoning_effort` parameter only
     - **DeepSeek V3 models**: `reasoning_effort` parameter only
 
-#### ![OpenAI](styles/logo_openai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } OpenAI API-compatible reasoning parameters
+#### ![OpenAI](styles/logo_openai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } OpenAI and DeepSeek API-Compatible Reasoning Parameters
 
-Use the `reasoning_effort` parameter with predefined effort levels. This is an OpenAI API-compatible format that works with all AWS Bedrock models supporting reasoning.
+Use the `reasoning_effort` parameter with predefined effort levels. This format is shared by the OpenAI and [DeepSeek](https://api-docs.deepseek.com/api/create-chat-completion) Chat Completions APIs and works with all Amazon Bedrock models supporting reasoning.
 
 **Available Levels:**
 
@@ -601,6 +601,11 @@ Use the `reasoning_effort` parameter with predefined effort levels. This is an O
 - `medium` - Balanced reasoning for most use cases
 - `high` - Deep reasoning for complex problems
 - `xhigh` - Maximum reasoning for complex problems
+
+**What You Get:**
+
+- **`reasoning_content` field** (DeepSeek API-compatible): models include their thinking process in the response
+- **Streaming support**: `choices[].delta.reasoning_content` chunks in real time
 
 **Example:**
 
@@ -618,9 +623,9 @@ curl -X POST "$BASE/v1/chat/completions" \
 !!! note "Compatibility"
     This format is accepted for all reasoning-capable models. Models that don't support this parameter will ignore it.
 
-#### ![Qwen](styles/logo_qwen.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Qwen API-compatible reasoning parameters
+#### ![Qwen](styles/logo_qwen.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Qwen API-Compatible Reasoning Parameters
 
-Use explicit `enable_thinking` & `thinking_budget` parameters for fine-grained control over thinking mode. This is a Qwen API-compatible format that works with all AWS Bedrock models supporting reasoning.
+Use explicit `enable_thinking` & `thinking_budget` parameters for fine-grained control over thinking mode. This is a Qwen API-compatible format that works with all Amazon Bedrock models supporting reasoning.
 
 **Parameters:**
 
@@ -648,28 +653,7 @@ curl -X POST "$BASE/v1/chat/completions" \
 !!! note "Compatibility"
     This format is accepted for all reasoning-capable models. Models that don't support these parameters will ignore them.
 
-#### ![DeepSeek](styles/logo_deepSeek.svg){ style="height: 1.2em; vertical-align: text-bottom;" } DeepSeek API-compatible reasoning parameters
-
-Use `reasoning_effort` to control reasoning intensity. This is a DeepSeek API-compatible format that works with all AWS Bedrock models supporting reasoning.
-
-!!! info "Documentation"
-    See [DeepSeek API - Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion) for more information.
-
-**Parameters:**
-
-- `reasoning_effort` (string): Reasoning effort level
-    - Values: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`
-    - Default: Model-specific
-
-**What You Get:**
-
-- **`reasoning_content` field**: Models include their thinking process in response
-- **Streaming support**: Get `choices[].delta.reasoning_content` chunks in real-time
-
-!!! note "Compatibility"
-    This format is accepted for all reasoning-capable models. Models that don't support this parameter will ignore it.
-
-#### ![Moonshot](styles/logo_moonshot.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Moonshot API-compatible thinking control
+#### ![Moonshot](styles/logo_moonshot.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Moonshot API-Compatible Thinking Control
 
 The `thinking` parameter provides a Moonshot API-compatible format for controlling thinking/reasoning on models that support it.
 
@@ -726,7 +710,7 @@ curl -X POST "$BASE/v1/chat/completions" \
     - [Bedrock Guardrails Configuration](operations_configuration.md#bedrock-guardrails)
     - [Service Tier and Performance Configuration](operations_configuration.md#bedrock-service-tier-and-performance-configuration)
 
-## Model-specific features
+## Model-Specific Features
 
 ### ![TwelveLabs](styles/logo_twelvelabs.svg){ style="height: 1.2em; vertical-align: text-bottom;" } TwelveLabs Pegasus
 
@@ -744,8 +728,8 @@ curl -X POST "$BASE/v1/chat/completions" \
 **Video input formats**: `data:video/mp4;base64,…`, `https://…`, `s3://bucket/key`, or `file-id:…`. Videos above 18.75 MB are automatically uploaded to S3.
 
 ```bash
-curl https://api.example.com/v1/chat/completions \
-  -H "Authorization: Bearer $API_KEY" \
+curl -X POST "$BASE/v1/chat/completions" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "twelvelabs.pegasus-1-2-v1:0",

@@ -1,14 +1,14 @@
 ---
-title: Images Generation API - AWS Bedrock Text-to-Image
-description: Generate images with AWS Bedrock using Stability AI and Amazon Nova Canvas. OpenAI-compatible text-to-image API with streaming support and multiple output formats.
+title: Images Generation API - Amazon Bedrock Text-to-Image
+description: Generate images with Amazon Bedrock using Stability AI and Amazon Nova Canvas. OpenAI-compatible text-to-image API with streaming support and multiple output formats.
 keywords: text to image API, image generation API, AWS Bedrock image, Stable Diffusion API, AI image generation, OpenAI images API, DALL-E alternative, Nova Canvas
 ---
 
-# Images API
+# Images API - Image Generation
 
-Generate images with AWS Bedrock image models like Stability AI and Amazon Nova Canvas through an OpenAI-compatible interface.
+Generate images with Amazon Bedrock image models like Stability AI and Amazon Nova Canvas through an OpenAI-compatible interface.
 
-## Why Choose Image Generation?
+## Why Choose the Image Generation API?
 
 <div class="grid cards" markdown>
 
@@ -22,15 +22,15 @@ Generate images with AWS Bedrock image models like Stability AI and Amazon Nova 
   <br>Choose dimensions, quality levels, and styles. From quick drafts to high-resolution finals.
 
 - :material-aws: __Scalable Infrastructure__
-  <br>Generate images at scale with AWS Bedrock infrastructure. No GPU management required.
+  <br>Generate images at scale with Amazon Bedrock infrastructure. No GPU management required.
 
 </div>
 
 ## Quick Start: Available Endpoint
 
-| Endpoint                 | Method | What It Does                      | Powered By               | MCP Tool                  |
-|--------------------------|--------|-----------------------------------|--------------------------|---------------------------|
-| `/v1/images/generations` | POST   | Generate images from text prompts | AWS Bedrock Image Models | `openai_image_generation` |
+| Endpoint                 | Method | What It Does                      | Powered By                  | MCP Tool                  |
+|--------------------------|--------|-----------------------------------|-----------------------------|---------------------------|
+| `/v1/images/generations` | `POST` | Generate images from text prompts | Amazon Bedrock Image Models | `openai_image_generation` |
 
 ## Feature Compatibility
 
@@ -43,7 +43,7 @@ Generate images with AWS Bedrock image models like Stability AI and Amazon Nova 
 | **Parameters**                 |                                          |                                                                     |
 | `prompt`                       |   :material-check-circle:{ .success }    | Text description for generation (required, min 1 char)              |
 | `model`                        |   :material-check-circle:{ .success }    | Required parameter                                                  |
-| `n` (number of images)         |   :material-check-circle:{ .success }    | Generate multiple images per request (1-10, default: 1)             |
+| `n` (number of images)         |   :material-check-circle:{ .success }    | Multiple images per request; accepted range is 1-10 (default: 1), but the effective maximum is model-dependent (e.g. Amazon Titan and Nova Canvas cap at 5) |
 | `size` (WIDTHxHEIGHT)          |   :material-check-circle:{ .success }    | Output dimensions (default: 1024x1024, format validated)            |
 | `response_format`              |   :material-check-circle:{ .success }    | `url` or `b64_json` (default: `url`)                                |
 | `quality`                      |       :material-cog:{ .model-dep }       | Quality setting (default: `auto`, supports OpenAI & model-specific) |
@@ -52,11 +52,11 @@ Generate images with AWS Bedrock image models like Stability AI and Amazon Nova 
 | `output_compression`           |   :material-check-circle:{ .success }    | Compression level 1-100% (default: 100)                             |
 | `stream`                       |   :material-check-circle:{ .success }    | Generate images in streaming mode with partial results              |
 | `partial_images`               |       :material-cog:{ .model-dep }       | Number of partial images in stream (0-3, model-specific)            |
-| `background`                   | :material-close-circle:{ .unsupported }  | Always `auto`, transparent backgrounds unsupported                  |
-| `moderation`                   | :material-close-circle:{ .unsupported }  | Always `auto`, other values unsupported                             |
+| `background`                   |   :material-minus-circle:{ .partial }    | Accepts `auto` (default) and `opaque`; `transparent` is unsupported — responses report `opaque` |
+| `moderation`                   | :material-close-circle:{ .unsupported }  | Only the default `auto` is accepted; other values are rejected with an error |
 | Extra model-specific params    | :material-plus-circle:{ .extra-feature } | Extra model-specific parameters via JSON body                       |
 | **Output**                     |                                          |                                                                     |
-| URL response format            |   :material-check-circle:{ .success }    | Temporary URLs to generated images (requires AWS_S3_BUCKET)         |
+| URL response format            |   :material-check-circle:{ .success }    | Temporary presigned URLs, valid for 60 minutes (requires AWS_S3_BUCKET) |
 | Base64 JSON format             |   :material-check-circle:{ .success }    | Inline base64-encoded images                                        |
 | PNG format                     |   :material-check-circle:{ .success }    | Lossless image output                                               |
 | JPEG format                    |       :material-cog:{ .model-dep }       | Lossy compression (model-specific)                                  |
@@ -102,62 +102,50 @@ Generate images with AWS Bedrock image models like Stability AI and Amazon Nova 
 | stability.stable-image-core-v1:0  | `TEXT_IMAGE`         | Stable Image Core - balanced quality and speed    |
 | stability.stable-image-ultra-v1:0 | `TEXT_IMAGE`         | Stable Image Ultra - premium quality and detail   |
 
+!!! info "No Built-In Aliases for OpenAI Image Model Names"
+    OpenAI's default image model names (`dall-e-2`, `dall-e-3`, `gpt-image-1`) have **no built-in alias**, so requests using them fail with a model-not-found error — the most common first-call issue. Pass one of the model IDs above, or map the OpenAI names to your preferred models with [`MODEL_ALIASES`](operations_configuration.md#model-aliases).
+
 !!! warning "Configuration Required"
     You must configure the `AWS_S3_BUCKET` environment variable with a bucket to use the URL response format.
 
 !!! tip "Performance Optimization"
     For faster image downloads, especially for high-resolution images or globally distributed users, enable S3 Transfer Acceleration by setting `AWS_S3_ACCELERATE=true`. This uses CloudFront edge locations to accelerate file downloads, providing 50-500% faster speeds for users far from your S3 bucket region. See [S3 Transfer Acceleration configuration](operations_configuration.md#aws-s3-accelerate) for setup details.
 
-## Available Request Headers
-
-This endpoint supports standard Bedrock headers for enhanced control over your requests. All headers are optional and can be combined as needed.
-
-### Content Safety (Guardrails)
-
-| Header                               | Purpose                            | Valid Values                          |
-|--------------------------------------|------------------------------------|---------------------------------------|
-| `X-Amzn-Bedrock-GuardrailIdentifier` | Guardrail ID for content filtering | Your guardrail identifier             |
-| `X-Amzn-Bedrock-GuardrailVersion`    | Guardrail version                  | Version number (e.g., `1`)            |
-| `X-Amzn-Bedrock-Trace`               | Guardrail trace level              | `disabled`, `enabled`, `enabled_full` |
-
-### Performance Optimization
-
-| Header                                     | Purpose                | Valid Values                  |
-|--------------------------------------------|------------------------|-------------------------------|
-| `X-Amzn-Bedrock-Service-Tier`              | Service tier selection | `priority`, `default`, `flex` |
-| `X-Amzn-Bedrock-PerformanceConfig-Latency` | Latency optimization   | `standard`, `optimized`       |
-
-**Example with headers:**
-
-```bash
-curl -X POST "$BASE/v1/images/generations" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: application/json" \
-  -H "X-Amzn-Bedrock-Service-Tier: priority" \
-  -H "X-Amzn-Bedrock-PerformanceConfig-Latency: optimized" \
-  -d '{
-    "model": "amazon.nova-canvas-v1:0",
-    "prompt": "A serene mountain landscape at sunset"
-  }'
-```
-
-!!! info "Detailed Documentation"
-    For complete information about these headers, configuration options, and use cases, see:
-
-    - [Bedrock Guardrails Configuration](operations_configuration.md#bedrock-guardrails)
-    - [Service Tier and Performance Configuration](operations_configuration.md#bedrock-service-tier-and-performance-configuration)
-
 ## Advanced Features
 
 ### Provider-Specific Parameters
 
-Unlock advanced image generation capabilities by passing provider-specific parameters directly in your requests. These parameters are forwarded to AWS Bedrock and allow you to access features unique to each image model provider.
+Unlock advanced image generation capabilities by passing provider-specific parameters directly in your requests. These parameters are forwarded to Amazon Bedrock and allow you to access features unique to each image model provider.
 
 **Documentation:** [Bedrock Image Model Parameters](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters.html)
 
 **How It Works:**
 
-Add provider-specific fields at the top level of your request body alongside standard OpenAI parameters. The API automatically forwards these to the appropriate model provider via AWS Bedrock.
+Add provider-specific fields at the top level of your request body alongside standard OpenAI parameters. The API automatically forwards these to the appropriate model provider via Amazon Bedrock.
+
+**Configuration Options:**
+
+**Option 1: Per-Request**
+
+Add provider-specific parameters directly in your request body (as shown in the examples below).
+
+**Option 2: Server-Wide Defaults**
+
+Configure default parameters for specific models via the `DEFAULT_MODEL_PARAMS` environment variable:
+
+```bash
+export DEFAULT_MODEL_PARAMS='{
+  "stability.stable-image-core-v1:0": {
+    "negative_prompt": "blurry, low quality, watermark"
+  }
+}'
+```
+
+**Note:** Per-request parameters override server-wide defaults.
+
+**Behavior:**
+
+**Compatible parameters** are forwarded to the model and applied; **unsupported parameters** return HTTP 400 with an error message.
 
 **Examples:**
 
@@ -256,7 +244,7 @@ curl -X POST "$BASE/v1/images/generations" \
 | OpenAI Parameter | Maps to                                | Notes                                                                       |
 |------------------|----------------------------------------|-----------------------------------------------------------------------------|
 | `prompt`         | Depends on `taskType`                  | See taskType-specific mapping below                                         |
-| `size`           | `imageGenerationConfig.width/height`   | Discrete sizes: 512, 768, 1024, 1152, 1216, 1344, 1536, 2048 (default: 512) |
+| `size`           | `imageGenerationConfig.width/height`   | Discrete sizes: 512, 768, 1024, 1152, 1216, 1344, 1536, 2048                |
 | `quality`        | `imageGenerationConfig.quality`        | "high" → "premium"                                                          |
 | `n`              | `imageGenerationConfig.numberOfImages` | 1-5 images                                                                  |
 
@@ -327,30 +315,44 @@ curl -X POST "$BASE/v1/images/generations" \
 !!! info "Full Parameter Reference"
     For all Stability AI parameters, see [Stability AI documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-stability-diffusion.html)
 
-**Configuration Options:**
+## Available Request Headers
 
-**Option 1: Per-Request**
+This endpoint supports standard Bedrock headers for enhanced control over your requests. All headers are optional and can be combined as needed.
 
-Add provider-specific parameters directly in your request body (as shown in examples above).
+### Content Safety (Guardrails)
 
-**Option 2: Server-Wide Defaults**
+| Header                               | Purpose                            | Valid Values                          |
+|--------------------------------------|------------------------------------|---------------------------------------|
+| `X-Amzn-Bedrock-GuardrailIdentifier` | Guardrail ID for content filtering | Your guardrail identifier             |
+| `X-Amzn-Bedrock-GuardrailVersion`    | Guardrail version                  | Version number (e.g., `1`)            |
+| `X-Amzn-Bedrock-Trace`               | Guardrail trace level              | `disabled`, `enabled`, `enabled_full` |
 
-Configure default parameters for specific models via the `DEFAULT_MODEL_PARAMS` environment variable:
+### Performance Optimization
+
+| Header                                     | Purpose                | Valid Values                  |
+|--------------------------------------------|------------------------|-------------------------------|
+| `X-Amzn-Bedrock-Service-Tier`              | Service tier selection | `priority`, `default`, `flex` |
+| `X-Amzn-Bedrock-PerformanceConfig-Latency` | Latency optimization   | `standard`, `optimized`       |
+
+**Example with headers:**
 
 ```bash
-export DEFAULT_MODEL_PARAMS='{
-  "stability.stable-image-core-v1:0": {
-    "negative_prompt": "blurry, low quality, watermark"
-  }
-}'
+curl -X POST "$BASE/v1/images/generations" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "X-Amzn-Bedrock-Service-Tier: priority" \
+  -H "X-Amzn-Bedrock-PerformanceConfig-Latency: optimized" \
+  -d '{
+    "model": "amazon.nova-canvas-v1:0",
+    "prompt": "A serene mountain landscape at sunset"
+  }'
 ```
 
-**Note:** Per-request parameters override server-wide defaults.
+!!! info "Detailed Documentation"
+    For complete information about these headers, configuration options, and use cases, see:
 
-**Behavior:**
-
-- ✅ **Compatible parameters**: Forwarded to the model and applied
-- ⚠️ **Unsupported parameters**: Return HTTP 400 with an error message
+    - [Bedrock Guardrails Configuration](operations_configuration.md#bedrock-guardrails)
+    - [Service Tier and Performance Configuration](operations_configuration.md#bedrock-service-tier-and-performance-configuration)
 
 ## Try It Now
 

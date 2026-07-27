@@ -1,12 +1,14 @@
 ---
 title: Files API - OpenAI-Compatible File Storage
 description: Upload, manage, and reference files in chat completions using the OpenAI-compatible Files API backed by Amazon S3. Supports documents, images, expiry, cursor pagination, and multipart uploads.
-keywords: Files API, OpenAI files, file upload, S3 file storage, chat completion file, expires_after, cursor pagination, AWS Bedrock files, multipart upload
+keywords: Files API, OpenAI files, file upload, S3 file storage, chat completion file, expires_after, cursor pagination, Amazon Bedrock files, multipart upload
 ---
 
-# Files API (OpenAI Compatible)
+# Files API
 
 Upload and manage files via an OpenAI-compatible interface. Files are stored in Amazon S3 and can be referenced directly in Chat Completions requests. Large files can be uploaded in parts using the Uploads API.
+
+## Why Choose the Files API?
 
 <div class="grid cards" markdown>
 
@@ -29,17 +31,17 @@ Upload and manage files via an OpenAI-compatible interface. Files are stored in 
 
 ## Available Endpoints
 
-| Endpoint                           | Method   | Description                            | MCP Tool                 |
-|------------------------------------|----------|----------------------------------------|--------------------------|
-| `/v1/files`                        | `POST`   | Upload a file                          | `openai_file`            |
-| `/v1/files`                        | `GET`    | List files with pagination             | `openai_file_list`       |
-| `/v1/files/{file_id}`              | `GET`    | Retrieve file metadata                 | `openai_files_get`       |
-| `/v1/files/{file_id}`              | `DELETE` | Delete a file                          | `openai_files_delete`    |
-| `/v1/files/{file_id}/content`      | `GET`    | Download raw file bytes                | `openai_file_content`    |
-| `/v1/uploads`                      | `POST`   | Create a multipart upload session      | `openai_upload`          |
-| `/v1/uploads/{upload_id}/parts`    | `POST`   | Add a part to an upload session        | `openai_upload_part`     |
-| `/v1/uploads/{upload_id}/complete` | `POST`   | Complete the upload and produce a file | `openai_upload_complete` |
-| `/v1/uploads/{upload_id}/cancel`   | `POST`   | Cancel a pending upload session        | `openai_upload_cancel`   |
+| Endpoint                           | Method   | What It Does                           | Powered By | MCP Tool                 |
+|------------------------------------|----------|----------------------------------------|------------|--------------------------|
+| `/v1/files`                        | `POST`   | Upload a file                          | Amazon S3  | `openai_file`            |
+| `/v1/files`                        | `GET`    | List files with pagination             | Amazon S3  | `openai_file_list`       |
+| `/v1/files/{file_id}`              | `GET`    | Retrieve file metadata                 | Amazon S3  | `openai_files_get`       |
+| `/v1/files/{file_id}`              | `DELETE` | Delete a file                          | Amazon S3  | `openai_files_delete`    |
+| `/v1/files/{file_id}/content`      | `GET`    | Download raw file bytes                | Amazon S3  | `openai_file_content`    |
+| `/v1/uploads`                      | `POST`   | Create a multipart upload session      | Amazon S3 Multipart Upload | `openai_upload`          |
+| `/v1/uploads/{upload_id}/parts`    | `POST`   | Add a part to an upload session        | Amazon S3 Multipart Upload | `openai_upload_part`     |
+| `/v1/uploads/{upload_id}/complete` | `POST`   | Complete the upload and produce a file | Amazon S3 Multipart Upload | `openai_upload_complete` |
+| `/v1/uploads/{upload_id}/cancel`   | `POST`   | Cancel a pending upload session        | Amazon S3 Multipart Upload | `openai_upload_cancel`   |
 
 ## Feature Compatibility
 
@@ -213,9 +215,9 @@ curl -X DELETE "$BASE/v1/files/file-0190c51c7de7455d9b8c2efe27dfbf67" \
 
 The Uploads API lets you stream large files to S3 in parts without buffering the entire file in memory. Each upload session is backed by an S3 native multipart upload.
 
-### Upload ID format
+### Upload ID Format
 
-Upload IDs use the same base32-encoded payload as file IDs. The prefix is swapped (`upload_` → `file-`) when the upload is completed, so the resulting file ID is known upfront.
+An upload ID and the file it produces share the same identifier — only the prefix changes (`upload_` → `file-`) when the upload is completed, so the final file ID is known upfront.
 
 ### Create an Upload Session
 
@@ -230,7 +232,7 @@ curl -X POST "$BASE/v1/uploads" \
     "filename": "large_dataset.bin",
     "mime_type": "application/octet-stream",
     "purpose": "assistants",
-    "expires_after": {"anchor": "created_at", "seconds": 86400}
+    "expires_after": {"anchor": "created_at", "seconds": 3600}
   }'
 ```
 
@@ -318,6 +320,7 @@ curl -X POST "$BASE/v1/uploads/upload_0190c51c7de7455d9b8c2efe27dfbf67/complete"
     "object": "file",
     "bytes": 6291456,
     "created_at": 1745000005,
+    "expires_at": 1745003605,
     "filename": "large_dataset.bin",
     "purpose": "assistants",
     "status": "processed"
@@ -405,7 +408,7 @@ curl -X POST "$BASE/v1/chat/completions" \
         "content": [
           {
             "type": "text",
-            "text": "Summarise this document."
+            "text": "Summarize this document."
           },
           {
             "type": "file",
@@ -456,7 +459,7 @@ curl -X DELETE "$BASE/v1/files/$FILE_ID" \
 
 The native `file_id` JSON field shown above is the OpenAI-compatible way to reference an uploaded file in routes that have a typed `file_id` slot (chat completions content parts, responses content parts, image edits, …). For **string-overloaded** file fields that already accept URI schemes like `s3://`, `https://`, or `data:` — and therefore do **not** have a typed `file_id` slot — this implementation defines an additional project-local URI scheme:
 
-```
+```text
 file-id:<file-id>
 ```
 
@@ -469,7 +472,7 @@ file-id:<file-id>
     * **Detection:** match is **case-sensitive** (`file-id:`, lowercase) with no whitespace stripping; the payload after the prefix must be a valid Files API ID, otherwise the request fails with `400 invalid_request_error`.
     * **Resolution:** the file is fetched from its underlying S3 object using the same code path as `s3://` URIs. A missing or expired file returns `404 not_found`. Content-type validation is delegated to each route, so an audio file passed to an image-only field is rejected the same way an `https://…/foo.mp3` URL would be.
 
-### Worked example — embed an uploaded file
+### Worked Example — Embed an Uploaded File
 
 ```bash
 # 1. Upload the file once.
@@ -497,6 +500,8 @@ curl -X DELETE "$BASE/v1/files/${FILE_ID}" \
 | HTTP | Cause                                                              |
 |------|--------------------------------------------------------------------|
 | 400  | Invalid `expires_after` range, bad filename, size mismatch, or unknown part ID |
+| 400  | `part_ids` not listed in ascending upload order on `/v1/uploads/{upload_id}/complete` |
+| 400  | `file-id:` URI passed to an ingest endpoint (`POST /v1/files`, `POST /v1/uploads/{upload_id}/parts`) |
 | 404  | File or upload not found, already deleted, expired, or not pending |
 | 503  | `AWS_S3_BUCKET` is not configured                                  |
 

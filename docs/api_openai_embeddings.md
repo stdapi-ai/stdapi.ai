@@ -1,14 +1,14 @@
 ---
-title: Embeddings API - AWS Bedrock Vector Embeddings
-description: Generate vector embeddings with AWS Bedrock using OpenAI-compatible API. Support for semantic search, RAG, multimodal embeddings with text, images, audio, and documents.
-keywords: embeddings API, vector embeddings AWS, semantic search API, RAG embeddings, text embeddings, multimodal embeddings, AWS Bedrock embeddings, OpenAI embeddings
+title: Embeddings API - Amazon Bedrock Vector Embeddings
+description: Generate vector embeddings with Amazon Bedrock using OpenAI-compatible API. Support for semantic search, RAG, multimodal embeddings with text, images, audio, and documents.
+keywords: embeddings API, vector embeddings AWS, semantic search API, RAG embeddings, text embeddings, multimodal embeddings, Amazon Bedrock embeddings, OpenAI embeddings
 ---
 
 # Embeddings API
 
-Generate vector embeddings for semantic search and RAG applications with AWS Bedrock embedding models through an OpenAI-compatible interface.
+Generate vector embeddings for semantic search and RAG applications with Amazon Bedrock embedding models through an OpenAI-compatible interface.
 
-## Why Choose Embeddings?
+## Why Choose the Embeddings API?
 
 <div class="grid cards" markdown>
 
@@ -16,7 +16,7 @@ Generate vector embeddings for semantic search and RAG applications with AWS Bed
   <br>Find content based on meaning and context, not just exact words. For knowledge bases and document retrieval.
 
 - :material-lightning-bolt: __High Performance__
-  <br>AWS Bedrock embedding models deliver fast vectors optimized for production workloads. Batch processing for large-scale operations.
+  <br>Amazon Bedrock embedding models deliver fast vectors optimized for production workloads. Batch processing for large-scale operations.
 
 - :material-puzzle: __Flexible Dimensions__
   <br>Choose vector dimensions that match your needs. Balance accuracy and storage/compute costs with model-specific dimension control.
@@ -30,7 +30,7 @@ Generate vector embeddings for semantic search and RAG applications with AWS Bed
 
 | Endpoint         | Method | What It Does                                                | Powered By                   | MCP Tool           |
 |------------------|--------|-------------------------------------------------------------|------------------------------|--------------------|
-| `/v1/embeddings` | POST   | Transform text and multimodal content into semantic vectors | AWS Bedrock Embedding Models | `openai_embedding` |
+| `/v1/embeddings` | `POST`   | Transform text and multimodal content into semantic vectors | Amazon Bedrock Embedding Models | `openai_embedding` |
 
 ## Feature Compatibility
 
@@ -60,62 +60,23 @@ Generate vector embeddings for semantic search and RAG applications with AWS Bed
 **Legend:**
 
 * :material-check-circle:{ .success } **Supported** — Fully compatible with OpenAI API
-* :material-cog:{ .model-dep } **Available on Select Models** — Check your model's capabilities
+* :material-cog:{ .model-dep } **Model-Dependent** — Behavior depends on the model or backend; check the Notes column
 * :material-close-circle:{ .unsupported } **Unsupported** — Not available in this implementation
 * :material-plus-circle:{ .extra-feature } **Extra Feature** — Enhanced capability beyond OpenAI API
 
 </div>
 
-## Available Request Headers
-
-This endpoint supports standard Bedrock headers for enhanced control over your requests. All headers are optional and can be combined as needed.
-
-### Content Safety (Guardrails)
-
-| Header                               | Purpose                            | Valid Values                          |
-|--------------------------------------|------------------------------------|---------------------------------------|
-| `X-Amzn-Bedrock-GuardrailIdentifier` | Guardrail ID for content filtering | Your guardrail identifier             |
-| `X-Amzn-Bedrock-GuardrailVersion`    | Guardrail version                  | Version number (e.g., `1`)            |
-| `X-Amzn-Bedrock-Trace`               | Guardrail trace level              | `disabled`, `enabled`, `enabled_full` |
-
-### Performance Optimization
-
-| Header                                     | Purpose                | Valid Values                  |
-|--------------------------------------------|------------------------|-------------------------------|
-| `X-Amzn-Bedrock-Service-Tier`              | Service tier selection | `priority`, `default`, `flex` |
-| `X-Amzn-Bedrock-PerformanceConfig-Latency` | Latency optimization   | `standard`, `optimized`       |
-
-**Example with headers:**
-
-```bash
-curl -X POST "$BASE/v1/embeddings" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: application/json" \
-  -H "X-Amzn-Bedrock-Service-Tier: flex" \
-  -H "X-Amzn-Bedrock-PerformanceConfig-Latency: standard" \
-  -d '{
-    "model": "amazon.nova-2-multimodal-embeddings-v1:0",
-    "input": ["Batch text 1", "Batch text 2", "Batch text 3"]
-  }'
-```
-
-!!! info "Detailed Documentation"
-    For complete information about these headers, configuration options, and use cases, see:
-
-    - [Bedrock Guardrails Configuration](operations_configuration.md#bedrock-guardrails)
-    - [Service Tier and Performance Configuration](operations_configuration.md#bedrock-service-tier-and-performance-configuration)
-
 ## Advanced Features
 
 ### Provider-Specific Parameters
 
-Access advanced embedding capabilities by passing provider-specific parameters directly in your requests. These parameters are forwarded to AWS Bedrock and allow you to access features unique to each embedding model provider.
+Access advanced embedding capabilities by passing provider-specific parameters directly in your requests. These parameters are forwarded to Amazon Bedrock and allow you to access features unique to each embedding model provider.
 
 **Documentation:** [Bedrock Embedding Model Parameters](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters.html)
 
 **How It Works:**
 
-Add provider-specific fields at the top level of your request body alongside standard OpenAI parameters. The API automatically forwards these to the appropriate model provider via AWS Bedrock.
+Add provider-specific fields at the top level of your request body alongside standard OpenAI parameters. The API automatically forwards these to the appropriate model provider via Amazon Bedrock.
 
 **Examples:**
 
@@ -160,8 +121,47 @@ export DEFAULT_MODEL_PARAMS='{
 
 **Behavior:**
 
-- ✅ **Compatible parameters**: Forwarded to the model and applied
-- ⚠️ **Unsupported parameters**: Return HTTP 400 with an error message
+- :material-check-circle:{ .success } **Compatible parameters**: Forwarded to the model and applied
+- :material-alert-circle:{ .warning } **Unsupported parameters**: Return HTTP 400 with an error message
+
+## Available Request Headers
+
+This endpoint supports standard Bedrock headers for enhanced control over your requests. All headers are optional and can be combined as needed.
+
+### Content Safety (Guardrails)
+
+| Header                               | Purpose                            | Valid Values                          |
+|--------------------------------------|------------------------------------|---------------------------------------|
+| `X-Amzn-Bedrock-GuardrailIdentifier` | Guardrail ID for content filtering | Your guardrail identifier             |
+| `X-Amzn-Bedrock-GuardrailVersion`    | Guardrail version                  | Version number (e.g., `1`)            |
+| `X-Amzn-Bedrock-Trace`               | Guardrail trace level              | `disabled`, `enabled`, `enabled_full` |
+
+### Performance Optimization
+
+| Header                                     | Purpose                | Valid Values                  |
+|--------------------------------------------|------------------------|-------------------------------|
+| `X-Amzn-Bedrock-Service-Tier`              | Service tier selection | `priority`, `default`, `flex` |
+| `X-Amzn-Bedrock-PerformanceConfig-Latency` | Latency optimization   | `standard`, `optimized`       |
+
+**Example with headers:**
+
+```bash
+curl -X POST "$BASE/v1/embeddings" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "X-Amzn-Bedrock-Service-Tier: flex" \
+  -H "X-Amzn-Bedrock-PerformanceConfig-Latency: standard" \
+  -d '{
+    "model": "amazon.nova-2-multimodal-embeddings-v1:0",
+    "input": ["Batch text 1", "Batch text 2", "Batch text 3"]
+  }'
+```
+
+!!! info "Detailed Documentation"
+    For complete information about these headers, configuration options, and use cases, see:
+
+    - [Bedrock Guardrails Configuration](operations_configuration.md#bedrock-guardrails)
+    - [Service Tier and Performance Configuration](operations_configuration.md#bedrock-service-tier-and-performance-configuration)
 
 ## Try It Now
 
@@ -198,7 +198,7 @@ Go beyond text! Supported models can process images, videos, and audio through b
 
 Multimodal content is passed as base64-encoded data URIs:
 
-```
+```text
 data:<mime-type>;base64,<base64-encoded-content>
 ```
 

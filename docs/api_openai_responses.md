@@ -1,12 +1,12 @@
 ---
-title: Responses API - AWS Bedrock with OpenAI Compatibility
-description: OpenAI-compatible Responses API for AWS Bedrock models. Supports streaming, tool calling, structured outputs, and multimodal inputs.
-keywords: responses API, OpenAI responses API, AWS Bedrock responses, streaming responses, tool calling API, structured output
+title: Responses API - Amazon Bedrock with OpenAI Compatibility
+description: OpenAI-compatible Responses API for Amazon Bedrock models. Supports streaming, tool calling, structured outputs, and multimodal inputs.
+keywords: responses API, OpenAI responses API, Amazon Bedrock responses, streaming responses, tool calling API, structured output
 ---
 
 # Responses API
 
-Generate model responses with AWS Bedrock foundation models through an OpenAI Responses API-compatible interface. Supports text, images, tool calling, and streaming.
+Generate model responses with Amazon Bedrock foundation models through an OpenAI Responses API-compatible interface. Supports text, images, tool calling, and streaming.
 
 ## Why Choose the Responses API?
 
@@ -30,13 +30,13 @@ Generate model responses with AWS Bedrock foundation models through an OpenAI Re
 
 | Endpoint                                  | Method   | What It Does                                                             | Powered By                                | MCP Tool                       |
 |-------------------------------------------|----------|--------------------------------------------------------------------------|-------------------------------------------|--------------------------------|
-| `/v1/responses`                           | `POST`   | Create a model response                                                  | AWS Bedrock Converse API · Bedrock Mantle | `openai_response`              |
-| `/v1/responses/input_tokens`              | `POST`   | Count input tokens without generating a response                         | AWS Bedrock CountTokens API               | `openai_response_input_tokens` |
-| `/v1/responses/compact`                   | `POST`   | Compact a conversation into a reusable summary                           | AWS Bedrock Converse API                  | `openai_response_compact`      |
-| `/v1/responses/{response_id}`             | `GET`    | Retrieve a stored response                                               | AWS Bedrock Sessions · Bedrock Mantle     | `openai_response_get`          |
-| `/v1/responses/{response_id}`             | `DELETE` | Delete a stored response                                                 | AWS Bedrock Sessions · Bedrock Mantle     | `openai_response_delete`       |
-| `/v1/responses/{response_id}/cancel`      | `POST`   | Cancel a background response — see [Stored Responses](#stored-responses) | AWS Bedrock Sessions · Bedrock Mantle     | `openai_response_cancel`       |
-| `/v1/responses/{response_id}/input_items` | `GET`    | List the input items of a stored response                                | AWS Bedrock Sessions                      | `openai_response_input_items`  |
+| `/v1/responses`                           | `POST`   | Create a model response                                                  | Amazon Bedrock Converse API · Amazon Bedrock Mantle | `openai_response`              |
+| `/v1/responses/input_tokens`              | `POST`   | Count input tokens without generating a response                         | Amazon Bedrock CountTokens API               | `openai_response_input_tokens` |
+| `/v1/responses/compact`                   | `POST`   | Compact a conversation into a reusable summary                           | Amazon Bedrock Converse API                  | `openai_response_compact`      |
+| `/v1/responses/{response_id}`             | `GET`    | Retrieve a stored response                                               | Amazon Bedrock Sessions · Bedrock Mantle     | `openai_response_get`          |
+| `/v1/responses/{response_id}`             | `DELETE` | Delete a stored response                                                 | Amazon Bedrock Sessions · Bedrock Mantle     | `openai_response_delete`       |
+| `/v1/responses/{response_id}/cancel`      | `POST`   | Cancel a background response — see [Stored Responses](#stored-responses) | Amazon Bedrock Sessions · Bedrock Mantle     | `openai_response_cancel`       |
+| `/v1/responses/{response_id}/input_items` | `GET`    | List the input items of a stored response                                | Amazon Bedrock Sessions                      | `openai_response_input_items`  |
 
 ## Feature Compatibility
 
@@ -54,7 +54,7 @@ Generate model responses with AWS Bedrock foundation models through an OpenAI Re
 | `function_call_output`                                                |   :material-check-circle:{ .success }   | Submit tool results as input; supports text, image, and file parts           |
 | Echoed output items (message, reasoning, refusal)                     |   :material-check-circle:{ .success }   | Replayed to the model; refusal parts preserved; unknown upstream fields tolerated |
 | Echoed `custom_tool_call` / `image_generation_call`                   |   :material-check-circle:{ .success }   | Replayed as tool calls (freeform input wrapped as `{"input": ...}`; image results attached) |
-| Hosted-tool call items (`web_search_call`, `file_search_call`, `code_interpreter_call`, `computer_call`, `tool_search_call`, shell/apply-patch/MCP items, `compaction_trigger`) | :material-check-circle:{ .success } | Accepted and dropped on replay (no Bedrock equivalent) |
+| Hosted-tool call items (`web_search_call`, `file_search_call`, `code_interpreter_call`, `computer_call`, `tool_search_call`, shell/apply-patch/MCP items, `compaction_trigger`) | :material-check-circle:{ .success } | Input-history tolerance only: echoed items are accepted and dropped on replay (no Bedrock equivalent). Whether each *tool* can actually be used is listed under Tool Calling below |
 | `item_reference`                                                      |   :material-check-circle:{ .success }   | Accepted and dropped on replay                                               |
 | **Tool Calling**                                                      |                                         |                                                                              |
 | Function tools (`type: "function"`)                                   |   :material-check-circle:{ .success }   | Full schema mapping to Bedrock toolSpec                                      |
@@ -65,21 +65,21 @@ Generate model responses with AWS Bedrock foundation models through an OpenAI Re
 | `tool_choice: allowed_tools`                                          |   :material-check-circle:{ .success }   | Approximated: `required` + 1 function → forced tool; `required` + many → any tool; `auto` → auto; type-variants add no constraint |
 | `parallel_tool_calls`                                                 |   :material-check-circle:{ .success }   | Echoed in response; not transmitted to Bedrock                               |
 | Built-in tools (`code_interpreter`, `web_search`, `image_generation`) |      :material-cog:{ .model-dep }       | See [OpenAI Integrated Tools](#openai-integrated-tools)                      |
-| `file_search` tool                                                    | :material-close-circle:{ .unsupported } | Accepted and dropped; no Bedrock equivalent                                  |
-| `computer` / `computer_use_preview` tools                             | :material-close-circle:{ .unsupported } | Accepted and dropped; see [Computer Use Not Supported](#computer-use-not-supported) |
-| `mcp` tool                                                            | :material-close-circle:{ .unsupported } | Accepted and dropped; MCP not supported                                      |
+| `file_search` tool                                                    |      :material-cog:{ .model-dep }       | No Converse equivalent — accepted and dropped; forwarded upstream on Bedrock Mantle native models |
+| `computer` / `computer_use_preview` tools                             |      :material-cog:{ .model-dep }       | No Converse equivalent — accepted and dropped (see [Computer Use Not Supported](#computer-use-not-supported)); forwarded upstream on Bedrock Mantle native models |
+| `mcp` tool                                                            |      :material-cog:{ .model-dep }       | No Converse equivalent — accepted and dropped; forwarded upstream on Bedrock Mantle native models |
 | `local_shell` / `shell` tools                                         | :material-close-circle:{ .unsupported } | Accepted and dropped; no Bedrock equivalent                                  |
 | `custom` / `namespace` / `tool_search` / `apply_patch` tools          | :material-close-circle:{ .unsupported } | Accepted and dropped; no Bedrock equivalent                                  |
 | **Generation Control**                                                |                                         |                                                                              |
 | `max_output_tokens`                                                   |   :material-check-circle:{ .success }   | Maps to Bedrock `maxTokens`                                                  |
 | `temperature`                                                         |      :material-cog:{ .model-dep }       | 0–2 range; mapped to Bedrock inference config                                |
 | `top_p`                                                               |      :material-cog:{ .model-dep }       | 0–1 range; nucleus sampling                                                  |
-| `top_logprobs`                                                        | :material-close-circle:{ .unsupported } | 0–20 range accepted and echoed; token log probabilities are never returned   |
+| `top_logprobs`                                                        |      :material-cog:{ .model-dep }       | 0–20 range accepted and echoed; log probabilities are never returned on Converse-served models; forwarded upstream on Bedrock Mantle native models |
 | `reasoning` (effort)                                                  |      :material-cog:{ .model-dep }       | Configures reasoning; without `effort` defaults to `medium`; `effort: "none"` disables; chain of thought returned as `reasoning` output items |
-| `reasoning.summary` / `generate_summary`                              | :material-close-circle:{ .unsupported } | Accepted but ignored — no summary is generated                               |
+| `reasoning.summary` / `generate_summary`                              |      :material-cog:{ .model-dep }       | Accepted but ignored on Converse-served models — no summary is generated; forwarded upstream on Bedrock Mantle native models |
 | `reasoning.context`                                                   | :material-close-circle:{ .unsupported } | Accepted but ignored — context scoping is not applied                        |
-| `text.verbosity`                                                      | :material-close-circle:{ .unsupported } | Accepted but ignored                                                         |
-| `include`                                                             |   :material-check-circle:{ .success }   | `reasoning.encrypted_content` is honored; other values are ignored           |
+| `text.verbosity`                                                      |      :material-cog:{ .model-dep }       | Accepted but ignored on Converse-served models; forwarded upstream on Bedrock Mantle native models |
+| `include`                                                             |   :material-minus-circle:{ .partial }   | `reasoning.encrypted_content` is honored; other values are accepted and ignored (forwarded upstream on Bedrock Mantle native models) |
 | `metadata`                                                            |   :material-check-circle:{ .success }   | Forwarded to Bedrock `requestMetadata`                                       |
 | `prompt_cache_key`                                                    |      :material-cog:{ .model-dep }       | Cache prompts to reduce costs and latency                                    |
 | `prompt_cache_retention`                                              |      :material-cog:{ .model-dep }       | Cache TTL: `in_memory`, `24h`, `1h`, or `5m`                                 |
@@ -87,14 +87,14 @@ Generate model responses with AWS Bedrock foundation models through an OpenAI Re
 | `truncation`                                                          | :material-close-circle:{ .unsupported } | Returns `400`; Bedrock manages context automatically                         |
 | `max_tool_calls`                                                      | :material-close-circle:{ .unsupported } | Returns `400`; not supported                                                 |
 | `context_management`                                                  | :material-close-circle:{ .unsupported } | Returns `400`; not supported                                                 |
-| `background`                                                          | :material-close-circle:{ .unsupported } | Accepted but ignored — execution is always synchronous; see [Stored Responses](#stored-responses) for the `cancel` endpoint caveat |
-| `store`                                                               |   :material-check-circle:{ .success }   | Persists the response — AWS Bedrock session storage (non-streaming) or Mantle native storage for Mantle models (streaming supported) |
-| `stream_options`                                                      | :material-close-circle:{ .unsupported } | Accepted but ignored                                                         |
+| `background`                                                          |      :material-cog:{ .model-dep }       | Accepted but ignored on Converse-served models — execution is synchronous; forwarded upstream on Bedrock Mantle native models, where background responses can be cancelled — see [Stored Responses](#stored-responses) |
+| `store`                                                               |   :material-check-circle:{ .success }   | Persists the response — Amazon Bedrock session storage (non-streaming) or Mantle native storage for Mantle models (streaming supported) |
+| `stream_options`                                                      |      :material-cog:{ .model-dep }       | Accepted but ignored on Converse-served models; forwarded upstream on Bedrock Mantle native models |
 | `conversation`                                                        | :material-close-circle:{ .unsupported } | Returns `400`; use `previous_response_id` or `input`                         |
 | `prompt` (template reference)                                         | :material-close-circle:{ .unsupported } | Returns `400`; not supported                                                 |
 | `safety_identifier`                                                   | :material-close-circle:{ .unsupported } | Accepted but ignored by generation; recorded in request logs                 |
-| `client_metadata`                                                     | :material-close-circle:{ .unsupported } | Accepted but ignored (sent by newer OpenAI clients such as Codex)            |
-| `moderation`                                                          |   :material-check-circle:{ .success }   | Applies an AWS Bedrock guardrail; results in the response `moderation` field (on the terminal event when streaming) — rejected (`400`) on Mantle-served models |
+| `client_metadata`                                                     |      :material-cog:{ .model-dep }       | Accepted but ignored on Converse-served models (sent by newer OpenAI clients such as Codex); forwarded upstream on Bedrock Mantle native models |
+| `moderation`                                                          |   :material-check-circle:{ .success }   | Applies an Amazon Bedrock guardrail; results in the response `moderation` field (on the terminal event when streaming) — rejected (`400`) on Mantle-served models |
 | **Output Format**                                                     |                                         |                                                                              |
 | `text.format: "text"`                                                 |   :material-check-circle:{ .success }   | Plain text output                                                            |
 | `text.format: "json_object"`                                          |      :material-cog:{ .model-dep }       | JSON object output via Bedrock outputConfig                                  |
@@ -124,17 +124,18 @@ Generate model responses with AWS Bedrock foundation models through an OpenAI Re
 **Legend:**
 
 * :material-check-circle:{ .success } **Supported** — Fully compatible with OpenAI API
-* :material-cog:{ .model-dep } **Available on Select Models** — Check your model's capabilities
+* :material-cog:{ .model-dep } **Model-Dependent** — Behavior depends on the model or backend; check the Notes column
+* :material-minus-circle:{ .partial } **Partial** — Supported with limitations
 * :material-close-circle:{ .unsupported } **Unsupported** — Not available in this implementation
 
 </div>
 
 !!! note "Bedrock Mantle passthrough"
-    On [Mantle](features.md#bedrock-mantle-models) models served natively by the upstream Responses API, parameters listed above as accepted-but-ignored — `background`, `include`, `stream_options`, `reasoning.summary`, `text.verbosity`, `client_metadata`, `top_logprobs` — and the hosted tools (`file_search`, `code_interpreter`, `computer`, `mcp`, `image_generation`) are forwarded verbatim upstream: the upstream API decides whether they take effect or return a clean error. The `web_search` tool runs in cache-only mode (`external_web_access` is forced off).
+    On [Mantle](features.md#bedrock-mantle-models) models served natively by the upstream Responses API, the parameters that the Converse path accepts but ignores — `background`, `include` (values other than `reasoning.encrypted_content`), `stream_options`, `reasoning.summary`, `text.verbosity`, `client_metadata`, `top_logprobs` — and the hosted tools (`file_search`, `code_interpreter`, `computer`, `mcp`, `image_generation`) are forwarded verbatim upstream: the upstream API decides whether they take effect or return a clean error. The `web_search` tool runs in cache-only mode (`external_web_access` is forced off).
 
 ## Model Support
 
-All models supported by AWS Bedrock Converse and Converse Stream API are supported, plus every model served by [Amazon Bedrock Mantle](features.md#bedrock-mantle-models) when enabled — including OpenAI GPT-5.x, xAI Grok, and Google Gemma 4. Requests to Mantle models are passed through natively or converted automatically depending on the model's upstream API support.
+All models supported by the Amazon Bedrock Converse and Converse Stream API are supported, plus every model served by [Bedrock Mantle](features.md#bedrock-mantle-models) when enabled — including OpenAI GPT-5.x, xAI Grok, and Google Gemma 4. Requests to Mantle models are passed through natively or converted automatically depending on the model's upstream API support.
 
 !!! note "Project attribution (`OpenAI-Project`)"
     Mantle requests can be attributed to a Bedrock Project for cost tracking and observability with the `OpenAI-Project: <project-id>` header (a bare project ID such as `proj_abc123`, not an ARN). It is honored per-request only when [`AWS_BEDROCK_ALLOW_MANTLE_PROJECT_OVERRIDE`](operations_configuration.md#bedrock-allow-mantle-project-override) is `true`; otherwise the server default ([`AWS_BEDROCK_MANTLE_PROJECT`](operations_configuration.md#bedrock-mantle-project)) applies. This applies **only** to models served by the Bedrock Mantle endpoint — classic `bedrock-runtime` models ignore the header.
@@ -398,10 +399,10 @@ curl -X POST "$BASE/v1/responses" \
   }'
 ```
 
-Valid values: `in_memory` (default), `24h`, `1h`, or `5m`. The `1h` and `5m` values are AWS Bedrock-specific. On AWS Bedrock, `in_memory` maps to 5 minutes and `24h` maps to 1 hour.
+Valid values: `in_memory` (default), `24h`, `1h`, or `5m`. The `1h` and `5m` values are Amazon Bedrock-specific. On Amazon Bedrock, `in_memory` maps to 5 minutes and `24h` maps to 1 hour.
 
 !!! note "Model Support"
-    Cache retention configuration is only available on select models. See [AWS Bedrock Prompt Caching - Supported Models](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html#prompt-caching-models) for details on which models support configurable TTL.
+    Cache retention configuration is only available on select models. See [Amazon Bedrock Prompt Caching - Supported Models](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html#prompt-caching-models) for details on which models support configurable TTL.
 
 Cached token usage is reported in the response:
 
@@ -435,7 +436,7 @@ curl -X POST "$BASE/v1/responses" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "amazon.nova-premier-v1:0",
+    "model": "amazon.nova-2-lite-v1:0",
     "input": "What is the current version of Python?",
     "tools": [{"type": "web_search"}]
   }'
@@ -464,18 +465,18 @@ curl -X POST "$BASE/v1/responses" \
       content. When streaming, each citation also emits a
       `response.output_text.annotation.added` event as it arrives.
 
-    AWS Bedrock does not report character positions, so `start_index` and
+    Amazon Bedrock does not report character positions, so `start_index` and
     `end_index` are approximated to the length of the generated text at the
     time the citation arrived.
 
 !!! warning "Region Compatibility"
-    `web_search` is only available on Nova Premier in US regions. Not available on EU inference profiles.
+    `web_search` is available on Amazon Nova 2 and Nova Premier models, in US regions only. Not available on EU inference profiles.
 
 #### :material-image: Image Generation
 
 The `image_generation` integrated tool works with **all text models** — Claude, Nova, and any future model. The gateway intercepts the tool, lets the LLM compose the image prompt and parameters via a synthetic function call, then generates the image against a configured Bedrock image model and returns an `image_generation_call` output item to the client. Intermediate `function_call` items are suppressed.
 
-!!! info "Configuration Required"
+!!! warning "Configuration Required"
     Set the [`IMAGE_GENERATION_MODEL`](operations_configuration.md#image-generation-model) environment variable to a Bedrock image model ID (e.g. `amazon.nova-canvas-v1:0`). The tool definition may also specify a `model` field to override the default per request.
 
 **Example — Generate an image:**
@@ -565,7 +566,7 @@ curl -X POST "$BASE/v1/responses" \
     - [Bedrock Guardrails Configuration](operations_configuration.md#bedrock-guardrails)
     - [Service Tier and Performance Configuration](operations_configuration.md#bedrock-service-tier-and-performance-configuration)
 
-## Model-specific features
+## Model-Specific Features
 
 ### ![TwelveLabs](styles/logo_twelvelabs.svg){ style="height: 1.2em; vertical-align: text-bottom;" } TwelveLabs Pegasus
 
@@ -583,8 +584,8 @@ curl -X POST "$BASE/v1/responses" \
 **Video input formats**: `data:video/mp4;base64,…`, `https://…`, `s3://bucket/key`, or `file-id:…`. Videos above 18.75 MB are automatically uploaded to S3.
 
 ```bash
-curl https://api.example.com/v1/responses \
-  -H "Authorization: Bearer $API_KEY" \
+curl -X POST "$BASE/v1/responses" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "twelvelabs.pegasus-1-2-v1:0",
@@ -699,11 +700,11 @@ curl -X POST "$BASE/v1/responses/input_tokens" \
 ```
 
 !!! note "Limitations"
-    The `previous_response_id` and `conversation` parameters are not supported for token counting (they would change the count); `personality` and `reasoning.context` are accepted and ignored. Token counting is not available for models served by [Amazon Bedrock Mantle](features.md#bedrock-mantle-models) (the request is rejected with a `400` error).
+    The `previous_response_id` and `conversation` parameters are not supported for token counting (they would change the count); `personality` (a token-counting-only schema field) and `reasoning.context` are accepted and ignored. Token counting is not available for models served by [Amazon Bedrock Mantle](features.md#bedrock-mantle-models) (the request is rejected with a `400` error).
 
 ## Stored Responses
 
-Set `store: true` to persist a response in [AWS Bedrock session storage](https://docs.aws.amazon.com/bedrock/latest/userguide/sessions.html): one AWS-managed session per stored response, encrypted at rest (optionally with [your own KMS key](operations_configuration.md#aws-bedrock-session-encryption-key-arn)), with no state on the server itself.
+Set `store: true` to persist a response in [Amazon Bedrock session storage](https://docs.aws.amazon.com/bedrock/latest/userguide/sessions.html): one AWS-managed session per stored response, encrypted at rest (optionally with [your own KMS key](operations_configuration.md#aws-bedrock-session-encryption-key-arn)), with no state on the server itself.
 
 ```bash
 curl -X POST "$BASE/v1/responses" \
@@ -716,21 +717,21 @@ The returned `id` then works with:
 
 - `GET /v1/responses/{response_id}` — retrieve the stored response.
 - `GET /v1/responses/{response_id}/input_items` — list the input items that produced it. Bedrock Mantle native storage does not serve input item listings: for Mantle-stored responses this returns `404` with an explanatory message.
-- `DELETE /v1/responses/{response_id}` — delete it (and its AWS Bedrock session).
+- `DELETE /v1/responses/{response_id}` — delete it (and its Amazon Bedrock session).
 - `POST /v1/responses/{response_id}/cancel` — for Mantle region-tagged IDs, proxied to Bedrock Mantle (background responses are cancellable upstream); for Bedrock-session-stored responses it fails with the OpenAI synchronous-response error since execution is synchronous.
 - `previous_response_id` on a new request — continue the conversation: the stored input and output are automatically prepended to the new input (instructions are not carried over, per the OpenAI API).
 
 !!! note "Behavior notes"
     - `store` defaults to **false** on this implementation (the OpenAI API defaults to true).
-    - On AWS Bedrock session storage, `store=true` is ignored with `stream=true` (a warning is recorded in the request log). [Mantle](features.md#bedrock-mantle-models) models persist responses in Mantle native storage instead, where `store` works with streaming too.
-    - Mantle models without native Responses storage (Messages- or Chat-Completions-bound) use AWS Bedrock session storage like classic models. Only a `store=true` request answered through a mid-request API fallback (away from the upstream Responses API) is served without storage, with a warning recorded in the request log (agent harnesses request `store` unconditionally); its ID cannot be retrieved later. `previous_response_id` on such a fallback returns `400` instead — conversation history is never silently dropped.
+    - On Amazon Bedrock session storage, `store=true` is ignored with `stream=true` (a warning is recorded in the request log). [Mantle](features.md#bedrock-mantle-models) models persist responses in Mantle native storage instead, where `store` works with streaming too.
+    - Mantle models without native Responses storage (Messages- or Chat-Completions-bound) use Amazon Bedrock session storage like classic models. Only a `store=true` request answered through a mid-request API fallback (away from the upstream Responses API) is served without storage, with a warning recorded in the request log; its ID cannot be retrieved later. `previous_response_id` on such a fallback returns `400` instead — conversation history is never silently dropped.
     - Sessions are created in the primary Bedrock region and persist until deleted through the API — see [operator guidance on cleaning up stale sessions](operations_configuration.md#bedrock-session-storage-optional).
     - `GET /v1/responses/{response_id}` rejects `stream=true` with `400`; `include` and `starting_after` are accepted and ignored.
-    - Requires the AWS Bedrock session management IAM permissions (`bedrock:CreateSession`, `bedrock:CreateInvocation`, `bedrock:PutInvocationStep`, `bedrock:GetInvocationStep`, `bedrock:ListInvocationSteps`, `bedrock:ListInvocations`, `bedrock:ListSessions`, `bedrock:ListTagsForResource`, `bedrock:EndSession`, `bedrock:DeleteSession`, `bedrock:TagResource`). Without them, `store=true` is ignored (with a request-log warning) and the response is not persisted.
+    - Requires the Amazon Bedrock session management IAM permissions (`bedrock:CreateSession`, `bedrock:CreateInvocation`, `bedrock:PutInvocationStep`, `bedrock:GetInvocationStep`, `bedrock:ListInvocationSteps`, `bedrock:ListInvocations`, `bedrock:ListSessions`, `bedrock:ListTagsForResource`, `bedrock:EndSession`, `bedrock:DeleteSession`, `bedrock:TagResource`). Without them, `store=true` is ignored (with a request-log warning) and the response is not persisted.
 
 ## Conversation Compaction
 
-Compact a long conversation into a single `compaction` item to keep multi-turn sessions within the context window. The model summarises the provided `input`; the summary comes back as an opaque item that you include in the `input` of later requests instead of the full history.
+Compact a long conversation into a single `compaction` item to keep multi-turn sessions within the context window. The model summarizes the provided `input`; the summary comes back as an opaque item that you include in the `input` of later requests instead of the full history.
 
 ```bash
 curl -X POST "$BASE/v1/responses/compact" \

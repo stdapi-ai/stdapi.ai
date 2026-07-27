@@ -1,14 +1,14 @@
 ---
-title: Moderations API - AWS Bedrock Guardrails & Amazon Comprehend Content Safety (OpenAI Compatible)
-description: Classify text and images with AWS Bedrock Guardrails or Amazon Comprehend toxicity detection through an OpenAI-compatible Moderations API. Content safety, policy enforcement, and harm detection for AI applications.
+title: Moderations API - Amazon Bedrock Guardrails & Amazon Comprehend Content Safety
+description: Classify text and images with Amazon Bedrock Guardrails or Amazon Comprehend toxicity detection through an OpenAI-compatible Moderations API. Content safety, policy enforcement, and harm detection for AI applications.
 keywords: OpenAI moderations API, content moderation AWS, Bedrock Guardrails API, Comprehend toxicity detection, content safety, harm detection, moderation categories, guardrail content filters
 ---
 
-# Moderations API (OpenAI Compatible)
+# Moderations API
 
-Classify content for harm with [AWS Bedrock Guardrails](https://aws.amazon.com/bedrock/guardrails/) or [Amazon Comprehend toxicity detection](https://docs.aws.amazon.com/comprehend/latest/dg/trust-safety.html) through an OpenAI-compatible Moderations interface.
+Classify content for harm with [Amazon Bedrock Guardrails](https://aws.amazon.com/bedrock/guardrails/) or [Amazon Comprehend toxicity detection](https://docs.aws.amazon.com/comprehend/latest/dg/trust-safety.html) through an OpenAI-compatible Moderations interface.
 
-## Why Choose Moderations?
+## Why Choose the Moderations API?
 
 <div class="grid cards" markdown>
 
@@ -30,7 +30,7 @@ Classify content for harm with [AWS Bedrock Guardrails](https://aws.amazon.com/b
 
 | Endpoint          | Method | What It Does                                                | Powered By                                | MCP Tool            |
 |-------------------|--------|--------------------------------------------------------------|-------------------------------------------|---------------------|
-| `/v1/moderations` | POST   | Classify inputs with a guardrail or toxicity detection      | AWS Bedrock Guardrails / Amazon Comprehend | `openai_moderation` |
+| `/v1/moderations` | `POST`   | Classify inputs with a guardrail or toxicity detection      | Amazon Bedrock Guardrails / Amazon Comprehend | `openai_moderation` |
 
 **Example request:**
 
@@ -90,7 +90,7 @@ curl -X POST "$BASE/v1/moderations" \
 **Legend:**
 
 * :material-check-circle:{ .success } **Supported** — Fully compatible with OpenAI API
-* :material-cog:{ .model-dep } **Available on Select Models** — Check your model's capabilities
+* :material-cog:{ .model-dep } **Model-Dependent** — Behavior depends on the model or backend; check the Notes column
 * :material-minus-circle:{ .partial } **Partial** — Supported with limitations
 * :material-close-circle:{ .unsupported } **Unsupported** — Not available in this implementation
 * :material-plus-circle:{ .extra-feature } **Extra Feature** — Enhanced capability beyond OpenAI API
@@ -101,7 +101,7 @@ curl -X POST "$BASE/v1/moderations" \
 
 Both moderation models appear in the [`/v1/models`](api_openai_models.md) and [`/search_models`](api_search_models.md) listings (`mcp_tool=openai_moderation`) with their OpenAI aliases.
 
-### ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){ style="height: 1.2em; vertical-align: text-bottom;" } AWS Bedrock Guardrails
+### ![Amazon Bedrock](styles/logo_amazon_bedrock.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Amazon Bedrock Guardrails
 
 | Model                              | OpenAI aliases                                       | Notes                                                                 |
 |------------------------------------|------------------------------------------------------|------------------------------------------------------------------------|
@@ -116,9 +116,9 @@ Both moderation models appear in the [`/v1/models`](api_openai_models.md) and [`
 
 ### Comparison
 
-| Capability                | AWS Bedrock Guardrails                                                     | Amazon Comprehend                                     |
+| Capability                | Amazon Bedrock Guardrails                                                  | Amazon Comprehend                                     |
 |---------------------------|-----------------------------------------------------------------------------|--------------------------------------------------------|
-| Setup                     | Create and configure a guardrail in AWS Bedrock                            | None — works out of the box                            |
+| Setup                     | Create and configure a guardrail in Amazon Bedrock                         | None — works out of the box                            |
 | Text inputs               | :material-check-circle:{ .success } Any language supported by the guardrail | :material-check-circle:{ .success } English only       |
 | Image inputs              | :material-check-circle:{ .success } PNG and JPEG                           | :material-close-circle:{ .unsupported } Not supported  |
 | Mapped categories         | `hate`, `harassment`, `sexual`, `violence`, `illicit`                       | `hate`, `harassment`, `sexual`, `violence`, `violence/graphic` |
@@ -146,13 +146,13 @@ The server guardrail comes from [`AWS_BEDROCK_GUARDRAIL_IDENTIFIER` / `AWS_BEDRO
 Guardrails are regional: a plain guardrail ID is applied in the primary Bedrock region, while an ARN selects its own region. Comprehend calls use [`AWS_COMPREHEND_REGION`](operations_configuration.md#aws-comprehend-region) (with multi-region failover otherwise).
 
 !!! tip "Moderating generations directly"
-    The guardrail selection and category mapping also power the `moderation` request parameter of the [Chat Completions](api_openai_chat_completions.md) and [Responses](api_openai_responses.md) APIs: the guardrail is applied to the generation itself, and the classification of the input and output is reported in the response's `moderation` field — for Chat Completions on non-streaming requests only, and for Responses also on the terminal event when streaming. The `moderation` parameter requires a guardrail — Comprehend is not available there — and is rejected (`400`) on Bedrock Mantle-served models.
+    The guardrail selection and category mapping also power the `moderation` request parameter of the [Chat Completions](api_openai_chat_completions.md) and [Responses](api_openai_responses.md) APIs: the guardrail is applied to the generation itself, and the classification of the input and output is reported in the response's `moderation` field — for Chat Completions on non-streaming requests only, and for Responses also on the terminal event when streaming. The `moderation` parameter requires a guardrail — Comprehend is not available there — and is rejected (`400`) on Amazon Bedrock Mantle-served models.
 
 ## Category Mapping
 
-**AWS Bedrock Guardrails** — content policy filters map to the OpenAI moderation categories:
+**Amazon Bedrock Guardrails** — content policy filters map to the OpenAI moderation categories:
 
-| AWS Bedrock filter | OpenAI category |
+| Amazon Bedrock filter | OpenAI category |
 |--------------------|-----------------|
 | `HATE`             | `hate`          |
 | `INSULTS`          | `harassment`    |
@@ -208,5 +208,5 @@ curl -X POST "$BASE/v1/moderations" \
 
 ## Billing
 
-- **Guardrails** — AWS bills per text unit and per image processed by the ApplyGuardrail API; see [AWS Bedrock pricing](https://aws.amazon.com/bedrock/pricing/). No Bedrock model invocation is involved.
+- **Guardrails** — AWS bills per text unit and per image processed by the ApplyGuardrail API; see [Amazon Bedrock pricing](https://aws.amazon.com/bedrock/pricing/). No Bedrock model invocation is involved.
 - **Comprehend** — AWS bills toxicity detection per 100-character unit with a 3-unit minimum per call; see [Amazon Comprehend pricing](https://aws.amazon.com/comprehend/pricing/). Billed units appear in [usage logs and cost tracking](operations_logging_monitoring.md) as `comprehend_units` under the `amazon.comprehend-toxicity` model.
