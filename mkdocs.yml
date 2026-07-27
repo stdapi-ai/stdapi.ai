@@ -1,6 +1,6 @@
 ---
 site_name: stdapi.ai
-site_description: "Deploy OpenAI, Anthropic, and Cohere-compatible applications on AWS Bedrock with no code changes. Access 80+ models including Claude, Nova, Llama for chat, video generation, and content moderation, with enterprise compliance, pay-per-use pricing, and AWS data sovereignty."
+site_description: "Deploy OpenAI, Anthropic, and Cohere-compatible applications on Amazon Bedrock with no code changes. Access 80+ models including Claude, OpenAI GPT, Amazon Nova, Llama for chat, video generation, and content moderation, with enterprise compliance, pay-per-use pricing, and AWS data sovereignty."
 site_url: https://stdapi.ai
 site_author: JGoutin-dev
 exclude_docs: |
@@ -86,18 +86,19 @@ nav:
           - Advanced Deployment: operations_deploy_advanced.md
           - Configuration: operations_configuration.md
           - Authentication & Security: operations_authentication_security.md
+          - IAM Permissions: operations_iam_permissions.md
           - Licensing: operations_licensing.md
           - Logging & Monitoring: operations_logging_monitoring.md
           - Cost Management: operations_cost_management.md
           - Resilience & Failover: operations_resilience.md
           - Data Sovereignty & Compliance: operations_compliance.md
           - Troubleshooting: operations_troubleshooting.md
-      - Use cases:
+      - Use Cases:
           - Overview: use_cases.md
-          - OpenWebUI integration: use_cases_openwebui.md
-          - n8n integration: use_cases_n8n.md
+          - Open WebUI Integration: use_cases_openwebui.md
+          - n8n Integration: use_cases_n8n.md
           - AI Coding Assistants: use_cases_coding_assistants.md
-      - Roadmap & Changelog: roadmap.md
+      - Releases & Roadmap: roadmap.md
   - Contact: contact.md
 
 repo_url: https://github.com/stdapi-ai/stdapi.ai

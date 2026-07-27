@@ -1,10 +1,10 @@
 ---
-title: Configuration Guide - AWS Bedrock API Gateway Setup
+title: Configuration Guide - Amazon Bedrock API Gateway Setup
 description: Complete configuration reference for stdapi.ai environment variables, AWS credentials, IAM permissions, regions, compliance settings, and S3 integration.
 keywords: AWS API gateway configuration, environment variables AWS, IAM permissions Bedrock, AWS regions setup, API authentication, compliance configuration, AWS credentials setup, S3 integration
 ---
 
-# Configuration Guide
+# :material-cog: Configuration Guide
 
 stdapi.ai is configured entirely through environment variables, which are read once at startup and cannot be changed without restarting the service. This guide explains each setting category with practical examples to help you configure the service correctly.
 
@@ -27,13 +27,13 @@ stdapi.ai is configured entirely through environment variables, which are read o
 
     - **AWS Account** with access to Amazon Bedrock
     - **AWS Credentials** configured via environment variables, AWS CLI, or IAM role (for EC2/ECS/Lambda deployments)
-    - **IAM Permissions** to access required AWS services (see [IAM Permissions](#iam-permissions) section)
+    - **IAM Permissions** to access required AWS services (see the [IAM Permissions](operations_iam_permissions.md) guide)
     - **S3 Bucket** (optional, but recommended for production use with file operations)
 
 !!! info "Container Runtime"
     Both the AWS Marketplace and community Docker images run using [Granian](https://github.com/emmett-framework/granian), a high-performance Python ASGI server. In addition to the stdapi.ai-specific configuration variables documented below, you can also use Granian environment variables to configure the server runtime (e.g., `GRANIAN_PORT`, `GRANIAN_WORKERS`, `GRANIAN_THREADS`, etc.).
 
-## Quick Start
+## :material-rocket-launch: Quick Start
 
 For production deployments, configure these essential settings:
 
@@ -134,18 +134,18 @@ export LOG_REQUEST_PARAMS=true
 !!! info "All Other Settings Are Optional"
     The configurations above are sufficient for most production deployments. All other settings can be configured as needed for your specific use case.
 
-## Environment Variable Summary
+## :material-format-list-bulleted: Environment Variable Summary
 
 This section provides a quick reference of all available configuration options. Detailed explanations for each variable can be found in the sections below.
 
-### :material-star: Essential (Production)
+### :material-star: Essential (Production) { #summary-essential }
 
 | Variable                                      | Default        | Description                                                                          |
 |-----------------------------------------------|----------------|--------------------------------------------------------------------------------------|
 | [`AWS_S3_BUCKET`](#aws-s3-bucket)             | None           | Primary S3 bucket for file storage; must be in first region of `AWS_BEDROCK_REGIONS` |
 | [`AWS_BEDROCK_REGIONS`](#aws-bedrock-regions) | Current region | Comma-separated regions for Bedrock; first region is where server should be hosted   |
 
-### :material-aws: AWS Client
+### :material-aws: AWS Client { #summary-aws-client }
 
 | Variable                                                | Default | Description                                                                                                 |
 |---------------------------------------------------------|---------|-------------------------------------------------------------------------------------------------------------|
@@ -153,7 +153,7 @@ This section provides a quick reference of all available configuration options. 
 | [`AWS_MAX_POOL_CONNECTIONS`](#aws-max-pool-connections) | `50`    | Maximum concurrent HTTP connections per AWS service client                                                  |
 | [`AWS_CONNECT_TIMEOUT`](#aws-connect-timeout)           | `5`     | Timeout in seconds for establishing a connection to an AWS service endpoint                                 |
 
-### :material-database: AWS Storage
+### :material-database: AWS Storage { #summary-aws-storage }
 
 | Variable                                                | Default         | Description                                                                                          |
 |---------------------------------------------------------|-----------------|------------------------------------------------------------------------------------------------------|
@@ -163,10 +163,10 @@ This section provides a quick reference of all available configuration options. 
 | [`AWS_S3_TMP_PREFIX`](#aws-s3-tmp-prefix)               | `tmp/`          | S3 prefix for temporary files used for jobs; configure lifecycle policies on this prefix             |
 | [`AWS_S3_FILES_PREFIX`](#aws-s3-files-prefix)           | `files/`        | S3 prefix for Files API objects; configure S3 lifecycle policies on this prefix                     |
 | [`AWS_S3_VIDEOS_PREFIX`](#aws-s3-videos-prefix)         | `videos/`       | S3 prefix for generated videos (Videos API); persists until deleted through the API                  |
-| [`AWS_S3_VIDEOS_EXPIRES_AFTER`](#aws-s3-videos-expires-after) | Unset     | Retention period in seconds for generated videos; sets `Video.expires_at` and blocks expired downloads |
+| [`AWS_S3_VIDEOS_EXPIRES_AFTER`](#aws-s3-videos-expires-after) | None      | Retention period in seconds for generated videos; sets `Video.expires_at` and blocks expired downloads |
 | [`AWS_TRANSCRIBE_S3_BUCKET`](#aws-transcribe-s3-bucket) | `AWS_S3_BUCKET` | S3 bucket for temporary audio transcription files; must be in same region as `AWS_TRANSCRIBE_REGION` |
 
-### :material-robot: AWS AI Services
+### :material-robot: AWS AI Services { #summary-aws-ai-services }
 
 | Variable                                          | Default                     | Description                                                 |
 |---------------------------------------------------|-----------------------------|-------------------------------------------------------------|
@@ -175,7 +175,7 @@ This section provides a quick reference of all available configuration options. 
 | [`AWS_TRANSCRIBE_REGION`](#aws-transcribe-region) | All `AWS_BEDROCK_REGIONS`   | Region for Amazon Transcribe; unset = failover across Bedrock regions with a co-located bucket |
 | [`AWS_TRANSLATE_REGION`](#aws-translate-region)   | All `AWS_BEDROCK_REGIONS`   | Region for Amazon Translate; unset = automatic failover across all Bedrock regions |
 
-### :material-directions-fork: Resilience & Failover
+### :material-directions-fork: Resilience & Failover { #summary-resilience-failover }
 
 | Variable                                                                                                | Default   | Description                                                                                                              |
 |---------------------------------------------------------------------------------------------------------|-----------|--------------------------------------------------------------------------------------------------------------------------|
@@ -187,7 +187,7 @@ This section provides a quick reference of all available configuration options. 
 | [`AWS_BEDROCK_MAX_RETRIES`](#bedrock-max-retries)                                                       | `9`       | Total retries across all regions per Bedrock invocation; retries cycle through regions in order                          |
 | [`AWS_FAILOVER_MAX_RETRIES`](#failover-max-retries)                                                     | `2`       | SDK retries per candidate region for the multi-region failover services (Polly, Transcribe, Translate, Comprehend)       |
 
-### :material-layers-triple: Bedrock Mantle
+### :material-layers-triple: Bedrock Mantle { #summary-bedrock-mantle }
 
 | Variable                                                                    | Default               | Description                                                                                          |
 |-----------------------------------------------------------------------------|-----------------------|------------------------------------------------------------------------------------------------------|
@@ -199,7 +199,7 @@ This section provides a quick reference of all available configuration options. 
 | [`AWS_BEDROCK_MANTLE_PROJECT`](#bedrock-mantle-project)                     | None                  | Default Bedrock Project/Workspace ID applied to Mantle requests for cost tracking and observability  |
 | [`AWS_BEDROCK_ALLOW_MANTLE_PROJECT_OVERRIDE`](#bedrock-allow-mantle-project-override) | `false`     | Allow requests to override the configured Mantle project via the `OpenAI-Project` / `anthropic-workspace` header |
 
-### :material-shield-check: Bedrock Advanced
+### :material-shield-check: Bedrock Advanced { #summary-bedrock-advanced }
 
 | Variable                                                                                          | Default | Description                                                                                         |
 |---------------------------------------------------------------------------------------------------|---------|-----------------------------------------------------------------------------------------------------|
@@ -218,9 +218,9 @@ This section provides a quick reference of all available configuration options. 
 | [`AWS_BEDROCK_GUARDRAIL_VERSION`](#aws-bedrock-guardrail-version)                                 | None    | Bedrock Guardrails version number (required with identifier)                                        |
 | [`AWS_BEDROCK_GUARDRAIL_TRACE`](#aws-bedrock-guardrail-trace)                                     | None    | Guardrails trace level: `disabled`, `enabled`, or `enabled_full`                                    |
 | [`AWS_BEDROCK_ALLOW_GUARDRAIL_OVERRIDE`](#aws-bedrock-allow-guardrail-override)                   | `false` | Allow users to override global guardrail configuration via request headers (security: default off)  |
-| [`AWS_BEDROCK_SESSION_ENCRYPTION_KEY_ARN`](#aws-bedrock-session-encryption-key-arn)               | None    | KMS key ARN encrypting AWS Bedrock session storage (Responses API `store=true`)                     |
+| [`AWS_BEDROCK_SESSION_ENCRYPTION_KEY_ARN`](#aws-bedrock-session-encryption-key-arn)               | None    | KMS key ARN encrypting Amazon Bedrock session storage (Responses API `store=true`)                     |
 
-### :material-lock: Authentication
+### :material-lock: Authentication { #summary-authentication }
 
 Choose **one** method (mutually exclusive):
 
@@ -231,37 +231,37 @@ Choose **one** method (mutually exclusive):
 | [`API_KEY_SECRETSMANAGER_KEY`](#api-key-secretsmanager-key)       | `api_key` | JSON key name within Secrets Manager secret                        |
 | [`API_KEY`](#api-key)                                             | None      | Direct API key value (not recommended for production)              |
 
-### :material-api: API Compatibility
+### :material-api: API Compatibility { #summary-api-compatibility }
 
 | Variable                                              | Default      | Description                                          |
 |-------------------------------------------------------|--------------|------------------------------------------------------|
-| [`OPENAI_ROUTES_PREFIX`](#openai-routes-prefix)       |              | Base path prefix for OpenAI-compatible API routes    |
+| [`OPENAI_ROUTES_PREFIX`](#openai-routes-prefix)       | None (root)  | Base path prefix for OpenAI-compatible API routes    |
 | [`ANTHROPIC_ROUTES_PREFIX`](#anthropic-routes-prefix) | `/anthropic` | Base path prefix for Anthropic-compatible API routes |
 | [`COHERE_ROUTES_PREFIX`](#cohere-routes-prefix)       | `/cohere`    | Base path prefix for Cohere-compatible API routes    |
 
-### :material-chart-line: Logging
+### :material-chart-line: Logging { #summary-logging }
 
 | Variable                                        | Default | Description                                                                           |
 |-------------------------------------------------|---------|---------------------------------------------------------------------------------------|
 | [`LOG_LEVEL`](#logging-level)                   | `info`  | Minimum log severity: `info`, `warning`, `error`, `critical`, or `disabled`           |
-| [`LOG_REQUEST_PARAMS`](#validation-and-logging) | `false` | Include request/response parameters in logs (not recommended for production)          |
+| [`LOG_REQUEST_PARAMS`](#log-request-params)     | `false` | Include request/response parameters in logs (not recommended for production)          |
 | [`LOG_CLIENT_IP`](#client-ip-logging)           | `false` | Log client IP addresses (requires `ENABLE_PROXY_HEADERS` for real IPs behind proxies) |
 
-### :material-chart-box-outline: CloudWatch Metrics
+### :material-chart-box-outline: CloudWatch Metrics { #summary-cloudwatch-metrics }
 
 | Variable                                                            | Default  | Description                                                            |
 |-----------------------------------------------------------------------|----------|--------------------------------------------------------------------|
 | [`CLOUDWATCH_METRICS`](#cloudwatch-metrics)                     | `false`  | Emit per-request AWS-billed usage as CloudWatch EMF log lines      |
 | [`CLOUDWATCH_METRICS_NAMESPACE`](#cloudwatch-metrics-namespace) | `stdapi` | CloudWatch namespace for the emitted usage metrics                 |
 
-### :material-currency-usd: Cost Tracking
+### :material-currency-usd: Cost Tracking { #summary-cost-tracking }
 
 | Variable                                                    | Default        | Description                                                              |
 |-----------------------------------------------------------------|----------------|-----------------------------------------------------------------------|
 | [`COST_TRACKING`](#cost-tracking)                           | `false`        | Enable real-time cost computation from live AWS pricing                |
 | [`COST_PRICE_OVERRIDES`](#cost-price-overrides)             | `{}`           | JSON map of operator-supplied unit prices for models missing from the AWS catalog |
 
-### :material-radar: Observability (OpenTelemetry)
+### :material-radar: Observability (OpenTelemetry) { #summary-observability }
 
 | Variable                                            | Default                           | Description                                                                            |
 |-----------------------------------------------------|-----------------------------------|----------------------------------------------------------------------------------------|
@@ -270,7 +270,7 @@ Choose **one** method (mutually exclusive):
 | [`OTEL_EXPORTER_ENDPOINT`](#otel-exporter-endpoint) | `http://127.0.0.1:4318/v1/traces` | OTLP HTTP endpoint URL for trace export                                                |
 | [`OTEL_SAMPLE_RATE`](#otel-sample-rate)             | `1.0`                             | Trace sampling rate from 0.0 (none) to 1.0 (all requests)                              |
 
-### :material-web: HTTP/Security
+### :material-web: HTTP/Security { #summary-http-security }
 
 | Variable                                                                            | Default  | Description                                                                           |
 |-------------------------------------------------------------------------------------|----------|---------------------------------------------------------------------------------------|
@@ -289,27 +289,27 @@ Choose **one** method (mutually exclusive):
 | [`MAX_INPUT_FILE_SIZE`](#max-input-file-size)                                       | `0`      | Maximum size in bytes of an inline input file loaded into memory (`0` disables)        |
 | [`MAX_CONCURRENT_INPUT_DOWNLOADS`](#max-concurrent-input-downloads)                 | `8`      | Maximum input files fetched/resolved concurrently per request                          |
 
-### :material-cog: Application Behavior
+### :material-cog: Application Behavior { #summary-application-behavior }
 
 | Variable                                                            | Default                 | Description                                                                                |
 |---------------------------------------------------------------------|-------------------------|--------------------------------------------------------------------------------------------|
-| [`TIMEZONE`](#validation-and-logging)                               | `UTC`                   | IANA timezone identifier for request timestamps                                            |
-| [`STRICT_INPUT_VALIDATION`](#validation-and-logging)                | `false`                 | Reject API requests with unknown/extra fields                                              |
+| [`TIMEZONE`](#timezone)                                             | `UTC`                   | IANA timezone identifier for request timestamps                                            |
+| [`STRICT_INPUT_VALIDATION`](#strict-input-validation)               | `false`                 | Reject API requests with unknown/extra fields                                              |
 | [`MODEL_ALIASES`](#model-aliases)                                   | `{}`                    | JSON object mapping custom model name aliases to Bedrock model IDs                         |
-| [`DEFAULT_TTS_MODEL`](#default-tts-model)                           | `amazon.polly-standard` | Default text-to-speech model: `standard`, `neural`, `long-form`, or `generative`           |
-| [`DEFAULT_TTS_LANGUAGE`](#default-tts-language)                     | None                    | Default language for TTS (e.g., `en-US`); when set, skips AWS Comprehend auto-detection    |
+| [`DEFAULT_TTS_MODEL`](#default-tts-model)                           | `amazon.polly-standard` | Default TTS model: `amazon.polly-standard`, `-neural`, `-long-form`, or `-generative`      |
+| [`DEFAULT_TTS_LANGUAGE`](#default-tts-language)                     | None                    | Default language for TTS (e.g., `en-US`); when set, skips Amazon Comprehend auto-detection    |
 | [`TOKENS_ESTIMATION`](#tokens-estimation)                           | `false`                 | Deprecated and ignored (token estimation removed)                                          |
-| [`TOKENS_ESTIMATION_DEFAULT_ENCODING`](#tokens-encoding)            | `o200k_base`            | Deprecated and ignored (token estimation removed)                                          |
+| [`TOKENS_ESTIMATION_DEFAULT_ENCODING`](#tokens-encoding)            | `None`                  | Deprecated and ignored (token estimation removed)                                          |
 | [`DEFAULT_MODEL_PARAMS`](#default-model-params)                     | `{}`                    | JSON object with per-model default inference parameters (temperature, max_tokens, etc.)    |
 | [`DEFAULT_MODEL_SERVICE_TIERS`](#default-model-service-tiers)       | `{}`                    | JSON object with per-model default service tiers (default, flex, priority, reserved)        |
 | [`MODEL_CACHE_SECONDS`](#model-cache-seconds)                       | `900`                   | Model list cache lifetime in seconds before lazy refresh (default: 15 minutes)             |
 | [`AI_RESPONSE_TIMEOUT`](#ai-response-timeout)                       | `600`                   | Maximum seconds to wait for a model to complete a response (default: 10 minutes)           |
 | [`DROP_UNSUPPORTED_SYSTEM_PROMPT`](#drop-unsupported-system-prompt) | `true`                  | Drop system prompts for unsupported models; when `false`, return error instead             |
 | [`ANTHROPIC_BETA_FILTER`](#anthropic-beta-filter)                   | `true`                  | Enable filtering of unsupported `anthropic_beta` flags for Claude models                   |
-| [`ANTHROPIC_BETA_ALLOWLIST`](#anthropic-beta-allowlist)             | `(empty)`               | Additional `anthropic_beta` flags to allow beyond built-in Bedrock defaults                |
-| [`IMAGE_GENERATION_MODEL`](#image-generation-model)                 | `(empty)`               | Default Bedrock image model ID used when the `image_generation` Responses API tool is invoked |
+| [`ANTHROPIC_BETA_ALLOWLIST`](#anthropic-beta-allowlist)             | None                    | Additional `anthropic_beta` flags to allow beyond built-in Bedrock defaults                |
+| [`IMAGE_GENERATION_MODEL`](#image-generation-model)                 | None                    | Default Bedrock image model ID used when the `image_generation` Responses API tool is invoked |
 
-### :material-file-document: API Documentation
+### :material-file-document: API Documentation { #summary-api-documentation }
 
 | Variable                                      | Default | Description                                                                      |
 |-----------------------------------------------|---------|----------------------------------------------------------------------------------|
@@ -317,7 +317,7 @@ Choose **one** method (mutually exclusive):
 | [`ENABLE_REDOC`](#enable-redoc)               | `false` | Enable ReDoc documentation UI at `/redoc`                                        |
 | [`ENABLE_OPENAPI_JSON`](#enable-openapi-json) | `false` | Enable OpenAPI schema endpoint at `/openapi.json` (auto-enabled with docs/redoc) |
 
-### :material-connection: MCP (Model Context Protocol)
+### :material-connection: MCP (Model Context Protocol) { #summary-mcp }
 
 | Variable                                                            | Default | Description                                                                             |
 |---------------------------------------------------------------------|---------|-----------------------------------------------------------------------------------------|
@@ -328,7 +328,7 @@ Choose **one** method (mutually exclusive):
 
 ---
 
-## AWS Services and Regions
+## :material-aws: AWS Services and Regions
 
 ### General Configuration
 
@@ -422,7 +422,7 @@ export AWS_S3_BUCKET=my-llm-storage-us-east-1
 ```
 
 !!! tip "Presigned URLs"
-    Files are served via presigned URLs for secure, time-limited access. Presigned URLs expire after 1 hour by default.
+    Files are served via presigned URLs for secure, time-limited access. Presigned URLs expire after 1 hour.
 
 !!! info "Terraform Module"
     When using the Terraform module, the main S3 bucket is created automatically — no manual configuration required.
@@ -467,7 +467,7 @@ export AWS_S3_ACCELERATE=true
          --bucket my-stdapi-bucket \
          --accelerate-configuration Status=Enabled
        ```
-    2. **Additional costs**: Transfer Acceleration incurs extra data transfer fees. See [AWS S3 Transfer Acceleration pricing](https://aws.amazon.com/s3/pricing/)
+    2. **Additional costs**: Transfer Acceleration incurs extra data transfer fees. See [Amazon S3 Transfer Acceleration pricing](https://aws.amazon.com/s3/pricing/)
 
 !!! tip "When to Enable"
     Consider enabling S3 Transfer Acceleration when:
@@ -551,20 +551,8 @@ export AWS_S3_TMP_PREFIX=
 export AWS_S3_FILES_PREFIX=files/
 ```
 
-!!! info "What is an S3 Prefix?"
-    An S3 prefix is a folder path within your S3 bucket. When you set `AWS_S3_FILES_PREFIX=files/`, all Files API objects are stored under that folder in your bucket.
-
-    **Example file paths:**
-
-    - With prefix `files/`: `s3://my-bucket/files/file-0190c51c7de7455d9b8c2efe27dfbf67`
-    - With prefix `uploads/files/`: `s3://my-bucket/uploads/files/file-0190...`
-    - With empty prefix ``: `s3://my-bucket/file-0190...` (not recommended)
-
-!!! warning "Trailing Slash"
-    Always include a trailing slash (`/`) in your prefix to create a proper folder structure.
-
-    - ✅ Correct: `files/` → Objects stored as `files/file-0190...`
-    - ❌ Incorrect: `files` → Objects stored as `filesfile-0190...`
+!!! info "S3 Prefix Format"
+    Prefix semantics (folder-style paths, trailing-slash requirement) are explained under [`AWS_S3_TMP_PREFIX`](#aws-s3-tmp-prefix) and apply here identically.
 
 **Custom prefix examples:**
 
@@ -597,7 +585,7 @@ export AWS_S3_FILES_PREFIX=
 export AWS_S3_VIDEOS_PREFIX=videos/
 ```
 
-AWS Bedrock writes each video generation job's output (MP4 and manifest) under this prefix, in a folder named after the job. Because AWS Bedrock requires the output bucket to be in the same region as the invocation, videos are stored in the [`AWS_S3_REGIONAL_BUCKETS`](#aws-s3-regional-buckets) bucket of the region that served the job.
+Amazon Bedrock writes each video generation job's output (MP4 and manifest) under this prefix, in a folder named after the job. Because Amazon Bedrock requires the output bucket to be in the same region as the invocation, videos are stored in the [`AWS_S3_REGIONAL_BUCKETS`](#aws-s3-regional-buckets) bucket of the region that served the job.
 
 #### `AWS_S3_VIDEOS_EXPIRES_AFTER` { #aws-s3-videos-expires-after }
 
@@ -811,7 +799,7 @@ aws s3api put-bucket-lifecycle-configuration \
 :   Current AWS SDK region if not specified
 
 :octicons-workflow-24: **Behavior**
-:   Models are discovered in the same order as the listed regions. The first region is the primary region where your server should be hosted on AWS for optimal performance. Your S3 bucket (`aws_s3_bucket`) must also be in this region. If a model is unavailable in the primary region, subsequent regions are checked in order
+:   Models are discovered in the same order as the listed regions. The first region is the primary region where your server should be hosted on AWS for optimal performance. Your S3 bucket (`AWS_S3_BUCKET`) must also be in this region. If a model is unavailable in the primary region, subsequent regions are checked in order
 
 ```bash
 export AWS_BEDROCK_REGIONS=us-east-1,us-west-2,eu-west-1
@@ -828,7 +816,7 @@ export AWS_BEDROCK_REGIONS=us-east-1,us-west-2,eu-west-1
     See [Compliance and Latency Optimization](#compliance-and-latency-optimization) for detailed configuration examples including GDPR compliance, regional optimization strategies, and best practices for multi-region deployments.
 
 !!! warning "Startup Warning"
-    If any models in the configured regions fail availability checks (not enabled, unauthorized, or missing entitlement/agreement in your AWS account), a warning listing the affected models and per-region issues is logged at startup. Enable the required models in the [AWS Bedrock console](https://console.aws.amazon.com/bedrock/home#/modelaccess) for each configured region.
+    If any models in the configured regions fail availability checks (not enabled, unauthorized, or missing entitlement/agreement in your AWS account), a warning listing the affected models and per-region issues is logged at startup. Enable the required models in the [Amazon Bedrock console](https://console.aws.amazon.com/bedrock/home#/modelaccess) for each configured region.
 
 !!! info "Unreachable Region Tolerance"
     A configured region that cannot be reached (invalid region for the account, network issue, throttling) does not block startup: it is skipped with an `unreachable_bedrock_regions` warning and its models are served from the remaining regions. The skipped region is retried automatically on the next model list refresh (see [`MODEL_CACHE_SECONDS`](#model-cache-seconds)), so a recovered region rejoins without a restart. Startup only fails when **every** configured region fails, or when **every** per-model availability check errors (e.g. the `bedrock:GetFoundationModelAvailability` permission is denied) — which indicates broken credentials or configuration rather than a regional outage.
@@ -1088,7 +1076,7 @@ export AWS_BEDROCK_MANTLE_ENABLED=false
     Amazon Bedrock Guardrails are not supported on Mantle-served requests. When guardrails are configured while Mantle models are exposed, a startup warning reports how many models are affected; set `AWS_BEDROCK_MANTLE_ENABLED=false` to disable them.
 
 !!! warning "Required IAM Permissions"
-    Enabling this setting requires the `bedrock-mantle` IAM permissions — see [Bedrock Mantle IAM Permissions](#bedrock-mantle-iam).
+    Enabling this setting requires the `bedrock-mantle` IAM permissions — see [Bedrock Mantle IAM Permissions](operations_iam_permissions.md#bedrock-mantle-iam).
 
 [:octicons-arrow-right-24: Bedrock Mantle Models feature overview](features.md#bedrock-mantle-models)
 
@@ -1218,7 +1206,7 @@ export AWS_BEDROCK_ALLOW_MANTLE_PROJECT_OVERRIDE=true
 :   `{}` (empty — no model-specific region restriction)
 
 :octicons-workflow-24: **Behavior**
-:   When set, the model is made available **only** in the listed regions. No fallback to other regions occurs. The order of the list determines routing priority when multiple regions are listed. Keys can be exact model IDs or prefixes that match the beginning of a model ID
+:   When set, the model is made available **only** in the listed regions (intersected with the regions where it is actually available), and the list order defines the routing priority when the default `ordered` [routing strategy](#bedrock-region-routing) is used. No fallback to other regions occurs. Keys can be exact model IDs or prefixes that match the beginning of a model ID
 
 ```bash
 # Restrict Nova Pro to us-east-1 for grounding support
@@ -1288,7 +1276,7 @@ export AWS_BEDROCK_DEPRECATED_MODEL_FALLBACK=false
 :   Merged with the built-in registry at startup. User-provided entries take precedence over built-in ones — this means it can be used both to **add** new deprecated model mappings and to **override** the fallback target of an already-defined deprecated model. Effective only when [`AWS_BEDROCK_DEPRECATED_MODEL_FALLBACK`](#bedrock-deprecated-model-fallback) is `true`.
 
 :octicons-link-external-24: **Reference**
-:   [AWS Bedrock model lifecycle](https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html)
+:   [Amazon Bedrock model lifecycle](https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html)
 
 ```bash
 # Add a custom deprecated model and override an existing built-in mapping
@@ -1310,7 +1298,7 @@ export AWS_BEDROCK_DEPRECATED_MODELS='{"my-old-model-v1": "my-new-model-v2", "am
 :   When `true`, the server automatically subscribes to new models discovered in the AWS Marketplace, making them immediately available through the API. When `false`, only models with existing marketplace subscriptions are visible and accessible
 
 :octicons-lock-24: **IAM Permissions Required**
-:   `aws-marketplace:Subscribe`, `aws-marketplace:ViewSubscriptions`
+:   `aws-marketplace:Subscribe`, `aws-marketplace:ViewSubscriptions` — see [Marketplace Auto-Subscribe IAM](operations_iam_permissions.md#bedrock-marketplace-auto-subscribe-iam)
 
 ```bash
 # Allow automatic subscription (default)
@@ -1321,7 +1309,7 @@ export AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE=false
 ```
 
 !!! info "What is Marketplace Auto-Subscribe?"
-    AWS Bedrock requires marketplace subscription before certain models can be used. This setting controls whether stdapi.ai automatically handles the subscription process:
+    Amazon Bedrock requires marketplace subscription before certain models can be used. This setting controls whether stdapi.ai automatically handles the subscription process:
 
     - :material-check: **`true` (default)**: Models are automatically subscribed when discovered, providing seamless access to new models as they become available
     - :material-close: **`false`**: Only models that have already been subscribed through the AWS Marketplace are visible, providing explicit control over model access
@@ -1334,16 +1322,8 @@ export AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE=false
     - :material-security: Your organization requires manual approval for new AI model usage
     - :material-account-check: Compliance policies require pre-authorization of AI models
 
-!!! note "IAM Permission Requirements"
-    This feature requires the following IAM permissions to automatically subscribe to models:
-
-    - `aws-marketplace:Subscribe` - Subscribe to marketplace offerings
-    - `aws-marketplace:ViewSubscriptions` - View existing marketplace subscriptions
-
-    See [Bedrock Marketplace Auto-Subscribe](#bedrock-marketplace-auto-subscribe-iam) section for the complete IAM policy configuration.
-
 !!! info "AWS Documentation"
-    For more information about Bedrock model access and marketplace registration, see the [AWS Bedrock Model Access documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html).
+    For more information about Bedrock model access and marketplace registration, see the [Amazon Bedrock Model Access documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html).
 
 #### `AWS_BEDROCK_ALLOW_CROSS_REGION_INFERENCE_PROFILE_ARN` { #bedrock-allow-cross-region-profile-arn }
 
@@ -1360,7 +1340,7 @@ export AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE=false
 :   When enabled, users can use cross-region inference profile ARNs instead of model IDs in the `model` parameter. Cross-region inference profiles enable routing to multiple regions for better availability
 
 :octicons-lock-24: **IAM Permissions Required**
-:   `bedrock:GetInferenceProfile` (see [IAM Permissions](#bedrock-inference-profiles-and-prompt-routers-optional))
+:   `bedrock:GetInferenceProfile` (see [IAM Permissions](operations_iam_permissions.md#bedrock-inference-profiles-and-prompt-routers-optional))
 
 ```bash
 # Disabled (default) - users can only use standard model IDs
@@ -1373,41 +1353,15 @@ export AWS_BEDROCK_ALLOW_CROSS_REGION_INFERENCE_PROFILE_ARN=true
 !!! warning "Additional IAM Permissions Required"
     Enabling this setting requires adding the `bedrock:GetInferenceProfile` IAM permission to your role/user. Without this permission, API requests using inference profile ARNs will fail with authorization errors.
 
-    See the [Bedrock Inference Profiles and Prompt Routers IAM section](#bedrock-inference-profiles-and-prompt-routers-optional) for the complete policy configuration.
+    See the [Bedrock Inference Profiles and Prompt Routers IAM section](operations_iam_permissions.md#bedrock-inference-profiles-and-prompt-routers-optional) for the complete policy configuration.
 
 !!! example "Example ARN"
-    ```
+    ```text
     arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-5
     ```
 
-!!! info "What are Cross-Region Inference Profiles?"
-    Cross-region inference profiles are AWS-managed routing configurations that automatically distribute requests across multiple AWS regions to improve availability and reduce latency. When a model is unavailable in one region, the request is automatically routed to another region where the model is available.
-
 !!! success "Automatic Cross-Region Routing (Default Behavior)"
-    **By default, stdapi.ai automatically determines and uses the best cross-region inference profile for each model.** You don't need to manually specify cross-region inference profile ARNs in most cases.
-
-    The automatic behavior is controlled by these settings:
-
-    - [`AWS_BEDROCK_REGIONS`](#aws-bedrock-regions) - Defines which regions are available for routing
-    - [`AWS_BEDROCK_CROSS_REGION_INFERENCE`](#cross-region-inference) (default: `true`) - Enables automatic cross-region routing
-    - [`AWS_BEDROCK_CROSS_REGION_INFERENCE_GLOBAL`](#cross-region-global) (default: `true`) - Allows global routing beyond configured regions
-
-    When using standard model IDs, the application automatically:
-
-    - :material-auto-fix: Selects the optimal AWS-managed cross-region inference profile for each model
-    - :material-earth: Routes requests across your configured regions for best availability
-    - :material-speedometer: Optimizes for latency and regional availability
-
-    **Manually specifying cross-region inference profile ARNs should only be done in rare cases** when you need to override the automatic selection for specific requirements.
-
-!!! tip "When to Enable"
-    Enable this setting only in rare cases when:
-
-    - :material-cog: You need to override automatic cross-region profile selection
-    - :material-earth: You have specific cross-region routing requirements that differ from defaults
-    - :material-api: You're testing or comparing different inference profile configurations
-
-    **For most deployments, leave this disabled** and let the application handle cross-region routing automatically.
+    **By default, stdapi.ai automatically determines and uses the best cross-region inference profile for each model**, based on [`AWS_BEDROCK_REGIONS`](#aws-bedrock-regions), [`AWS_BEDROCK_CROSS_REGION_INFERENCE`](#cross-region-inference), and [`AWS_BEDROCK_CROSS_REGION_INFERENCE_GLOBAL`](#cross-region-global). Manually passing cross-region inference profile ARNs is only needed in rare cases to override that selection — for most deployments, leave this disabled. See [Using Inference Profile and Prompt Router ARNs](#using-inference-profile-and-prompt-router-arns) for details.
 
 #### `AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN` { #bedrock-allow-application-profile-arn }
 
@@ -1424,7 +1378,7 @@ export AWS_BEDROCK_ALLOW_CROSS_REGION_INFERENCE_PROFILE_ARN=true
 :   When enabled, users can use application inference profile ARNs instead of model IDs in the `model` parameter. Application inference profiles are custom routing configurations for specific use cases
 
 :octicons-lock-24: **IAM Permissions Required**
-:   `bedrock:GetInferenceProfile` (see [IAM Permissions](#bedrock-inference-profiles-and-prompt-routers-optional))
+:   `bedrock:GetInferenceProfile` (see [IAM Permissions](operations_iam_permissions.md#bedrock-inference-profiles-and-prompt-routers-optional))
 
 ```bash
 # Disabled (default) - users can only use standard model IDs
@@ -1437,10 +1391,10 @@ export AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN=true
 !!! warning "Additional IAM Permissions Required"
     Enabling this setting requires adding the `bedrock:GetInferenceProfile` IAM permission to your role/user. Without this permission, API requests using application inference profile ARNs will fail with authorization errors.
 
-    See the [Bedrock Inference Profiles and Prompt Routers IAM section](#bedrock-inference-profiles-and-prompt-routers-optional) for the complete policy configuration.
+    See the [Bedrock Inference Profiles and Prompt Routers IAM section](operations_iam_permissions.md#bedrock-inference-profiles-and-prompt-routers-optional) for the complete policy configuration.
 
 !!! example "Example ARN"
-    ```
+    ```text
     arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123xyz
     ```
 
@@ -1469,7 +1423,7 @@ export AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN=true
 :   When enabled, users can use prompt router ARNs instead of model IDs in the `model` parameter. Prompt routers enable dynamic model selection based on prompt characteristics
 
 :octicons-lock-24: **IAM Permissions Required**
-:   `bedrock:GetPromptRouter` (see [IAM Permissions](#bedrock-inference-profiles-and-prompt-routers-optional))
+:   `bedrock:GetPromptRouter` (see [IAM Permissions](operations_iam_permissions.md#bedrock-inference-profiles-and-prompt-routers-optional))
 
 ```bash
 # Disabled (default) - users can only use standard model IDs
@@ -1482,10 +1436,10 @@ export AWS_BEDROCK_ALLOW_PROMPT_ROUTER_ARN=true
 !!! warning "Additional IAM Permissions Required"
     Enabling this setting requires adding the `bedrock:GetPromptRouter` IAM permission to your role/user. Without this permission, API requests using prompt router ARNs will fail with authorization errors.
 
-    See the [Bedrock Inference Profiles and Prompt Routers IAM section](#bedrock-inference-profiles-and-prompt-routers-optional) for the complete policy configuration.
+    See the [Bedrock Inference Profiles and Prompt Routers IAM section](operations_iam_permissions.md#bedrock-inference-profiles-and-prompt-routers-optional) for the complete policy configuration.
 
 !!! example "Example ARN"
-    ```
+    ```text
     arn:aws:bedrock:us-east-1:123456789012:default-prompt-router/my-router
     ```
 
@@ -1610,7 +1564,7 @@ export AWS_COMPREHEND_REGION=us-east-1
 ```
 
 !!! warning "Amazon Comprehend Regional Availability"
-    Amazon Comprehend is not available in all AWS regions. stdapi.ai uses the `detect_dominant_language` feature for language detection and `detect_toxic_content` for [Comprehend moderation](#comprehend-moderation). Verify service and feature availability in your target region (with the default multi-region behavior, a region without Comprehend simply fails over to the next one). See [Amazon Comprehend supported regions](https://docs.aws.amazon.com/comprehend/latest/dg/guidelines-and-limits.html#limits-regions) for regional availability.
+    Amazon Comprehend is not available in all AWS regions. stdapi.ai uses the `detect_dominant_language` feature for language detection and `detect_toxic_content` for [Comprehend moderation](operations_iam_permissions.md#comprehend-moderation). Verify service and feature availability in your target region (with the default multi-region behavior, a region without Comprehend simply fails over to the next one). See [Amazon Comprehend supported regions](https://docs.aws.amazon.com/comprehend/latest/dg/guidelines-and-limits.html#limits-regions) for regional availability.
 
 #### `AWS_TRANSCRIBE_REGION` { #aws-transcribe-region }
 
@@ -1744,646 +1698,28 @@ export AWS_BEDROCK_CROSS_REGION_INFERENCE_GLOBAL=false
 
 ---
 
-## Configuration Order
+## :material-sort-numeric-ascending: Configuration Order
 
 When deploying stdapi.ai, configure settings in this recommended order:
 
-1. **[IAM Permissions](#iam-permissions)** - Set up AWS access first
+1. **[IAM Permissions](operations_iam_permissions.md)** - Set up AWS access first
 2. **[AWS Services and Regions](#aws-services-and-regions)** - Configure S3 buckets and Bedrock regions
 3. **[Authentication](#authentication)** - Secure your API with authentication
 4. **[Optional Features](#observability-opentelemetry)** - Add observability, guardrails, and other features as needed
 
 ---
 
-## IAM Permissions
+## :material-shield-key: IAM Permissions { #iam-permissions }
 
-stdapi.ai requires specific AWS IAM permissions to access Bedrock models and other AWS services. The exact permissions needed depend on which features you enable.
+[](){ #bedrock-iam }
+[](){ #bedrock-mantle-iam }
+[](){ #speech-to-text-optional }
 
-!!! tip "Building Your Policy"
-    Combine the permission statements below based on the features you need. At minimum, you need the **Bedrock** permissions. Add statements for S3, TTS, STT, and other features as required by your deployment.
-
-### Bedrock (Required) { #bedrock-iam }
-
-**Environment Variables**: Always required
-
-These permissions are mandatory for stdapi.ai to discover and invoke Bedrock models:
-
-??? example "Bedrock IAM Policy Statements"
-    ```json
-    {
-      "Sid": "BedrockModelInvoke",
-      "Effect": "Allow",
-      "Action": [
-        "bedrock:CountTokens",
-        "bedrock:GetAsyncInvoke",
-        "bedrock:InvokeModel",
-        "bedrock:InvokeModelWithResponseStream",
-        "bedrock:InvokeTool",
-        "bedrock:ListAsyncInvokes",
-        "bedrock:Rerank"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Sid": "BedrockAsyncInvokeTagging",
-      "Effect": "Allow",
-      "Action": [
-        "bedrock:TagResource",
-        "bedrock:ListTagsForResource"
-      ],
-      "Resource": "arn:aws:bedrock:*:*:async-invoke/*"
-    },
-    {
-      "Sid": "BedrockModelDiscovery",
-      "Effect": "Allow",
-      "Action": [
-        "bedrock:ListFoundationModels",
-        "bedrock:GetFoundationModelAvailability",
-        "bedrock:ListProvisionedModelThroughputs",
-        "bedrock:ListInferenceProfiles"
-      ],
-      "Resource": "*"
-    }
-    ```
-
-### Bedrock Marketplace Auto-Subscribe (Optional) { #bedrock-marketplace-auto-subscribe-iam }
-
-**Environment Variables**: [`AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE`](#bedrock-marketplace-auto-subscribe)
-
-Required only if you want to enable automatic subscription to new models in the AWS Marketplace (`AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE=true`, which is the default). When enabled, the server can automatically subscribe to marketplace offerings for newly discovered models.
-
-??? example "Bedrock Marketplace Auto-Subscribe IAM Policy Statement"
-    ```json
-    {
-      "Sid": "BedrockMarketplaceAutoSubscribe",
-      "Effect": "Allow",
-      "Action": [
-        "aws-marketplace:Subscribe",
-        "aws-marketplace:ViewSubscriptions"
-      ],
-      "Resource": "*"
-    }
-    ```
-
-    !!! warning "Cost Consideration"
-        Automatic marketplace subscriptions may incur costs. Review AWS Marketplace pricing for individual models before enabling this feature, or set `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE=false` to require manual marketplace subscription.
-
-### Bedrock Inference Profiles and Prompt Routers (Optional)
-
-**Environment Variables**: [`AWS_BEDROCK_ALLOW_CROSS_REGION_INFERENCE_PROFILE_ARN`](#bedrock-allow-cross-region-profile-arn), [`AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN`](#bedrock-allow-application-profile-arn), [`AWS_BEDROCK_ALLOW_PROMPT_ROUTER_ARN`](#bedrock-allow-prompt-router-arn), [`AWS_BEDROCK_MODEL_ARN_MAPPING`](#bedrock-model-arn-mapping)
-
-Required only if you enable ARN-based routing features that allow users to pass inference profile or prompt router ARNs directly as model IDs, or if you configure server-side ARN mappings.
-
-??? example "Bedrock Inference Profiles and Prompt Routers IAM Policy Statement"
-    ```json
-    {
-      "Sid": "BedrockInferenceProfilesAndPromptRouters",
-      "Effect": "Allow",
-      "Action": [
-        "bedrock:GetInferenceProfile",
-        "bedrock:GetPromptRouter"
-      ],
-      "Resource": "*"
-    }
-    ```
-
-    !!! note "When to Include"
-        Add these permissions when:
-
-        - `AWS_BEDROCK_ALLOW_CROSS_REGION_INFERENCE_PROFILE_ARN=true`
-        - `AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN=true`
-        - `AWS_BEDROCK_ALLOW_PROMPT_ROUTER_ARN=true`
-        - `AWS_BEDROCK_MODEL_ARN_MAPPING` is configured with any mappings
-
-### Bedrock Guardrails (Optional)
-
-**Environment Variables**: [`AWS_BEDROCK_GUARDRAIL_IDENTIFIER`](#aws-bedrock-guardrail-identifier), [`AWS_BEDROCK_GUARDRAIL_VERSION`](#aws-bedrock-guardrail-version)
-
-Required if you configure Bedrock Guardrails for content filtering, use the `moderation` request parameter, or select a guardrail on the [Moderations API](api_openai_moderations.md) (without a guardrail, that API falls back to [Comprehend toxicity moderation](#comprehend-moderation)). See [Bedrock Guardrails](#bedrock-guardrails) configuration section.
-
-??? example "Bedrock Guardrails IAM Policy Statement"
-    ```json
-    {
-      "Sid": "BedrockGuardrails",
-      "Effect": "Allow",
-      "Action": [
-        "bedrock:ApplyGuardrail"
-      ],
-      "Resource": "arn:aws:bedrock:*:*:guardrail/*"
-    }
-    ```
-
-### Bedrock Session Storage (Optional)
-
-**Environment Variables**: none (enabled by the `store=true` request parameter)
-
-Required only if clients use `store=true` on the [Responses](api_openai_responses.md#stored-responses) or [Chat Completions](api_openai_chat_completions.md#stored-chat-completions) APIs, which persist generations in AWS Bedrock sessions.
-
-??? example "Bedrock Session Storage IAM Policy Statement"
-    ```json
-    {
-      "Sid": "BedrockSessionStorage",
-      "Effect": "Allow",
-      "Action": [
-        "bedrock:CreateSession",
-        "bedrock:CreateInvocation",
-        "bedrock:PutInvocationStep",
-        "bedrock:ListInvocations",
-        "bedrock:ListInvocationSteps",
-        "bedrock:GetInvocationStep",
-        "bedrock:EndSession",
-        "bedrock:DeleteSession",
-        "bedrock:TagResource",
-        "bedrock:ListTagsForResource"
-      ],
-      "Resource": "arn:aws:bedrock:*:*:session/*"
-    },
-    {
-      "Sid": "BedrockSessionListing",
-      "Effect": "Allow",
-      "Action": "bedrock:ListSessions",
-      "Resource": "*"
-    }
-    ```
-
-    `bedrock:ListSessions` and `bedrock:ListTagsForResource` serve the stored chat completions listing endpoint (`GET /v1/chat/completions`); the account-level `ListSessions` action does not support resource scoping.
-
-    Add `kms:Decrypt` and `kms:GenerateDataKey` on the key when [`AWS_BEDROCK_SESSION_ENCRYPTION_KEY_ARN`](#aws-bedrock-session-encryption-key-arn) is configured.
-
-!!! warning "Shared Visibility Across Deployments"
-    Stored responses and chat completions are namespaced by AWS account and region, not by stdapi.ai deployment. Multiple deployments sharing the same account and region can list, retrieve, and delete each other's stored objects. Use a dedicated AWS account per deployment when isolation matters, or accept this shared visibility as a deliberate trade-off.
-
-!!! info "Orphaned Session Cleanup"
-    A session is created before its response or chat completion is generated; a crash between the two leaves an empty, orphaned session. Bedrock sessions have no TTL and persist until deleted, so periodically clean up stale sessions (`aws bedrock-agent-runtime list-sessions` plus `delete-session`, or an operator-managed lifecycle policy).
-
-### Bedrock Mantle (Optional) { #bedrock-mantle-iam }
-
-**Environment Variables**: [`AWS_BEDROCK_MANTLE_ENABLED`](#bedrock-mantle-enabled)
-
-Required for [`AWS_BEDROCK_MANTLE_ENABLED`](#bedrock-mantle-enabled) (enabled by default), which exposes models served by the Amazon Bedrock Mantle endpoint (OpenAI GPT, xAI Grok, Google Gemma, and more). Without these permissions the server still starts normally: Mantle models are not listed and a warning is logged.
-
-??? example "Bedrock Mantle IAM Policy Statements"
-    ```json
-    {
-      "Sid": "BedrockMantleInference",
-      "Effect": "Allow",
-      "Action": [
-        "bedrock-mantle:CreateInference",
-        "bedrock-mantle:GetInference",
-        "bedrock-mantle:DeleteInference",
-        "bedrock-mantle:ListModels",
-        "bedrock-mantle:GetModel",
-        "bedrock-mantle:CountTokens",
-        "bedrock-mantle:CancelInference"
-      ],
-      "Resource": "arn:aws:bedrock-mantle:*:*:project/*"
-    },
-    {
-      "Sid": "BedrockMantleBearerToken",
-      "Effect": "Allow",
-      "Action": "bedrock-mantle:CallWithBearerToken",
-      "Resource": "*"
-    }
-    ```
-
-    `bedrock-mantle:CallWithBearerToken` authorizes the short-term bearer tokens the server derives from its AWS credential chain; it does not support resource scoping.
-
-### S3 File Storage (Optional)
-
-**Environment Variables**: [`AWS_S3_BUCKET`](#aws-s3-bucket), [`AWS_S3_REGIONAL_BUCKETS`](#aws-s3-regional-buckets)
-
-Required for storing generated images, audio files, documents, and videos. See [Storage Configuration](#storage-configuration) for bucket setup details.
-
-??? example "S3 File Storage IAM Policy Statements"
-    ```json
-    {
-      "Sid": "S3FileStorage",
-      "Effect": "Allow",
-      "Action": [
-        "s3:PutObject",
-        "s3:PutObjectTagging",
-        "s3:GetObject",
-        "s3:DeleteObject",
-        "s3:CreateMultipartUpload",
-        "s3:UploadPart",
-        "s3:CompleteMultipartUpload",
-        "s3:AbortMultipartUpload",
-        "s3:ListMultipartUploadParts"
-      ],
-      "Resource": "arn:aws:s3:::AWS_S3_BUCKET_VALUE/*"
-    },
-    {
-      "Sid": "S3FileStorageList",
-      "Effect": "Allow",
-      "Action": [
-        "s3:ListBucket",
-        "s3:ListBucketMultipartUploads"
-      ],
-      "Resource": "arn:aws:s3:::AWS_S3_BUCKET_VALUE"
-    }
-    ```
-
-    !!! info "Replace Bucket Name"
-        Replace `AWS_S3_BUCKET_VALUE` with the value of your [`AWS_S3_BUCKET`](#aws-s3-bucket) environment variable. Repeat both statements for each [`AWS_S3_REGIONAL_BUCKETS`](#aws-s3-regional-buckets) bucket (used for async operations such as video generation).
-
-    **If your S3 bucket uses KMS encryption**, also add:
-
-    ```json
-    {
-      "Sid": "KMSEncryptedBucket",
-      "Effect": "Allow",
-      "Action": [
-        "kms:Decrypt",
-        "kms:GenerateDataKey"
-      ],
-      "Resource": "arn:aws:kms:REGION:ACCOUNT_ID:key/YOUR_KMS_KEY_ID",
-      "Condition": {
-        "StringEquals": {
-          "kms:ViaService": "s3.REGION.amazonaws.com"
-        }
-      }
-    }
-    ```
-
-    !!! tip "KMS Security"
-        The `kms:ViaService` condition restricts KMS key usage to S3 service calls only, following AWS security best practices.
-
-### Text-to-Speech (Optional)
-
-**Environment Variables**: [`AWS_POLLY_REGION`](#aws-polly-region), [`DEFAULT_TTS_MODEL`](#default-tts-model), [`DEFAULT_TTS_LANGUAGE`](#default-tts-language)
-
-Required for generating speech from text using Amazon Polly. See [Audio and Text-to-Speech](#audio-and-text-to-speech) configuration section.
-
-!!! tip "Optimize Performance"
-    Set [`DEFAULT_TTS_LANGUAGE`](#default-tts-language) to skip language detection and avoid AWS Comprehend API calls, improving response times and reducing costs.
-
-??? example "Polly Text-to-Speech IAM Policy Statement"
-    ```json
-    {
-      "Sid": "PollyTextToSpeech",
-      "Effect": "Allow",
-      "Action": [
-        "polly:SynthesizeSpeech",
-        "polly:DescribeVoices"
-      ],
-      "Resource": "*"
-    }
-    ```
-
-### Speech-to-Text (Optional) { #speech-to-text-optional }
-
-**Environment Variables**: [`AWS_TRANSCRIBE_REGION`](#aws-transcribe-region), [`AWS_TRANSCRIBE_S3_BUCKET`](#aws-transcribe-s3-bucket)
-
-Required for transcribing audio files using Amazon Transcribe.
-
-??? example "Transcribe Speech-to-Text IAM Policy Statements"
-    ```json
-    {
-      "Sid": "TranscribeSpeechToText",
-      "Effect": "Allow",
-      "Action": [
-        "transcribe:StartTranscriptionJob",
-        "transcribe:GetTranscriptionJob",
-        "transcribe:DeleteTranscriptionJob"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Sid": "TranscribeTagging",
-      "Effect": "Allow",
-      "Action": [
-        "transcribe:TagResource"
-      ],
-      "Resource": "arn:aws:transcribe:*:*:transcription-job/*"
-    },
-    {
-      "Sid": "TranscribeS3Storage",
-      "Effect": "Allow",
-      "Action": [
-        "s3:PutObject",
-        "s3:GetObject",
-        "s3:DeleteObject"
-      ],
-      "Resource": "arn:aws:s3:::AWS_TRANSCRIBE_S3_BUCKET_VALUE/*"
-    }
-    ```
-
-    !!! info "Replace Bucket Name"
-        Replace `AWS_TRANSCRIBE_S3_BUCKET_VALUE` with the value of your [`AWS_TRANSCRIBE_S3_BUCKET`](#aws-transcribe-s3-bucket) environment variable (or [`AWS_S3_BUCKET`](#aws-s3-bucket) if using the same bucket).
-
-    **If your transcribe S3 bucket uses KMS encryption**, also add the KMS permissions with the appropriate bucket ARN.
-
-### Language Detection (Optional)
-
-**Environment Variables**: [`AWS_COMPREHEND_REGION`](#aws-comprehend-region)
-
-Required for automatic language detection (used by TTS for voice selection).
-
-??? example "Comprehend Language Detection IAM Policy Statement"
-    ```json
-    {
-      "Sid": "ComprehendLanguageDetection",
-      "Effect": "Allow",
-      "Action": [
-        "comprehend:DetectDominantLanguage"
-      ],
-      "Resource": "*"
-    }
-    ```
-
-### Comprehend Moderation (Optional) { #comprehend-moderation }
-
-**Environment Variables**: [`AWS_COMPREHEND_REGION`](#aws-comprehend-region)
-
-Required for the [Moderations API](api_openai_moderations.md) toxicity backend — the default backend when no Bedrock guardrail is configured, and always available as the `amazon.comprehend-toxicity` model.
-
-??? example "Comprehend Moderation IAM Policy Statement"
-    ```json
-    {
-      "Sid": "ComprehendModeration",
-      "Effect": "Allow",
-      "Action": [
-        "comprehend:DetectToxicContent"
-      ],
-      "Resource": "*"
-    }
-    ```
-
-### Text Translation (Optional)
-
-**Environment Variables**: [`AWS_TRANSLATE_REGION`](#aws-translate-region)
-
-Required for text translation features.
-
-??? example "Translate Text Translation IAM Policy Statement"
-    ```json
-    {
-      "Sid": "TranslateTextTranslation",
-      "Effect": "Allow",
-      "Action": [
-        "translate:TranslateText"
-      ],
-      "Resource": "*"
-    }
-    ```
-
-### API Key Authentication (Optional)
-
-Required if you configure API authentication. See [Authentication](#authentication) configuration section.
-
-#### SSM Parameter Store
-
-**Environment Variables**: [`API_KEY_SSM_PARAMETER`](#api-key-ssm)
-
-??? example "SSM Parameter Store IAM Policy Statements"
-    ```json
-    {
-      "Sid": "SSMParameterAccess",
-      "Effect": "Allow",
-      "Action": [
-        "ssm:GetParameter"
-      ],
-      "Resource": "arn:aws:ssm:REGION:ACCOUNT_ID:parameter/API_KEY_SSM_PARAMETER_VALUE"
-    }
-    ```
-
-    !!! info "Replace Parameter Path"
-        Replace `API_KEY_SSM_PARAMETER_VALUE` with the value of your [`API_KEY_SSM_PARAMETER`](#api-key-ssm) environment variable (e.g., `/stdapi/prod/api-key`).
-
-    **If using encrypted SSM parameters**, also add:
-
-    ```json
-    {
-      "Sid": "KMSDecryptionForSSM",
-      "Effect": "Allow",
-      "Action": [
-        "kms:Decrypt"
-      ],
-      "Resource": "arn:aws:kms:REGION:ACCOUNT_ID:key/YOUR_KMS_KEY_ID",
-      "Condition": {
-        "StringEquals": {
-          "kms:ViaService": "ssm.REGION.amazonaws.com"
-        }
-      }
-    }
-    ```
-
-    !!! tip "KMS Security"
-        The `kms:ViaService` condition restricts KMS key usage to SSM service calls only.
-
-#### Secrets Manager
-
-**Environment Variables**: [`API_KEY_SECRETSMANAGER_SECRET`](#api-key-secretsmanager-secret)
-
-??? example "Secrets Manager IAM Policy Statement"
-    ```json
-    {
-      "Sid": "SecretsManagerAccess",
-      "Effect": "Allow",
-      "Action": [
-        "secretsmanager:GetSecretValue"
-      ],
-      "Resource": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:API_KEY_SECRETSMANAGER_SECRET_VALUE"
-    }
-    ```
-
-    !!! info "Replace Secret Name"
-        Replace `API_KEY_SECRETSMANAGER_SECRET_VALUE` with the value of your [`API_KEY_SECRETSMANAGER_SECRET`](#api-key-secretsmanager-secret) environment variable (e.g., `stdapi-api-key`).
-
-### Complete Policy Examples
-
-??? example "Minimal Policy (Bedrock Only)"
-    ```json
-    {
-      "Version": "2012-10-17",
-      "Statement": [
-        {
-          "Sid": "BedrockModelInvoke",
-          "Effect": "Allow",
-          "Action": [
-            "bedrock:CountTokens",
-            "bedrock:GetAsyncInvoke",
-            "bedrock:InvokeModel",
-            "bedrock:InvokeModelWithResponseStream",
-            "bedrock:InvokeTool",
-            "bedrock:Rerank"
-          ],
-          "Resource": "*"
-        },
-        {
-          "Sid": "BedrockAsyncInvokeTagging",
-          "Effect": "Allow",
-          "Action": [
-            "bedrock:TagResource"
-          ],
-          "Resource": "arn:aws:bedrock:*:*:async-invoke/*"
-        },
-        {
-          "Sid": "BedrockModelDiscovery",
-          "Effect": "Allow",
-          "Action": [
-            "bedrock:ListFoundationModels",
-            "bedrock:GetFoundationModelAvailability",
-            "bedrock:ListProvisionedModelThroughputs",
-            "bedrock:ListInferenceProfiles"
-          ],
-          "Resource": "*"
-        },
-        {
-          "Sid": "BedrockMarketplaceAutoSubscribe",
-          "Effect": "Allow",
-          "Action": [
-            "aws-marketplace:Subscribe",
-            "aws-marketplace:ViewSubscriptions"
-          ],
-          "Resource": "*"
-        }
-      ]
-    }
-    ```
-
-    !!! note "Marketplace Auto-Subscribe (Default Enabled)"
-        The marketplace permissions are included because `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE` defaults to `true`. If you set it to `false`, you can remove the `BedrockMarketplaceAutoSubscribe` statement.
-
-??? example "Production Policy (Bedrock + S3 + Authentication)"
-    ```json
-    {
-      "Version": "2012-10-17",
-      "Statement": [
-        {
-          "Sid": "BedrockModelInvoke",
-          "Effect": "Allow",
-          "Action": [
-            "bedrock:CountTokens",
-            "bedrock:GetAsyncInvoke",
-            "bedrock:InvokeModel",
-            "bedrock:InvokeModelWithResponseStream",
-            "bedrock:InvokeTool",
-            "bedrock:Rerank"
-          ],
-          "Resource": "*"
-        },
-        {
-          "Sid": "BedrockAsyncInvokeTagging",
-          "Effect": "Allow",
-          "Action": [
-            "bedrock:TagResource"
-          ],
-          "Resource": "arn:aws:bedrock:*:*:async-invoke/*"
-        },
-        {
-          "Sid": "BedrockModelDiscovery",
-          "Effect": "Allow",
-          "Action": [
-            "bedrock:ListFoundationModels",
-            "bedrock:GetFoundationModelAvailability",
-            "bedrock:ListProvisionedModelThroughputs",
-            "bedrock:ListInferenceProfiles"
-          ],
-          "Resource": "*"
-        },
-        {
-          "Sid": "BedrockMarketplaceAutoSubscribe",
-          "Effect": "Allow",
-          "Action": [
-            "aws-marketplace:Subscribe",
-            "aws-marketplace:ViewSubscriptions"
-          ],
-          "Resource": "*"
-        },
-        {
-          "Sid": "S3FileStorage",
-          "Effect": "Allow",
-          "Action": [
-            "s3:PutObject",
-            "s3:PutObjectTagging",
-            "s3:GetObject",
-            "s3:DeleteObject",
-            "s3:CreateMultipartUpload",
-            "s3:UploadPart",
-            "s3:CompleteMultipartUpload",
-            "s3:AbortMultipartUpload",
-            "s3:ListMultipartUploadParts"
-          ],
-          "Resource": "arn:aws:s3:::my-stdapi-bucket/*"
-        },
-        {
-          "Sid": "S3FileStorageList",
-          "Effect": "Allow",
-          "Action": [
-            "s3:ListBucket",
-            "s3:ListBucketMultipartUploads"
-          ],
-          "Resource": "arn:aws:s3:::my-stdapi-bucket"
-        },
-        {
-          "Sid": "SSMParameterAccess",
-          "Effect": "Allow",
-          "Action": [
-            "ssm:GetParameter"
-          ],
-          "Resource": "arn:aws:ssm:us-east-1:123456789012:parameter/stdapi/prod/api-key"
-        }
-      ]
-    }
-    ```
-
-    !!! note "Marketplace Auto-Subscribe (Default Enabled)"
-        The marketplace permissions are included because `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE` defaults to `true`. If you set it to `false`, you can remove the `BedrockMarketplaceAutoSubscribe` statement to follow the principle of least privilege.
-
-### Permission Notes
-
-!!! tip "Least Privilege Principle"
-    Only include the permission statements you need for your specific deployment. Start with Bedrock permissions and add others as required.
-
-### Feature-Specific Permission Requirements
-
-| Feature                                         | Required Permissions                                                                                                                                       | Configuration                                                                |
-|-------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------|
-| **Bedrock Models (Invoke)**                     | `bedrock:CountTokens`<br>`bedrock:InvokeModel`<br>`bedrock:InvokeModelWithResponseStream`<br>`bedrock:InvokeTool`<br>`bedrock:Rerank`<br>`bedrock:TagResource` (on `arn:aws:bedrock:*:*:async-invoke/*`)                                          | Always required                                                              |
-| **Bedrock Models (Discovery)**                  | `bedrock:ListFoundationModels`<br>`bedrock:GetFoundationModelAvailability`<br>`bedrock:ListProvisionedModelThroughputs`<br>`bedrock:ListInferenceProfiles` | Always required                                                              |
-| **Bedrock Marketplace Auto-Subscribe**          | `aws-marketplace:Subscribe`<br>`aws-marketplace:ViewSubscriptions`                                                                                         | `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE=true` (default)                      |
-| **Bedrock Inference Profiles & Prompt Routers** | `bedrock:GetInferenceProfile`<br>`bedrock:GetPromptRouter`                                                                                                 | `AWS_BEDROCK_ALLOW_*_ARN=true` or `AWS_BEDROCK_MODEL_ARN_MAPPING` configured |
-| **Bedrock Guardrails & Moderations**            | `bedrock:ApplyGuardrail`                                                                                                                                   | `AWS_BEDROCK_GUARDRAIL_IDENTIFIER`                                           |
-| **Stored Responses & Chat Completions**         | Bedrock session permissions (`bedrock:CreateSession`, `bedrock:*Invocation*`, `bedrock:ListSessions`, `bedrock:EndSession`, `bedrock:DeleteSession`, `bedrock:*TagResource*`)        | `store=true` requests and stored-completion listings                                                        |
-| **Bedrock Mantle**                              | `bedrock-mantle:CreateInference`<br>`bedrock-mantle:GetInference`<br>`bedrock-mantle:DeleteInference`<br>`bedrock-mantle:ListModels`<br>`bedrock-mantle:GetModel`<br>`bedrock-mantle:CountTokens`<br>`bedrock-mantle:CancelInference` (on `arn:aws:bedrock-mantle:*:*:project/*`)<br>`bedrock-mantle:CallWithBearerToken` | `AWS_BEDROCK_MANTLE_ENABLED=true`                                            |
-| **File Storage**                                | `s3:PutObject`<br>`s3:PutObjectTagging`<br>`s3:GetObject`<br>`s3:DeleteObject`<br>`s3:CreateMultipartUpload`<br>`s3:UploadPart`<br>`s3:CompleteMultipartUpload`<br>`s3:AbortMultipartUpload`<br>`s3:ListMultipartUploadParts`<br>`s3:ListBucket`<br>`s3:ListBucketMultipartUploads` | `AWS_S3_BUCKET`                                                              |
-| **Video Generation**                            | Bedrock invoke permissions (incl. `bedrock:GetAsyncInvoke`, `bedrock:ListAsyncInvokes`, `bedrock:ListTagsForResource`, `bedrock:TagResource`)<br>File Storage S3 permissions on each regional bucket | `AWS_S3_REGIONAL_BUCKETS`                                                    |
-| **KMS Encrypted S3 Buckets**                    | `kms:Decrypt`<br>`kms:GenerateDataKey`<br>with `kms:ViaService` condition                                                                                  | If S3 buckets use KMS encryption                                             |
-| **Text-to-Speech**                              | `polly:SynthesizeSpeech`<br>`polly:DescribeVoices`                                                                                                         | `AWS_POLLY_REGION`                                                           |
-| **Speech-to-Text**                              | `transcribe:StartTranscriptionJob`<br>`transcribe:GetTranscriptionJob`<br>`transcribe:DeleteTranscriptionJob`<br>`transcribe:TagResource` (on `arn:aws:transcribe:*:*:transcription-job/*`)<br>`s3:PutObject` (transcribe bucket)        | `AWS_TRANSCRIBE_REGION`<br>`AWS_TRANSCRIBE_S3_BUCKET`                        |
-| **Language Detection**                          | `comprehend:DetectDominantLanguage`                                                                                                                        | `AWS_COMPREHEND_REGION`                                                      |
-| **Comprehend Moderations**                      | `comprehend:DetectToxicContent`                                                                                                                            | Moderations API without a configured guardrail                              |
-| **Translation**                                 | `translate:TranslateText`                                                                                                                                  | `AWS_TRANSLATE_REGION`                                                       |
-| **Cost Tracking**                               | `pricing:GetProducts`                                                                                                                                      | `COST_TRACKING=true` (opt-in; `false` by default)                            |
-| **SSM Parameter Store**                         | `ssm:GetParameter`<br>`kms:Decrypt` (if encrypted)                                                                                                         | `API_KEY_SSM_PARAMETER`                                                      |
-| **Secrets Manager**                             | `secretsmanager:GetSecretValue`                                                                                                                            | `API_KEY_SECRETSMANAGER_SECRET`                                              |
-
-### IAM Role vs. IAM User
-
-stdapi.ai supports both IAM roles and IAM users:
-
-- **:material-aws: IAM Role (Recommended)**: Use when running on EC2, ECS, Lambda, or other AWS compute services. Attach the policy to the instance/task role.
-- **:material-account: IAM User**: Use when running outside AWS or for development. Create an IAM user with the required permissions and configure AWS credentials via environment variables or AWS CLI configuration.
-
-!!! success "Best Practice: Use IAM Roles"
-    When deploying on AWS infrastructure, always prefer IAM roles over IAM users with access keys. IAM roles provide automatic credential rotation and better security.
-
-### AWS Tag Policies
-
-If your AWS organization enforces a [tag policy](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_tag-policies.html), the following tag keys must be allowed on the relevant resource types.
-
-| Tag key | Value | Applied to |
-|---------|-------|------------|
-| `stdapi-ai.expires` | `"true"` | S3 objects (Files API expiry) |
-| `stdapi-ai.request_id` | request UUID | Bedrock async jobs, Transcribe jobs |
-| `stdapi-ai.server_id` | server instance name | Bedrock async jobs, Transcribe jobs |
-| `stdapi-ai.user_id` | user identifier | Bedrock async jobs, Transcribe jobs (when user identity is known) |
-| `aws-apn-id` | `pc:<product-code>` | All AWS resources created at runtime and by the Terraform module. This is a [standard AWS Marketplace attribution tag](https://docs.aws.amazon.com/PRM/latest/aws-prm-onboarding-guide/what-is-service.html) required by any AWS Marketplace product — allowing it benefits all such products deployed in your organization, not only stdapi.ai. |
+The full IAM reference — required Amazon Bedrock permissions, per-feature policy statements, complete policy examples, and AWS tag policy requirements — has moved to the dedicated [IAM Permissions](operations_iam_permissions.md) page.
 
 ---
 
-## Authentication
+## :material-lock: Authentication
 
 stdapi.ai supports three methods for API key authentication.
 
@@ -2481,7 +1817,7 @@ export API_KEY=sk-1234567890abcdef...
 
 ---
 
-## API Compatibility
+## :material-api: API Compatibility
 
 Configure the base URL paths for OpenAI and Anthropic-compatible API routes.
 
@@ -2567,7 +1903,7 @@ export COHERE_ROUTES_PREFIX=/cohere
 
 ---
 
-## CORS Configuration
+## :material-web: CORS Configuration
 
 Configure Cross-Origin Resource Sharing (CORS) to control which web origins can access your API from browsers.
 
@@ -2646,7 +1982,7 @@ export CORS_ALLOW_ORIGINS='["https://app.example.com", "https://staging.example.
 
 ---
 
-## Trusted Host Configuration
+## :material-server-security: Trusted Host Configuration
 
 Configure Host header validation to protect against Host header injection attacks.
 
@@ -2766,7 +2102,7 @@ export TRUSTED_HOSTS='["api.example.com", "staging.example.com", "localhost"]'
 
 ---
 
-## Proxy Headers Configuration
+## :material-swap-horizontal: Proxy Headers Configuration
 
 Configure X-Forwarded-* header processing when running behind reverse proxies or load balancers.
 
@@ -2847,7 +2183,7 @@ export ENABLE_PROXY_HEADERS=true
 !!! note "Proxy Headers Behavior"
     - When `ENABLE_PROXY_HEADERS` is `false` (default), X-Forwarded-* headers are **not trusted**
     - When enabled, the server processes X-Forwarded-For, X-Forwarded-Proto, and X-Forwarded-Port headers to determine client information
-    - All proxies are trusted - ensure your network architecture prevents untrusted sources from reaching the application
+    - Which peers' headers are trusted is controlled by [`PROXY_TRUSTED_HOSTS`](#proxy-trusted-hosts) — the default `*` trusts every peer, so restrict it to your reverse proxy's IP range
 
 !!! tip "When to Enable"
     Enable `ENABLE_PROXY_HEADERS` when:
@@ -2864,9 +2200,35 @@ export ENABLE_PROXY_HEADERS=true
     - Original protocol (from X-Forwarded-Proto: http/https)
     - Original port (from X-Forwarded-Port)
 
+#### `PROXY_TRUSTED_HOSTS` { #proxy-trusted-hosts }
+
+:octicons-package-24: **Purpose**
+:   Restrict which peer IPs may set trusted `X-Forwarded-*` headers when `ENABLE_PROXY_HEADERS` is enabled
+
+:octicons-database-24: **Type**
+:   JSON array of IPs/CIDRs, or `*`
+
+:octicons-gear-24: **Default**
+:   `*` (trust every peer — backward compatible)
+
+:octicons-shield-check-24: **Best Practice**
+:   Restrict to your reverse proxy's IP range so direct clients cannot spoof `X-Forwarded-For`
+
+```bash
+# Trust forwarded headers only from the VPC / proxy range
+export ENABLE_PROXY_HEADERS=true
+export PROXY_TRUSTED_HOSTS='["10.0.0.0/8"]'
+```
+
+!!! warning "Only effective with `ENABLE_PROXY_HEADERS=true`"
+    This setting has no effect unless [`ENABLE_PROXY_HEADERS`](#enable-proxy-headers) is enabled. With the default `*`, any client that can reach the server directly can forge `X-Forwarded-For`, poisoning the client IP recorded in logs and OpenTelemetry spans. Restrict it to the address range of your load balancer or reverse proxy (AWS ALB/CloudFront, nginx, etc.).
+
+!!! tip "Configured automatically by the official Terraform module"
+    The [stdapi-ai Terraform module](https://github.com/stdapi-ai/terraform-aws-stdapi-ai) sets this for you when the ALB is enabled with client IP logging (`alb_enabled = true`, `log_client_ip = true`): it enables proxy headers and pins `PROXY_TRUSTED_HOSTS` to the ALB's subnet CIDRs, so only the load balancer is trusted and direct clients cannot forge `X-Forwarded-For`. Override it with the module's `proxy_trusted_hosts` variable when fronting the ALB with an additional proxy (for example CloudFront).
+
 ---
 
-## TLS / SSL Configuration
+## :material-certificate: TLS / SSL Configuration
 
 Configure end-to-end TLS encryption within the container. These are native [Granian](https://github.com/emmett-framework/granian) environment variables and are available with the provided container images.
 
@@ -2920,7 +2282,7 @@ Configure end-to-end TLS encryption within the container. These are native [Gran
 
 ---
 
-## GZip Compression
+## :material-zip-box: GZip Compression
 
 Configure automatic GZip compression for HTTP responses to reduce bandwidth usage and improve response times.
 
@@ -2957,28 +2319,10 @@ export ENABLE_GZIP=true
     Typical compression ratios for JSON responses: **60-80% size reduction**
 
 !!! success "Recommended: Use AWS Compression Services"
-    **Instead of enabling application-level compression, use AWS services for better performance:**
+    Instead of enabling application-level compression, enable compression at the AWS layer — it offloads the CPU cost from your application servers, at the price of managing it in AWS instead of a single environment variable:
 
-    **AWS ALB (Application Load Balancer):**
-
-    - Enable compression in ALB target group attributes
-    - ALB compresses responses before sending to clients
-    - Reduces CPU load on your application servers
-    - [AWS ALB Compression Documentation](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-target-groups.html#compression)
-
-    **AWS CloudFront (CDN):**
-
-    - Enable automatic compression in CloudFront distribution settings
-    - Compresses and caches responses at edge locations globally
-    - Best performance for geographically distributed users
-    - [CloudFront Compression Documentation](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/ServingCompressedFiles.html)
-
-    **Benefits of AWS-managed compression:**
-
-    - :material-speedometer: No CPU overhead on application servers
-    - :material-server-network: Offloads compression to AWS infrastructure
-    - :material-earth: Better performance with CloudFront edge locations
-    - :material-cog: Centralized configuration and management
+    - **AWS ALB** — enable the `compression.enabled` target group attribute ([documentation](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-target-groups.html#compression))
+    - **Amazon CloudFront** — enable "Compress Objects Automatically" in the distribution behavior settings ([documentation](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/ServingCompressedFiles.html))
 
 !!! tip "When to Enable Application-Level Compression"
     Enable `ENABLE_GZIP` only when:
@@ -3004,58 +2348,9 @@ export ENABLE_GZIP=true
         - Response does not already have `Content-Encoding` header
     - Streaming responses are compressed on-the-fly
 
-!!! info "Configuring AWS Compression"
-
-    **AWS ALB Compression:**
-
-    Enable via AWS Console:
-
-    1. Navigate to EC2 → Target Groups → Your Target Group
-    2. Edit target group attributes
-    3. Enable "Compression" attribute
-
-    Enable via AWS CLI:
-
-    ```bash
-    aws elbv2 modify-target-group-attributes \
-      --target-group-arn arn:aws:elasticloadbalancing:region:account:targetgroup/... \
-      --attributes Key=compression.enabled,Value=true
-    ```
-
-    **AWS CloudFront Compression:**
-
-    Enable via AWS Console:
-
-    1. Navigate to CloudFront → Distributions → Your Distribution
-    2. Edit behavior settings
-    3. Enable "Compress Objects Automatically"
-
-    Enable via AWS CLI:
-
-    ```bash
-    aws cloudfront update-distribution \
-      --id YOUR_DISTRIBUTION_ID \
-      --distribution-config file://config.json
-    # Set "Compress": true in the distribution config
-    ```
-
-!!! success "Performance Impact"
-
-    **Application-level compression costs:**
-
-    - :material-cpu-64-bit: Increased CPU usage on application servers
-    - :material-memory: Memory overhead for compression buffers
-    - :material-timer-sand: Small latency increase (1-5ms per request)
-
-    **AWS-managed compression benefits:**
-
-    - :material-server-off: No CPU impact on application servers
-    - :material-speedometer: Better overall performance
-    - :material-cash: Lower costs (compression offloaded to AWS infrastructure)
-
 ---
 
-## MCP (Model Context Protocol)
+## :material-connection: MCP (Model Context Protocol)
 
 When enabled, stdapi.ai exposes its API endpoints as MCP tools, allowing AI clients and agents to call them directly using the Model Context Protocol. The full list of available tool names is documented in [API Overview → MCP Tools](api_overview.md#mcp-model-context-protocol).
 
@@ -3066,10 +2361,15 @@ Both transport types can be enabled independently or simultaneously.
 :octicons-package-24: **Purpose**
 :   Enable the MCP server using Streamable HTTP transport — the recommended method
 
-:material-server-network: **How it Works**
+:octicons-database-24: **Type**
+:   Boolean
+
+:octicons-gear-24: **Default**
+:   `false`
+
+:octicons-workflow-24: **Behavior**
 :   Exposes an MCP-compatible endpoint at `/mcp`. AI clients connect using standard HTTP requests following the MCP Streamable HTTP specification.
 
-:material-cog: **Configuration**
 ```bash
 # Disabled (default)
 # No environment variable needed
@@ -3083,10 +2383,15 @@ export ENABLE_MCP_STREAMABLE_HTTP=true
 :octicons-package-24: **Purpose**
 :   Enable the MCP server using Server-Sent Events (SSE) transport
 
-:material-server-network: **How it Works**
+:octicons-database-24: **Type**
+:   Boolean
+
+:octicons-gear-24: **Default**
+:   `false`
+
+:octicons-workflow-24: **Behavior**
 :   Exposes MCP endpoints at `/sse` for AI clients that require the SSE transport protocol.
 
-:material-cog: **Configuration**
 ```bash
 # Disabled (default)
 # No environment variable needed
@@ -3114,10 +2419,12 @@ export ENABLE_MCP_SSE=true
 :octicons-package-24: **Purpose**
 :   Expose only a specific subset of MCP tools; all others are hidden
 
-:octicons-database-24: **Format**
+:octicons-code-24: **Format**
 :   Comma-separated list of tool names (duplicates are automatically removed)
 
-:material-cog: **Configuration**
+:octicons-gear-24: **Default**
+:   None (all tools exposed)
+
 ```bash
 # All tools exposed by default
 # No environment variable needed
@@ -3142,13 +2449,15 @@ See [API Overview → MCP Tools](api_overview.md#mcp-model-context-protocol) for
 :octicons-package-24: **Purpose**
 :   Hide specific MCP tools from clients; all others remain exposed
 
-:octicons-database-24: **Format**
+:octicons-code-24: **Format**
 :   Comma-separated list of tool names (duplicates are automatically removed)
+
+:octicons-gear-24: **Default**
+:   None (no tools excluded)
 
 !!! note "Behavior with `MCP_INCLUDE_TOOLS`"
     When both `MCP_INCLUDE_TOOLS` and `MCP_EXCLUDE_TOOLS` are specified, tools in `MCP_EXCLUDE_TOOLS` are removed from `MCP_INCLUDE_TOOLS`. The remaining tools in `MCP_INCLUDE_TOOLS` are what get exposed.
 
-:material-cog: **Configuration**
 ```bash
 # No tools excluded by default
 # No environment variable needed
@@ -3196,41 +2505,13 @@ export MCP_INCLUDE_TOOLS="openai_chat_completion,search_models"
 ```
 
 !!! note
-    The `Health` and `metadata` tags are automatically excluded from MCP exposure and do not need to be listed in `MCP_EXCLUDE_TOOLS`.
+    Health and metadata endpoints are never exposed as MCP tools, so they do not need to be listed in `MCP_EXCLUDE_TOOLS`.
 
 ---
 
-## SSRF Protection
+## :material-shield-alert: SSRF Protection
 
 Configure Server-Side Request Forgery (SSRF) protection to prevent unauthorized access to internal networks.
-
-#### `PROXY_TRUSTED_HOSTS` { #proxy-trusted-hosts }
-
-:octicons-package-24: **Purpose**
-:   Restrict which peer IPs may set trusted `X-Forwarded-*` headers when `ENABLE_PROXY_HEADERS` is enabled
-
-:octicons-database-24: **Type**
-:   JSON array of IPs/CIDRs, or `*`
-
-:octicons-gear-24: **Default**
-:   `*` (trust every peer — backward compatible)
-
-:octicons-shield-check-24: **Best Practice**
-:   Restrict to your reverse proxy's IP range so direct clients cannot spoof `X-Forwarded-For`
-
-```bash
-# Trust forwarded headers only from the VPC / proxy range
-export ENABLE_PROXY_HEADERS=true
-export PROXY_TRUSTED_HOSTS='["10.0.0.0/8"]'
-```
-
-!!! warning "Only effective with `ENABLE_PROXY_HEADERS=true`"
-    This setting has no effect unless [`ENABLE_PROXY_HEADERS`](#enable-proxy-headers) is enabled. With the default `*`, any client that can reach the server directly can forge `X-Forwarded-For`, poisoning the client IP recorded in logs and OpenTelemetry spans. Restrict it to the address range of your load balancer or reverse proxy (AWS ALB/CloudFront, nginx, etc.).
-
-!!! tip "Configured automatically by the official Terraform module"
-    The [stdapi-ai Terraform module](https://github.com/stdapi-ai/terraform-aws-stdapi-ai) sets this for you when the ALB is enabled with client IP logging (`alb_enabled = true`, `log_client_ip = true`): it enables proxy headers and pins `PROXY_TRUSTED_HOSTS` to the ALB's subnet CIDRs, so only the load balancer is trusted and direct clients cannot forge `X-Forwarded-For`. Override it with the module's `proxy_trusted_hosts` variable when fronting the ALB with an additional proxy (for example CloudFront).
-
----
 
 #### `SSRF_PROTECTION_BLOCK_PRIVATE_NETWORKS` { #ssrf-protection-block-private-networks }
 
@@ -3303,6 +2584,10 @@ export SSRF_PROTECTION_BLOCK_PRIVATE_NETWORKS=false
 
 ---
 
+## :material-speedometer-slow: Request Limits
+
+Bound per-request resource usage to protect the server when the API is exposed to untrusted clients.
+
 #### `MAX_INPUT_FILE_SIZE` { #max-input-file-size }
 
 :octicons-package-24: **Purpose**
@@ -3338,8 +2623,6 @@ export MAX_INPUT_FILE_SIZE=26214400
     - :material-cloud-upload: Multipart form uploads
     - :material-file-move: Files API ingest from HTTP(S) URLs and S3-to-S3 copies
 
----
-
 #### `MAX_CONCURRENT_INPUT_DOWNLOADS` { #max-concurrent-input-downloads }
 
 :octicons-package-24: **Purpose**
@@ -3364,7 +2647,7 @@ export MAX_CONCURRENT_INPUT_DOWNLOADS=4
 
 ---
 
-## Observability (OpenTelemetry)
+## :material-radar: Observability (OpenTelemetry)
 
 Configure distributed tracing for debugging and performance monitoring. stdapi.ai integrates with AWS X-Ray, Jaeger, DataDog, and other OTLP-compatible systems.
 
@@ -3473,7 +2756,7 @@ export OTEL_SAMPLE_RATE=0.01
 
 ---
 
-## API Documentation Routes
+## :material-file-document: API Documentation Routes
 
 stdapi.ai provides automatic API documentation routes, which are **disabled by default** for security in production environments.
 
@@ -3612,25 +2895,25 @@ export ENABLE_REDOC=true
 
 ---
 
-## Validation and Logging
+## :material-chart-line: Validation and Logging
 
 For comprehensive logging and monitoring information, see the [Logging and Monitoring](operations_logging_monitoring.md) guide.
 
-| Variable | Type | Default | Description |
-|----------|------|---------|-------------|
-| `STRICT_INPUT_VALIDATION` | Boolean | `false` | Reject API requests containing unknown/extra fields |
-| `LOG_LEVEL` | String | `info` | Minimum log level to output (see [Logging Level](#logging-level)) |
-| `LOG_REQUEST_PARAMS` | Boolean | `false` | Include request/response parameters in logs |
-| `TIMEZONE` | String | `UTC` | IANA timezone identifier for request timestamps |
+#### `STRICT_INPUT_VALIDATION` { #strict-input-validation }
 
-**Strict Validation:**
+:octicons-package-24: **Purpose**
+:   Reject API requests containing unknown/extra fields instead of ignoring them
+
+:octicons-database-24: **Type**
+:   Boolean
+
+:octicons-gear-24: **Default**
+:   `false`
 
 ```bash
 # Returns HTTP 400 for requests with unexpected fields
 export STRICT_INPUT_VALIDATION=true
 ```
-
-### Logging Level
 
 #### `LOG_LEVEL` { #logging-level }
 
@@ -3674,19 +2957,26 @@ export LOG_LEVEL=disabled
 
     For detailed information about log events, structure, and monitoring strategies, see the [Logging and Monitoring](operations_logging_monitoring.md) guide.
 
-**Debug Logging:**
+#### `LOG_REQUEST_PARAMS` { #log-request-params }
+
+:octicons-package-24: **Purpose**
+:   Include request and response parameters (JSON body, form, query) in logs for integration debugging
+
+:octicons-database-24: **Type**
+:   Boolean
+
+:octicons-gear-24: **Default**
+:   `false`
 
 ```bash
 # Enable for debugging (NOT recommended for production)
 export LOG_REQUEST_PARAMS=true
 ```
 
-!!! danger "Security and cost warning"
+!!! danger "Security and Cost Warning"
     Enabling `LOG_REQUEST_PARAMS` may expose sensitive data in logs. Use only in development/debugging environments.
 
     Logging full request/response payloads can also significantly increase log ingestion and storage costs, especially for large LLM prompts, tool calls, and generated outputs. If you must enable it, prefer short log retention, targeted sampling, and temporary use only.
-
-### Client IP Logging
 
 #### `LOG_CLIENT_IP` { #client-ip-logging }
 
@@ -3764,7 +3054,16 @@ export LOG_CLIENT_IP=true
     # ENABLE_PROXY_HEADERS remains false (default)
     ```
 
-**Timezone Configuration:**
+#### `TIMEZONE` { #timezone }
+
+:octicons-package-24: **Purpose**
+:   IANA timezone identifier used for request date and time
+
+:octicons-database-24: **Type**
+:   String (IANA timezone identifier)
+
+:octicons-gear-24: **Default**
+:   `UTC`
 
 ```bash
 # UTC (default)
@@ -3779,7 +3078,7 @@ export TIMEZONE=Europe/London
 
 ---
 
-## CloudWatch Metrics and Cost Tracking
+## :material-chart-box-outline: CloudWatch Metrics and Cost Tracking
 
 The behavior of these settings — EMF line structure, cost log format, pricing accuracy, regional price fallback, known limitations, and the price override format with examples — is documented in [CloudWatch Metrics (EMF)](operations_logging_monitoring.md#cloudwatch-metrics-emf) and [Cost Tracking](operations_cost_management.md#cost-tracking-real-time-aws-pricing) in the Logging and Monitoring guide.
 
@@ -3844,7 +3143,7 @@ export COST_TRACKING=true
 
 ---
 
-## Bedrock Guardrails
+## :material-shield-check: Bedrock Guardrails
 
 Amazon Bedrock Guardrails add content filtering and safety controls to model inputs and outputs. The configured guardrail also powers the [OpenAI-compatible Moderations API](api_openai_moderations.md) (`POST /v1/moderations`).
 
@@ -3914,21 +3213,6 @@ export AWS_BEDROCK_GUARDRAIL_TRACE=enabled
 export AWS_BEDROCK_ALLOW_GUARDRAIL_OVERRIDE=true
 ```
 
-#### `AWS_BEDROCK_SESSION_ENCRYPTION_KEY_ARN` { #aws-bedrock-session-encryption-key-arn }
-
-:octicons-package-24: **Purpose**
-:   KMS key ARN encrypting the AWS Bedrock sessions that back [stored responses](api_openai_responses.md#stored-responses) and [stored chat completions](api_openai_chat_completions.md#stored-chat-completions) (`store=true`)
-
-:octicons-gear-24: **Default**
-:   Unset — sessions are encrypted with the AWS-managed key
-
-:octicons-check-circle-24: **Validation**
-:   Checked at startup: must be a KMS key ARN (`arn:<partition>:kms:<region>:<account-id>:key/<key-id>`).
-
-```bash
-export AWS_BEDROCK_SESSION_ENCRYPTION_KEY_ARN=arn:aws:kms:us-east-1:123456789012:key/abcd-...
-```
-
 !!! example "Complete Guardrail Configuration"
     ```bash
     export AWS_BEDROCK_GUARDRAIL_IDENTIFIER=abc123def456
@@ -3937,7 +3221,7 @@ export AWS_BEDROCK_SESSION_ENCRYPTION_KEY_ARN=arn:aws:kms:us-east-1:123456789012
     export AWS_BEDROCK_ALLOW_GUARDRAIL_OVERRIDE=false  # Default: prevent overrides
     ```
 
-### Per-Request Configuration
+### Per-Request Guardrail Configuration
 
 !!! info "Header Usage Behavior"
     Request headers can be used when [`AWS_BEDROCK_ALLOW_GUARDRAIL_OVERRIDE`](#aws-bedrock-allow-guardrail-override) is `true`:
@@ -3973,7 +3257,34 @@ The `amazon-bedrock-guardrailConfig` object in the request body is supported for
 
 ---
 
-## Bedrock Service Tier and Performance Configuration
+## :material-database-lock: Bedrock Session Storage { #bedrock-session-storage-optional }
+
+Requests with `store=true` on the [Responses](api_openai_responses.md#stored-responses) and [Chat Completions](api_openai_chat_completions.md#stored-chat-completions) APIs persist generations in Amazon Bedrock sessions. No environment variable is needed to enable this — it requires the [Bedrock Session Storage IAM permissions](operations_iam_permissions.md#bedrock-session-storage-optional).
+
+#### `AWS_BEDROCK_SESSION_ENCRYPTION_KEY_ARN` { #aws-bedrock-session-encryption-key-arn }
+
+:octicons-package-24: **Purpose**
+:   KMS key ARN encrypting the Amazon Bedrock sessions that back [stored responses](api_openai_responses.md#stored-responses) and [stored chat completions](api_openai_chat_completions.md#stored-chat-completions) (`store=true`)
+
+:octicons-gear-24: **Default**
+:   None — sessions are encrypted with the AWS-managed key
+
+:octicons-check-circle-24: **Validation**
+:   Checked at startup: must be a KMS key ARN (`arn:<partition>:kms:<region>:<account-id>:key/<key-id>`).
+
+```bash
+export AWS_BEDROCK_SESSION_ENCRYPTION_KEY_ARN=arn:aws:kms:us-east-1:123456789012:key/abcd-...
+```
+
+!!! warning "Shared Visibility Across Deployments"
+    Stored responses and chat completions are namespaced by AWS account and region, not by stdapi.ai deployment. Multiple deployments sharing the same account and region can list, retrieve, and delete each other's stored objects. Use a dedicated AWS account per deployment when isolation matters, or accept this shared visibility as a deliberate trade-off.
+
+!!! info "Orphaned Session Cleanup"
+    A session is created before its response or chat completion is generated; a crash between the two leaves an empty, orphaned session. Bedrock sessions have no TTL and persist until deleted, so periodically clean up stale sessions (`aws bedrock-agent-runtime list-sessions` plus `delete-session`, or an operator-managed lifecycle policy).
+
+---
+
+## :material-speedometer: Bedrock Service Tier and Performance Configuration
 
 Amazon Bedrock service tiers and performance configurations allow you to optimize AI workload performance and cost trade-offs. Configure latency optimization and throughput priority for your inference requests.
 
@@ -3997,9 +3308,9 @@ Performance configuration allows you to optimize for latency:
 - **`standard`** - Standard latency profile with balanced performance
 - **`optimized`** - Optimized for lowest possible latency
 
-### Per-Request Configuration
+### Per-Request Service Tier Configuration { #service-tier-per-request }
 
-Configure service tier and performance settings per request using HTTP headers. These headers are available on all Bedrock-based routes (Chat Completions, Embeddings, Images):
+Configure service tier and performance settings per request using HTTP headers. These headers are available on all Bedrock-based routes (Chat Completions, Embeddings, Images). Server-side per-model defaults can be set with [`DEFAULT_MODEL_SERVICE_TIERS`](#default-model-service-tiers).
 
 | Header                                     | Purpose                | Valid Values                  |
 |--------------------------------------------|------------------------|-------------------------------|
@@ -4064,7 +3375,7 @@ curl -X POST https://api.example.com/v1/images/generations \
 
 ---
 
-## Audio and Text-to-Speech
+## :material-account-voice: Audio and Text-to-Speech
 
 #### `DEFAULT_TTS_MODEL` { #default-tts-model }
 
@@ -4091,12 +3402,12 @@ export DEFAULT_TTS_MODEL=amazon.polly-neural
 :   Default language code for text-to-speech synthesis when using OpenAI voice names
 
 :octicons-gear-24: **Default**
-:   None (automatic language detection via AWS Comprehend)
+:   None (automatic language detection via Amazon Comprehend)
 
 :octicons-check-circle-24: **Behavior**
-:   When specified, this language is used instead of automatic detection. When not set, AWS Comprehend detects the language automatically from the input text.
+:   When specified, this language is used instead of automatic detection. When not set, Amazon Comprehend detects the language automatically from the input text.
 
-**Valid Language Codes**: Any AWS Polly language code (e.g., `en-US`, `fr-FR`, `es-ES`, `de-DE`, `ja-JP`)
+**Valid Language Codes**: Any Amazon Polly language code (e.g., `en-US`, `fr-FR`, `es-ES`, `de-DE`, `ja-JP`)
 
 ```bash
 # Use English (US) for all TTS requests
@@ -4109,8 +3420,8 @@ export DEFAULT_TTS_LANGUAGE=fr-FR
 !!! tip "Performance Benefits"
     Setting a default language improves performance by:
 
-    - **Faster responses**: Skips language detection API call to AWS Comprehend
-    - **Reduced costs**: No AWS Comprehend charges for language detection
+    - **Faster responses**: Skips language detection API call to Amazon Comprehend
+    - **Reduced costs**: No Amazon Comprehend charges for language detection
     - **Predictable voice selection**: Always uses voices from the specified language
 
 !!! info "When to Use"
@@ -4125,48 +3436,17 @@ export DEFAULT_TTS_LANGUAGE=fr-FR
 
 ---
 
-## Token Counting
+## :material-archive: Deprecated Settings
 
-Control how token usage is calculated and reported in API responses.
+[](){ #tokens-estimation }
+[](){ #tokens-encoding }
 
-#### `TOKENS_ESTIMATION` { #tokens-estimation }
-
-!!! warning "Deprecated"
-    This setting is deprecated and ignored. Token estimation using tiktoken has been removed from the project. Token counts are now sourced directly from AWS billing data when available.
-
-:octicons-package-24: **Purpose**
-:   (Deprecated) Estimate token counts using a tokenizer when the model doesn't return them directly
-
-:octicons-database-24: **Type**
-:   Boolean
-
-:octicons-gear-24: **Default**
-:   `false`
-
-```bash
-# No longer functional - setting is deprecated and ignored
-# export TOKENS_ESTIMATION=true
-```
-
-#### `TOKENS_ESTIMATION_DEFAULT_ENCODING` { #tokens-encoding }
-
-!!! warning "Deprecated"
-    This setting is deprecated and ignored. Token estimation using tiktoken has been removed from the project.
-
-:octicons-package-24: **Purpose**
-:   (Deprecated) Tiktoken encoding algorithm for token estimation
-
-:octicons-gear-24: **Default**
-:   `o200k_base`
-
-```bash
-# No longer functional - setting is deprecated and ignored
-# export TOKENS_ESTIMATION_DEFAULT_ENCODING=o200k_base
-```
+!!! warning "Deprecated and Ignored"
+    `TOKENS_ESTIMATION` (default: `false`) and `TOKENS_ESTIMATION_DEFAULT_ENCODING` (default: `None`) are deprecated and ignored: tiktoken-based token estimation has been removed from the project. Token counts are now sourced directly from AWS billing data when available. Remove these variables from existing configurations.
 
 ---
 
-## Model Cache
+## :material-cached: Model Cache
 
 stdapi.ai automatically discovers and caches available Bedrock models from configured regions. The cache is refreshed on-demand when expired, not via background tasks.
 
@@ -4182,7 +3462,7 @@ stdapi.ai automatically discovers and caches available Bedrock models from confi
 :   `900` (15 minutes)
 
 :octicons-workflow-24: **Behavior**
-:   When a request needs the model list (e.g., model lookup, `/models` endpoint) and the cache has expired, the server queries AWS Bedrock to discover newly available models, check for model access changes, and update inference profile configurations. This cache also applies to application inference profile and prompt router information when users pass ARNs directly (if enabled via [`AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN`](#bedrock-allow-application-profile-arn) or [`AWS_BEDROCK_ALLOW_PROMPT_ROUTER_ARN`](#bedrock-allow-prompt-router-arn))
+:   When a request needs the model list (e.g., model lookup, `/models` endpoint) and the cache has expired, the server queries Amazon Bedrock to discover newly available models, check for model access changes, and update inference profile configurations. This cache also applies to application inference profile and prompt router information when users pass ARNs directly (if enabled via [`AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN`](#bedrock-allow-application-profile-arn) or [`AWS_BEDROCK_ALLOW_PROMPT_ROUTER_ARN`](#bedrock-allow-prompt-router-arn))
 
 ```bash
 # Default: 15 minutes
@@ -4200,8 +3480,7 @@ export MODEL_CACHE_SECONDS=3600
 
     - Cache is refreshed only when a request needs it **and** the cache has expired
     - Common triggers: model lookup failures, `/v1/models` API calls, inference requests with unknown models
-    - The **first request after expiration** will experience additional latency while the cache refreshes (typically 2-5 seconds depending on number of regions)
-    - **All AWS API requests are executed in parallel** across regions to minimize latency penalty
+    - The **first request after expiration** experiences additional latency (typically 2-5 seconds) while the cache refreshes; the AWS calls (`ListFoundationModels`, `GetFoundationModelAvailability`, `ListInferenceProfiles`) run in parallel across regions, so the penalty scales with the slowest region rather than the number of regions
     - Subsequent requests use the fresh cache until it expires again
 
 !!! tip "Tuning Recommendations"
@@ -4211,11 +3490,11 @@ export MODEL_CACHE_SECONDS=3600
     | `900` (15 min) | :material-check: Production (default, balanced) | Balanced refresh frequency and latency impact |
     | `3600` (1 hour) | :material-cash: Stable production, cost optimization | Rare refresh latency, slower model discovery |
 
-!!! warning "Performance Considerations"
-    - **Latency Impact**: The first request after cache expiration will experience 2-5 seconds additional latency. All AWS API calls are parallelized to minimize this penalty, so latency scales with the slowest region rather than the sum of all regions.
-    - **API Calls**: Each refresh makes parallel calls to `ListFoundationModels`, `GetFoundationModelAvailability`, and `ListInferenceProfiles` across all configured regions. Lower cache lifetimes increase the frequency of these calls.
-    - **Rate Limits**: Very frequent refreshes in high-traffic deployments may approach API rate limits, though parallel execution doesn't increase per-region request rate
-    - **Multi-Region**: Refresh latency is determined by the slowest responding region, not the total number of regions, thanks to parallel execution
+    Lower cache lifetimes increase the frequency of the per-region discovery calls; very frequent refreshes in high-traffic deployments may approach API rate limits.
+
+---
+
+## :material-timer-sand: AI Response Timeout { #ai-response-timeout-section }
 
 #### `AI_RESPONSE_TIMEOUT` { #ai-response-timeout }
 
@@ -4251,7 +3530,7 @@ export AI_RESPONSE_TIMEOUT=900
 
 ---
 
-## Default Model Parameters
+## :material-tune: Default Model Parameters
 
 Configure default inference parameters applied automatically to specific models.
 
@@ -4282,7 +3561,7 @@ Configure default inference parameters applied automatically to specific models.
 | `stop_sequences` | String/Array | - | Stop generation tokens |
 | Provider-specific | Various | - | e.g., `anthropic_beta` |
 
-### Configuration Examples
+### Configuration Examples { #default-model-params-examples }
 
 **Basic Parameters:**
 
@@ -4354,7 +3633,7 @@ graph LR
 
 ---
 
-## Default Model Service Tiers
+## :material-layers-triple: Default Model Service Tiers { #default-model-service-tiers-section }
 
 Configure default service tiers applied automatically to specific Bedrock models.
 
@@ -4396,7 +3675,7 @@ Configure default service tiers applied automatically to specific Bedrock models
 :octicons-code-24: **Format**
 :   JSON object with model IDs as keys and tier string as value
 
-:octicons-arrow-right-24: **Default**
+:octicons-gear-24: **Default**
 :   `{}`
 
 **Supported Values:**
@@ -4408,7 +3687,7 @@ Configure default service tiers applied automatically to specific Bedrock models
 | `priority` | Lower-latency priority compute                    |
 | `reserved` | Dedicated reserved capacity (requires AWS contract) |
 
-### Configuration Examples
+### Configuration Examples { #service-tier-examples }
 
 **Single Model:**
 
@@ -4430,13 +3709,13 @@ export DEFAULT_MODEL_SERVICE_TIERS='{
 ### Service Tier Merging
 
 1. :material-numeric-1-circle: **Explicit request parameter** takes highest priority
-2. :material-numeric-2-circle: **HTTP header** (`X-Amzn-Bedrock-ServiceTier`) overrides defaults
+2. :material-numeric-2-circle: **HTTP header** (`X-Amzn-Bedrock-Service-Tier`, see [Per-Request Service Tier Configuration](#service-tier-per-request)) overrides defaults
 3. :material-numeric-3-circle: **Default from** `DEFAULT_MODEL_SERVICE_TIERS` applies if no explicit value
 4. :material-numeric-4-circle: **No service tier** passed to Bedrock if unset
 
 ---
 
-## Model Aliases
+## :material-label: Model Aliases { #model-aliases-section }
 
 Configure custom aliases to map user-friendly model names to actual model IDs. This enables OpenAI API compatibility and simplifies model references.
 
@@ -4453,7 +3732,7 @@ Configure custom aliases to map user-friendly model names to actual model IDs. T
     - `tts-1-hd` → `amazon.polly-neural`
     - `whisper-1` → `amazon.transcribe`
 
-    stdapi.ai also supports dynamic model name aliases matching official provider APIs (OpenAI, Anthropic). You can use model names from provider documentation (e.g., `claude-sonnet-5`, `gpt-oss-20b`) which are automatically resolved to their corresponding AWS Bedrock model identifiers.
+    stdapi.ai also supports dynamic model name aliases matching official provider APIs (OpenAI, Anthropic). You can use model names from provider documentation (e.g., `claude-sonnet-5`, `gpt-oss-20b`) which are automatically resolved to their corresponding Amazon Bedrock model identifiers.
 
 
 #### `MODEL_ALIASES` { #model-aliases }
@@ -4464,13 +3743,13 @@ Configure custom aliases to map user-friendly model names to actual model IDs. T
 :octicons-code-24: **Format**
 :   JSON object with alias names as keys and model IDs or ARNs as values
 
-:octicons-arrow-right-24: **Default**
+:octicons-gear-24: **Default**
 :   `{}` (empty, uses built-in defaults only)
 
 !!! tip "Advanced Routing with ARNs"
     Model aliases can also reference ARNs for Application Inference Profiles or Prompt Routers, enabling advanced routing strategies through friendly alias names. See [Using Inference Profile and Prompt Router ARNs](#using-inference-profile-and-prompt-router-arns) for more details.
 
-### Configuration Examples
+### Configuration Examples { #model-aliases-examples }
 
 **Basic Alias:**
 
@@ -4504,7 +3783,7 @@ export MODEL_ALIASES='{
 **Map OpenAI Models to Bedrock:**
 
 ```bash
-# Make OpenAI model names work with AWS Bedrock models
+# Make OpenAI model names work with Amazon Bedrock models
 export MODEL_ALIASES='{
   "gpt-5": "anthropic.claude-sonnet-5",
   "gpt-4o": "anthropic.claude-sonnet-5",
@@ -4580,7 +3859,7 @@ graph LR
 
 ---
 
-## System Prompt Handling
+## :material-message-text: System Prompt Handling
 
 Control how system prompts are handled for models that don't support them.
 
@@ -4624,9 +3903,9 @@ export DROP_UNSUPPORTED_SYSTEM_PROMPT=false
     - :material-bug: **Debugging** - Identify when system prompts aren't being used
     - :material-shield-alert: **Security requirements** - Ensure system prompts are always applied
 
-## Anthropic Beta Flag Filtering
+## :material-flask: Anthropic Beta Flag Filtering
 
-Anthropic-compatible clients like Claude Code send `anthropic-beta` headers with experimental beta flags. Many of these flags (such as `files-api-2025-04-14`, `prompt-caching-2024-07-31`) are **not supported by AWS Bedrock** and cause `ValidationException` errors (HTTP 400).
+Anthropic-compatible clients like Claude Code send `anthropic-beta` headers with experimental beta flags. Many of these flags (such as `files-api-2025-04-14`, `prompt-caching-2024-07-31`) are **not supported by Amazon Bedrock** and cause `ValidationException` errors (HTTP 400).
 
 stdapi.ai automatically filters out unsupported flags while preserving supported ones, so clients work without any special configuration. Previously, the workaround was to set `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` on the client side, but this also disabled Bedrock-supported flags like `Interleaved-thinking-2025-05-14` and `token-efficient-tools-2025-02-19`, degrading capabilities. This workaround is no longer needed.
 
@@ -4707,26 +3986,21 @@ export ANTHROPIC_BETA_ALLOWLIST='new-feature-2026-03-01,another-flag-2026-04-01'
 
 ---
 
+## :material-image: Image Generation
+
 #### `IMAGE_GENERATION_MODEL` { #image-generation-model }
 
 :octicons-package-24: **Purpose**
+:   Default Bedrock image model ID used when the [`image_generation`](api_openai_responses.md#image-generation) integrated tool is invoked via the Responses API. The tool intercepts requests from any text model, generates the image against this Bedrock image model, and returns an `image_generation_call` output item.
 
-Default Bedrock image model ID used when the [`image_generation`](api_openai_responses.md#image-generation) integrated tool is invoked via the Responses API. The tool intercepts requests from any text model, generates the image against this Bedrock image model, and returns an `image_generation_call` output item.
+:octicons-database-24: **Type**
+:   String (Bedrock image model ID)
 
-:octicons-gear-24: **Default**: `(empty)` — the tool returns HTTP 400 if no model is configured and the request does not specify one.
+:octicons-gear-24: **Default**
+:   None — the tool returns HTTP 400 if no model is configured and the request does not specify one
 
-The tool definition in the request may include a `model` field to override this default per call. Priority: request `model` field > this env var.
-
-**Supported Bedrock image models:**
-
-| Model ID | Description |
-|----------|-------------|
-| `amazon.nova-canvas-v1:0` | Amazon Nova Canvas (high quality) |
-| `amazon.titan-image-generator-v2:0` | Amazon Titan Image Generator v2 |
-| `amazon.titan-image-generator-v1` | Amazon Titan Image Generator v1 |
-| `stability.stable-diffusion-xl-v1` | Stability AI SDXL v1 |
-
-**Example:**
+:octicons-workflow-24: **Behavior**
+:   The tool definition in the request may include a `model` field to override this default per call. Priority: request `model` field > this env var. Any available Bedrock image generation model can be used — for example `amazon.nova-canvas-v1:0`, `amazon.titan-image-generator-v2:0`, or the Stability AI Stable Image / Stable Diffusion family. Legacy models (such as `amazon.titan-image-generator-v1` and `stability.stable-diffusion-xl-v1`) are hidden unless [`AWS_BEDROCK_LEGACY`](#bedrock-legacy) is enabled. Use the [Search Models API](api_search_models.md) to list the image models available in your deployment.
 
 ```bash
 export IMAGE_GENERATION_MODEL='amazon.nova-canvas-v1:0'
@@ -4748,7 +4022,7 @@ curl -X POST "$BASE/v1/responses" \
 
 ---
 
-## Using Inference Profile and Prompt Router ARNs { #using-inference-profile-and-prompt-router-arns }
+## :material-directions-fork: Using Inference Profile and Prompt Router ARNs { #using-inference-profile-and-prompt-router-arns }
 
 stdapi.ai supports passing ARNs directly as model IDs in API requests, enabling advanced routing capabilities beyond standard model selection.
 
@@ -4888,7 +4162,18 @@ When using ARN-based routing, ensure your IAM role/user has the appropriate perm
 }
 ```
 
-See the [IAM Permissions](#iam-permissions) section for complete policy examples.
+See the [IAM Permissions](operations_iam_permissions.md) page for complete policy examples.
 
 ---
+
+## :material-arrow-right: Next Steps
+
+<div class="grid cards" markdown>
+
+- :material-shield-key: [**IAM Permissions**](operations_iam_permissions.md) — Complete IAM policy reference
+- :material-lock: [**Authentication & Security**](operations_authentication_security.md) — Secure your deployment
+- :material-shield-check: [**Resilience & Failover**](operations_resilience.md) — Region routing and failover behavior
+- :material-chart-line: [**Logging & Monitoring**](operations_logging_monitoring.md) — Observability and metrics
+
+</div>
 

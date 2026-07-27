@@ -1,0 +1,701 @@
+---
+title: IAM Permissions - Amazon Bedrock API Gateway Access Policies
+description: Complete AWS IAM permission reference for stdapi.ai, including required Amazon Bedrock policies, feature-specific statements, and full policy examples.
+keywords: IAM permissions Bedrock, AWS IAM policy, Bedrock IAM actions, least privilege AWS, S3 IAM policy, Polly IAM, Transcribe IAM, API gateway permissions
+---
+
+# :material-shield-key: IAM Permissions
+
+stdapi.ai requires specific AWS IAM permissions to access Amazon Bedrock models and other AWS services. The exact permissions needed depend on which features you enable.
+
+!!! tip "Building Your Policy"
+    Combine the permission statements below based on the features you need. At minimum, you need the **Bedrock** permissions. Add statements for S3, TTS, STT, and other features as required by your deployment. Only include the statements you need — start with the Bedrock permissions and add others as required (least privilege).
+
+!!! info "Terraform Module"
+    The official [stdapi-ai Terraform module](https://github.com/stdapi-ai/terraform-aws-stdapi-ai) provisions the ECS task role with the required permissions automatically. This reference is for custom deployments and policy auditing.
+
+---
+
+## :material-aws: Bedrock (Required) { #bedrock-iam }
+
+**Environment Variables**: Always required
+
+These permissions are mandatory for stdapi.ai to discover and invoke Amazon Bedrock models:
+
+??? example "Bedrock IAM Policy Statements"
+    ```json
+    {
+      "Sid": "BedrockModelInvoke",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:CountTokens",
+        "bedrock:GetAsyncInvoke",
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream",
+        "bedrock:InvokeTool",
+        "bedrock:Rerank"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "BedrockAsyncInvokeTagging",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:TagResource"
+      ],
+      "Resource": "arn:aws:bedrock:*:*:async-invoke/*"
+    },
+    {
+      "Sid": "BedrockModelDiscovery",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:ListFoundationModels",
+        "bedrock:GetFoundationModelAvailability",
+        "bedrock:ListProvisionedModelThroughputs",
+        "bedrock:ListInferenceProfiles"
+      ],
+      "Resource": "*"
+    }
+    ```
+
+!!! note "Asynchronous Invocations"
+    `bedrock:GetAsyncInvoke` and `bedrock:TagResource` (on `arn:aws:bedrock:*:*:async-invoke/*`) serve Bedrock asynchronous invocations, used by video generation models and asynchronous embedding models such as TwelveLabs Marengo (`twelvelabs.marengo-embed-*`). They can be dropped if your deployment uses none of these models. `bedrock:ListAsyncInvokes` and `bedrock:ListTagsForResource` are **not** part of this core set — they are only needed for video job listing (see [Video Generation](#video-generation-optional)).
+
+---
+
+## :material-storefront: Bedrock Marketplace Auto-Subscribe (Optional) { #bedrock-marketplace-auto-subscribe-iam }
+
+**Environment Variables**: [`AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE`](operations_configuration.md#bedrock-marketplace-auto-subscribe)
+
+Required only if you want to enable automatic subscription to new models in the AWS Marketplace (`AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE=true`, which is the default). When enabled, the server can automatically subscribe to marketplace offerings for newly discovered models.
+
+??? example "Bedrock Marketplace Auto-Subscribe IAM Policy Statement"
+    ```json
+    {
+      "Sid": "BedrockMarketplaceAutoSubscribe",
+      "Effect": "Allow",
+      "Action": [
+        "aws-marketplace:Subscribe",
+        "aws-marketplace:ViewSubscriptions"
+      ],
+      "Resource": "*"
+    }
+    ```
+
+    !!! warning "Cost Consideration"
+        Automatic marketplace subscriptions may incur costs. Review AWS Marketplace pricing for individual models before enabling this feature, or set `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE=false` to require manual marketplace subscription.
+
+---
+
+## :material-directions-fork: Bedrock Inference Profiles and Prompt Routers (Optional) { #bedrock-inference-profiles-and-prompt-routers-optional }
+
+**Environment Variables**: [`AWS_BEDROCK_ALLOW_CROSS_REGION_INFERENCE_PROFILE_ARN`](operations_configuration.md#bedrock-allow-cross-region-profile-arn), [`AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN`](operations_configuration.md#bedrock-allow-application-profile-arn), [`AWS_BEDROCK_ALLOW_PROMPT_ROUTER_ARN`](operations_configuration.md#bedrock-allow-prompt-router-arn), [`AWS_BEDROCK_MODEL_ARN_MAPPING`](operations_configuration.md#bedrock-model-arn-mapping)
+
+Required only if you enable ARN-based routing features that allow users to pass inference profile or prompt router ARNs directly as model IDs, or if you configure server-side ARN mappings.
+
+??? example "Bedrock Inference Profiles and Prompt Routers IAM Policy Statement"
+    ```json
+    {
+      "Sid": "BedrockInferenceProfilesAndPromptRouters",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:GetInferenceProfile",
+        "bedrock:GetPromptRouter"
+      ],
+      "Resource": "*"
+    }
+    ```
+
+    !!! note "When to Include"
+        Add these permissions when:
+
+        - `AWS_BEDROCK_ALLOW_CROSS_REGION_INFERENCE_PROFILE_ARN=true`
+        - `AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN=true`
+        - `AWS_BEDROCK_ALLOW_PROMPT_ROUTER_ARN=true`
+        - `AWS_BEDROCK_MODEL_ARN_MAPPING` is configured with any mappings
+
+---
+
+## :material-shield-check: Bedrock Guardrails (Optional)
+
+**Environment Variables**: [`AWS_BEDROCK_GUARDRAIL_IDENTIFIER`](operations_configuration.md#aws-bedrock-guardrail-identifier), [`AWS_BEDROCK_GUARDRAIL_VERSION`](operations_configuration.md#aws-bedrock-guardrail-version)
+
+Required if you configure Bedrock Guardrails for content filtering, use the `moderation` request parameter, or select a guardrail on the [Moderations API](api_openai_moderations.md) (without a guardrail, that API falls back to [Comprehend toxicity moderation](#comprehend-moderation)). See the [Bedrock Guardrails](operations_configuration.md#bedrock-guardrails) configuration section.
+
+??? example "Bedrock Guardrails IAM Policy Statement"
+    ```json
+    {
+      "Sid": "BedrockGuardrails",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:ApplyGuardrail"
+      ],
+      "Resource": "arn:aws:bedrock:*:*:guardrail/*"
+    }
+    ```
+
+---
+
+## :material-database-lock: Bedrock Session Storage (Optional)
+
+**Environment Variables**: none (enabled by the `store=true` request parameter; see [Bedrock Session Storage](operations_configuration.md#bedrock-session-storage-optional) configuration)
+
+Required only if clients use `store=true` on the [Responses](api_openai_responses.md#stored-responses) or [Chat Completions](api_openai_chat_completions.md#stored-chat-completions) APIs, which persist generations in Amazon Bedrock sessions.
+
+??? example "Bedrock Session Storage IAM Policy Statement"
+    ```json
+    {
+      "Sid": "BedrockSessionStorage",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:CreateSession",
+        "bedrock:CreateInvocation",
+        "bedrock:PutInvocationStep",
+        "bedrock:ListInvocations",
+        "bedrock:ListInvocationSteps",
+        "bedrock:GetInvocationStep",
+        "bedrock:EndSession",
+        "bedrock:DeleteSession",
+        "bedrock:TagResource",
+        "bedrock:ListTagsForResource"
+      ],
+      "Resource": "arn:aws:bedrock:*:*:session/*"
+    },
+    {
+      "Sid": "BedrockSessionListing",
+      "Effect": "Allow",
+      "Action": "bedrock:ListSessions",
+      "Resource": "*"
+    }
+    ```
+
+    `bedrock:ListSessions` and `bedrock:ListTagsForResource` serve the stored chat completions listing endpoint (`GET /v1/chat/completions`); the account-level `ListSessions` action does not support resource scoping.
+
+    Add `kms:Decrypt` and `kms:GenerateDataKey` on the key when [`AWS_BEDROCK_SESSION_ENCRYPTION_KEY_ARN`](operations_configuration.md#aws-bedrock-session-encryption-key-arn) is configured.
+
+---
+
+## :material-layers-triple: Bedrock Mantle (Optional) { #bedrock-mantle-iam }
+
+**Environment Variables**: [`AWS_BEDROCK_MANTLE_ENABLED`](operations_configuration.md#bedrock-mantle-enabled)
+
+Required for [`AWS_BEDROCK_MANTLE_ENABLED`](operations_configuration.md#bedrock-mantle-enabled) (enabled by default), which exposes models served by the Amazon Bedrock Mantle endpoint (OpenAI GPT, xAI Grok, Google Gemma, and more). Without these permissions the server still starts normally: Mantle models are not listed and a warning is logged.
+
+??? example "Bedrock Mantle IAM Policy Statements"
+    ```json
+    {
+      "Sid": "BedrockMantleInference",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock-mantle:CreateInference",
+        "bedrock-mantle:GetInference",
+        "bedrock-mantle:DeleteInference",
+        "bedrock-mantle:ListModels",
+        "bedrock-mantle:GetModel",
+        "bedrock-mantle:CountTokens",
+        "bedrock-mantle:CancelInference"
+      ],
+      "Resource": "arn:aws:bedrock-mantle:*:*:project/*"
+    },
+    {
+      "Sid": "BedrockMantleBearerToken",
+      "Effect": "Allow",
+      "Action": "bedrock-mantle:CallWithBearerToken",
+      "Resource": "*"
+    }
+    ```
+
+    `bedrock-mantle:CallWithBearerToken` authorizes the short-term bearer tokens the server derives from its AWS credential chain; it does not support resource scoping.
+
+---
+
+## :material-database: S3 File Storage (Optional)
+
+**Environment Variables**: [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket), [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets)
+
+Required for storing generated images, audio files, documents, and videos. See [Storage Configuration](operations_configuration.md#storage-configuration) for bucket setup details.
+
+??? example "S3 File Storage IAM Policy Statements"
+    ```json
+    {
+      "Sid": "S3FileStorage",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging",
+        "s3:GetObject",
+        "s3:DeleteObject",
+        "s3:CreateMultipartUpload",
+        "s3:UploadPart",
+        "s3:CompleteMultipartUpload",
+        "s3:AbortMultipartUpload",
+        "s3:ListMultipartUploadParts"
+      ],
+      "Resource": "arn:aws:s3:::AWS_S3_BUCKET_VALUE/*"
+    },
+    {
+      "Sid": "S3FileStorageList",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListBucket",
+        "s3:ListBucketMultipartUploads"
+      ],
+      "Resource": "arn:aws:s3:::AWS_S3_BUCKET_VALUE"
+    }
+    ```
+
+    !!! info "Replace Bucket Name"
+        Replace `AWS_S3_BUCKET_VALUE` with the value of your [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket) environment variable. Repeat both statements for each [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets) bucket (used for async operations such as video generation).
+
+    **If your S3 bucket uses KMS encryption**, also add:
+
+    ```json
+    {
+      "Sid": "KMSEncryptedBucket",
+      "Effect": "Allow",
+      "Action": [
+        "kms:Decrypt",
+        "kms:GenerateDataKey"
+      ],
+      "Resource": "arn:aws:kms:REGION:ACCOUNT_ID:key/YOUR_KMS_KEY_ID",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "s3.REGION.amazonaws.com"
+        }
+      }
+    }
+    ```
+
+    !!! tip "KMS Security"
+        The `kms:ViaService` condition restricts KMS key usage to S3 service calls only, following AWS security best practices.
+
+---
+
+## :material-video: Video Generation (Optional) { #video-generation-optional }
+
+**Environment Variables**: [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets)
+
+Video generation itself runs on the core Bedrock asynchronous invocation permissions (`bedrock:InvokeModel`, `bedrock:GetAsyncInvoke`, `bedrock:TagResource`) plus [S3 File Storage](#s3-file-storage-optional) permissions on each regional bucket. The video job listing endpoint (`GET /v1/videos`) additionally requires:
+
+??? example "Video Job Listing IAM Policy Statements"
+    ```json
+    {
+      "Sid": "BedrockVideoJobListing",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:ListAsyncInvokes"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "BedrockVideoJobTags",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:ListTagsForResource"
+      ],
+      "Resource": "arn:aws:bedrock:*:*:async-invoke/*"
+    }
+    ```
+
+    The account-level `ListAsyncInvokes` action does not support resource scoping; `ListTagsForResource` reads the job metadata tags used to attribute listed jobs.
+
+---
+
+## :material-account-voice: Text-to-Speech (Optional)
+
+**Environment Variables**: [`AWS_POLLY_REGION`](operations_configuration.md#aws-polly-region), [`DEFAULT_TTS_MODEL`](operations_configuration.md#default-tts-model), [`DEFAULT_TTS_LANGUAGE`](operations_configuration.md#default-tts-language)
+
+Required for generating speech from text using Amazon Polly. See the [Audio and Text-to-Speech](operations_configuration.md#audio-and-text-to-speech) configuration section.
+
+!!! tip "Optimize Performance"
+    Set [`DEFAULT_TTS_LANGUAGE`](operations_configuration.md#default-tts-language) to skip language detection and avoid Amazon Comprehend API calls, improving response times and reducing costs.
+
+??? example "Polly Text-to-Speech IAM Policy Statement"
+    ```json
+    {
+      "Sid": "PollyTextToSpeech",
+      "Effect": "Allow",
+      "Action": [
+        "polly:SynthesizeSpeech",
+        "polly:DescribeVoices"
+      ],
+      "Resource": "*"
+    }
+    ```
+
+---
+
+## :material-microphone: Speech-to-Text (Optional) { #speech-to-text-optional }
+
+**Environment Variables**: [`AWS_TRANSCRIBE_REGION`](operations_configuration.md#aws-transcribe-region), [`AWS_TRANSCRIBE_S3_BUCKET`](operations_configuration.md#aws-transcribe-s3-bucket)
+
+Required for transcribing audio files using Amazon Transcribe.
+
+??? example "Transcribe Speech-to-Text IAM Policy Statements"
+    ```json
+    {
+      "Sid": "TranscribeSpeechToText",
+      "Effect": "Allow",
+      "Action": [
+        "transcribe:StartTranscriptionJob",
+        "transcribe:GetTranscriptionJob",
+        "transcribe:DeleteTranscriptionJob"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "TranscribeTagging",
+      "Effect": "Allow",
+      "Action": [
+        "transcribe:TagResource"
+      ],
+      "Resource": "arn:aws:transcribe:*:*:transcription-job/*"
+    },
+    {
+      "Sid": "TranscribeS3Storage",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:DeleteObject"
+      ],
+      "Resource": "arn:aws:s3:::AWS_TRANSCRIBE_S3_BUCKET_VALUE/*"
+    }
+    ```
+
+    !!! info "Replace Bucket Name"
+        Replace `AWS_TRANSCRIBE_S3_BUCKET_VALUE` with the value of your [`AWS_TRANSCRIBE_S3_BUCKET`](operations_configuration.md#aws-transcribe-s3-bucket) environment variable (or [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket) if using the same bucket).
+
+    **If your transcribe S3 bucket uses KMS encryption**, also add the KMS permissions with the appropriate bucket ARN.
+
+---
+
+## :material-earth: Language Detection (Optional)
+
+**Environment Variables**: [`AWS_COMPREHEND_REGION`](operations_configuration.md#aws-comprehend-region)
+
+Required for automatic language detection (used by TTS for voice selection).
+
+??? example "Comprehend Language Detection IAM Policy Statement"
+    ```json
+    {
+      "Sid": "ComprehendLanguageDetection",
+      "Effect": "Allow",
+      "Action": [
+        "comprehend:DetectDominantLanguage"
+      ],
+      "Resource": "*"
+    }
+    ```
+
+---
+
+## :material-shield-alert: Comprehend Moderation (Optional) { #comprehend-moderation }
+
+**Environment Variables**: [`AWS_COMPREHEND_REGION`](operations_configuration.md#aws-comprehend-region)
+
+Required for the [Moderations API](api_openai_moderations.md) toxicity backend — the default backend when no Bedrock guardrail is configured, and always available as the `amazon.comprehend-toxicity` model.
+
+??? example "Comprehend Moderation IAM Policy Statement"
+    ```json
+    {
+      "Sid": "ComprehendModeration",
+      "Effect": "Allow",
+      "Action": [
+        "comprehend:DetectToxicContent"
+      ],
+      "Resource": "*"
+    }
+    ```
+
+---
+
+## :material-translate: Text Translation (Optional)
+
+**Environment Variables**: [`AWS_TRANSLATE_REGION`](operations_configuration.md#aws-translate-region)
+
+Required for text translation features.
+
+??? example "Translate Text Translation IAM Policy Statement"
+    ```json
+    {
+      "Sid": "TranslateTextTranslation",
+      "Effect": "Allow",
+      "Action": [
+        "translate:TranslateText"
+      ],
+      "Resource": "*"
+    }
+    ```
+
+---
+
+## :material-key: API Key Authentication (Optional)
+
+Required if you configure API authentication. See the [Authentication](operations_configuration.md#authentication) configuration section.
+
+### SSM Parameter Store
+
+**Environment Variables**: [`API_KEY_SSM_PARAMETER`](operations_configuration.md#api-key-ssm)
+
+??? example "SSM Parameter Store IAM Policy Statements"
+    ```json
+    {
+      "Sid": "SSMParameterAccess",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetParameter"
+      ],
+      "Resource": "arn:aws:ssm:REGION:ACCOUNT_ID:parameter/API_KEY_SSM_PARAMETER_VALUE"
+    }
+    ```
+
+    !!! info "Replace Parameter Path"
+        Replace `API_KEY_SSM_PARAMETER_VALUE` with the value of your [`API_KEY_SSM_PARAMETER`](operations_configuration.md#api-key-ssm) environment variable (e.g., `/stdapi/prod/api-key`).
+
+    **If using encrypted SSM parameters**, also add:
+
+    ```json
+    {
+      "Sid": "KMSDecryptionForSSM",
+      "Effect": "Allow",
+      "Action": [
+        "kms:Decrypt"
+      ],
+      "Resource": "arn:aws:kms:REGION:ACCOUNT_ID:key/YOUR_KMS_KEY_ID",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "ssm.REGION.amazonaws.com"
+        }
+      }
+    }
+    ```
+
+    !!! tip "KMS Security"
+        The `kms:ViaService` condition restricts KMS key usage to SSM service calls only.
+
+### Secrets Manager
+
+**Environment Variables**: [`API_KEY_SECRETSMANAGER_SECRET`](operations_configuration.md#api-key-secretsmanager-secret)
+
+??? example "Secrets Manager IAM Policy Statement"
+    ```json
+    {
+      "Sid": "SecretsManagerAccess",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:GetSecretValue"
+      ],
+      "Resource": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:API_KEY_SECRETSMANAGER_SECRET_VALUE"
+    }
+    ```
+
+    !!! info "Replace Secret Name"
+        Replace `API_KEY_SECRETSMANAGER_SECRET_VALUE` with the value of your [`API_KEY_SECRETSMANAGER_SECRET`](operations_configuration.md#api-key-secretsmanager-secret) environment variable (e.g., `stdapi-api-key`).
+
+---
+
+## :material-file-document: Complete Policy Examples
+
+??? example "Minimal Policy (Bedrock Only)"
+    ```json
+    {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Sid": "BedrockModelInvoke",
+          "Effect": "Allow",
+          "Action": [
+            "bedrock:CountTokens",
+            "bedrock:GetAsyncInvoke",
+            "bedrock:InvokeModel",
+            "bedrock:InvokeModelWithResponseStream",
+            "bedrock:InvokeTool",
+            "bedrock:Rerank"
+          ],
+          "Resource": "*"
+        },
+        {
+          "Sid": "BedrockAsyncInvokeTagging",
+          "Effect": "Allow",
+          "Action": [
+            "bedrock:TagResource"
+          ],
+          "Resource": "arn:aws:bedrock:*:*:async-invoke/*"
+        },
+        {
+          "Sid": "BedrockModelDiscovery",
+          "Effect": "Allow",
+          "Action": [
+            "bedrock:ListFoundationModels",
+            "bedrock:GetFoundationModelAvailability",
+            "bedrock:ListProvisionedModelThroughputs",
+            "bedrock:ListInferenceProfiles"
+          ],
+          "Resource": "*"
+        },
+        {
+          "Sid": "BedrockMarketplaceAutoSubscribe",
+          "Effect": "Allow",
+          "Action": [
+            "aws-marketplace:Subscribe",
+            "aws-marketplace:ViewSubscriptions"
+          ],
+          "Resource": "*"
+        }
+      ]
+    }
+    ```
+
+    !!! note "Marketplace Auto-Subscribe (Default Enabled)"
+        The marketplace permissions are included because `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE` defaults to `true`. If you set it to `false`, you can remove the `BedrockMarketplaceAutoSubscribe` statement.
+
+??? example "Production Policy (Bedrock + S3 + Authentication)"
+    ```json
+    {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Sid": "BedrockModelInvoke",
+          "Effect": "Allow",
+          "Action": [
+            "bedrock:CountTokens",
+            "bedrock:GetAsyncInvoke",
+            "bedrock:InvokeModel",
+            "bedrock:InvokeModelWithResponseStream",
+            "bedrock:InvokeTool",
+            "bedrock:Rerank"
+          ],
+          "Resource": "*"
+        },
+        {
+          "Sid": "BedrockAsyncInvokeTagging",
+          "Effect": "Allow",
+          "Action": [
+            "bedrock:TagResource"
+          ],
+          "Resource": "arn:aws:bedrock:*:*:async-invoke/*"
+        },
+        {
+          "Sid": "BedrockModelDiscovery",
+          "Effect": "Allow",
+          "Action": [
+            "bedrock:ListFoundationModels",
+            "bedrock:GetFoundationModelAvailability",
+            "bedrock:ListProvisionedModelThroughputs",
+            "bedrock:ListInferenceProfiles"
+          ],
+          "Resource": "*"
+        },
+        {
+          "Sid": "BedrockMarketplaceAutoSubscribe",
+          "Effect": "Allow",
+          "Action": [
+            "aws-marketplace:Subscribe",
+            "aws-marketplace:ViewSubscriptions"
+          ],
+          "Resource": "*"
+        },
+        {
+          "Sid": "S3FileStorage",
+          "Effect": "Allow",
+          "Action": [
+            "s3:PutObject",
+            "s3:PutObjectTagging",
+            "s3:GetObject",
+            "s3:DeleteObject",
+            "s3:CreateMultipartUpload",
+            "s3:UploadPart",
+            "s3:CompleteMultipartUpload",
+            "s3:AbortMultipartUpload",
+            "s3:ListMultipartUploadParts"
+          ],
+          "Resource": "arn:aws:s3:::my-stdapi-bucket/*"
+        },
+        {
+          "Sid": "S3FileStorageList",
+          "Effect": "Allow",
+          "Action": [
+            "s3:ListBucket",
+            "s3:ListBucketMultipartUploads"
+          ],
+          "Resource": "arn:aws:s3:::my-stdapi-bucket"
+        },
+        {
+          "Sid": "SSMParameterAccess",
+          "Effect": "Allow",
+          "Action": [
+            "ssm:GetParameter"
+          ],
+          "Resource": "arn:aws:ssm:us-east-1:123456789012:parameter/stdapi/prod/api-key"
+        }
+      ]
+    }
+    ```
+
+    !!! note "Marketplace Auto-Subscribe (Default Enabled)"
+        The marketplace permissions are included because `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE` defaults to `true`. If you set it to `false`, you can remove the `BedrockMarketplaceAutoSubscribe` statement to follow the principle of least privilege.
+
+---
+
+## :material-table: Feature-Specific Permission Requirements
+
+| Feature                                         | Required Permissions                                                                                                                                       | Configuration                                                                |
+|-------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------|
+| **Bedrock Models (Invoke)**                     | `bedrock:CountTokens`<br>`bedrock:InvokeModel`<br>`bedrock:InvokeModelWithResponseStream`<br>`bedrock:InvokeTool`<br>`bedrock:Rerank`<br>`bedrock:GetAsyncInvoke` and `bedrock:TagResource` (on `arn:aws:bedrock:*:*:async-invoke/*`) for async-invoke models (video, TwelveLabs Marengo embeddings) | Always required                                                              |
+| **Bedrock Models (Discovery)**                  | `bedrock:ListFoundationModels`<br>`bedrock:GetFoundationModelAvailability`<br>`bedrock:ListProvisionedModelThroughputs`<br>`bedrock:ListInferenceProfiles` | Always required                                                              |
+| **Bedrock Marketplace Auto-Subscribe**          | `aws-marketplace:Subscribe`<br>`aws-marketplace:ViewSubscriptions`                                                                                         | `AWS_BEDROCK_MARKETPLACE_AUTO_SUBSCRIBE=true` (default)                      |
+| **Bedrock Inference Profiles & Prompt Routers** | `bedrock:GetInferenceProfile`<br>`bedrock:GetPromptRouter`                                                                                                 | `AWS_BEDROCK_ALLOW_*_ARN=true` or `AWS_BEDROCK_MODEL_ARN_MAPPING` configured |
+| **Bedrock Guardrails & Moderations**            | `bedrock:ApplyGuardrail`                                                                                                                                   | `AWS_BEDROCK_GUARDRAIL_IDENTIFIER`                                           |
+| **Stored Responses & Chat Completions**         | Bedrock session permissions (`bedrock:CreateSession`, `bedrock:*Invocation*`, `bedrock:ListSessions`, `bedrock:EndSession`, `bedrock:DeleteSession`, `bedrock:TagResource`, `bedrock:ListTagsForResource` on sessions) | `store=true` requests and stored-completion listings                         |
+| **Bedrock Mantle**                              | `bedrock-mantle:CreateInference`<br>`bedrock-mantle:GetInference`<br>`bedrock-mantle:DeleteInference`<br>`bedrock-mantle:ListModels`<br>`bedrock-mantle:GetModel`<br>`bedrock-mantle:CountTokens`<br>`bedrock-mantle:CancelInference` (on `arn:aws:bedrock-mantle:*:*:project/*`)<br>`bedrock-mantle:CallWithBearerToken` | `AWS_BEDROCK_MANTLE_ENABLED=true`                                            |
+| **File Storage**                                | `s3:PutObject`<br>`s3:PutObjectTagging`<br>`s3:GetObject`<br>`s3:DeleteObject`<br>`s3:CreateMultipartUpload`<br>`s3:UploadPart`<br>`s3:CompleteMultipartUpload`<br>`s3:AbortMultipartUpload`<br>`s3:ListMultipartUploadParts`<br>`s3:ListBucket`<br>`s3:ListBucketMultipartUploads` | `AWS_S3_BUCKET`                                                              |
+| **Video Generation**                            | Core Bedrock invoke permissions (incl. `bedrock:GetAsyncInvoke`, `bedrock:TagResource`)<br>`bedrock:ListAsyncInvokes` and `bedrock:ListTagsForResource` (on `arn:aws:bedrock:*:*:async-invoke/*`) for job listing<br>File Storage S3 permissions on each regional bucket | `AWS_S3_REGIONAL_BUCKETS`                                                    |
+| **KMS Encrypted S3 Buckets**                    | `kms:Decrypt`<br>`kms:GenerateDataKey`<br>with `kms:ViaService` condition                                                                                  | If S3 buckets use KMS encryption                                             |
+| **Text-to-Speech**                              | `polly:SynthesizeSpeech`<br>`polly:DescribeVoices`                                                                                                         | `AWS_POLLY_REGION`                                                           |
+| **Speech-to-Text**                              | `transcribe:StartTranscriptionJob`<br>`transcribe:GetTranscriptionJob`<br>`transcribe:DeleteTranscriptionJob`<br>`transcribe:TagResource` (on `arn:aws:transcribe:*:*:transcription-job/*`)<br>`s3:PutObject` (transcribe bucket)        | `AWS_TRANSCRIBE_REGION`<br>`AWS_TRANSCRIBE_S3_BUCKET`                        |
+| **Language Detection**                          | `comprehend:DetectDominantLanguage`                                                                                                                        | `AWS_COMPREHEND_REGION`                                                      |
+| **Comprehend Moderations**                      | `comprehend:DetectToxicContent`                                                                                                                            | Moderations API without a configured guardrail                              |
+| **Translation**                                 | `translate:TranslateText`                                                                                                                                  | `AWS_TRANSLATE_REGION`                                                       |
+| **Cost Tracking**                               | `pricing:GetProducts`                                                                                                                                      | `COST_TRACKING=true` (opt-in; `false` by default)                            |
+| **SSM Parameter Store**                         | `ssm:GetParameter`<br>`kms:Decrypt` (if encrypted)                                                                                                         | `API_KEY_SSM_PARAMETER`                                                      |
+| **Secrets Manager**                             | `secretsmanager:GetSecretValue`                                                                                                                            | `API_KEY_SECRETSMANAGER_SECRET`                                              |
+
+---
+
+## :material-account: IAM Role vs. IAM User
+
+stdapi.ai supports both IAM roles and IAM users:
+
+- **:material-aws: IAM Role (Recommended)**: Use when running on EC2, ECS, Lambda, or other AWS compute services. Attach the policy to the instance/task role.
+- **:material-account: IAM User**: Use when running outside AWS or for development. Create an IAM user with the required permissions and configure AWS credentials via environment variables or AWS CLI configuration.
+
+!!! success "Best Practice: Use IAM Roles"
+    When deploying on AWS infrastructure, always prefer IAM roles over IAM users with access keys. IAM roles provide automatic credential rotation and better security.
+
+---
+
+## :material-tag: AWS Tag Policies
+
+If your AWS organization enforces a [tag policy](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_tag-policies.html), the following tag keys must be allowed on the relevant resource types.
+
+| Tag key | Value | Applied to |
+|---------|-------|------------|
+| `stdapi-ai.expires` | `"true"` | S3 objects (Files API expiry) |
+| `stdapi-ai.request_id` | request UUID | Bedrock async jobs, Transcribe jobs |
+| `stdapi-ai.server_id` | server instance name | Bedrock async jobs, Transcribe jobs |
+| `stdapi-ai.user_id` | user identifier | Bedrock async jobs, Transcribe jobs (when user identity is known) |
+| `aws-apn-id` | `pc:<product-code>` | All AWS resources created at runtime and by the Terraform module. This is a [standard AWS Marketplace attribution tag](https://docs.aws.amazon.com/PRM/latest/aws-prm-onboarding-guide/what-is-service.html) required by any AWS Marketplace product — allowing it benefits all such products deployed in your organization, not only stdapi.ai. |
+
+---
+
+## :material-arrow-right: Next Steps
+
+<div class="grid cards" markdown>
+
+- :material-cog: [**Configuration Reference**](operations_configuration.md) — Environment variables for every feature
+- :material-lock: [**Authentication & Security**](operations_authentication_security.md) — Secure your deployment
+- :material-server-network: [**Advanced Deployment**](operations_deploy_advanced.md) — Terraform infrastructure examples
+- :material-help-circle: [**Troubleshooting**](operations_troubleshooting.md) — Diagnose permission errors
+
+</div>
