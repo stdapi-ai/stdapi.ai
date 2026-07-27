@@ -11,17 +11,60 @@ Discover how to integrate stdapi.ai with popular AI applications and tools. stda
 **Why use stdapi.ai for integrations?**
 
 - **No code changes required** - Just update the API endpoint in your application settings
-- **Access 80+ models** - Claude, Kimi, MiniMax, Qwen, GLM, Nova, Llama, Stability AI, and more
+- **Access 100+ models** - Claude, OpenAI GPT, xAI Grok, Kimi, DeepSeek, Qwen, GLM, Nova, Llama, Stability AI, and more
 - **Enterprise data control** - All processing stays in your AWS account
 - **Pay-per-use pricing** - No subscriptions, pay only Amazon Bedrock rates for actual usage
 - **AWS-native features** - Leverage prompt caching, reasoning modes, and guardrails through standard OpenAI, Anthropic, and Cohere APIs
 - **Three-dialect API compatibility** - Use the OpenAI, Anthropic, or Cohere SDK with the same deployment
 
+!!! tip "Try it before committing to anything"
+    Run stdapi.ai on your laptop in minutes with the [free community Docker image](operations_getting_started_local.md) — or deploy to AWS with a [14-day free trial](operations_getting_started.md). Every integration below works identically against either.
+
+## :material-lightning-bolt: How Integration Works
+
+Every integration on this page follows the same three steps — there is no step four:
+
+1. **Deploy** stdapi.ai — [on AWS](operations_getting_started.md) or [locally with Docker](operations_getting_started_local.md)
+2. **Copy** your endpoint URL and API key
+3. **Paste** them into your tool's AI-provider settings (or your SDK's `base_url`)
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="https://your-endpoint/v1", api_key="YOUR_KEY")
+# Everything else in your application stays exactly the same
+```
+
 ## :material-view-grid: Choose Your Integration
 
-Select the category that matches your needs, or explore multiple integrations to use Amazon Bedrock across your workflow.
+Pick the category that matches your goal — categories marked :material-book-open-variant: have a dedicated step-by-step guide.
 
-### :material-code-braces: Developer Tools — AI Coding Assistants
+<div class="grid cards" markdown>
+
+- :material-code-braces: **[AI Coding Assistants](#coding-assistants)** :material-book-open-variant:
+  <br>Frontier coding models in your IDE and terminal
+- :material-brain: **[Autonomous Agents](#autonomous-agents)**
+  <br>Self-directed agents on infrastructure you control
+- :material-chat: **[Chat Interfaces](#chat-interfaces)** :material-book-open-variant:
+  <br>Private ChatGPT alternative for your organization
+- :material-graph-outline: **[Workflow Automation](#workflow-automation)** :material-book-open-variant:
+  <br>AI steps in business processes, no code required
+- :material-microphone-message: **[Voice & Audio](#voice-audio)**
+  <br>Voice agents, transcription, and subtitles
+- :material-magnify: **[RAG & Semantic Search](#rag-semantic-search)**
+  <br>Ground AI answers in your own documents
+- :material-image-multiple: **[Content & Media Generation](#media-generation)**
+  <br>Images and video for creative pipelines
+- :material-note-text: **[Knowledge Management](#knowledge-management)**
+  <br>Private AI inside your notes and research
+- :material-robot: **[Team Chatbots](#team-chatbots)**
+  <br>Assistants in Slack, Discord, and Teams
+
+</div>
+
+### :material-code-braces: Developer Tools — AI Coding Assistants { #coding-assistants }
+
+*For teams that want frontier coding models in their IDEs and terminals — without sending code to third-party AI clouds.*
 
 Enhance your development workflow with AI-powered coding assistants. stdapi.ai integrates seamlessly with popular IDEs and AI development frameworks, allowing you to leverage Amazon Bedrock models (Claude, Kimi thinking, Qwen3 Coder Next) for code completion, generation, and intelligent assistance.
 
@@ -37,7 +80,9 @@ Enhance your development workflow with AI-powered coding assistants. stdapi.ai i
 
 ---
 
-### :material-brain: Autonomous Agents — Research & Task Automation
+### :material-brain: Autonomous Agents — Research & Task Automation { #autonomous-agents }
+
+*For builders of agents that must run on infrastructure you control.*
 
 Build self-directed AI agents that can plan, execute, and refine complex tasks autonomously. Integrate stdapi.ai with agent frameworks to create intelligent systems powered by Amazon Bedrock that can conduct research, automate workflows, and solve multi-step problems.
 
@@ -58,7 +103,9 @@ All agent frameworks that support OpenAI or Anthropic SDKs work immediately — 
 
 ---
 
-### :material-chat: Chat Interfaces — Private ChatGPT Alternative
+### :material-chat: Chat Interfaces — Private ChatGPT Alternative { #chat-interfaces }
+
+*For organizations replacing per-seat AI subscriptions with a private, pay-per-use assistant.*
 
 Build ChatGPT-like experiences with Amazon Bedrock models and complete privacy control. Deploy feature-rich web interfaces that provide familiar chat experiences while keeping all data within your AWS environment.
 
@@ -76,7 +123,9 @@ Build ChatGPT-like experiences with Amazon Bedrock models and complete privacy c
 
 ---
 
-### :material-graph-outline: Workflow Automation — AI-Powered Business Processes
+### :material-graph-outline: Workflow Automation — AI-Powered Business Processes { #workflow-automation }
+
+*For teams adding AI steps to business processes without writing code.*
 
 Integrate Amazon Bedrock AI into your business processes and automation workflows. Connect models to hundreds of services and APIs through visual workflow builders, enabling sophisticated AI-powered automation without writing code.
 
@@ -97,7 +146,9 @@ Integrate Amazon Bedrock AI into your business processes and automation workflow
 
 ---
 
-### :material-microphone-message: Voice & Audio — Speech Applications & Voice Agents
+### :material-microphone-message: Voice & Audio — Speech Applications & Voice Agents { #voice-audio }
+
+*For products that need speech in and speech out — without adding a second AI vendor.*
 
 Build voice-first applications on the same OpenAI-compatible endpoint: text-to-speech with Amazon Polly voices, speech-to-text with Amazon Transcribe and Bedrock audio models (including streaming and speaker diarization), and speech translation with subtitle output.
 
@@ -115,7 +166,9 @@ Build voice-first applications on the same OpenAI-compatible endpoint: text-to-s
 
 ---
 
-### :material-magnify: RAG & Semantic Search — Embeddings and Reranking
+### :material-magnify: RAG & Semantic Search — Embeddings and Reranking { #rag-semantic-search }
+
+*For teams grounding AI answers in their own documents and data.*
 
 Build retrieval-augmented generation and semantic search pipelines with Bedrock embedding models and Cohere-compatible reranking — two-stage retrieval (embed, then rerank) through one deployment.
 
@@ -133,7 +186,9 @@ Build retrieval-augmented generation and semantic search pipelines with Bedrock 
 
 ---
 
-### :material-image-multiple: Content & Media Generation — Images and Video
+### :material-image-multiple: Content & Media Generation — Images and Video { #media-generation }
+
+*For creative and marketing pipelines that generate visuals at scale.*
 
 Generate and edit visual content with Amazon Bedrock media models through the standard OpenAI Images and Videos APIs — from marketing assets to fully automated content pipelines.
 
@@ -151,7 +206,9 @@ Generate and edit visual content with Amazon Bedrock media models through the st
 
 ---
 
-### :material-note-text: Knowledge Management — AI-Enhanced Notes & Research
+### :material-note-text: Knowledge Management — AI-Enhanced Notes & Research { #knowledge-management }
+
+*For individuals and teams adding private AI to their notes and research.*
 
 Transform your knowledge base with AI-powered insights and generation. Integrate stdapi.ai with note-taking applications to add semantic search, writing assistance, and intelligent content organization.
 
@@ -169,7 +226,9 @@ Transform your knowledge base with AI-powered insights and generation. Integrate
 
 ---
 
-### :material-robot: Team Chatbots & Assistants — Slack, Discord, Teams Integration
+### :material-robot: Team Chatbots & Assistants — Slack, Discord, Teams Integration { #team-chatbots }
+
+*For support and ops teams meeting users where they already chat.*
 
 Deploy intelligent AI assistants to your team's communication platforms powered by Amazon Bedrock models.
 
@@ -186,6 +245,12 @@ Deploy intelligent AI assistants to your team's communication platforms powered 
     Build bots using the OpenAI or Anthropic SDK, pointing to your stdapi.ai endpoint. No dedicated guide yet — [see the API overview](api_overview.md) for connection details.
 
 ---
+
+## :material-help-circle: Common Questions
+
+- **Where does my data go?** Nowhere outside your AWS account — all inference runs in your account and is never shared with model providers or used for training. [Data sovereignty & compliance →](operations_compliance.md)
+- **What does it cost?** $0.10/container-hour for the gateway plus Amazon Bedrock rates — no markup, no subscriptions, no per-seat fees. [Cost management →](operations_cost_management.md)
+- **Am I locked in?** No — stdapi.ai speaks the standard OpenAI, Anthropic, and Cohere APIs. Leaving is the same one-line base-URL change that got you in.
 
 ## :material-arrow-right: Ready to Get Started?
 
