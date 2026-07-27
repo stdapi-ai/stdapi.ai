@@ -3,9 +3,9 @@
 
 # stdapi.ai
 
-**OpenAI, Anthropic & Cohere Compatible API Gateway for AWS Bedrock and AI Services**
+**OpenAI, Anthropic & Cohere Compatible API Gateway for Amazon Bedrock and AWS AI Services**
 
-Run your favorite OpenAI, Anthropic, and Cohere-compatible applications on AWS Bedrock. Access 80+ models including Claude, OpenAI GPT, xAI Grok, Kimi, MiniMax, Qwen with enterprise privacy, compliance controls, and pay-per-use AWS pricing.
+Run your favorite OpenAI, Anthropic, and Cohere-compatible applications on Amazon Bedrock. Access 80+ models including Claude, OpenAI GPT, xAI Grok, Kimi, MiniMax, Qwen with enterprise privacy, compliance controls, and pay-per-use AWS pricing.
 
 ---
 
@@ -70,7 +70,7 @@ curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "amazon.nova-micro-v1:0",
-    "messages": [{"role": "user", "content": "Hello from AWS Bedrock!"}]
+    "messages": [{"role": "user", "content": "Hello from Amazon Bedrock!"}]
   }'
 ```
 
@@ -83,11 +83,11 @@ curl http://localhost:8000/anthropic/v1/messages \
   -d '{
     "model": "amazon.nova-micro-v1:0",
     "max_tokens": 1000,
-    "messages": [{"role": "user", "content": "Hello from AWS Bedrock!"}]
+    "messages": [{"role": "user", "content": "Hello from Amazon Bedrock!"}]
   }'
 ```
 
-**Using the official SDKs?** Point `base_url` at `http://localhost:8000/v1` (OpenAI SDK) or `http://localhost:8000/anthropic` (Anthropic SDK) — no other code changes.
+**Using the official SDKs?** Point `base_url` at `http://localhost:8000/v1` (OpenAI SDK), `http://localhost:8000/anthropic` (Anthropic SDK), or `http://localhost:8000/cohere` (Cohere SDK) — no other code changes.
 
 **[Local development guide →](https://stdapi.ai/operations_getting_started_local/)**
 
@@ -114,10 +114,10 @@ Prefer a hands-off setup? A [managed deployment service](https://aws.amazon.com/
 
 ## 🎯 Why stdapi.ai?
 
-- **🔌 Drop-in replacement** — Change only the base URL. Works with LangChain, Continue.dev, Open WebUI, n8n, Claude Code, Aider, and 1000+ tools.
+- **🔌 Drop-in replacement** — Change only the base URL. Works with Open WebUI, n8n, OpenClaw, Claude Code, LangChain, OpenCode, and hundreds of other applications and tools.
 - **🔒 Data stays in your AWS account** — All inference runs in your account. Data never shared with model providers or used for training. Configure allowed regions for GDPR, HIPAA, FedRAMP.
 - **🌍 Multiply quota across regions** — Each AWS region has independent quota. 3 regions = 3× tokens per minute. Automatic routing and failover—no client changes.
-- **💰 Pay only what you use** — AWS Bedrock rates, no markup, no subscriptions or monthly minimums.
+- **💰 Pay only what you use** — Amazon Bedrock rates, no markup, no subscriptions or monthly minimums.
 - **⚡ Advanced Bedrock features** — Reasoning modes (Claude, Nova), prompt caching, guardrails, service tiers, inference profiles, prompt routers, stored conversations—all through standard OpenAI and Anthropic API parameters.
 - **🧠 80+ models** — Claude, OpenAI GPT, xAI Grok, Kimi, MiniMax, Qwen, GLM, Nova, Llama, Stability AI, and more. Switch instantly—no vendor lock-in.
 - **🎨 Complete multi-modal API** — Chat, embeddings, image generation/editing/variations, video generation, audio speech/transcription/translation, content moderation. Amazon Polly, Transcribe, Translate unified under OpenAI-compatible endpoints.
@@ -133,11 +133,11 @@ Prefer a hands-off setup? A [managed deployment service](https://aws.amazon.com/
 
 | Category | What You Can Build | Tools | Guide |
 |---|---|---|---|
-| **💬 Chat Interfaces** | Private ChatGPT alternative, team chat, knowledge base with RAG | Open WebUI, LibreChat | [Guide →](https://stdapi.ai/use_cases_openwebui/) |
-| **💻 Coding Assistants** | AI pair programming, code completion, codebase chat | Continue.dev, Cline, Cursor, Claude Code, Aider | [Guide →](https://stdapi.ai/use_cases_coding_assistants/) |
-| **🔄 Workflow Automation** | AI-powered ticket routing, content creation, data processing | n8n, Make, Zapier | [Guide →](https://stdapi.ai/use_cases_n8n/) |
-| **🤖 Chatbots** | Slack/Discord/Teams bots, documentation assistants | Slack Bot, Botpress | |
-| **🧠 Autonomous Agents** | Personal AI assistants, research agents, multi-agent systems, code agents | OpenClaw, LangGraph, CrewAI, AutoGPT | |
+| **💬 Chat Interfaces** | Private ChatGPT alternative, team chat, knowledge base with RAG | Open WebUI, AnythingLLM, LibreChat | [Guide →](https://stdapi.ai/use_cases_openwebui/) |
+| **💻 Coding Assistants** | AI pair programming, code completion, codebase chat | Claude Code, Cline, OpenCode, Pi Agent, Zed | [Guide →](https://stdapi.ai/use_cases_coding_assistants/) |
+| **🔄 Workflow Automation** | AI-powered ticket routing, content creation, data processing | n8n, Langflow, Dify, Flowise | [Guide →](https://stdapi.ai/use_cases_n8n/) |
+| **🤖 Chatbots** | Slack/Discord/Teams bots, documentation assistants | Dify, Chatwoot, Typebot | |
+| **🧠 Autonomous Agents** | Personal AI assistants, research agents, multi-agent systems, code agents | OpenClaw, Hermes Agent, LangGraph, CrewAI | |
 
 **[All use cases and integration guides →](https://stdapi.ai/use_cases/)**
 
@@ -152,7 +152,7 @@ The commercial license via [AWS Marketplace](https://aws.amazon.com/marketplace/
 - ✅ **Hardened containers** — security-optimized with regular updates
 - ✅ **Terraform module** — production-ready infrastructure in minutes
 - ✅ **Streamlined AWS billing** — consolidated with your existing AWS costs
-- ✅ **$0.10/container-hour** — no markup on model usage; pay AWS Bedrock rates directly
+- ✅ **$0.10/container-hour** — no markup on model usage; pay Amazon Bedrock rates directly
 
 **[Start 14-Day Free Trial →](https://aws.amazon.com/marketplace/pp/prodview-su2dajk5zawpo)**
 
@@ -227,6 +227,7 @@ We welcome contributions! Whether it's bug reports, new features, documentation 
 
 - **Issues:** [GitHub Issue Tracker](https://github.com/stdapi-ai/stdapi.ai/issues)
 - **Documentation:** [stdapi.ai](https://stdapi.ai)
+- **Commercial support:** [Contact page](https://stdapi.ai/contact/) — Marketplace subscribers get a response within 1 business day
 - **Sponsor:** [GitHub Sponsors](https://github.com/sponsors/JGoutin) — Priority support, feature prioritization, and influence on the roadmap. [View tiers →](https://github.com/sponsors/JGoutin)
 
 ---
