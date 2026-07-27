@@ -435,11 +435,17 @@ stdapi.ai is a drop-in replacement in hundreds of applications and tools. Change
 - :material-robot: **Agent Frameworks**
   <br>OpenClaw, Hermes Agent, LangChain, LangGraph, CrewAI, OpenAI Agents SDK, Strands Agents — multi-agent systems on Bedrock
 
+- :material-microphone-message: **Voice & Audio**
+  <br>Pipecat, LiveKit Agents, TEN Framework — voice agents with speech, transcription, and translation
+
+- :material-magnify: **RAG & Semantic Search**
+  <br>LlamaIndex, Haystack, RAGFlow, LightRAG — embeddings and Cohere-compatible reranking
+
 - :material-forum: **Team Chatbots**
   <br>Slack, Discord, Microsoft Teams — AI assistants in your team's communication tools
 
 - :material-note-text: **Knowledge Management**
-  <br>Obsidian, Notion, Logseq — AI-powered writing assistance and search
+  <br>Obsidian Copilot, Khoj, SiYuan — AI-powered writing assistance and search
 
 </div>
 
