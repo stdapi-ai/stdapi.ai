@@ -1,7 +1,7 @@
 ---
 title: AI Coding Assistants - Amazon Bedrock for IDEs
-description: Connect Continue.dev, Cursor, Cline, Claude Code, and other AI coding assistants to Amazon Bedrock via stdapi.ai. Use Claude, Kimi thinking, and Qwen Coder in VS Code and JetBrains IDEs.
-keywords: AI coding assistant AWS, Continue.dev AWS Bedrock, Cursor AWS integration, VS Code AI AWS, AI pair programming, coding copilot AWS, IDE AI integration, private Copilot, Claude Code AWS Bedrock
+description: Connect Claude Code, Cline, OpenCode, and other AI coding assistants to Amazon Bedrock via stdapi.ai. Use Claude, Kimi thinking, and Qwen3 Coder in VS Code, JetBrains IDEs, Zed, and the terminal.
+keywords: AI coding assistant AWS, Cline AWS Bedrock, OpenCode AWS Bedrock, Codex CLI AWS integration, VS Code AI AWS, AI pair programming, coding copilot AWS, IDE AI integration, private Copilot, Claude Code AWS Bedrock
 ---
 
 # :material-code-braces: AI Coding Assistants Integration
@@ -28,7 +28,7 @@ AI coding assistants are IDE extensions and terminal tools that leverage large l
 <div class="grid cards" markdown>
 
 - :material-puzzle: __Works with Your IDE__
-  <br>Almost any coding assistant that supports OpenAI or Anthropic compatible APIs works with stdapi.ai. Continue.dev, Cursor, Cline, Claude Code, Windsurf, Aider—all compatible with Amazon Bedrock models.
+  <br>Almost any coding assistant that supports OpenAI or Anthropic compatible APIs works with stdapi.ai. Claude Code, Cline, OpenCode, Pi Agent, Zed, OpenAI Codex CLI—all compatible with Amazon Bedrock models.
 
 - :material-brain: __Best-in-Class Coding Models__
   <br>Claude for reasoning and architecture, Kimi thinking for complex problem-solving, Qwen3 Coder Next for specialized coding tasks. Choose the right model for each task.
@@ -57,13 +57,13 @@ flowchart LR
     - ✓ **stdapi.ai deployed** - [See deployment guide](operations_getting_started.md) or [run locally with Docker](operations_getting_started_local.md)
     - ✓ **Your stdapi.ai URL** - e.g., `https://api.example.com` or `http://localhost:8000` for local
     - ✓ **Your API key** - From Terraform output or configuration (optional for local development)
-    - ✓ **IDE with AI assistant** - VS Code, JetBrains, Cursor, or your preferred editor with an AI coding extension
+    - ✓ **IDE with AI assistant** - VS Code, JetBrains IDEs, Zed, or your preferred editor with an AI coding extension
 
 ---
 
 ## ![OpenAI](styles/logo_openai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } OpenAI-Compatible Coding Assistants
 
-**Popular Tools:** [Cline](https://github.com/cline/cline) | [JetBrains AI Assistant](https://www.jetbrains.com/ai/) | [Continue.dev](https://continue.dev/) | [Cursor](https://cursor.com/) | [Windsurf](https://windsurf.com/)
+**Popular Tools:** [Cline](https://github.com/cline/cline) | [OpenCode](https://opencode.ai/) | [Pi Agent](https://github.com/earendil-works/pi) | [OpenAI Codex CLI](https://developers.openai.com/codex) | [Zed](https://zed.dev/) | [JetBrains AI Assistant](https://www.jetbrains.com/ai/)
 
 Most IDE coding assistants use the OpenAI-compatible API. Configure them by pointing to stdapi.ai's `/v1` endpoint.
 
@@ -87,6 +87,21 @@ Most AI coding assistants follow a similar configuration pattern. The exact menu
         Model: anthropic.claude-fable-5
         (or select from detected models if available)
         ```
+
+!!! example "OpenAI Codex CLI"
+    Codex CLI only speaks the [Responses API](api_openai_responses.md) wire format, which stdapi.ai serves at `/v1/responses`. Declare a custom provider in `~/.codex/config.toml` with `wire_api = "responses"`:
+
+    ```toml
+    [model_providers.stdapi]
+    name = "stdapi.ai"
+    base_url = "https://YOUR_STDAPI_URL/v1"
+    env_key = "STDAPI_API_KEY"
+    wire_api = "responses"
+
+    [profiles.stdapi]
+    model_provider = "stdapi"
+    model = "anthropic.claude-fable-5"
+    ```
 
 !!! tip "Model Selection for Coding"
     **Recommended models for different tasks:**
@@ -130,7 +145,7 @@ stdapi.ai fully supports tool calling (function calling) through the chat comple
     - Run tests and analyze output
     - Interact with external APIs and services
 
-    Most modern autonomous agents like Cline or Junie rely heavily on tool calling to perform complex, multi-step coding tasks. stdapi.ai's tool calling support (see [Chat Completions API - Tool Calling](api_openai_chat_completions.md#feature-compatibility)) ensures these agents can work at their full potential with Amazon Bedrock models.
+    Most modern autonomous agents like Cline or OpenCode rely heavily on tool calling to perform complex, multi-step coding tasks. stdapi.ai's tool calling support (see [Chat Completions API - Tool Calling](api_openai_chat_completions.md#feature-compatibility)) ensures these agents can work at their full potential with Amazon Bedrock models.
 
 ### :material-lightning-bolt: Code Completions
 
@@ -149,7 +164,7 @@ Some coding assistants support dedicated code completion endpoints for real-time
 
 ## ![Anthropic](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Anthropic-Compatible Coding Assistants
 
-**Popular Tools:** [Claude Code](https://code.claude.com/docs/en/overview) | [Aider](https://aider.chat/) | [JetBrains AI Assistant (with Claude Code ACP)](https://www.jetbrains.com/ai/)
+**Popular Tools:** [Claude Code](https://code.claude.com/docs/en/overview) | [OpenCode](https://opencode.ai/) | [Zed](https://zed.dev/) | [Factory Droid](https://factory.ai/)
 
 Tools that use the Anthropic messages API natively can be connected to stdapi.ai's `/anthropic` endpoint, enabling them to use Claude models via Amazon Bedrock.
 
@@ -322,7 +337,7 @@ stdapi.ai can act as an MCP server, exposing its API endpoints as tools that MCP
 
 ### :material-cog: Configuration
 
-Many MCP clients—including Claude Code and Cursor—configure servers via a `mcpServers` JSON block:
+Many MCP clients—including Claude Code and Cline—configure servers via a `mcpServers` JSON block:
 
 ```json
 {

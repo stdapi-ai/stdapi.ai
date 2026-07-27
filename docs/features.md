@@ -424,16 +424,16 @@ stdapi.ai is a drop-in replacement in hundreds of applications and tools. Change
 <div class="grid cards" markdown>
 
 - :material-chat: **Chat Interfaces**
-  <br>Open WebUI, LobeHub, LibreChat, Chatbot UI — private ChatGPT-style experiences on AWS
+  <br>Open WebUI, LobeHub, AnythingLLM, LibreChat — private ChatGPT-style experiences on AWS
 
 - :material-code-braces: **AI Coding Assistants**
-  <br>Claude Code, Continue.dev, Cline, Cursor, Windsurf, Aider — backed by Claude, Kimi, Qwen3 Coder
+  <br>Claude Code, Cline, OpenCode, Pi Agent, Zed — backed by Claude, Kimi, Qwen3 Coder
 
 - :material-graph-outline: **Workflow Automation**
-  <br>n8n, Make, Zapier — connect AI to your business processes
+  <br>n8n, Langflow, Dify, Flowise — connect AI to your business processes
 
 - :material-robot: **Agent Frameworks**
-  <br>OpenClaw, LangChain, LlamaIndex, CrewAI, LangGraph, AutoGPT — multi-agent systems on Bedrock
+  <br>OpenClaw, Hermes Agent, LangChain, LangGraph, CrewAI, OpenAI Agents SDK — multi-agent systems on Bedrock
 
 - :material-forum: **Team Chatbots**
   <br>Slack, Discord, Microsoft Teams — AI assistants in your team's communication tools
@@ -482,7 +482,7 @@ export MCP_EXCLUDE_TOOLS="openai_files_delete,anthropic_files_delete"
 <div class="grid cards" markdown>
 
 - :material-robot: **AI coding assistants**
-  <br>Connect Claude Code, Cursor, or Cline directly to stdapi.ai via MCP. Agents can generate text, search models, and manage files without any custom integration code.
+  <br>Connect Claude Code, Cline, or OpenCode directly to stdapi.ai via MCP. Agents can generate text, search models, and manage files without any custom integration code.
 
 - :material-flask: **Agentic pipelines**
   <br>Let orchestration frameworks (LangChain, LlamaIndex, CrewAI) discover and call Bedrock models dynamically. Include `search_models` so agents can find the right model ID, and `openai_chat_completion` for inference — keep the tool surface minimal.

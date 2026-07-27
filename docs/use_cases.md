@@ -1,6 +1,6 @@
 ---
 title: Use Cases - Amazon Bedrock Integration Examples
-description: Integrate Amazon Bedrock with Open WebUI, n8n, Continue.dev, and other OpenAI and Anthropic-compatible tools. Step-by-step guides for chat interfaces, coding assistants, and workflow automation.
+description: Integrate Amazon Bedrock with Open WebUI, n8n, Claude Code, and other OpenAI and Anthropic-compatible tools. Step-by-step guides for chat interfaces, coding assistants, and workflow automation.
 keywords: AWS Bedrock integration, Open WebUI AWS, ChatGPT alternative, Claude alternative, AI coding assistant AWS, n8n AI workflow, private ChatGPT, private Claude, AI automation tools, OpenAI integration examples, Anthropic integration examples
 ---
 
@@ -32,7 +32,7 @@ Build ChatGPT-like experiences with Amazon Bedrock models and complete privacy c
 - **Internal knowledge base** - RAG-enabled chat with document search
 - **Multi-modal applications** - Process text, voice, images, and documents
 
-**Popular tools:** Open WebUI, LobeHub, LibreChat, Chatbot UI
+**Popular tools:** Open WebUI, LobeHub, AnythingLLM, LibreChat
 
 **[Open WebUI Integration Guide](use_cases_openwebui.md)** — Complete setup with Terraform deployment examples
 
@@ -49,7 +49,10 @@ Integrate Amazon Bedrock AI into your business processes and automation workflow
 - **Data processing** - Extract, transform, and analyze data with AI
 - **Document workflows** - Automated summarization, translation, and classification
 
-**Popular tools:** n8n, Make (Integromat), Zapier
+**Popular tools:** n8n, Langflow, Dify, Flowise
+
+!!! note "Make & Zapier"
+    Make and Zapier can call stdapi.ai through their generic HTTP/webhook modules, but their native OpenAI modules do not support custom endpoints.
 
 **[n8n Integration Guide](use_cases_n8n.md)** — Complete setup for AI workflow automation
 
@@ -65,7 +68,7 @@ Enhance your development workflow with AI-powered coding assistants. stdapi.ai i
 - **Code generation** - Natural language to code with Claude and specialized coding models
 - **Codebase understanding** - Chat with your codebase, explain functions, refactor code
 
-**Popular tools:** Claude Code, Continue.dev, Cline, Cursor, JetBrains AI Assistant, Windsurf, Aider
+**Popular tools:** Claude Code, Cline, OpenCode, Pi Agent, Zed, JetBrains AI Assistant
 
 **[AI Coding Assistants Guide](use_cases_coding_assistants.md)** — Universal setup for IDEs and development frameworks
 
@@ -118,7 +121,7 @@ Build self-directed AI agents that can plan, execute, and refine complex tasks a
 - **Task automation** - Self-improving workflows that adapt to results
 - **Code agents** - Autonomous development and testing systems
 
-**Compatible frameworks:** OpenClaw, LangChain, LlamaIndex, LangGraph, CrewAI, AutoGPT, Semantic Kernel
+**Compatible frameworks:** OpenClaw, Hermes Agent, LangChain, LangGraph, LlamaIndex, CrewAI, OpenAI Agents SDK, Pydantic AI
 
 All agent frameworks that support OpenAI or Anthropic SDKs work immediately — point the SDK's base URL to stdapi.ai. See the [API overview](api_overview.md) for connection details.
 

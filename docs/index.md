@@ -23,7 +23,7 @@ Drop-in API gateway for Amazon Bedrock and AI services. Build private AI product
 <div class="grid cards" markdown>
 
 - :material-swap-horizontal: __Change one line, access 80+ models__
-  <br>Drop-in replacement for OpenAI, Anthropic, and Cohere SDKs. Works with Open WebUI, n8n, OpenClaw, Claude Code, LangChain, Continue.dev, and hundreds of other applications and tools—no code changes beyond the base URL.
+  <br>Drop-in replacement for OpenAI, Anthropic, and Cohere SDKs. Works with Open WebUI, n8n, OpenClaw, Claude Code, LangChain, OpenCode, and hundreds of other applications and tools—no code changes beyond the base URL.
 
 - :material-shield-lock: __Your data stays in your AWS account__
   <br>All inference runs in your account. Data is never shared with model providers or used for training. Configure allowed regions for GDPR, HIPAA, and FedRAMP compliance.
@@ -252,7 +252,7 @@ flowchart LR
   <br>[:octicons-arrow-right-24: Coding assistants guide](use_cases_coding_assistants.md)
 
 - :material-robot: __Workflow Automation Teams__
-  <br>Connect n8n, Make, Zapier, or custom automation to Amazon Bedrock. Access hundreds of integrations with enterprise-grade AI—all through one API endpoint.
+  <br>Connect n8n, Langflow, Dify, or custom automation to Amazon Bedrock. Access hundreds of integrations with enterprise-grade AI—all through one API endpoint.
   <br>[:octicons-arrow-right-24: n8n integration guide](use_cases_n8n.md)
 
 - :material-domain: __Enterprises with Compliance Needs__
@@ -263,7 +263,7 @@ flowchart LR
   <br>Switch from subscription-based AI services to pay-per-use Amazon Bedrock pricing. Pay only for actual usage with no monthly commitments while accessing leading models (Claude, Kimi, MiniMax, Qwen).
 
 - :material-application-brackets: __Teams Migrating from OpenAI or Anthropic__
-  <br>LangChain, LlamaIndex, Haystack, Claude SDK, or custom apps work immediately. Gradual migration supported—run both APIs in parallel during transition.
+  <br>LangChain, LlamaIndex, Pydantic AI, Claude Agent SDK, or custom apps work immediately. Gradual migration supported—run both APIs in parallel during transition.
 
 - :material-briefcase: __Legal & Professional Services__
   <br>Attorneys, consultants, and accountants cannot send client materials to third-party AI services. stdapi.ai processes all inference inside your own AWS account — client data never leaves your infrastructure.

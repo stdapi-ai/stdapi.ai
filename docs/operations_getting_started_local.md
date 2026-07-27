@@ -121,7 +121,7 @@ stdapi.ai works with any OpenAI or Anthropic-compatible tool. Here are popular i
 
 - :material-chat: [**Open WebUI**](use_cases_openwebui.md) — Private ChatGPT-like interface with RAG, multi-modal support, and document upload
 - :material-robot: [**n8n Workflows**](use_cases_n8n.md) — AI-powered automation with 400+ integrations
-- :material-code-braces: [**AI Coding Assistants**](use_cases_coding_assistants.md) — Claude Code, Continue.dev, Cline, Cursor, Aider with Amazon Bedrock models
+- :material-code-braces: [**AI Coding Assistants**](use_cases_coding_assistants.md) — Claude Code, Cline, OpenCode, Zed with Amazon Bedrock models
 - :material-book-open-variant: [**API Overview**](api_overview.md) — All endpoints, parameters, and usage examples
 - :material-rocket-launch: [**Getting Started**](operations_getting_started.md) — Deploy the production stack on AWS with Terraform
 - :material-wrench: [**Troubleshooting**](operations_troubleshooting.md) — Podman/SELinux, auth, model-not-found, and other common errors
