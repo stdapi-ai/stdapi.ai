@@ -1,6 +1,6 @@
 ---
 title: Releases & Roadmap - Active Development
-description: stdapi.ai release history and upcoming features. Track regular updates, new AWS Bedrock capabilities, and active development progress.
+description: stdapi.ai release history and upcoming features. Track regular updates, new Amazon Bedrock capabilities, and active development progress.
 keywords: stdapi.ai releases, AI gateway updates, AWS Bedrock features, API gateway roadmap, software changelog, active development, new AI features, product updates
 ---
 
@@ -12,11 +12,11 @@ keywords: stdapi.ai releases, AI gateway updates, AWS Bedrock features, API gate
 
 See [Release History below](#release-history) for the full changelog of all releases.
 
-**Latest: v1.14.0** – Amazon Bedrock Mantle support (enabled by default: OpenAI GPT-5.x, xAI Grok 4.3, Google Gemma 4, and more through every text API), video generation (OpenAI Videos API on Amazon Nova Reel and Luma Ray 2), Cohere-compatible Rerank and Embed APIs, content moderation via Bedrock Guardrails or Amazon Comprehend, extended reasoning as native Responses API reasoning items, stored responses and chat completions with a full list/retrieve/update/delete lifecycle and multi-turn continuation, conversation compaction, a model pricing API, multi-region failover for all AWS AI services, a security hardening pass, and broad Responses API compatibility improvements validated against agent SDKs (OpenAI Codex CLI)
+**Latest: v1.14.0** – Amazon Bedrock Mantle support, video generation, Cohere-compatible APIs, content moderation, and stored conversations. See the [full release notes](#v1140-bedrock-mantle-video-generation-cohere-apis-moderation-stored-conversations) below.
 
 ---
 
-## :material-rocket-launch: Roadmap
+## :material-rocket-launch: Roadmap (Tracked on GitHub)
 
 Pending features and current deployment state are tracked on the [GitHub Project](https://github.com/orgs/stdapi-ai/projects/1).
 
@@ -26,7 +26,7 @@ Pending features and current deployment state are tracked on the [GitHub Project
 
 ### v1.14.0 – Bedrock Mantle, Video Generation, Cohere APIs, Moderation & Stored Conversations
 
-This release adds enabled-by-default [**Amazon Bedrock Mantle** support](features.md#bedrock-mantle-models) — models served by the Bedrock Mantle endpoint (OpenAI GPT-5.4/5.5/5.6, xAI Grok 4.3, Google Gemma 4, Qwen3, GLM, DeepSeek, MiniMax, Kimi, Nemotron, and more) become available through all four text APIs, with transparent API conversion, native stored conversations, and independent throughput quotas. It also turns stdapi.ai into a three-dialect gateway with the new **Cohere-compatible API** ([Rerank](api_cohere_rerank.md) and [Embed](api_cohere_embed.md)), adds the OpenAI-compatible [**Videos API**](api_openai_videos.md) for asynchronous video generation, [**content moderation**](api_openai_moderations.md) backed by AWS Bedrock Guardrails or Amazon Comprehend toxicity detection, **stored responses and chat completions** with `store=true`, `previous_response_id` multi-turn continuation, and a full list/retrieve/update/delete lifecycle on AWS Bedrock session storage, and [**conversation compaction**](api_openai_responses.md#conversation-compaction). The Responses API gains [**extended reasoning**](api_openai_responses.md#extended-reasoning): Bedrock `reasoningContent` now surfaces as native reasoning output items, both non-streaming and streamed, with signatures and redacted payloads round-tripping through an `encrypted_content` envelope. A broader compatibility pass brings request/response parity closer to the OpenAI SDK — hosted and agent tool types (web search, computer use, custom tools) are now accepted and ignored instead of rejected, streams correctly terminate with `response.incomplete`/`response.failed`, cached tokens are counted in `input_tokens`, and citation annotations are emitted with their streaming events — validated end-to-end against the OpenAI Codex CLI as an agent client. Operations gain a [model pricing API](api_model_pricing.md), multi-region failover for every AWS AI service, fault-tolerant startup, real AWS-billed usage and costs in request logs (optionally exported as CloudWatch metrics), and a [security hardening pass](#security-hardening) covering SSRF protection, input validation, and log/error redaction.
+This release adds enabled-by-default [**Amazon Bedrock Mantle** support](features.md#bedrock-mantle-models) — models served by the Bedrock Mantle endpoint (OpenAI GPT-5.4/5.5/5.6, xAI Grok 4.3, Google Gemma 4, Qwen3, GLM, DeepSeek, MiniMax, Kimi, Nemotron, and more) become available through all four text APIs, with transparent API conversion, native stored conversations, and independent throughput quotas. It also turns stdapi.ai into a three-dialect gateway with the new **Cohere-compatible API** ([Rerank](api_cohere_rerank.md) and [Embed](api_cohere_embed.md)), adds the OpenAI-compatible [**Videos API**](api_openai_videos.md) for asynchronous video generation, [**content moderation**](api_openai_moderations.md) backed by Amazon Bedrock Guardrails or Amazon Comprehend toxicity detection, **stored responses and chat completions** with `store=true`, `previous_response_id` multi-turn continuation, and a full list/retrieve/update/delete lifecycle on Amazon Bedrock session storage, and [**conversation compaction**](api_openai_responses.md#conversation-compaction). The Responses API gains [**extended reasoning**](api_openai_responses.md#extended-reasoning): Bedrock `reasoningContent` now surfaces as native reasoning output items, both non-streaming and streamed, with signatures and redacted payloads round-tripping through an `encrypted_content` envelope. A broader compatibility pass brings request/response parity closer to the OpenAI SDK — hosted and agent tool types (web search, computer use, custom tools) are now accepted and ignored instead of rejected, streams correctly terminate with `response.incomplete`/`response.failed`, cached tokens are counted in `input_tokens`, and citation annotations are emitted with their streaming events — validated end-to-end against the OpenAI Codex CLI as an agent client. Operations gain a [model pricing API](api_model_pricing.md), multi-region failover for every AWS AI service, fault-tolerant startup, real AWS-billed usage and costs in request logs (optionally exported as CloudWatch metrics), and a [security hardening pass](#security-hardening) covering SSRF protection, input validation, and log/error redaction.
 
 !!! warning "New Required IAM Permissions"
     v1.14.0 requires two new IAM permissions:
@@ -96,7 +96,7 @@ Enabled-by-default support ([`AWS_BEDROCK_MANTLE_ENABLED`](operations_configurat
 | Smaller container images                      | The published images shrink by around 40% — 413 MB to 253 MB for the AWS Marketplace image, 377 MB to 230 MB for the community image — cutting pull time and storage. ffmpeg is now built with only the audio encoders the server uses, and the unused OpenTelemetry gRPC exporter is no longer installed |
 | Video retention (`AWS_S3_VIDEOS_EXPIRES_AFTER`) | Optional retention period for generated videos, reported as `expires_at` and enforced on download                                                                               |
 | Upload expiry (`expires_after`)               | Multipart upload sessions honor the OpenAI `expires_after` policy on the resulting file                                                                                           |
-| Session storage encryption                    | Optional KMS key for AWS Bedrock session storage (`AWS_BEDROCK_SESSION_ENCRYPTION_KEY_ARN`)                                                                                       |
+| Session storage encryption                    | Optional KMS key for Amazon Bedrock session storage (`AWS_BEDROCK_SESSION_ENCRYPTION_KEY_ARN`)                                                                                       |
 | Proxy trust (`PROXY_TRUSTED_HOSTS`)           | `X-Forwarded-*` headers are only honored when sent by a trusted reverse-proxy address                                                                                             |
 | Input file size limit (`MAX_INPUT_FILE_SIZE`) | Optional cap on the size of downloaded/decoded input files, with bounded download concurrency (`MAX_CONCURRENT_INPUT_DOWNLOADS`)                                                  |
 | Legacy model opt-in fix                       | `AWS_BEDROCK_LEGACY` now also exposes models whose AWS legacy date has already passed (e.g. Amazon Nova Reel)                                                                     |
@@ -139,7 +139,7 @@ The Responses API request/response surface was audited and hardened against the 
 - Fixed input files from one request occasionally leaking into later requests served by the same connection, which could fail those requests with internal errors
 - Anthropic Messages streams now emit an empty tool-input delta for tool calls without arguments, so SDK stream accumulators no longer fail on argument-less tool calls
 - JSON-body image edit and variation requests now accept the `model` field instead of rejecting the request
-- Model listings now report `service: "AWS Bedrock Runtime"` for classic Bedrock models (previously `"AWS Bedrock"`), distinguishing them from `"AWS Bedrock Mantle"`
+- Model listings now report `service: "AWS Bedrock Runtime"` for classic Bedrock models (previously `"Amazon Bedrock"`), distinguishing them from `"AWS Bedrock Mantle"`
 - High reasoning effort now maps to the intended thinking-token budget on Anthropic Claude models (the budget factor was previously miscomputed)
 - Setting `log_level` to `disabled` now suppresses all log output as documented, instead of publishing every event
 - Server startup no longer fails when the ECS container metadata endpoint answers slowly, which could prevent small Fargate tasks from starting: the lookup is retried, then falls back to the STS caller identity with a startup warning
@@ -222,7 +222,7 @@ This release adds the OpenAI-compatible [`/v1/completions`](api_openai_completio
 
 ---
 
-### v1.11.0 – MCP Server, Agent Discovery & Model Search (with v1.11.1-v1.11.4 maintenance updates)
+### v1.11.0 – MCP Server, Agent Discovery & Model Search (with v1.11.1–v1.11.4 maintenance updates)
 
 This release introduces a **Model Context Protocol (MCP) server**, making all stdapi.ai API endpoints directly accessible as MCP tools for AI agents and agentic workflows. A new `/search_models` endpoint enables precise discovery of models by route, MCP tool, region, streaming support, and legacy status. Agent-friendly discovery metadata is now exposed via RFC 8288 Link headers and an RFC 9727 machine-readable API catalog at `/.well-known/api-catalog`. Endpoints that previously required binary `multipart/form-data` uploads now also accept an `application/json` body for MCP and HTTP client compatibility. The Anthropic Messages API now accepts `xhigh` as a `reasoning_effort` value.
 
@@ -265,7 +265,7 @@ This release introduces a **Model Context Protocol (MCP) server**, making all st
 - Fix missing `file_id` inputs for image and file processing in OpenAI Responses API adapter
 - Remove `store` parameter from unsupported validations in chat completions to ensure client compatibility
 
-#### Fixes & Maintenance (v1.11.1-v1.11.4)
+#### Fixes & Maintenance (v1.11.1–v1.11.4)
 
 **v1.11.1**
 
@@ -285,7 +285,7 @@ This release introduces a **Model Context Protocol (MCP) server**, making all st
 
 ### v1.10.0 – OpenAI Responses API
 
-This release adds support for the OpenAI [`/v1/responses`](api_openai_responses.md) endpoint—OpenAI's next-generation API designed for building agents and multi-step AI workflows. Drop-in compatible with the OpenAI SDK, it works with all AWS Bedrock Converse-compatible models and supports streaming, function tools, built-in tools (web search, code interpreter, image generation), extended reasoning, and structured output.
+This release adds support for the OpenAI [`/v1/responses`](api_openai_responses.md) endpoint—OpenAI's next-generation API designed for building agents and multi-step AI workflows. Drop-in compatible with the OpenAI SDK, it works with all Amazon Bedrock Converse-compatible models and supports streaming, function tools, built-in tools (web search, code interpreter, image generation), extended reasoning, and structured output.
 
 #### :material-chat: Responses (OpenAI-Compatible)
 
@@ -406,7 +406,7 @@ The headline feature of v1.7 is **automatic multi-region routing**: stdapi.ai no
 
 ### v1.6.0 – Anthropic API Compatibility & Advanced Claude Capabilities
 
-Introduces a full Anthropic-compatible API layer, enabling direct use of the Anthropic SDK and Claude-native tools with AWS Bedrock. Adds Claude server tools support via OpenAI chat completions, token count estimation, automatic Anthropic beta flag filtering, and configurable route prefixes.
+Introduces a full Anthropic-compatible API layer, enabling direct use of the Anthropic SDK and Claude-native tools with Amazon Bedrock. Adds Claude server tools support via OpenAI chat completions, token count estimation, automatic Anthropic beta flag filtering, and configurable route prefixes.
 
 #### :material-chat: Chat Completions
 
@@ -438,7 +438,7 @@ Introduces a full Anthropic-compatible API layer, enabling direct use of the Ant
 | `OPENAI_ROUTES_PREFIX` configuration                    | Configurable base path prefix for OpenAI-compatible routes                                                                                         |
 | Real usage tracking (`usage` in logs)                   | Token counts sourced directly from AWS billing data (replaces tiktoken-based estimation)                                                           |
 | Anthropic beta flag filtering (`ANTHROPIC_BETA_FILTER`) | Automatically filter unsupported `anthropic-beta` flags to prevent Bedrock `ValidationException` errors; extensible via `ANTHROPIC_BETA_ALLOWLIST` |
-| Claude model name aliases                               | Use official Anthropic model names (e.g., `claude-opus-4-8`) auto-resolved to AWS Bedrock identifiers                                              |
+| Claude model name aliases                               | Use official Anthropic model names (e.g., `claude-opus-4-8`) auto-resolved to Amazon Bedrock identifiers                                              |
 
 ---
 
@@ -459,7 +459,7 @@ Introduces advanced reasoning capabilities with Amazon Nova 2 and Anthropic Clau
 **v1.5.2**
 
 - Add "/" route to avoid 404 errors on root endpoint
-- Fix empty system content block handling (improves AWS Bedrock Converse API compatibility)
+- Fix empty system content block handling (improves Amazon Bedrock Converse API compatibility)
 
 **v1.5.1**
 
@@ -613,7 +613,7 @@ Expands multimodal embedding capabilities, adds prompt caching support, and intr
 
 ### v1.0.0 – Foundation Release
 
-The initial release establishes core OpenAI API compatibility with AWS Bedrock backing.
+The initial release establishes core OpenAI API compatibility with Amazon Bedrock backing.
 
 #### :material-chat: Chat Completions
 

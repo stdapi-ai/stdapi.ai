@@ -13,7 +13,7 @@ Feel free to get in touch to discuss your needs.
 
 !!! tip offer "Request a 10% discount via a private offer"
 
-    Get **$0.09/container-hour** instead of $0.10 — a 10% reduction on the standard rate. Same pay-per-use model, no upfront payment or minimum usage. Want to try first? Use the [14-day free trial](operations_getting_started.md) of the public listing, then accept the private offer. Send us the AWS account ID that will purchase the product. We will create a private AWS Marketplace offer for that account. You will receive an AWS notification and can review the complete pricing and terms before accepting.
+    Get **$0.09/container-hour** instead of $0.10 — a 10% reduction on the standard rate, with the same pay-per-use model and no upfront payment or minimum usage. Want to try first? Use the [14-day free trial](operations_getting_started.md) of the public listing, then accept the private offer once we send it.
 
     Please include:
 

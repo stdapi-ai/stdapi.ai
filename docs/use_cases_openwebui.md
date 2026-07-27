@@ -1,12 +1,12 @@
 ---
-title: Open WebUI Integration - AWS Bedrock ChatGPT Alternative
-description: Deploy Open WebUI with AWS Bedrock using stdapi.ai. Complete setup guide for private ChatGPT alternative with RAG, voice, images, and multi-modal AI capabilities.
+title: Open WebUI Integration - Amazon Bedrock ChatGPT Alternative
+description: Deploy Open WebUI with Amazon Bedrock using stdapi.ai. Complete setup guide for private ChatGPT alternative with RAG, voice, images, and multi-modal AI capabilities.
 keywords: Open WebUI AWS, private ChatGPT, ChatGPT alternative, self-hosted ChatGPT, AWS Bedrock ChatGPT, enterprise chat interface, RAG chatbot AWS, multi-modal chat
 ---
 
 # :material-chat: Open WebUI Integration
 
-Connect Open WebUI to stdapi.ai as an OpenAI-compatible backend. Access AWS Bedrock models through Open WebUI's chat interface—it works out of the box as a private ChatGPT alternative running on your AWS infrastructure.
+Connect Open WebUI to stdapi.ai as an OpenAI-compatible backend. Access Amazon Bedrock models through Open WebUI's chat interface—it works out of the box as a private ChatGPT alternative running on your AWS infrastructure.
 
 ## :material-information-outline: About Open WebUI
 
@@ -16,7 +16,7 @@ Open WebUI is the leading open-source ChatGPT alternative. It provides a feature
 
 **Key Features:**
 
-- ⭐ **100,000+ GitHub stars** - Most popular open-source AI chat interface
+- ⭐ **140,000+ GitHub stars** - Most popular open-source AI chat interface
 - **ChatGPT-like UI** - Familiar interface your team already knows
 - **Multi-modal capabilities** - Text, voice, images, and document processing
 - **RAG & embeddings** - Upload documents, search with semantic understanding
@@ -28,9 +28,9 @@ Open WebUI is the leading open-source ChatGPT alternative. It provides a feature
 <div class="grid cards" markdown>
 
 - :material-swap-horizontal: __Zero Configuration Changes__
-  <br>stdapi.ai provides OpenAI-compatible API. Just update the endpoint URL—Open WebUI works immediately with AWS Bedrock models.
+  <br>stdapi.ai provides OpenAI-compatible API. Just update the endpoint URL—Open WebUI works immediately with Amazon Bedrock models.
 
-- :material-aws: __Access AWS Bedrock Models__
+- :material-aws: __Access Amazon Bedrock Models__
   <br>Claude with reasoning, Nova, Llama, DeepSeek, Stable Diffusion, and 80+ models through Open WebUI's familiar chat interface.
 
 - :material-application-cog: __Full Multi-Modal Support__
@@ -40,7 +40,7 @@ Open WebUI is the leading open-source ChatGPT alternative. It provides a feature
   <br>All processing stays in your AWS account. Complete infrastructure control with AWS security, compliance, and data sovereignty.
 
 - :material-currency-usd-off: __Pay-Per-Use Pricing__
-  <br>No ChatGPT subscriptions. Pay only AWS Bedrock rates for actual usage—no monthly minimums or per-user fees.
+  <br>No ChatGPT subscriptions. Pay only Amazon Bedrock rates for actual usage—no monthly minimums or per-user fees.
 
 </div>
 
@@ -48,9 +48,9 @@ Open WebUI is the leading open-source ChatGPT alternative. It provides a feature
 %%{init: {'flowchart': {'htmlLabels': true}} }%%
 flowchart LR
   openwebui["<img src='../styles/logo_openwebui.svg' style='height:64px;width:auto;vertical-align:middle;' /> Open WebUI"] --> stdapi["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai"]
-  stdapi --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Bedrock"]
-  stdapi --> transcribe["<img src='../styles/logo_amazon_transcribe.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Transcribe"]
-  stdapi --> polly["<img src='../styles/logo_amazon_polly.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Polly"]
+  stdapi --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
+  stdapi --> transcribe["<img src='../styles/logo_amazon_transcribe.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Transcribe"]
+  stdapi --> polly["<img src='../styles/logo_amazon_polly.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Polly"]
 ```
 
 ## :material-check-circle: Prerequisites
@@ -156,6 +156,7 @@ Choose any TTS model you prefer. Open WebUI calls `POST /v1/audio/speech` (see [
 
 !!! warning "TTS language detection"
     Open WebUI generates audio in small chunks, which makes language auto-detection inconsistent. Disable auto-detection by setting the stdapi.ai environment variable `DEFAULT_TTS_LANGUAGE` to a fixed language (for example, `en-US`).
+
 ---
 
 ## :material-rocket-launch: Terraform Deployment
@@ -167,7 +168,7 @@ Deploy Open WebUI + stdapi.ai together with production infrastructure:
 **What's included:**
 
 - Open WebUI on ECS Fargate with auto-scaling
-- stdapi.ai gateway connected to AWS Bedrock
+- stdapi.ai gateway connected to Amazon Bedrock
 - ElastiCache Valkey for caching
 - Aurora PostgreSQL with pgvector extension for RAG
 - SearXNG for web search integration

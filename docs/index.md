@@ -1,18 +1,16 @@
 ---
-title: stdapi.ai - OpenAI, Anthropic & Cohere Compatible AI Gateway for AWS Bedrock
-description: Run your favorite OpenAI, Anthropic, and Cohere-compatible apps on AWS Bedrock. Access 80+ models including Claude, OpenAI GPT, Kimi, GLM, MiniMax for chat, video generation, and content moderation, with stored conversations, enterprise compliance, and pay-per-use pricing. 14-day free trial on AWS Marketplace.
+title: stdapi.ai - OpenAI, Anthropic & Cohere Compatible AI Gateway for Amazon Bedrock
+description: Run your favorite OpenAI, Anthropic, and Cohere-compatible apps on Amazon Bedrock. Access 80+ models including Claude, OpenAI GPT, Amazon Nova, Llama for chat, video generation, and content moderation, with stored conversations, enterprise compliance, and pay-per-use pricing. 14-day free trial on AWS Marketplace.
 keywords: OpenAI API gateway, Anthropic API gateway, Cohere API gateway, AWS Bedrock API, OpenAI compatible API, Anthropic compatible API, Cohere compatible API, AWS AI gateway, OpenAI AWS integration, Anthropic AWS integration, enterprise AI API, AWS Bedrock integration, OpenAI alternative, Anthropic alternative, video generation API, content moderation API, private AI deployment, HIPAA compliant AI
 hide:
   - toc
   - navigation
 ---
 
-</style>
-
 <div class="hero hero--home" markdown>
-# Run OpenAI, Anthropic & Cohere Apps on AWS Bedrock
+# Run OpenAI, Anthropic & Cohere Apps on Amazon Bedrock
 
-Drop-in API gateway for AWS Bedrock and AI services. Build private AI products on AWS — without exposing your data to third-party AI providers, without subscriptions, and without rewriting your applications. Your existing OpenAI, Anthropic, and Cohere applications work immediately — just change the base URL. Access 80+ models with enterprise privacy, compliance controls, and pay-per-use AWS pricing.
+Drop-in API gateway for Amazon Bedrock and AI services. Build private AI products on AWS — without exposing your data to third-party AI providers, without subscriptions, and without rewriting your applications. Your existing OpenAI, Anthropic, and Cohere applications work immediately — just change the base URL. Access 80+ models with enterprise privacy, compliance controls, and pay-per-use AWS pricing.
 
 **Two ways to try it:** 14-day free trial on AWS Marketplace for production, or free for local development.
 
@@ -25,26 +23,26 @@ Drop-in API gateway for AWS Bedrock and AI services. Build private AI products o
 <div class="grid cards" markdown>
 
 - :material-swap-horizontal: __Change one line, access 80+ models__
-  <br>Drop-in replacement for OpenAI, Anthropic, and Cohere SDKs. Works with Open WebUI, n8n, OpenClaw, Claude Code, LangChain, Continue.dev, and 1000+ tools—no code changes beyond the base URL.
+  <br>Drop-in replacement for OpenAI, Anthropic, and Cohere SDKs. Works with Open WebUI, n8n, OpenClaw, Claude Code, LangChain, Continue.dev, and hundreds of other applications and tools—no code changes beyond the base URL.
 
 - :material-shield-lock: __Your data stays in your AWS account__
   <br>All inference runs in your account. Data is never shared with model providers or used for training. Configure allowed regions for GDPR, HIPAA, and FedRAMP compliance.
 
 - :material-currency-usd-off: __Pay only for what you use__
-  <br>No subscriptions or monthly minimums. Pay AWS Bedrock rates directly with no markup from stdapi.ai. Pay only for what you actually use.
+  <br>No subscriptions or monthly minimums. Pay Amazon Bedrock rates directly, with no markup from stdapi.ai.
 
-- :material-aws: __Purpose-built for AWS Bedrock__
+- :material-aws: __Purpose-built for Amazon Bedrock__
   <br>Deep integration with prompt caching, reasoning modes, guardrails, service tiers, inference profiles, and prompt routers. Not a generic proxy—built to leverage every Bedrock feature.
 
 - :material-brain: __Claude, GPT, Kimi, and 80+ more__
   <br>Claude (reasoning), OpenAI GPT, xAI Grok, Kimi, MiniMax, Qwen, Llama, GLM, Nova, Stability AI, and more. Switch models instantly—no vendor lock-in.
 
 - :material-rocket-launch: __Deploy in 5 minutes__
-  <br>3 lines of Terraform for production on AWS. Or run Docker locally for development. Production-ready infrastructure with HTTPS, WAF, auto-scaling, and monitoring included.
+  <br>3 Terraform commands for production on AWS. Or run Docker locally for development. Production-ready infrastructure with HTTPS, WAF, auto-scaling, and monitoring included.
 
 </div>
 
-## Models and AI services at your fingertips
+## Models and AI Services at Your Fingertips
 <div class="logo-marquee" aria-label="Top models and AWS AI services">
   <div class="logo-track">
     <a class="logo-item" href="https://aws.amazon.com/ai/generative-ai/" target="_blank" rel="noopener" title="Amazon Generative AI" aria-label="Amazon Generative AI">
@@ -53,7 +51,7 @@ Drop-in API gateway for AWS Bedrock and AI services. Build private AI products o
     </a>
     <a class="logo-item" href="https://aws.amazon.com/bedrock/" target="_blank" rel="noopener" title="Amazon Bedrock" aria-label="Amazon Bedrock">
       <img src="styles/logo_amazon_bedrock.svg" alt="Amazon Bedrock logo" />
-      <span>AWS Bedrock</span>
+      <span>Amazon Bedrock</span>
     </a>
     <a class="logo-item" href="https://claude.ai" target="_blank" rel="noopener" title="Anthropic Claude" aria-label="Anthropic Claude">
       <img src="styles/logo_anthropic_claude.svg" alt="Anthropic Claude logo" />
@@ -65,7 +63,7 @@ Drop-in API gateway for AWS Bedrock and AI services. Build private AI products o
     </a>
     <a class="logo-item" href="https://aws.amazon.com/polly/" target="_blank" rel="noopener" title="Amazon Polly" aria-label="Amazon Polly">
       <img src="styles/logo_amazon_polly.svg" alt="Amazon Polly logo" />
-      <span>AWS Polly</span>
+      <span>Amazon Polly</span>
     </a>
     <a class="logo-item" href="https://ai.meta.com/llama/" target="_blank" rel="noopener" title="Meta Llama" aria-label="Meta Llama">
       <img src="styles/logo_meta.svg" alt="Meta logo" />
@@ -93,7 +91,7 @@ Drop-in API gateway for AWS Bedrock and AI services. Build private AI products o
     </a>
     <a class="logo-item" href="https://aws.amazon.com/translate/" target="_blank" rel="noopener" title="Amazon Translate" aria-label="Amazon Translate">
       <img src="styles/logo_amazon_translate.svg" alt="Amazon Translate logo" />
-      <span>AWS Translate</span>
+      <span>Amazon Translate</span>
     </a>
     <a class="logo-item" href="https://mistral.ai" target="_blank" rel="noopener" title="Mistral AI" aria-label="Mistral AI">
       <img src="styles/logo_mistralai.svg" alt="Mistral AI logo" />
@@ -113,7 +111,7 @@ Drop-in API gateway for AWS Bedrock and AI services. Build private AI products o
     </a>
     <a class="logo-item" href="https://aws.amazon.com/transcribe/" target="_blank" rel="noopener" title="Amazon Transcribe" aria-label="Amazon Transcribe">
       <img src="styles/logo_amazon_transcribe.svg" alt="Amazon Transcribe logo" />
-      <span>AWS Transcribe</span>
+      <span>Amazon Transcribe</span>
     </a>
     <a class="logo-item" href="https://www.ai21.com" target="_blank" rel="noopener" title="AI21 Labs" aria-label="AI21 Labs">
       <img src="styles/logo_ai21.svg" alt="AI21 Labs logo" />
@@ -129,7 +127,7 @@ Drop-in API gateway for AWS Bedrock and AI services. Build private AI products o
     </a>
     <a class="logo-item" href="https://aws.amazon.com/bedrock/nova/" target="_blank" rel="noopener" title="Amazon Nova" aria-label="Amazon Nova">
       <img src="styles/logo_amazon_nova.svg" alt="Amazon Nova logo" />
-      <span>AWS Nova</span>
+      <span>Amazon Nova</span>
     </a>
     <a class="logo-item" href="https://ai.google/" target="_blank" rel="noopener" title="Google" aria-label="Google">
       <img src="styles/logo_google.svg" alt="Google logo" />
@@ -145,7 +143,7 @@ Drop-in API gateway for AWS Bedrock and AI services. Build private AI products o
     </a>
     <a class="logo-item" href="https://aws.amazon.com/comprehend/" target="_blank" rel="noopener" title="Amazon Comprehend" aria-label="Amazon Comprehend">
       <img src="styles/logo_amazon_comprehend.svg" alt="Amazon Comprehend logo" />
-      <span>AWS Comprehend</span>
+      <span>Amazon Comprehend</span>
     </a>
     <a class="logo-item" href="https://writer.com" target="_blank" rel="noopener" title="Writer" aria-label="Writer">
       <img src="styles/logo_writer.svg" alt="Writer logo" />
@@ -178,23 +176,23 @@ Drop-in API gateway for AWS Bedrock and AI services. Build private AI products o
 flowchart LR
   openai["<img src='styles/logo_openai.svg' style='height:64px;width:auto;vertical-align:middle;' /> OpenAI SDK Apps"] --> stdapi["<img src='styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai"]
   anthropic["<img src='styles/logo_anthropic.svg' style='height:64px;width:auto;vertical-align:middle;' /> Anthropic SDK Apps"] --> stdapi
-  stdapi --> bedrock["<img src='styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Bedrock<br/>80+ models"]
+  stdapi --> bedrock["<img src='styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Bedrock<br/>80+ models"]
   stdapi --> services["<img src='styles/logo_amazon.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS AI Services<br/>Polly · Transcribe · Translate"]
 ```
 
 </div>
 
-### Two paths to your first response
+### Two Paths to Your First Response
 
 === ":material-docker: 30 seconds — local Docker"
 
-    One `docker run` command, your existing AWS credentials, and you have a working compatible endpoint on `localhost:8000`. Free community image, AGPL-3.0.
+    One `docker run` command, your existing AWS credentials, and you have a working OpenAI/Anthropic-compatible endpoint on `localhost:8000`. Free community image, AGPL-3.0.
 
     [:octicons-arrow-right-24: Run Locally with Docker](operations_getting_started_local.md)
 
 === ":material-aws: 5 minutes — production on AWS"
 
-    Three Terraform commands deploy a production-ready stack: ECS Fargate, HTTPS, WAF, auto-scaling, CloudWatch alarms — all IP-restricted to your current address out of the box. Hardened container from AWS Marketplace with a 14-day free trial.
+    3 Terraform commands deploy a production-ready stack: ECS Fargate, HTTPS, WAF, auto-scaling, CloudWatch alarms — all IP-restricted to your current address out of the box. Hardened container from AWS Marketplace with a 14-day free trial.
 
     [:octicons-arrow-right-24: Deploy on AWS](operations_getting_started.md)
 
@@ -250,19 +248,19 @@ flowchart LR
   <br>[:octicons-arrow-right-24: Open WebUI guide](use_cases_openwebui.md) · [:octicons-arrow-right-24: All use cases](use_cases.md)
 
 - :material-code-braces: __Developers & AI Engineers__
-  <br>Use Claude, GPT, Kimi thinking, and Qwen Coder Next in your coding agent or IDE. Test locally with Docker, deploy to production with Terraform.
+  <br>Use Claude, GPT, Kimi thinking, and Qwen3 Coder Next in your coding agent or IDE. Test locally with Docker, deploy to production with Terraform.
   <br>[:octicons-arrow-right-24: Coding assistants guide](use_cases_coding_assistants.md)
 
 - :material-robot: __Workflow Automation Teams__
-  <br>Connect n8n, Make, Zapier, or custom automation to AWS Bedrock. Access 400+ integrations with enterprise-grade AI—all through one API endpoint.
+  <br>Connect n8n, Make, Zapier, or custom automation to Amazon Bedrock. Access hundreds of integrations with enterprise-grade AI—all through one API endpoint.
   <br>[:octicons-arrow-right-24: n8n integration guide](use_cases_n8n.md)
 
 - :material-domain: __Enterprises with Compliance Needs__
-  <br>Meet data sovereignty requirements with region controls. GDPR, HIPAA, FedRAMP workloads supported through AWS Bedrock's compliance certifications. CLOUD Act and FISA 702 risk mitigated through customer-managed encryption.
+  <br>Meet data sovereignty requirements with region controls. GDPR, HIPAA, FedRAMP workloads supported through Amazon Bedrock's compliance certifications. CLOUD Act and FISA 702 risk mitigated through customer-managed encryption.
   <br>[:octicons-arrow-right-24: Data Sovereignty & Compliance](operations_compliance.md)
 
 - :material-cash-multiple: __Cost-conscious Organizations__
-  <br>Switch from subscription-based AI services to pay-per-use AWS Bedrock pricing. Pay only for actual usage with no monthly commitments while accessing leading models (Claude, Kimi, MiniMax, Qwen).
+  <br>Switch from subscription-based AI services to pay-per-use Amazon Bedrock pricing. Pay only for actual usage with no monthly commitments while accessing leading models (Claude, Kimi, MiniMax, Qwen).
 
 - :material-application-brackets: __Teams Migrating from OpenAI or Anthropic__
   <br>LangChain, LlamaIndex, Haystack, Claude SDK, or custom apps work immediately. Gradual migration supported—run both APIs in parallel during transition.
@@ -307,7 +305,7 @@ stdapi.ai is an **AWS Qualified Software** solution, verified against AWS techni
     - **14-day free trial** — test in your environment risk-free
     - Hardened container, security updates, commercial support
     - Terraform module validated against AWS Security Hub FSBP; optional GuardDuty & DNS Firewall integrations
-    - **$0.10/container-hour** — no markup on model usage; pay AWS Bedrock rates directly
+    - **$0.10/container-hour** — no markup on model usage; pay Amazon Bedrock rates directly
     - No AGPL restrictions — keep your code and modifications private
     - Terraform module for production-ready deployment in minutes
     - Streamlined AWS billing

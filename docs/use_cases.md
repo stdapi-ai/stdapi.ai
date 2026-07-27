@@ -1,21 +1,21 @@
 ---
-title: Use Cases - AWS Bedrock Integration Examples
-description: Integrate AWS Bedrock with Open WebUI, n8n, Continue.dev, and other OpenAI and Anthropic-compatible tools. Step-by-step guides for chat interfaces, coding assistants, and workflow automation.
+title: Use Cases - Amazon Bedrock Integration Examples
+description: Integrate Amazon Bedrock with Open WebUI, n8n, Continue.dev, and other OpenAI and Anthropic-compatible tools. Step-by-step guides for chat interfaces, coding assistants, and workflow automation.
 keywords: AWS Bedrock integration, Open WebUI AWS, ChatGPT alternative, Claude alternative, AI coding assistant AWS, n8n AI workflow, private ChatGPT, private Claude, AI automation tools, OpenAI integration examples, Anthropic integration examples
 ---
 
 # :material-puzzle: Use Cases
 
-Discover how to integrate stdapi.ai with popular AI applications and tools. stdapi.ai's OpenAI and Anthropic-compatible APIs make it a drop-in replacement for OpenAI and Anthropic in hundreds of applications, giving you access to AWS Bedrock models with zero code changes.
+Discover how to integrate stdapi.ai with popular AI applications and tools. stdapi.ai's OpenAI, Anthropic, and Cohere-compatible APIs make it a drop-in replacement in hundreds of applications and tools, giving you access to Amazon Bedrock models with zero code changes.
 
 **Why use stdapi.ai for integrations?**
 
 - **No code changes required** - Just update the API endpoint in your application settings
 - **Access 80+ models** - Claude, Kimi, MiniMax, Qwen, GLM, Nova, Llama, Stability AI, and more
 - **Enterprise data control** - All processing stays in your AWS account
-- **Pay-per-use pricing** - No subscriptions, pay only AWS Bedrock rates for actual usage
-- **AWS-native features** - Leverage prompt caching, reasoning modes, and guardrails through standard OpenAI and Anthropic APIs
-- **Dual API compatibility** - Use OpenAI SDK or Anthropic SDK with the same deployment
+- **Pay-per-use pricing** - No subscriptions, pay only Amazon Bedrock rates for actual usage
+- **AWS-native features** - Leverage prompt caching, reasoning modes, and guardrails through standard OpenAI, Anthropic, and Cohere APIs
+- **Three-dialect API compatibility** - Use the OpenAI, Anthropic, or Cohere SDK with the same deployment
 
 ## :material-view-grid: Choose Your Integration
 
@@ -23,7 +23,7 @@ Select the category that matches your needs, or explore multiple integrations to
 
 ### :material-chat: Chat Interfaces — Private ChatGPT Alternative
 
-Build ChatGPT-like experiences with AWS Bedrock models and complete privacy control. Deploy feature-rich web interfaces that provide familiar chat experiences while keeping all data within your AWS environment.
+Build ChatGPT-like experiences with Amazon Bedrock models and complete privacy control. Deploy feature-rich web interfaces that provide familiar chat experiences while keeping all data within your AWS environment.
 
 **What you can build:**
 
@@ -40,7 +40,7 @@ Build ChatGPT-like experiences with AWS Bedrock models and complete privacy cont
 
 ### :material-graph-outline: Workflow Automation — AI-Powered Business Processes
 
-Integrate AWS Bedrock AI into your business processes and automation workflows. Connect models to hundreds of services and APIs through visual workflow builders, enabling sophisticated AI-powered automation without writing code.
+Integrate Amazon Bedrock AI into your business processes and automation workflows. Connect models to hundreds of services and APIs through visual workflow builders, enabling sophisticated AI-powered automation without writing code.
 
 **What you can automate:**
 
@@ -57,7 +57,7 @@ Integrate AWS Bedrock AI into your business processes and automation workflows. 
 
 ### :material-code-braces: Developer Tools — AI Coding Assistants
 
-Enhance your development workflow with AI-powered coding assistants. stdapi.ai integrates seamlessly with popular IDEs and AI development frameworks, allowing you to leverage AWS Bedrock models (Claude, Kimi thinking, Qwen Coder Next) for code completion, generation, and intelligent assistance.
+Enhance your development workflow with AI-powered coding assistants. stdapi.ai integrates seamlessly with popular IDEs and AI development frameworks, allowing you to leverage Amazon Bedrock models (Claude, Kimi thinking, Qwen3 Coder Next) for code completion, generation, and intelligent assistance.
 
 **What you can do:**
 
@@ -65,7 +65,7 @@ Enhance your development workflow with AI-powered coding assistants. stdapi.ai i
 - **Code generation** - Natural language to code with Claude and specialized coding models
 - **Codebase understanding** - Chat with your codebase, explain functions, refactor code
 
-**Popular tools:** Claude Code, Continue.dev, Cline, Cursor, JetBrains AI Assistant, Junie, Windsurf, Aider
+**Popular tools:** Claude Code, Continue.dev, Cline, Cursor, JetBrains AI Assistant, Windsurf, Aider
 
 **[AI Coding Assistants Guide](use_cases_coding_assistants.md)** — Universal setup for IDEs and development frameworks
 
@@ -91,7 +91,7 @@ Transform your knowledge base with AI-powered insights and generation. Integrate
 
 ### :material-robot: Team Chatbots & Assistants — Slack, Discord, Teams Integration
 
-Deploy intelligent AI assistants to your team's communication platforms powered by AWS Bedrock models.
+Deploy intelligent AI assistants to your team's communication platforms powered by Amazon Bedrock models.
 
 **What you can build:**
 
@@ -108,7 +108,7 @@ Deploy intelligent AI assistants to your team's communication platforms powered 
 
 ### :material-brain: Autonomous Agents — Research & Task Automation
 
-Build self-directed AI agents that can plan, execute, and refine complex tasks autonomously. Integrate stdapi.ai with agent frameworks to create intelligent systems powered by AWS Bedrock that can conduct research, automate workflows, and solve multi-step problems.
+Build self-directed AI agents that can plan, execute, and refine complex tasks autonomously. Integrate stdapi.ai with agent frameworks to create intelligent systems powered by Amazon Bedrock that can conduct research, automate workflows, and solve multi-step problems.
 
 **What you can build:**
 

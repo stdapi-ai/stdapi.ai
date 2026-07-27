@@ -1,12 +1,12 @@
 ---
-title: AI Coding Assistants - AWS Bedrock for IDEs
-description: Connect Continue.dev, Cursor, Cline, Claude Code, and other AI coding assistants to AWS Bedrock via stdapi.ai. Use Claude, Kimi thinking, and Qwen Coder in VS Code and JetBrains IDEs.
+title: AI Coding Assistants - Amazon Bedrock for IDEs
+description: Connect Continue.dev, Cursor, Cline, Claude Code, and other AI coding assistants to Amazon Bedrock via stdapi.ai. Use Claude, Kimi thinking, and Qwen Coder in VS Code and JetBrains IDEs.
 keywords: AI coding assistant AWS, Continue.dev AWS Bedrock, Cursor AWS integration, VS Code AI AWS, AI pair programming, coding copilot AWS, IDE AI integration, private Copilot, Claude Code AWS Bedrock
 ---
 
 # :material-code-braces: AI Coding Assistants Integration
 
-Connect your favorite AI coding assistants to AWS Bedrock models through stdapi.ai. Get intelligent code completions, chat assistance, and codebase understanding with powerful AWS models like Claude, Kimi thinking, and Qwen Coder Next—no vendor lock-in required.
+Connect your favorite AI coding assistants to Amazon Bedrock models through stdapi.ai. Get intelligent code completions, chat assistance, and codebase understanding with powerful AWS models like Claude, Kimi thinking, and Qwen3 Coder Next—no vendor lock-in required.
 
 ## :material-information-outline: About AI Coding Assistants
 
@@ -28,10 +28,10 @@ AI coding assistants are IDE extensions and terminal tools that leverage large l
 <div class="grid cards" markdown>
 
 - :material-puzzle: __Works with Your IDE__
-  <br>Almost any coding assistant that supports OpenAI or Anthropic compatible APIs works with stdapi.ai. Continue.dev, Cursor, Cline, Claude Code, Windsurf, Aider—all compatible with AWS Bedrock models.
+  <br>Almost any coding assistant that supports OpenAI or Anthropic compatible APIs works with stdapi.ai. Continue.dev, Cursor, Cline, Claude Code, Windsurf, Aider—all compatible with Amazon Bedrock models.
 
 - :material-brain: __Best-in-Class Coding Models__
-  <br>Claude for reasoning and architecture, Kimi thinking for complex problem-solving, Qwen Coder Next for specialized coding tasks. Choose the right model for each task.
+  <br>Claude for reasoning and architecture, Kimi thinking for complex problem-solving, Qwen3 Coder Next for specialized coding tasks. Choose the right model for each task.
 
 - :material-lock: __Code Privacy Guaranteed__
   <br>Your code never leaves your AWS account. Perfect for proprietary codebases, enterprise security requirements, or compliance-sensitive projects.
@@ -40,7 +40,7 @@ AI coding assistants are IDE extensions and terminal tools that leverage large l
   <br>Run stdapi.ai in AWS for production or locally with Docker for development. Test locally, deploy to cloud—same API, same experience.
 
 - :material-currency-usd-off: __Pay-Per-Use, No Subscriptions__
-  <br>No per-developer licenses or monthly subscriptions. Pay only AWS Bedrock rates for actual usage. Use powerful models without per-seat costs.
+  <br>No per-developer licenses or monthly subscriptions. Pay only Amazon Bedrock rates for actual usage. Use powerful models without per-seat costs.
 
 </div>
 
@@ -48,7 +48,7 @@ AI coding assistants are IDE extensions and terminal tools that leverage large l
 %%{init: {'flowchart': {'htmlLabels': true}} }%%
 flowchart LR
   ide["<img src='../styles/logo_vscode.svg' style='height:64px;width:auto;vertical-align:middle;' /> IDE + AI Assistant"] --> stdapi["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai"]
-  stdapi --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Bedrock"]
+  stdapi --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
 ```
 
 ## :material-check-circle: Prerequisites
@@ -63,7 +63,7 @@ flowchart LR
 
 ## ![OpenAI](styles/logo_openai.svg){ style="height: 1.2em; vertical-align: text-bottom;" } OpenAI-Compatible Coding Assistants
 
-**Popular Tools:** [Cline](https://github.com/cline/cline) | [JetBrains AI Assistant](https://www.jetbrains.com/ai/) | [Continue.dev](https://continue.dev/) | [Cursor](https://cursor.com/) | [Windsurf](https://codeium.com/windsurf)
+**Popular Tools:** [Cline](https://github.com/cline/cline) | [JetBrains AI Assistant](https://www.jetbrains.com/ai/) | [Continue.dev](https://continue.dev/) | [Cursor](https://cursor.com/) | [Windsurf](https://windsurf.com/)
 
 Most IDE coding assistants use the OpenAI-compatible API. Configure them by pointing to stdapi.ai's `/v1` endpoint.
 
@@ -93,7 +93,7 @@ Most AI coding assistants follow a similar configuration pattern. The exact menu
 
     - **Advanced reasoning & architecture**: Anthropic Claude Opus or Fable
     - **Complex problem-solving**: Kimi thinking models
-    - **Specialized coding tasks**: Qwen Coder, Mistral Devstral & Codestral, ...
+    - **Specialized coding tasks**: Qwen3 Coder, Mistral Devstral, Mistral Codestral
     - **Fast completions**: Amazon Nova Micro or Nova Lite
 
     **Configuration tips:**
@@ -149,9 +149,9 @@ Some coding assistants support dedicated code completion endpoints for real-time
 
 ## ![Anthropic](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Anthropic-Compatible Coding Assistants
 
-**Popular Tools:** [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview) | [Aider](https://aider.chat/) | [JetBrains AI Assistant (With Claude code ACP)](https://www.jetbrains.com/ai/)
+**Popular Tools:** [Claude Code](https://code.claude.com/docs/en/overview) | [Aider](https://aider.chat/) | [JetBrains AI Assistant (with Claude Code ACP)](https://www.jetbrains.com/ai/)
 
-Tools that use the Anthropic messages API natively can be connected to stdapi.ai's `/anthropic` endpoint, enabling them to use Claude models via AWS Bedrock.
+Tools that use the Anthropic messages API natively can be connected to stdapi.ai's `/anthropic` endpoint, enabling them to use Claude models via Amazon Bedrock.
 
 ### Claude Code
 
@@ -177,7 +177,10 @@ Create or edit `~/.claude/settings.json`:
 - Replace `YOUR_STDAPI_URL` with your stdapi.ai deployment URL (e.g., `https://api.example.com` or `http://localhost:8000` for local)
 - Replace `YOUR_API_KEY` with your stdapi.ai API key
 - The `/anthropic` path prefix is configured via the [`ANTHROPIC_ROUTES_PREFIX`](operations_configuration.md#anthropic-routes-prefix) setting (default: `/anthropic`)
-- The `ANTHROPIC_DEFAULT_*_MODEL` variables pin each model tier to a specific Bedrock model ID — recommended for production stability. Without them, Claude Code resolves aliases (`fable`, `opus`, `sonnet`, `haiku`) which may change when Anthropic releases new versions. stdapi.ai also accepts the short alias names (e.g. `claude-sonnet-5`) as a convenience.
+- The `ANTHROPIC_DEFAULT_*_MODEL` variables pin each model tier to a specific Bedrock model ID, so Claude Code stops resolving the `fable`/`opus`/`sonnet`/`haiku` aliases itself — an alias moves to a new model whenever Anthropic ships one, while a pinned model ID only changes when you edit it. Haiku's current Bedrock ID carries a dated snapshot (`claude-haiku-4-5-20251001-v1:0`) for the most granular pin; Sonnet, Opus, and Fable 5 don't yet have a separate dated ID in the Bedrock catalog, so pinning to their generation ID (e.g. `anthropic.claude-sonnet-5`) is the most specific option available today. stdapi.ai also accepts the short alias names (e.g. `claude-sonnet-5`) as a convenience.
+
+!!! note "No API key authentication? `ANTHROPIC_AUTH_TOKEN` is still required"
+    Claude Code refuses to start without a non-empty `ANTHROPIC_AUTH_TOKEN`, even if your stdapi.ai deployment has no API-key authentication configured. In that case, set it to any non-empty placeholder, e.g. `"ANTHROPIC_AUTH_TOKEN": "1"`.
 
 !!! tip "Beta Flag Compatibility"
     stdapi.ai automatically filters unsupported `anthropic_beta` flags, so Claude Code works without needing `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`. Bedrock-supported flags (like `Interleaved-thinking-2025-05-14` and `token-efficient-tools-2025-02-19`) are preserved while unsupported ones are silently removed. See [`ANTHROPIC_BETA_FILTER`](operations_configuration.md#anthropic-beta-filter) and [`ANTHROPIC_BETA_ALLOWLIST`](operations_configuration.md#anthropic-beta-allowlist) for details.
@@ -271,7 +274,7 @@ Claude Code is optimized for Claude models and enables reasoning by default. Whe
 Common configuration issues with non-Claude models:
 
 - **Prompt caching** — Claude Code sends `cache_control` headers that can cause errors on models that handle caching differently. Set `DISABLE_PROMPT_CACHING=1` to suppress them.
-- **Output token limit** — Claude Code defaults to requesting up to 32 000 output tokens, which exceeds the maximum for many non-Claude models. Set `CLAUDE_CODE_MAX_OUTPUT_TOKENS` to a value within the model's limit to avoid `max_tokens` validation errors.
+- **Output token limit** — Claude Code defaults to requesting up to 32,000 output tokens, which exceeds the maximum for many non-Claude models. Set `CLAUDE_CODE_MAX_OUTPUT_TOKENS` to a value within the model's limit to avoid `max_tokens` validation errors.
 
 ```json
 {

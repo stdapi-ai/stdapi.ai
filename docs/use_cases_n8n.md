@@ -1,26 +1,26 @@
 ---
-title: n8n Integration - AWS Bedrock Workflow Automation
-description: Connect n8n workflows to AWS Bedrock using stdapi.ai. Automate business processes with AI using 400+ integrations, no-code interface, and OpenAI-compatible or Anthropic-compatible nodes.
+title: n8n Integration - Amazon Bedrock Workflow Automation
+description: Connect n8n workflows to Amazon Bedrock using stdapi.ai. Automate business processes with AI using hundreds of integrations, no-code interface, and OpenAI-compatible or Anthropic-compatible nodes.
 keywords: n8n AI integration, workflow automation AI, no-code AI automation, AWS Bedrock workflows, business process automation, AI workflow tools, n8n AWS Bedrock, OpenAI n8n, Anthropic n8n
 ---
 
 # :material-sitemap: n8n Integration
 
-Connect n8n automation workflows to AWS Bedrock models through stdapi.ai's OpenAI-compatible or Anthropic-compatible interfaces. Existing OpenAI and Anthropic templates from the n8n marketplace work out of the box—simply point them to your stdapi.ai instance and access AWS Bedrock models.
+Connect n8n automation workflows to Amazon Bedrock models through stdapi.ai's OpenAI-compatible or Anthropic-compatible interfaces. Existing OpenAI and Anthropic templates from the n8n marketplace work out of the box—simply point them to your stdapi.ai instance and access Amazon Bedrock models.
 
 ## :material-information-outline: About n8n
 
 **🔗 Links:** [Website](https://n8n.io/) | [GitHub](https://github.com/n8n-io/n8n) | [Documentation](https://docs.n8n.io/)
 
-n8n is a powerful workflow automation platform that enables you to connect any app with an API to build intelligent automations. With its intuitive visual interface, you can create complex AI-powered workflows without writing code, connecting AWS Bedrock models to 400+ services including Slack, Google Sheets, Salesforce, and more.
+n8n is a powerful workflow automation platform that enables you to connect any app with an API to build intelligent automations. With its intuitive visual interface, you can create complex AI-powered workflows without writing code, connecting Amazon Bedrock models to hundreds of services including Slack, Google Sheets, Salesforce, and more.
 
 **Key Features:**
 
-- ⭐ **50,000+ GitHub stars** - Leading open-source workflow automation platform
-- **400+ integrations** - Pre-built nodes for popular services and APIs
+- ⭐ **190,000+ GitHub stars** - Leading open-source workflow automation platform
+- **Hundreds of integrations** - Pre-built nodes for popular services and APIs
 - **Visual no-code builder** - Drag-and-drop interface with JavaScript customization
 - **Self-hosted or cloud** - Deploy on your infrastructure or use n8n Cloud
-- **AI-native platform** - Built-in OpenAI nodes work instantly with AWS Bedrock via stdapi.ai
+- **AI-native platform** - Built-in OpenAI nodes work instantly with Amazon Bedrock via stdapi.ai
 - **Template marketplace** - Thousands of pre-built workflows ready to use
 
 ## :material-help-circle-outline: Why n8n + stdapi.ai?
@@ -28,22 +28,22 @@ n8n is a powerful workflow automation platform that enables you to connect any a
 <div class="grid cards" markdown>
 
 - :material-puzzle: __Use Existing OpenAI Templates__
-  <br>stdapi.ai works with n8n's OpenAI nodes. Thousands of marketplace templates and workflows designed for OpenAI run on AWS Bedrock—zero modifications needed.
+  <br>stdapi.ai works with n8n's OpenAI nodes. Thousands of marketplace templates and workflows designed for OpenAI run on Amazon Bedrock—zero modifications needed.
 
 - :material-robot: __Use Existing Anthropic Templates__
-  <br>stdapi.ai works with n8n's Anthropic nodes. Templates and workflows designed for Anthropic Claude run on AWS Bedrock—zero modifications needed.
+  <br>stdapi.ai works with n8n's Anthropic nodes. Templates and workflows designed for Anthropic Claude run on Amazon Bedrock—zero modifications needed.
 
-- :material-aws: __Access AWS Bedrock Models__
+- :material-aws: __Access Amazon Bedrock Models__
   <br>Claude, Nova, Llama, DeepSeek, Stable Diffusion, and 80+ models available in n8n workflows. Switch models without changing automation logic.
 
 - :material-graph-outline: __Automate Business Processes__
-  <br>Connect AWS Bedrock AI to Slack, Salesforce, Google Workspace, databases, and 400+ services. Build intelligent automation with no-code drag-and-drop.
+  <br>Connect Amazon Bedrock AI to Slack, Salesforce, Google Workspace, databases, and hundreds of other services. Build intelligent automation with no-code drag-and-drop.
 
 - :material-lock: __Enterprise Data Control__
   <br>All AI processing stays in your AWS account. Self-host n8n and stdapi.ai for complete data sovereignty and compliance.
 
 - :material-currency-usd-off: __Pay-Per-Use Pricing__
-  <br>No OpenAI subscriptions or per-automation fees. Pay only AWS Bedrock rates for actual AI usage in your workflows.
+  <br>No OpenAI subscriptions or per-automation fees. Pay only Amazon Bedrock rates for actual AI usage in your workflows.
 
 </div>
 
@@ -51,9 +51,9 @@ n8n is a powerful workflow automation platform that enables you to connect any a
 %%{init: {'flowchart': {'htmlLabels': true}} }%%
 flowchart LR
   n8n["<img src='../styles/logo_n8n.svg' style='height:64px;width:auto;vertical-align:middle;' /> n8n"] --> stdapi["<img src='../styles/logo.svg' style='height:64px;width:auto;vertical-align:middle;' /> stdapi.ai"]
-  stdapi --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Bedrock"]
-  stdapi --> transcribe["<img src='../styles/logo_amazon_transcribe.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Transcribe"]
-  stdapi --> polly["<img src='../styles/logo_amazon_polly.svg' style='height:64px;width:auto;vertical-align:middle;' /> AWS Polly"]
+  stdapi --> bedrock["<img src='../styles/logo_amazon_bedrock.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Bedrock"]
+  stdapi --> transcribe["<img src='../styles/logo_amazon_transcribe.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Transcribe"]
+  stdapi --> polly["<img src='../styles/logo_amazon_polly.svg' style='height:64px;width:auto;vertical-align:middle;' /> Amazon Polly"]
 ```
 
 ## :material-check-circle: Prerequisites
@@ -101,7 +101,7 @@ Enables: Text generation and conversational AI in workflows.
     **`OpenAI Chat Model`**
 
     - Model can be selected directly in the `Model` parameter
-    - ⚠️ **Note:** `Use Responses API` parameter can optionally be checked — stdapi.ai now implements the `/v1/responses` endpoint. When unchecked, n8n uses the standard `/v1/chat/completions` endpoint instead.
+    - Either setting works: checked uses `/v1/responses`, unchecked uses `/v1/chat/completions`.
 
     n8n calls either `POST /v1/chat/completions` (see [Chat Completions API](api_openai_chat_completions.md)) or `POST /v1/responses` (see [Responses API](api_openai_responses.md)) depending on this setting. Either way, the model must be a text/chat-capable model from the correct family.
 

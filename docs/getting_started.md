@@ -6,7 +6,7 @@ keywords: stdapi.ai getting started, try stdapi.ai, OpenAI gateway AWS, Anthropi
 
 # :material-rocket-launch: Get Started
 
-Pick the path that fits where you are right now. Both use the same OpenAI and Anthropic-compatible API — you can graduate from one to the other without changing your application code.
+Pick the path that fits where you are right now. Both use the same OpenAI, Anthropic, and Cohere-compatible API — you can graduate from one to the other without changing your application code.
 
 <div class="grid cards" markdown>
 
@@ -41,7 +41,7 @@ Pick the path that fits where you are right now. Both use the same OpenAI and An
 
 ---
 
-## :material-help-circle-outline: Not sure which to pick?
+## :material-help-circle-outline: Not Sure Which to Pick?
 
 | You are... | Go with | Why |
 |---|---|---|
@@ -54,7 +54,7 @@ You can start local and migrate to AWS later — your client code doesn't change
 
 ---
 
-## :material-clipboard-check-outline: Before you start
+## :material-clipboard-check-outline: Before You Start
 
 Both paths need:
 
@@ -70,7 +70,7 @@ The AWS Terraform path additionally needs:
 
 ---
 
-## :material-arrow-right: After your first call
+## :material-arrow-right: After Your First Call
 
 <div class="grid cards" markdown>
 
