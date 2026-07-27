@@ -152,7 +152,8 @@ async def create_transcription(
         str,
         Form(
             description=(
-                "The transcription model to use.\nAvailable models: amazon.transcribe"
+                "The transcription model to use.\n"
+                "`amazon.transcribe` or a Bedrock speech-to-text model (e.g. Mistral Voxtral)."
             )
         ),
     ] = AWS_TRANSCRIBE_MODEL_ID,
@@ -262,14 +263,17 @@ async def create_transcription(
     Args:
         http_request: FastAPI request object used to detect content-type.
         file: The audio file to transcribe (multipart only).
-        model: The transcription model to use. Available models: amazon.transcribe.
+        model: The transcription model to use: ``amazon.transcribe`` or a
+            Bedrock speech-to-text model (e.g. Mistral Voxtral).
         language: The language of the input audio (ISO-639-1 code, e.g. `en`). Improves accuracy and latency when provided.
-        prompt: Optional style guidance for the model. UNSUPPORTED on this implementation.
+        prompt: Optional style guidance for the model. Supported by Bedrock
+            models (e.g. Mistral Voxtral); rejected by ``amazon.transcribe``.
         chunking_strategy: Controls how the audio is cut into chunks. `auto` only is supported on this implementation.
         response_format: Output format: `json`, `text`, `srt`, `verbose_json`, `vtt`, or `diarized_json`.
         timestamp_granularities: For `verbose_json` only; comma-separated values among `word` and `segment` (e.g. `word,segment`).
         include: Additional information to include in the transcription response. `logprobs` only works with response_format set to `json`.
-        temperature: Sampling temperature. UNSUPPORTED on this implementation (must be 0.0).
+        temperature: Sampling temperature. Supported by Bedrock models
+            (e.g. Mistral Voxtral); rejected by ``amazon.transcribe``.
         stream: Whether to stream partial results via Server-Sent Events.
         known_speaker_names: Optional list of known speaker names. UNSUPPORTED on this implementation.
         known_speaker_references: Optional list of audio references for known speakers. UNSUPPORTED on this implementation.

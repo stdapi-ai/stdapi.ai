@@ -119,7 +119,8 @@ async def create_translation(
         str,
         Form(
             description=(
-                "The transcription model to use.\nAvailable models: amazon.transcribe"
+                "The transcription model to use.\n"
+                "`amazon.transcribe` or a Bedrock speech-to-text model (e.g. Mistral Voxtral)."
             )
         ),
     ] = AWS_TRANSCRIBE_MODEL_ID,
@@ -128,7 +129,8 @@ async def create_translation(
         Form(
             description=(
                 "An optional text to guide the model's style or continue a previous audio segment.\n"
-                "The prompt should be in English.\nUNSUPPORTED on this implementation."
+                "The prompt should be in English.\n"
+                "Supported by Bedrock models (e.g. Mistral Voxtral); rejected by `amazon.transcribe`."
             )
         ),
     ] = None,
@@ -154,10 +156,13 @@ async def create_translation(
     Args:
         http_request: FastAPI request object used to detect content-type.
         file: The audio file to translate (multipart only).
-        model: The transcription model to use. Available models: amazon.transcribe.
-        prompt: Optional style guidance for the model. UNSUPPORTED on this implementation.
+        model: The transcription model to use: ``amazon.transcribe`` or a
+            Bedrock speech-to-text model (e.g. Mistral Voxtral).
+        prompt: Optional style guidance for the model. Supported by Bedrock
+            models (e.g. Mistral Voxtral); rejected by ``amazon.transcribe``.
         response_format: Output format: `json`, `text`, `srt`, `verbose_json`, or `vtt`.
-        temperature: Sampling temperature. UNSUPPORTED on this implementation (must be 0.0).
+        temperature: Sampling temperature. Supported by Bedrock models
+            (e.g. Mistral Voxtral); rejected by ``amazon.transcribe``.
 
     Returns:
         The translated text in English in the requested format.
