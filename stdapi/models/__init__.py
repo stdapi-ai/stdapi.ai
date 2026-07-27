@@ -1250,6 +1250,27 @@ async def _get_inference_profiles(bedrock_client: BedrockClient) -> dict[str, st
     return result
 
 
+def _region_restriction_for(model_id: str) -> tuple[RegionName, ...] | None:
+    """Return the region restriction configured for *model_id*, if any.
+
+    Matches an exact ``aws_bedrock_model_region_restrict`` key first, then the
+    first key that is a prefix of *model_id*.
+
+    Args:
+        model_id: Bedrock model ID.
+
+    Returns:
+        Allowed regions in priority order, or ``None`` when unrestricted.
+    """
+    restrictions = SETTINGS.aws_bedrock_model_region_restrict
+    entry = restrictions.get(model_id)
+    if entry is None:
+        entry = next(
+            (v for k, v in restrictions.items() if model_id.startswith(k)), None
+        )
+    return entry
+
+
 def _filter_inference_profiles(
     profiles: dict[str, str], profiles_all: dict[str, list[str]]
 ) -> None:
@@ -1267,11 +1288,8 @@ def _filter_inference_profiles(
         profiles_all: All discovered profile IDs per model ID.
     """
     use_global = SETTINGS.aws_bedrock_cross_region_inference_global
-    restrictions = SETTINGS.aws_bedrock_model_region_restrict
     for model_id, profile_ids in profiles_all.items():
-        model_restricted = restrictions.get(model_id) is not None or any(
-            model_id.startswith(k) for k in restrictions
-        )
+        model_restricted = _region_restriction_for(model_id) is not None
         if (
             use_global
             and not model_restricted
@@ -1319,7 +1337,6 @@ async def _get_bedrock_models_from_region(region: RegionName) -> list[ModelDetai
         _get_provisioned_models(bedrock_client),
         _get_inference_profiles(bedrock_client),
     )
-    restrictions = SETTINGS.aws_bedrock_model_region_restrict
     next_refresh = SETTINGS.now() + _CACHE["update_interval"]
     models: list[ModelDetails] = []
     for model in foundation_models["modelSummaries"]:
@@ -1347,18 +1364,7 @@ async def _get_bedrock_models_from_region(region: RegionName) -> list[ModelDetai
                 )
             )
             and (
-                (
-                    allowed := restrictions.get(model["modelId"])
-                    or next(
-                        (
-                            v
-                            for k, v in restrictions.items()
-                            if model["modelId"].startswith(k)
-                        ),
-                        None,
-                    )
-                )
-                is None
+                (allowed := _region_restriction_for(model["modelId"])) is None
                 or region in allowed
             )
         ):
@@ -1531,7 +1537,9 @@ async def _collect_region_candidates(
         failed_regions: Accumulator mapping unreachable regions to the error.
 
     Returns:
-        Per model ID, its per-region candidates in region priority order.
+        Per model ID, its per-region candidates in region priority order;
+        models with an ``aws_bedrock_model_region_restrict`` entry follow
+        that entry's order instead.
 
     Raises:
         BotoCoreError: When every configured region fails (first error).
@@ -1553,6 +1561,9 @@ async def _collect_region_candidates(
             continue
         for model in result:
             candidates.setdefault(model.id, []).append(model)
+    for model_id, model_candidates in candidates.items():
+        if allowed := _region_restriction_for(model_id):
+            model_candidates.sort(key=lambda model: allowed.index(model.regions[0]))
     if errors and len(errors) == len(regions):
         raise errors[0]
     return candidates

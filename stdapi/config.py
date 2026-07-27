@@ -471,14 +471,16 @@ class _Settings(BaseSettings):
         ),
     )
 
-    aws_bedrock_model_region_restrict: dict[str, frozenset[RegionName]] = Field(
+    aws_bedrock_model_region_restrict: dict[str, tuple[RegionName, ...]] = Field(
         default={},
         description=(
             "Restrict a model to specific region(s) only. Can be used when a model "
             "provides important features only in certain regions.\n\n"
             "Keys are Bedrock model IDs (or prefixes), values are ordered lists of "
             "allowed regions. When set, the model will only be available in the listed "
-            "regions (intersected with the regions where it is actually available). "
+            "regions (intersected with the regions where it is actually available), "
+            "and the list order defines the routing priority when the default "
+            '"ordered" routing strategy is used. '
             "No fallback to other regions occurs.\n\n"
             "Example: {'amazon.nova-pro-v1:0': ['us-east-1']}\n\n"
             "Use case: Nova grounding is only available in us-east-1, so restricting "

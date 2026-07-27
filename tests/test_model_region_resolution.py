@@ -11,12 +11,15 @@ import pytest
 from botocore.exceptions import ClientError
 
 import stdapi.models as models_module
+from stdapi import region_routing
 from stdapi.api_errors import ApiError
 from stdapi.config import SETTINGS
 from stdapi.models import (
     ModelDetails,
     ModelRegionUnavailableError,
+    _collect_region_candidates,
     _is_invalid_model_identifier,
+    _region_restriction_for,
     route_and_execute,
 )
 from stdapi.monitoring import REQUEST_LOG
@@ -193,3 +196,44 @@ class TestRouteAndExecuteFailover:
             await route_and_execute(
                 "vendor.model-v1", cast("list[RegionName]", ["us-east-1"]), fn
             )
+
+
+class TestRegionRestrictOrder:
+    """aws_bedrock_model_region_restrict list order drives region priority."""
+
+    def test_restriction_lookup_exact_then_prefix(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Exact model ID keys win; prefix keys match as fallback."""
+        monkeypatch.setattr(
+            SETTINGS,
+            "aws_bedrock_model_region_restrict",
+            {"vendor.model-v1": ("eu-west-1",), "vendor.other": ("us-east-1",)},
+        )
+        assert _region_restriction_for("vendor.model-v1") == ("eu-west-1",)
+        assert _region_restriction_for("vendor.other-v2:0") == ("us-east-1",)
+        assert _region_restriction_for("vendor.unknown-v1") is None
+
+    async def test_candidates_follow_restriction_order(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Restricted models get candidates reordered to the configured order."""
+        monkeypatch.setattr(
+            SETTINGS,
+            "aws_bedrock_model_region_restrict",
+            {"vendor.model-v1": ("us-west-2", "us-east-1")},
+        )
+        monkeypatch.setattr(
+            region_routing, "ORDERED_BEDROCK_REGIONS", ["us-east-1", "us-west-2"]
+        )
+
+        async def fake_fetch(region: RegionName) -> list[ModelDetails]:
+            return [_model(None, [region])]
+
+        monkeypatch.setattr(
+            models_module, "_get_bedrock_models_from_region", fake_fetch
+        )
+        candidates = await _collect_region_candidates({})
+        assert [
+            candidate.regions[0] for candidate in candidates["vendor.model-v1"]
+        ] == ["us-west-2", "us-east-1"]
