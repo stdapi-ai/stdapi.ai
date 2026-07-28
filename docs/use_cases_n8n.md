@@ -93,6 +93,8 @@ The foundation of any n8n integration is configuring your API credentials. This 
 
 For each node, first select the credentials you previously created in the node parameters. Then, select the model you want to use. If you want to use a model that is not listed, you can enter its ID as an expression in the `Model` parameter.
 
+Operation names below match V2 of the n8n OpenAI node (n8n 1.117.0 and later); older versions use slightly different names (e.g. `Message a model` instead of `Generate a Model Response`).
+
 #### :material-chat-outline: Chat Completions
 
 Enables: Text generation and conversational AI in workflows.
@@ -101,20 +103,41 @@ Enables: Text generation and conversational AI in workflows.
     **`OpenAI Chat Model`**
 
     - Model can be selected directly in the `Model` parameter
-    - Either setting works: checked uses `/v1/responses`, unchecked uses `/v1/chat/completions`.
+    - Sub-node for AI Agent and chain nodes
+    - The **Use Responses API** option works either way: enabled calls `POST /v1/responses` (see [Responses API](api_openai_responses.md)), disabled calls `POST /v1/chat/completions` (see [Chat Completions API](api_openai_chat_completions.md))
 
-    n8n calls either `POST /v1/chat/completions` (see [Chat Completions API](api_openai_chat_completions.md)) or `POST /v1/responses` (see [Responses API](api_openai_responses.md)) depending on this setting. Either way, the model must be a text/chat-capable model from the correct family.
+    In both cases the model must be a text/chat-capable model from the correct family.
 
 #### :material-message-text: Text Generation
 
-Enables: Text generation using the OpenAI Responses API.
+Enables: Text generation using the OpenAI Responses or Chat Completions APIs.
 
-!!! example "Supported Node"
-    **`OpenAI/Message a model`**
+!!! example "Supported Nodes"
+    **`OpenAI/Generate a Model Response`**
 
     - Model can be selected directly in the `Model` parameter
 
     n8n calls `POST /v1/responses` (see [Responses API](api_openai_responses.md)), so the model must be a text/chat-capable model from the correct family.
+
+    ---
+
+    **`OpenAI/Generate a Chat Completion`**
+
+    - Model can be selected directly in the `Model` parameter
+
+    n8n calls `POST /v1/chat/completions` (see [Chat Completions API](api_openai_chat_completions.md)), so the model must be a text/chat-capable model from the correct family.
+
+#### :material-shield-check: Text Moderation
+
+Enables: Content safety classification in workflows.
+
+!!! example "Supported Node"
+    **`OpenAI/Classify Text for Violations`**
+
+    - Works out of the box with OpenAI's default moderation model names
+    - `omni-moderation-latest` maps to your configured Bedrock guardrail (or to Amazon Comprehend toxicity detection when no guardrail is set); `text-moderation-latest` maps to Amazon Comprehend toxicity detection
+
+    n8n calls `POST /v1/moderations` (see [Moderations API](api_openai_moderations.md)).
 
 #### :material-database: Embeddings
 
@@ -132,7 +155,7 @@ Enables: Vector embeddings for semantic search and RAG workflows.
 Enables: Image understanding and analysis in workflows.
 
 !!! example "Supported Node"
-    **`OpenAI/Analyze image`**
+    **`OpenAI/Analyze Image`**
 
     - Model can be selected directly in the `Model` parameter
 
@@ -143,7 +166,7 @@ Enables: Image understanding and analysis in workflows.
 Enables: Text-to-image creation in workflows.
 
 !!! example "Supported Node"
-    **`OpenAI/Generate an image`**
+    **`OpenAI/Generate an Image`**
 
     - Model ID can be entered as expression in the `Model` parameter
 
@@ -154,7 +177,7 @@ Enables: Text-to-image creation in workflows.
 Enables: Image transformation and editing in workflows.
 
 !!! example "Supported Node"
-    **`OpenAI/Edit image`**
+    **`OpenAI/Edit an Image`**
 
     - Model ID can be entered as expression in the `Model` parameter
 
@@ -165,7 +188,7 @@ Enables: Image transformation and editing in workflows.
 Enables: Text-to-speech audio generation in workflows.
 
 !!! example "Supported Node"
-    **`OpenAI/Generate audio`**
+    **`OpenAI/Generate Audio`**
 
     - Model ID can be entered as expression in the `Model` parameter
     - **Or use OpenAI model names directly:** `tts-1` and `tts-1-hd` work by default thanks to built-in model aliases
@@ -177,12 +200,24 @@ Enables: Text-to-speech audio generation in workflows.
 Enables: Speech-to-text transcription in workflows.
 
 !!! example "Supported Node"
-    **`OpenAI/Transcribe a recording`**
+    **`OpenAI/Transcribe a Recording`**
 
     - Works out of the box with OpenAI's `whisper-1` model name
     - The model alias automatically maps to `amazon.transcribe`
 
     n8n calls `POST /v1/audio/transcriptions` (see [Audio Transcriptions API](api_openai_audio_transcriptions.md)), so the model must match the speech-to-text modality.
+
+#### :material-translate: Audio Translation
+
+Enables: Translating speech in any supported language into English text.
+
+!!! example "Supported Node"
+    **`OpenAI/Translate a Recording`**
+
+    - Works out of the box with OpenAI's `whisper-1` model name
+    - The model alias automatically maps to `amazon.transcribe`; Bedrock speech-to-text models (e.g. Mistral Voxtral) also work
+
+    n8n calls `POST /v1/audio/translations` (see [Audio Translations API](api_openai_audio_translations.md)), so the model must match the speech-to-text modality.
 
 #### :material-file-upload: Files
 
@@ -190,7 +225,7 @@ Enables: Upload files once and reference them across multiple chat completion re
 
 n8n calls the `/v1/files` endpoints (see [Files API](api_openai_files.md)). Set **Resource** to **"Files"** in the OpenAI node for all operations below.
 
-!!! example "Upload a file — `OpenAI/Upload a file`"
+!!! example "Upload a file — `OpenAI/Upload a File`"
     Uploads a file to S3 and returns a `file_id` for use in subsequent requests.
 
     **Node parameters:**
@@ -207,7 +242,7 @@ n8n calls the `/v1/files` endpoints (see [Files API](api_openai_files.md)). Set 
     3. Store the returned `file_id` in a variable or database
     4. Pass `file_id` in `OpenAI Chat Model` messages via the `type: "file"` content part for repeated analysis without re-uploading
 
-!!! example "Delete a file — `OpenAI/Delete a file`"
+!!! example "Delete a file — `OpenAI/Delete a File`"
     Permanently deletes a file from S3 by its `file_id`.
 
     **Node parameters:**
@@ -216,7 +251,7 @@ n8n calls the `/v1/files` endpoints (see [Files API](api_openai_files.md)). Set 
     - **Operation:** Delete a File
     - **File ID:** the `file_id` of the file to delete
 
-!!! example "List files — `OpenAI/List files`"
+!!! example "List files — `OpenAI/List Files`"
     Returns a paginated list of uploaded files, optionally filtered by purpose.
 
     **Node parameters:**
@@ -261,16 +296,11 @@ Enables: Text generation and conversational AI in workflows.
     **`Anthropic Chat Model`**
 
     - Model can be selected directly in the `Model` parameter
+    - Sub-node for AI Agent and chain nodes
 
     ---
 
-    **`Anthropic/Message a model`**
-
-    - Model can be selected directly in the `Model` parameter
-
-    ---
-
-    **`Message a model in Anthropic`**
+    **`Anthropic/Message a Model`**
 
     - Model can be selected directly in the `Model` parameter
 
@@ -281,7 +311,7 @@ Enables: Text generation and conversational AI in workflows.
 Enables: Image understanding and analysis in workflows.
 
 !!! example "Supported Node"
-    **`Anthropic/Analyze image`**
+    **`Anthropic/Analyze Image`**
 
     - Model can be selected directly in the `Model` parameter
 
@@ -292,7 +322,7 @@ Enables: Image understanding and analysis in workflows.
 Enables: Document understanding and extraction in workflows.
 
 !!! example "Supported Node"
-    **`Anthropic/Analyze document`**
+    **`Anthropic/Analyze Document`**
 
     - Model can be selected directly in the `Model` parameter
 
@@ -304,13 +334,13 @@ Enables: Upload files once and reference them across multiple Messages requests 
 
 n8n calls the `/anthropic/v1/files` endpoints (see [Anthropic Files API](api_anthropic_files.md)). Set **Resource** to **"Files"** in the Anthropic node for all operations below.
 
-!!! example "Upload a file — `Anthropic/Upload a file`"
+!!! example "Upload a file — `Anthropic/Upload File`"
     Uploads a file to S3 and returns a `file_id` for use in subsequent Messages requests.
 
     **Node parameters:**
 
     - **Resource:** Files
-    - **Operation:** Upload a File
+    - **Operation:** Upload File
     - **Input Data Field Name:** name of the binary field containing the file
 
     **Typical workflow pattern:**
@@ -318,9 +348,9 @@ n8n calls the `/anthropic/v1/files` endpoints (see [Anthropic Files API](api_ant
     1. Receive or fetch a file (PDF, image, etc.) in an earlier node
     2. Pass the binary data to this node
     3. Store the returned `file_id` in a variable or database
-    4. Pass `file_id` as a `source: {type: "file"}` in `Anthropic/Message a model` document or image blocks
+    4. Pass `file_id` as a `source: {type: "file"}` in `Anthropic/Message a Model` document or image blocks
 
-!!! example "Get file metadata — `Anthropic/Get file metadata`"
+!!! example "Get file metadata — `Anthropic/Get File Metadata`"
     Retrieves metadata (filename, MIME type, size, creation date) for a file by its `file_id`.
 
     **Node parameters:**
@@ -329,7 +359,7 @@ n8n calls the `/anthropic/v1/files` endpoints (see [Anthropic Files API](api_ant
     - **Operation:** Get File Metadata
     - **File ID:** the `file_id` of the file to retrieve
 
-!!! example "List files — `Anthropic/List files`"
+!!! example "List files — `Anthropic/List Files`"
     Returns a paginated list of uploaded files.
 
     **Node parameters:**
@@ -340,14 +370,18 @@ n8n calls the `/anthropic/v1/files` endpoints (see [Anthropic Files API](api_ant
 
     Files are returned in ascending order (oldest first). Use `after_id` / `before_id` cursors for bidirectional pagination.
 
-!!! example "Delete a file — `Anthropic/Delete a file`"
+!!! example "Delete a file — `Anthropic/Delete File`"
     Permanently deletes a file from S3 by its `file_id`.
 
     **Node parameters:**
 
     - **Resource:** Files
-    - **Operation:** Delete a File
+    - **Operation:** Delete File
     - **File ID:** the `file_id` of the file to delete
+
+#### :material-lightbulb-outline: Prompt Resource
+
+The Anthropic node's **Prompt** resource (`Generate Prompt`, `Improve Prompt`, `Templatize Prompt`) calls Anthropic's experimental prompt tools endpoints, which are not part of the Amazon Bedrock API surface and are not available through stdapi.ai. Use a `Message a Model` node with prompt-engineering instructions instead.
 
 ## :material-arrow-right: Next Steps
 
