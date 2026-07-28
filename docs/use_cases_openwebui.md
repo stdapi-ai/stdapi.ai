@@ -177,6 +177,30 @@ Choose any TTS model you prefer. Open WebUI calls `POST /v1/audio/speech` (see [
 !!! warning "TTS language detection"
     Open WebUI generates audio in small chunks, which makes language auto-detection inconsistent. Disable auto-detection by setting the stdapi.ai environment variable `DEFAULT_TTS_LANGUAGE` to a fixed language (for example, `en-US`).
 
+### :material-tools: MCP Tool Server
+
+Enables: Chat models calling stdapi.ai endpoints as tools, including the ones Open WebUI has no native feature for—such as video generation.
+
+Open WebUI supports MCP servers over Streamable HTTP (v0.6.31 and later), the transport stdapi.ai exposes at `/mcp`. Turn it on with the stdapi.ai environment variables:
+
+!!! example "Environment Variables (stdapi.ai)"
+    ```bash
+    ENABLE_MCP_STREAMABLE_HTTP=true
+    MCP_INCLUDE_TOOLS=openai_video_generation,openai_video_get,search_models
+    ```
+
+Every endpoint is exposed as a tool by default. Restrict the list with [`MCP_INCLUDE_TOOLS`](operations_configuration.md#mcp-include-tools) so models see only the tools they need, and keep the ones already wired natively—chat, images, speech, embeddings—out of it.
+
+Then register the server in Open WebUI. MCP connections are admin-only and configured in the interface, not through environment variables:
+
+1. Open **Admin Settings → External Tools**
+2. Click **+ (Add Server)** and set **Type** to **MCP (Streamable HTTP)**
+3. Set the server URL to `https://YOUR_STDAPI_URL/mcp`
+4. Set **Auth** to **Bearer** and paste your stdapi.ai API key
+5. Save, then enable the tool in a chat with **+ → Integrations → Tools**
+
+See [MCP tools](api_overview.md#mcp-model-context-protocol) for the full tool list.
+
 ---
 
 ## :material-rocket-launch: Terraform Deployment
