@@ -94,6 +94,26 @@ Enables: Document ingestion and semantic search for RAG.
 
 Pick any embedding model you prefer. Open WebUI calls `POST /v1/embeddings` (see [Embeddings API](api_openai_embeddings.md)), so the model must be an embeddings-capable model from the correct family.
 
+### :material-sort-variant: RAG Reranking
+
+Enables: Hybrid search, with retrieved documents reordered by relevance before they reach the model.
+
+!!! example "Environment Variables"
+    ```bash
+    ENABLE_RAG_HYBRID_SEARCH=true
+    RAG_RERANKING_ENGINE=external
+    RAG_EXTERNAL_RERANKER_URL=https://YOUR_STDAPI_URL/cohere/v2/rerank
+    RAG_EXTERNAL_RERANKER_API_KEY=YOUR_STDAPI_KEY
+    RAG_RERANKING_MODEL=cohere.rerank-v3-5:0
+    ```
+
+Open WebUI's external reranker speaks the Cohere dialect, so it targets the Cohere-compatible route instead of `/v1` (see [Cohere Rerank API](api_cohere_rerank.md)). Give the full endpoint path: Open WebUI sends the request to the URL as-is and appends nothing. The model must be a reranking model.
+
+!!! tip "Regional availability"
+    Amazon Bedrock serves reranking from a subset of regions only. Keep at least one of them in [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions); stdapi.ai fails over to it automatically.
+
+Without an external reranker, Open WebUI falls back to a local Sentence-Transformers cross-encoder that it downloads from Hugging Face at startup—unavailable when `OFFLINE_MODE` is enabled.
+
 ### :material-image: Image Generation
 
 Enables: Text-to-image creation inside chats.
@@ -170,10 +190,10 @@ Deploy Open WebUI + stdapi.ai together with production infrastructure:
 - Open WebUI on ECS Fargate with auto-scaling
 - stdapi.ai gateway connected to Amazon Bedrock
 - ElastiCache Valkey for caching
-- Aurora PostgreSQL with pgvector extension for RAG
+- Aurora PostgreSQL with pgvector extension for RAG, with hybrid search and reranking
 - SearXNG for web search integration
 - Playwright for web scraping
-- HTTPS with ALB and optional WAF
+- HTTPS with ALB on your own domain
 - All environment variables pre-configured
 
 **Deploy:**
