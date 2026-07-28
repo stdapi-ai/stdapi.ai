@@ -54,7 +54,7 @@ Enabled-by-default support ([`AWS_BEDROCK_MANTLE_ENABLED`](operations_configurat
 [:octicons-arrow-right-24: Bedrock Mantle Models](features.md#bedrock-mantle-models)
 
 !!! warning "Additional IAM Permissions (opt-in feature)"
-    Enabling `AWS_BEDROCK_MANTLE_ENABLED` requires the `bedrock-mantle:CreateInference`, `bedrock-mantle:GetInference`, `bedrock-mantle:DeleteInference`, `bedrock-mantle:ListModels`, `bedrock-mantle:GetModel`, `bedrock-mantle:CountTokens`, and `bedrock-mantle:CancelInference` permissions on `arn:aws:bedrock-mantle:*:*:project/*`, plus `bedrock-mantle:CallWithBearerToken` on `*`. See [IAM Permissions](operations_configuration.md#bedrock-mantle-iam).
+    Enabling `AWS_BEDROCK_MANTLE_ENABLED` requires the `bedrock-mantle:CreateInference`, `bedrock-mantle:GetInference`, `bedrock-mantle:DeleteInference`, `bedrock-mantle:ListModels`, `bedrock-mantle:GetModel`, and `bedrock-mantle:CancelInference` permissions on `arn:aws:bedrock-mantle:*:*:project/*`, plus `bedrock-mantle:CallWithBearerToken` on `*`. See [IAM Permissions](operations_iam_permissions.md#bedrock-mantle-iam).
 
 #### :material-api: New APIs
 

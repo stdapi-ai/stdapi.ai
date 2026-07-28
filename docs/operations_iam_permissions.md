@@ -14,6 +14,11 @@ stdapi.ai requires specific AWS IAM permissions to access Amazon Bedrock models 
 !!! info "Terraform Module"
     The official [stdapi-ai Terraform module](https://github.com/stdapi-ai/terraform-aws-stdapi-ai) provisions the ECS task role with the required permissions automatically. This reference is for custom deployments and policy auditing.
 
+!!! warning "Multi-Region Failover and Region-Scoped Policies"
+    By default, Amazon Bedrock **and** the other AWS AI services (Polly, Transcribe, Comprehend, Translate) are called in every region listed in [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions), failing over from one to the next on throttling, quota, or availability errors. See [Other AWS Services Failover](operations_resilience.md#other-aws-services-failover).
+
+    The statements on this page use region-agnostic resources, so they work as-is. However, any `aws:RequestedRegion` condition — in the policy itself, a permissions boundary, or a service control policy — must allow **all** configured regions, otherwise failover silently fails and requests error out once the first region is unavailable.
+
 ---
 
 ## :material-aws: Bedrock (Required) { #bedrock-iam }
@@ -192,7 +197,6 @@ Required for [`AWS_BEDROCK_MANTLE_ENABLED`](operations_configuration.md#bedrock-
         "bedrock-mantle:DeleteInference",
         "bedrock-mantle:ListModels",
         "bedrock-mantle:GetModel",
-        "bedrock-mantle:CountTokens",
         "bedrock-mantle:CancelInference"
       ],
       "Resource": "arn:aws:bedrock-mantle:*:*:project/*"
@@ -205,7 +209,7 @@ Required for [`AWS_BEDROCK_MANTLE_ENABLED`](operations_configuration.md#bedrock-
     }
     ```
 
-    `bedrock-mantle:CallWithBearerToken` authorizes the short-term bearer tokens the server derives from its AWS credential chain; it does not support resource scoping.
+    `bedrock-mantle:CallWithBearerToken` authorizes the short-term bearer tokens the server derives from its AWS credential chain; it does not support resource scoping. Token counting for Mantle-only models is served by the same endpoint and needs no additional action.
 
 ---
 
@@ -225,9 +229,6 @@ Required for storing generated images, audio files, documents, and videos. See [
         "s3:PutObjectTagging",
         "s3:GetObject",
         "s3:DeleteObject",
-        "s3:CreateMultipartUpload",
-        "s3:UploadPart",
-        "s3:CompleteMultipartUpload",
         "s3:AbortMultipartUpload",
         "s3:ListMultipartUploadParts"
       ],
@@ -245,7 +246,13 @@ Required for storing generated images, audio files, documents, and videos. See [
     ```
 
     !!! info "Replace Bucket Name"
-        Replace `AWS_S3_BUCKET_VALUE` with the value of your [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket) environment variable. Repeat both statements for each [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets) bucket (used for async operations such as video generation).
+        Replace `AWS_S3_BUCKET_VALUE` with the value of your [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket) environment variable. Repeat both statements for each [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets) bucket — they serve video generation, asynchronous embeddings (TwelveLabs Marengo, Amazon Nova), and [Speech-to-Text](#speech-to-text-optional) failover, and the Files API looks up objects across every configured bucket.
+
+    !!! note "Multipart Uploads"
+        Large files are uploaded and copied with the multipart API. Its `CreateMultipartUpload`, `UploadPart`, `UploadPartCopy`, and `CompleteMultipartUpload` operations have no dedicated IAM actions — they are authorized by `s3:PutObject` — which is why only the abort and listing actions appear above.
+
+    !!! note "Cross-Region Access"
+        Bucket ARNs are region-agnostic, so one statement per bucket covers every region. When a request fails over to another region, the server copies the object server-side through the destination region's S3 endpoint, reading the source bucket from there. Grant these actions on the source and destination buckets alike, and on the KMS key of each encrypted bucket.
 
     **If your S3 bucket uses KMS encryption**, also add:
 
@@ -267,7 +274,7 @@ Required for storing generated images, audio files, documents, and videos. See [
     ```
 
     !!! tip "KMS Security"
-        The `kms:ViaService` condition restricts KMS key usage to S3 service calls only, following AWS security best practices.
+        The `kms:ViaService` condition restricts KMS key usage to S3 service calls only, following AWS security best practices. Because the condition pins a single region, add one statement per region — with that region's key ARN and `s3.REGION.amazonaws.com` — when you use regional buckets with per-region keys.
 
 ---
 
@@ -327,9 +334,9 @@ Required for generating speech from text using Amazon Polly. See the [Audio and 
 
 ## :material-microphone: Speech-to-Text (Optional) { #speech-to-text-optional }
 
-**Environment Variables**: [`AWS_TRANSCRIBE_REGION`](operations_configuration.md#aws-transcribe-region), [`AWS_TRANSCRIBE_S3_BUCKET`](operations_configuration.md#aws-transcribe-s3-bucket)
+**Environment Variables**: [`AWS_TRANSCRIBE_REGION`](operations_configuration.md#aws-transcribe-region), [`AWS_TRANSCRIBE_S3_BUCKET`](operations_configuration.md#aws-transcribe-s3-bucket), [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets)
 
-Required for transcribing audio files using Amazon Transcribe.
+Required for transcribing audio files using Amazon Transcribe. Each transcription job stages its audio in a bucket co-located with the Transcribe endpoint, so the S3 statement must cover every bucket that serves a candidate region.
 
 ??? example "Transcribe Speech-to-Text IAM Policy Statements"
     ```json
@@ -356,8 +363,11 @@ Required for transcribing audio files using Amazon Transcribe.
       "Effect": "Allow",
       "Action": [
         "s3:PutObject",
+        "s3:PutObjectTagging",
         "s3:GetObject",
-        "s3:DeleteObject"
+        "s3:DeleteObject",
+        "s3:AbortMultipartUpload",
+        "s3:ListMultipartUploadParts"
       ],
       "Resource": "arn:aws:s3:::AWS_TRANSCRIBE_S3_BUCKET_VALUE/*"
     }
@@ -366,7 +376,12 @@ Required for transcribing audio files using Amazon Transcribe.
     !!! info "Replace Bucket Name"
         Replace `AWS_TRANSCRIBE_S3_BUCKET_VALUE` with the value of your [`AWS_TRANSCRIBE_S3_BUCKET`](operations_configuration.md#aws-transcribe-s3-bucket) environment variable (or [`AWS_S3_BUCKET`](operations_configuration.md#aws-s3-bucket) if using the same bucket).
 
-    **If your transcribe S3 bucket uses KMS encryption**, also add the KMS permissions with the appropriate bucket ARN.
+    !!! note "One Bucket per Candidate Region"
+        With the default multi-region behavior ([`AWS_TRANSCRIBE_REGION`](operations_configuration.md#aws-transcribe-region) unset), Transcribe fails over across the [`AWS_BEDROCK_REGIONS`](operations_configuration.md#aws-bedrock-regions) that have a co-located bucket: the primary region uses the bucket above, the others their [`AWS_S3_REGIONAL_BUCKETS`](operations_configuration.md#aws-s3-regional-buckets) entry. Repeat the `TranscribeS3Storage` statement for each of those buckets.
+
+        On failover the audio is server-side copied from the previous candidate's bucket to the next one, which is why the copy and multipart actions are required. Set `AWS_TRANSCRIBE_REGION` to pin a single region and keep a single bucket.
+
+    **If your transcribe S3 buckets use KMS encryption**, also add the KMS permissions for each bucket's key, with that region's `kms:ViaService` value.
 
 ---
 
@@ -451,7 +466,7 @@ Required if you configure API authentication. See the [Authentication](operation
     ```
 
     !!! info "Replace Parameter Path"
-        Replace `API_KEY_SSM_PARAMETER_VALUE` with the value of your [`API_KEY_SSM_PARAMETER`](operations_configuration.md#api-key-ssm) environment variable (e.g., `/stdapi/prod/api-key`).
+        Replace `API_KEY_SSM_PARAMETER_VALUE` with the value of your [`API_KEY_SSM_PARAMETER`](operations_configuration.md#api-key-ssm) environment variable (e.g., `/stdapi/prod/api-key`), and `REGION` with the server's own region (`AWS_REGION`) — parameters are read there, not in the Bedrock regions.
 
     **If using encrypted SSM parameters**, also add:
 
@@ -491,7 +506,7 @@ Required if you configure API authentication. See the [Authentication](operation
     ```
 
     !!! info "Replace Secret Name"
-        Replace `API_KEY_SECRETSMANAGER_SECRET_VALUE` with the value of your [`API_KEY_SECRETSMANAGER_SECRET`](operations_configuration.md#api-key-secretsmanager-secret) environment variable (e.g., `stdapi-api-key`).
+        Replace `API_KEY_SECRETSMANAGER_SECRET_VALUE` with the value of your [`API_KEY_SECRETSMANAGER_SECRET`](operations_configuration.md#api-key-secretsmanager-secret) environment variable (e.g., `stdapi-api-key`), and `REGION` with the server's own region (`AWS_REGION`) — secrets are read there, not in the Bedrock regions.
 
 ---
 
@@ -604,9 +619,6 @@ Required if you configure API authentication. See the [Authentication](operation
             "s3:PutObjectTagging",
             "s3:GetObject",
             "s3:DeleteObject",
-            "s3:CreateMultipartUpload",
-            "s3:UploadPart",
-            "s3:CompleteMultipartUpload",
             "s3:AbortMultipartUpload",
             "s3:ListMultipartUploadParts"
           ],
@@ -648,12 +660,12 @@ Required if you configure API authentication. See the [Authentication](operation
 | **Bedrock Inference Profiles & Prompt Routers** | `bedrock:GetInferenceProfile`<br>`bedrock:GetPromptRouter`                                                                                                 | `AWS_BEDROCK_ALLOW_*_ARN=true` or `AWS_BEDROCK_MODEL_ARN_MAPPING` configured |
 | **Bedrock Guardrails & Moderations**            | `bedrock:ApplyGuardrail`                                                                                                                                   | `AWS_BEDROCK_GUARDRAIL_IDENTIFIER`                                           |
 | **Stored Responses & Chat Completions**         | Bedrock session permissions (`bedrock:CreateSession`, `bedrock:*Invocation*`, `bedrock:ListSessions`, `bedrock:EndSession`, `bedrock:DeleteSession`, `bedrock:TagResource`, `bedrock:ListTagsForResource` on sessions) | `store=true` requests and stored-completion listings                         |
-| **Bedrock Mantle**                              | `bedrock-mantle:CreateInference`<br>`bedrock-mantle:GetInference`<br>`bedrock-mantle:DeleteInference`<br>`bedrock-mantle:ListModels`<br>`bedrock-mantle:GetModel`<br>`bedrock-mantle:CountTokens`<br>`bedrock-mantle:CancelInference` (on `arn:aws:bedrock-mantle:*:*:project/*`)<br>`bedrock-mantle:CallWithBearerToken` | `AWS_BEDROCK_MANTLE_ENABLED=true`                                            |
-| **File Storage**                                | `s3:PutObject`<br>`s3:PutObjectTagging`<br>`s3:GetObject`<br>`s3:DeleteObject`<br>`s3:CreateMultipartUpload`<br>`s3:UploadPart`<br>`s3:CompleteMultipartUpload`<br>`s3:AbortMultipartUpload`<br>`s3:ListMultipartUploadParts`<br>`s3:ListBucket`<br>`s3:ListBucketMultipartUploads` | `AWS_S3_BUCKET`                                                              |
+| **Bedrock Mantle**                              | `bedrock-mantle:CreateInference`<br>`bedrock-mantle:GetInference`<br>`bedrock-mantle:DeleteInference`<br>`bedrock-mantle:ListModels`<br>`bedrock-mantle:GetModel`<br>`bedrock-mantle:CancelInference` (on `arn:aws:bedrock-mantle:*:*:project/*`)<br>`bedrock-mantle:CallWithBearerToken` | `AWS_BEDROCK_MANTLE_ENABLED=true`                                            |
+| **File Storage**                                | `s3:PutObject`<br>`s3:PutObjectTagging`<br>`s3:GetObject`<br>`s3:DeleteObject`<br>`s3:AbortMultipartUpload`<br>`s3:ListMultipartUploadParts`<br>`s3:ListBucket`<br>`s3:ListBucketMultipartUploads`<br>on every bucket, including each `AWS_S3_REGIONAL_BUCKETS` entry | `AWS_S3_BUCKET`<br>`AWS_S3_REGIONAL_BUCKETS`                                 |
 | **Video Generation**                            | Core Bedrock invoke permissions (incl. `bedrock:GetAsyncInvoke`, `bedrock:TagResource`)<br>`bedrock:ListAsyncInvokes` and `bedrock:ListTagsForResource` (on `arn:aws:bedrock:*:*:async-invoke/*`) for job listing<br>File Storage S3 permissions on each regional bucket | `AWS_S3_REGIONAL_BUCKETS`                                                    |
 | **KMS Encrypted S3 Buckets**                    | `kms:Decrypt`<br>`kms:GenerateDataKey`<br>with `kms:ViaService` condition                                                                                  | If S3 buckets use KMS encryption                                             |
 | **Text-to-Speech**                              | `polly:SynthesizeSpeech`<br>`polly:DescribeVoices`                                                                                                         | `AWS_POLLY_REGION`                                                           |
-| **Speech-to-Text**                              | `transcribe:StartTranscriptionJob`<br>`transcribe:GetTranscriptionJob`<br>`transcribe:DeleteTranscriptionJob`<br>`transcribe:TagResource` (on `arn:aws:transcribe:*:*:transcription-job/*`)<br>`s3:PutObject` (transcribe bucket)        | `AWS_TRANSCRIBE_REGION`<br>`AWS_TRANSCRIBE_S3_BUCKET`                        |
+| **Speech-to-Text**                              | `transcribe:StartTranscriptionJob`<br>`transcribe:GetTranscriptionJob`<br>`transcribe:DeleteTranscriptionJob`<br>`transcribe:TagResource` (on `arn:aws:transcribe:*:*:transcription-job/*`)<br>File Storage S3 permissions on every bucket serving a candidate region | `AWS_TRANSCRIBE_REGION`<br>`AWS_TRANSCRIBE_S3_BUCKET`<br>`AWS_S3_REGIONAL_BUCKETS` |
 | **Language Detection**                          | `comprehend:DetectDominantLanguage`                                                                                                                        | `AWS_COMPREHEND_REGION`                                                      |
 | **Comprehend Moderations**                      | `comprehend:DetectToxicContent`                                                                                                                            | Moderations API without a configured guardrail                              |
 | **Translation**                                 | `translate:TranslateText`                                                                                                                                  | `AWS_TRANSLATE_REGION`                                                       |
