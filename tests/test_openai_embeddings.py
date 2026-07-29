@@ -582,6 +582,39 @@ class TestEmbeddingsEmptyInputRejected:
         assert error_body["error"]["type"] == "invalid_request_error"
 
 
+class TestEmbeddingsTokenArrayRejected:
+    """Offline unit tests: token-array ``input`` gets the dedicated friendly error.
+
+    Validation happens before any model dispatch or AWS call, so these tests
+    run against an app instance without the AWS-touching lifespan.
+    """
+
+    pytestmark = pytest.mark.local
+
+    @pytest.fixture
+    def client(self, api_key: str) -> TestClientType:
+        """Test client without lifespan (no AWS startup), pre-authenticated."""
+        from starlette.testclient import TestClient  # noqa: PLC0415
+
+        from stdapi.main import app  # noqa: PLC0415
+
+        return TestClient(app, headers={"Authorization": f"Bearer {api_key}"})
+
+    @pytest.mark.parametrize("input_value", [[1, 2, 3], [[1, 2], [3, 4]]])
+    def test_token_array_input_returns_friendly_error(
+        self, client: TestClientType, input_value: list[object]
+    ) -> None:
+        """A legacy OpenAI token-array ``input`` returns the dedicated 400 message."""
+        response = client.post(
+            "/v1/embeddings",
+            json={"model": "text-embedding-3-small", "input": input_value},
+        )
+        assert response.status_code == 400, response.text
+        error_body = response.json()
+        assert error_body["error"]["type"] == "invalid_request_error"
+        assert "Token array inputs are not supported" in error_body["error"]["message"]
+
+
 class TestEmbeddingsCohereUnsupportedEmbeddingType:
     """Offline unit test: non-``float`` Cohere ``embedding_types`` are rejected cleanly.
 

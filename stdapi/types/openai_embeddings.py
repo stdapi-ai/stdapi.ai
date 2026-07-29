@@ -62,7 +62,9 @@ class EmbeddingCreateParams(BaseModelRequestWithExtra):
     """
 
     input: (
-        InputFileUrl | str | Annotated[list[InputFileUrl | str], Field(min_length=1)]
+        InputFileUrl
+        | str
+        | Annotated[list[InputFileUrl | str | int | list[int]], Field(min_length=1)]
     ) = Field(
         ...,
         description="Input text to embed, as a single string or array of strings. "
