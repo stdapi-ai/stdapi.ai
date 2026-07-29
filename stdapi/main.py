@@ -399,8 +399,10 @@ async def handle_botocore_client_error(
 ) -> JSONResponse:
     """Format AWS botocore ClientError using the correct API error envelope.
 
-    Maps common AWS error codes to appropriate HTTP statuses.
-    When region routing is enabled, marks the region as blocked for retryable errors.
+    Maps common AWS error codes to appropriate HTTP statuses. Region-routing
+    bookkeeping (marking a region blocked for retryable errors) already
+    happened upstream in ``route_and_execute``, if applicable; this handler
+    only formats the terminal error and never touches ``REGION_ROUTER``.
 
     Args:
         request: The current request.
