@@ -15,12 +15,15 @@ from stdapi.models.audio import amazon_transcribe
 from stdapi.models.audio.amazon_transcribe import (
     AWS_TRANSCRIBE_MODEL_ID,
     AudioModel,
+    _build_transcription_segment,
     _get_audio_duration,
     _start_transcription_with_failover,
+    _text_compression_ratio,
     initialize_transcribe_models,
     transcribe_job_candidates,
 )
 from stdapi.monitoring import REQUEST_ID, REQUEST_LOG, EventLog
+from stdapi.types.openai_audio import TranslationVerbose
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -551,3 +554,90 @@ class TestBucketToRegionMapping:
         monkeypatch.setattr(SETTINGS, "aws_transcribe_region", None)
         monkeypatch.setattr(SETTINGS, "aws_transcribe_s3_bucket", "transcribe-bucket")
         assert _bucket_to_region()["transcribe-bucket"] == "us-east-1"
+
+
+class TestFormatTranslationResponseVerboseJson:
+    """_format_translation_response: verbose_json segments are translated too."""
+
+    async def test_segments_are_translated_not_left_in_source_language(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Each segment's text is translated, not just the top-level text."""
+        transcript_data: dict[str, Any] = {
+            "language_code": "fr-FR",
+            "audio_segments": [
+                {
+                    "id": 0,
+                    "start_time": "0.0",
+                    "end_time": "1.0",
+                    "transcript": "Bonjour",
+                },
+                {
+                    "id": 1,
+                    "start_time": "1.0",
+                    "end_time": "2.0",
+                    "transcript": "le monde",
+                },
+            ],
+        }
+        translations = {"Bonjour": "Hello", "le monde": "the world"}
+
+        async def _fake_translate(text: str, language: str) -> str:
+            assert language == "fr-FR"
+            return translations[text]
+
+        monkeypatch.setattr(amazon_transcribe, "translate", _fake_translate)
+
+        response = await AudioModel._format_translation_response(  # noqa: SLF001
+            transcript_data,  # type: ignore[arg-type]
+            "Hello the world",
+            "verbose_json",
+        )
+
+        assert isinstance(response, TranslationVerbose)
+        assert response.segments is not None
+        assert [segment.text for segment in response.segments] == ["Hello", "the world"]
+
+
+class TestTextCompressionRatio:
+    """_text_compression_ratio: a real, text-based repetition signal."""
+
+    def test_empty_text_is_zero(self) -> None:
+        """An empty segment reports a ratio of 0.0, not a false-confident value."""
+        assert _text_compression_ratio("") == 0.0
+
+    def test_repetitive_text_yields_a_high_ratio(self) -> None:
+        """Highly repetitive text compresses well: a high ratio, as Whisper defines it."""
+        repetitive = "the quick brown fox " * 50
+        assert _text_compression_ratio(repetitive) > 2.4
+
+
+class TestBuildTranscriptionSegment:
+    """_build_transcription_segment: derives confidence stats Transcribe lacks."""
+
+    def test_segment_with_transcript_reports_confident_values(self) -> None:
+        """A segment with text reports the confident (non-silent) defaults."""
+        segment: dict[str, Any] = {
+            "id": 0,
+            "start_time": "0.0",
+            "end_time": "1.0",
+            "transcript": "hello",
+        }
+        result = _build_transcription_segment(segment, "hello")  # type: ignore[arg-type]
+
+        assert result.no_speech_prob == 0.0
+        assert result.avg_logprob == 0.0
+        assert result.compression_ratio == _text_compression_ratio("hello")
+
+    def test_segment_without_transcript_reports_silence_consistently(self) -> None:
+        """An empty segment reports the documented combined silence signal."""
+        segment: dict[str, Any] = {
+            "id": 0,
+            "start_time": "0.0",
+            "end_time": "1.0",
+            "transcript": "",
+        }
+        result = _build_transcription_segment(segment, "")  # type: ignore[arg-type]
+
+        assert result.no_speech_prob == 1.0
+        assert result.avg_logprob < -1.0

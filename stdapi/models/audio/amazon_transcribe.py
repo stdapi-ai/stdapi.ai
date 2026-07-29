@@ -4,6 +4,7 @@ from asyncio import gather, sleep
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, NotRequired
+from zlib import compress
 
 from botocore.exceptions import ClientError
 from fastapi import Response
@@ -462,6 +463,63 @@ def _format_diarized_json_response(
     )
 
 
+#: avg_logprob reported for silent segments, below Whisper's "-1 suggests failed" threshold
+_SILENT_SEGMENT_AVG_LOGPROB = -2.0
+
+
+def _text_compression_ratio(text: str) -> float:
+    """Compute the zlib-based compression ratio, mirroring Whisper's own metric.
+
+    AWS Transcribe exposes no decoder-internal compression ratio; a high
+    ratio (compressed size much smaller than the original) signals
+    repetitive or hallucinated text, computed here directly from the text.
+
+    Args:
+        text: Segment text to measure.
+
+    Returns:
+        Ratio of the raw UTF-8 byte length to its zlib-compressed length, or
+        0.0 for empty text.
+    """
+    if not text:
+        return 0.0
+    raw = text.encode("utf-8")
+    return len(raw) / len(compress(raw))
+
+
+def _build_transcription_segment(
+    segment: TranscribeJobAudioSegment, text: str
+) -> TranscriptionSegment:
+    """Build a verbose-JSON segment, approximating Whisper-only confidence stats.
+
+    AWS Transcribe exposes no per-token log-probabilities or sampling
+    parameters: avg_logprob/no_speech_prob are derived from whether the
+    segment carries a transcript (so the documented combined silence signal
+    still fires), and compression_ratio is computed on the returned text.
+
+    Args:
+        segment: Raw AWS Transcribe audio segment.
+        text: Segment text to report (source or translated).
+
+    Returns:
+        The formatted verbose-JSON segment.
+    """
+    has_transcript = bool(segment["transcript"])
+    return TranscriptionSegment(
+        id=segment["id"],
+        end=float(segment["end_time"]),
+        start=float(segment["start_time"]),
+        text=text,
+        no_speech_prob=0.0 if has_transcript else 1.0,
+        avg_logprob=0.0 if has_transcript else _SILENT_SEGMENT_AVG_LOGPROB,
+        compression_ratio=_text_compression_ratio(text),
+        # Not supported: Transcribe has no seek offset, sampling temperature, or tokens
+        seek=0,
+        temperature=0.0,
+        tokens=[],
+    )
+
+
 def _format_json_response(
     transcript_data: TranscribeJobData,
     text: str,
@@ -491,19 +549,7 @@ def _format_json_response(
     # OpenAI defaults to segment-level timestamps when the parameter is omitted.
     if not timestamp_granularities or "segment" in timestamp_granularities:
         segments = [
-            TranscriptionSegment(
-                id=segment["id"],
-                end=float(segment["end_time"]),
-                start=float(segment["start_time"]),
-                text=segment["transcript"],
-                # Not supported
-                no_speech_prob=0.0 if len(segment["transcript"]) else 1.0,
-                avg_logprob=0.0,
-                compression_ratio=0.0,
-                seek=0,
-                temperature=0.0,
-                tokens=[],
-            )
+            _build_transcription_segment(segment, segment["transcript"])
             for segment in transcript_data["audio_segments"]
         ]
     if timestamp_granularities and "word" in timestamp_granularities:
@@ -720,25 +766,22 @@ class AudioModel(AudioModelBase[None, None]):
             )
 
         if response_format == "verbose_json":
+            audio_segments = transcript_data["audio_segments"]
+            translated_segments = await gather(
+                *(
+                    translate(segment["transcript"], transcript_data["language_code"])
+                    for segment in audio_segments
+                )
+            )
             return TranslationVerbose(
                 duration=_get_audio_duration(transcript_data),
                 language="english",  # Translation output is always English
                 text=translated_content,
                 segments=[
-                    TranscriptionSegment(
-                        id=segment["id"],
-                        end=float(segment["end_time"]),
-                        start=float(segment["start_time"]),
-                        text=segment["transcript"],
-                        # Not supported
-                        no_speech_prob=0.0 if len(segment["transcript"]) else 1.0,
-                        avg_logprob=0.0,
-                        compression_ratio=0.0,
-                        seek=0,
-                        temperature=0.0,
-                        tokens=[],
+                    _build_transcription_segment(segment, segment_text)
+                    for segment, segment_text in zip(
+                        audio_segments, translated_segments, strict=True
                     )
-                    for segment in transcript_data["audio_segments"]
                 ],
             )
 
