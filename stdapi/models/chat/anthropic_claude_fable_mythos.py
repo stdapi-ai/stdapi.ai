@@ -23,6 +23,7 @@ class ChatModel(AnthropicClaudeChatModel):
 
     MATCHER = re_compile(r"^anthropic\.claude-(?:fable|mythos)-")
     REASONING_DISABLE_SUPPORTED: ClassVar[bool] = False
+    SYSTEM_MESSAGE_AS_MESSAGES_SUPPORTED: ClassVar[bool] = True
     TOOL_BETA_FLAGS = MappingProxyType(
         {
             "bash": _BETA_COMPUTER_USE_2025,

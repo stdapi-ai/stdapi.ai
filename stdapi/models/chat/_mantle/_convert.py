@@ -494,7 +494,10 @@ async def _resolve_chat_part(part: object, dumped: dict[str, Any]) -> None:
 
 
 async def messages_payload(
-    request: MessageCreateParams, model_id: str
+    request: MessageCreateParams,
+    model_id: str,
+    *,
+    system_message_as_messages: bool = False,
 ) -> dict[str, Any]:
     """Build the passthrough Anthropic Messages payload for Mantle.
 
@@ -507,6 +510,10 @@ async def messages_payload(
     Args:
         request: Anthropic-format message creation request.
         model_id: Mantle model identifier to set on the payload.
+        system_message_as_messages: When True, mid-conversation ``system``-role
+            messages the model handles natively are forwarded as-is; every
+            other one is folded into the ``system`` field, which is also the
+            only behavior when False.
 
     Returns:
         JSON-ready request payload.
@@ -530,7 +537,7 @@ async def messages_payload(
             and isinstance(dumped.get("content"), list)
         )
     )
-    _fold_inline_system(payload)
+    _fold_inline_system(payload, forward_native=system_message_as_messages)
     return payload
 
 
@@ -592,19 +599,56 @@ async def _inline_source(file: InputFile, dumped: dict[str, Any]) -> None:
     dumped.update({"type": "base64", "media_type": media_type, "data": data})
 
 
-def _fold_inline_system(payload: dict[str, Any]) -> None:
+def _is_native_system_placement(messages: list[dict[str, Any]], index: int) -> bool:
+    """Whether the ``system``-role message at *index* is placed where models accept it.
+
+    Models supporting mid-conversation system messages require them to follow a
+    user turn and to either precede an assistant turn or end the message list;
+    consecutive system messages are accepted as a single section.
+
+    Args:
+        messages: Full message list of the payload.
+        index: Index of the system-role message in *messages*.
+
+    Returns:
+        True when the message sits in an accepted placement.
+    """
+    before = index - 1
+    while before >= 0 and messages[before].get("role") == "system":
+        before -= 1
+    after = index + 1
+    while after < len(messages) and messages[after].get("role") == "system":
+        after += 1
+    return (
+        before >= 0
+        and messages[before].get("role") == "user"
+        and (after == len(messages) or messages[after].get("role") == "assistant")
+    )
+
+
+def _fold_inline_system(
+    payload: dict[str, Any], *, forward_native: bool = False
+) -> None:
     """Fold inline ``system``-role messages into the ``system`` field.
 
     Args:
         payload: Anthropic Messages request payload, updated in place.
+        forward_native: When True, system-role messages in a placement the model
+            accepts natively are left in the message list.
     """
     messages = payload.get("messages") or []
-    inline = [message for message in messages if message.get("role") == "system"]
+    kept: list[dict[str, Any]] = []
+    inline: list[dict[str, Any]] = []
+    for index, message in enumerate(messages):
+        if message.get("role") != "system" or (
+            forward_native and _is_native_system_placement(messages, index)
+        ):
+            kept.append(message)
+        else:
+            inline.append(message)
     if not inline:
         return
-    payload["messages"] = [
-        message for message in messages if message.get("role") != "system"
-    ]
+    payload["messages"] = kept
     texts = [_anthropic_text(payload.get("system"))]
     texts += [_anthropic_text(message.get("content")) for message in inline]
     payload["system"] = "\n\n".join(text for text in texts if text)

@@ -2,6 +2,7 @@
 
 from re import compile as re_compile
 from types import MappingProxyType
+from typing import ClassVar
 
 from stdapi.models.chat._anthropic_claude import (
     _BETA_COMPUTER_USE_2025,
@@ -20,6 +21,7 @@ class ChatModel(AnthropicClaudeChatModel):
     """
 
     MATCHER = re_compile(r"^anthropic\.claude-opus-(?:[5-9]|\d\d)")
+    SYSTEM_MESSAGE_AS_MESSAGES_SUPPORTED: ClassVar[bool] = True
     TOOL_BETA_FLAGS = MappingProxyType(
         {
             "bash": _BETA_COMPUTER_USE_2025,

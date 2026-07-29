@@ -268,14 +268,11 @@ class TestAnthropicMessages:
         anthropic_system_as_messages_model: str,
         use_official_api: bool,
     ) -> None:
-        """Test a mid-conversation system message on Claude Opus 4.8+.
+        """Test a trailing mid-conversation system message.
 
-        The first message must always be role='user'; a system-role message may only
-        appear immediately after a user turn and must be the last entry (or be followed
-        by an assistant turn). When SYSTEM_MESSAGE_AS_MESSAGES_SUPPORTED is True the
-        message is forwarded to Bedrock as a native mid-conversation system instruction;
-        while Bedrock lacks support the flag stays False and the message is extracted
-        into the system field. Either way the request must succeed.
+        The first message must always be role='user'. A system-role message that is
+        not followed by an assistant turn is extracted into the system field, because
+        Bedrock rejects that placement; the request must still succeed.
 
         Validates:
             - A mid-conversation system message is accepted after the last user turn
@@ -285,7 +282,8 @@ class TestAnthropicMessages:
             pytest.skip("system-role messages in `messages` are a stdapi extension")
         response = anthropic_client.messages.create(
             model=anthropic_system_as_messages_model,
-            max_tokens=100,
+            # Room for reasoning models to think AND answer with text.
+            max_tokens=512,
             messages=[
                 {"role": "user", "content": "Hello."},
                 {"role": "assistant", "content": "Hi! How can I help you?"},
@@ -297,6 +295,38 @@ class TestAnthropicMessages:
 
         assert response.type == "message"
         assert len(response.content) >= 1
+        assert any(c.type == "text" for c in response.content)
+
+    def test_system_role_forwarded_between_user_and_assistant_turns(
+        self,
+        anthropic_client: Anthropic,
+        anthropic_system_as_messages_model: str,
+        use_official_api: bool,
+    ) -> None:
+        """Test the placement Bedrock forwards natively: user -> system -> assistant.
+
+        On a model with ``SYSTEM_MESSAGE_AS_MESSAGES_SUPPORTED`` the directive stays in
+        the message list and reaches Bedrock as a native ``role: "system"`` turn, so
+        this exercises the forwarding path end to end rather than the folding fallback.
+
+        Validates:
+            - Bedrock accepts a forwarded mid-conversation system message
+            - Response is valid
+        """
+        if use_official_api:
+            pytest.skip("system-role messages in `messages` are a stdapi extension")
+        response = anthropic_client.messages.create(
+            model=anthropic_system_as_messages_model,
+            max_tokens=100,
+            messages=[
+                {"role": "user", "content": "Hello."},
+                {"role": "system", "content": "From now on, respond only in one word."},
+                {"role": "assistant", "content": "Hi."},
+                {"role": "user", "content": "How are you?"},
+            ],
+        )
+
+        assert response.type == "message"
         assert any(c.type == "text" for c in response.content)
 
     # --- Streaming ---

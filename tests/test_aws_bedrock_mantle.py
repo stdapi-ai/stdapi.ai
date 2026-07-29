@@ -518,6 +518,43 @@ class TestMantleModelClassResolution:
         assert not isinstance(model, GemmaChatModel)
 
 
+class TestMantleSystemMessageAsMessages:
+    """Native mid-conversation system message support is scoped per model family."""
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "anthropic.claude-opus-4-8",
+            "anthropic.claude-opus-5",
+            "anthropic.claude-opus-5-1-20260724-v1:0",
+            "anthropic.claude-fable-5",
+            "anthropic.claude-mythos-5",
+            "anthropic.claude-mythos-preview",
+            "anthropic.claude-sonnet-5-20260501-v1:0",
+            "anthropic.claude-haiku-5",
+        ],
+    )
+    def test_opus_48_and_later_forward_system_messages(self, model_id: str) -> None:
+        """Opus 4.8+, Fable and Mythos handle system-role messages natively."""
+        model = cast("mantle_default.ChatModel", get_mantle_chat_model(model_id))
+        assert model._system_message_as_messages() is True  # noqa: SLF001
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "anthropic.claude-opus-4-7",
+            "anthropic.claude-opus-4-6",
+            "anthropic.claude-haiku-4-5-20251001-v1:0",
+            "anthropic.claude-3-5-sonnet-20241022-v2:0",
+            "openai.gpt-5.6-sol",
+        ],
+    )
+    def test_other_models_keep_folding_system_messages(self, model_id: str) -> None:
+        """Models without native support keep the folding fallback."""
+        model = cast("mantle_default.ChatModel", get_mantle_chat_model(model_id))
+        assert model._system_message_as_messages() is False  # noqa: SLF001
+
+
 class TestValidatePruningExtras:
     """Extra-field pruning validation for upstream passthrough payloads."""
 

@@ -450,33 +450,59 @@ async def _map_content_block_to_bedrock(  # noqa: PLR0911
             raise ApiError(msg)
 
 
+def _is_historical_directive(messages: list[MessageParam], index: int) -> bool:
+    """Whether the system-role message at *index* may be forwarded to Bedrock.
+
+    Models accepting native mid-conversation system messages require them to
+    follow a user turn and precede an assistant turn; the "ends the array"
+    placement they also allow is unreachable through Converse, which requires
+    the last turn to be a user one.
+
+    Args:
+        messages: Full message list.
+        index: Index of the system-role message in *messages*.
+
+    Returns:
+        True when the message sits between a user turn and an assistant turn.
+    """
+    return (
+        index > 0
+        and messages[index - 1].role == "user"
+        and index + 1 < len(messages)
+        and messages[index + 1].role == "assistant"
+    )
+
+
 def _extract_system_messages(
-    messages: list[MessageParam],
+    messages: list[MessageParam], *, forward_historical: bool = False
 ) -> tuple[list[MessageParam], list[TextBlockParam]]:
     """Partition messages into non-system messages and system text blocks.
 
     Args:
         messages: Anthropic message params, possibly including system-role entries.
+        forward_historical: When True, system-role messages in a placement the
+            model accepts natively are kept in the message list instead of
+            being extracted.
 
     Returns:
-        A 2-tuple of (non_system_messages, system_blocks) where system_blocks
-        contains the content of any system-role messages as TextBlockParams.
+        A 2-tuple of (kept_messages, system_blocks) where system_blocks
+        contains the content of the extracted system-role messages as
+        TextBlockParams.
     """
-    non_system: list[MessageParam] = []
+    kept: list[MessageParam] = []
     system_blocks: list[TextBlockParam] = []
-    for msg in messages:
-        match msg.role:
-            case "system":
-                match msg.content:
-                    case str(text):
-                        system_blocks.append(TextBlockParam(type="text", text=text))
-                    case list(blocks):
-                        system_blocks.extend(
-                            b for b in blocks if isinstance(b, TextBlockParam)
-                        )
-            case _:
-                non_system.append(msg)
-    return non_system, system_blocks
+    for index, msg in enumerate(messages):
+        if msg.role != "system" or (
+            forward_historical and _is_historical_directive(messages, index)
+        ):
+            kept.append(msg)
+            continue
+        match msg.content:
+            case str(text):
+                system_blocks.append(TextBlockParam(type="text", text=text))
+            case list(blocks):
+                system_blocks.extend(b for b in blocks if isinstance(b, TextBlockParam))
+    return kept, system_blocks
 
 
 def _merge_system_content(
@@ -513,19 +539,21 @@ def _prepare_messages_and_system(
     Args:
         messages: Input message list, possibly containing system-role entries.
             System-role messages are mid-conversation system instructions valid
-            only after the first user turn (Claude Opus 4.8+).
+            only after the first user turn (Claude 4.8+).
         system: Top-level system field value.
-        system_message_as_messages: When True (Claude Opus 4.8+), pass system-role
-            messages through as-is — the model handles them natively.  When False,
-            extract them and merge their content into the system field as a fallback.
+        system_message_as_messages: When True (Claude 4.8+), forward system-role
+            messages the model accepts natively, that is the historical
+            ``user -> system -> assistant`` ones.  Any other system-role message
+            is extracted and its content merged into the system field, which is
+            also the only behavior when False.
 
     Returns:
         A 2-tuple of (resolved_messages, resolved_system).
     """
-    if system_message_as_messages:
-        return messages, system
-    non_system, system_blocks = _extract_system_messages(messages)
-    return non_system, _merge_system_content(system, system_blocks)
+    kept, system_blocks = _extract_system_messages(
+        messages, forward_historical=system_message_as_messages
+    )
+    return kept, _merge_system_content(system, system_blocks)
 
 
 async def _map_messages(
@@ -820,10 +848,10 @@ async def translate_request(
             Bedrock names before being added as ``toolSpec`` entries.
         req_map_content_block: Optional model-specific callback for content block
             translation.  Passed through to ``_map_messages``.
-        system_message_as_messages: When True, system-role messages are forwarded
-            directly to Bedrock as messages instead of being extracted into the
-            system-blocks field.  The top-level ``system`` field is always sent
-            unchanged regardless of this flag.
+        system_message_as_messages: When True, system-role messages in a
+            placement Bedrock accepts are forwarded as messages instead of being
+            extracted into the system-blocks field.  The top-level ``system``
+            field is always sent unchanged regardless of this flag.
 
     Returns:
         A 9-tuple of (messages, system blocks, inference config,

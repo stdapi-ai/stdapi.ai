@@ -2138,6 +2138,123 @@ class TestMessagesPayloadBuilder:
         schema = payload["tools"][0]["input_schema"]
         assert "propertyNames" not in schema["properties"]["a"]
 
+    async def test_system_messages_forwarded_when_natively_supported(self) -> None:
+        """Mid-conversation system messages stay in place for capable models."""
+        request = MessageCreateParams.model_validate(
+            {
+                "model": "ignored",
+                "max_tokens": 16,
+                "system": "Be helpful.",
+                "messages": [
+                    {"role": "user", "content": "Hello."},
+                    {"role": "system", "content": "Answer in one word."},
+                    {"role": "assistant", "content": "Hi."},
+                    {"role": "user", "content": "And now?"},
+                ],
+            }
+        )
+        payload = await mantle_convert.messages_payload(
+            request, "model-id", system_message_as_messages=True
+        )
+        assert payload["system"] == "Be helpful."
+        assert [message["role"] for message in payload["messages"]] == [
+            "user",
+            "system",
+            "assistant",
+            "user",
+        ]
+
+    async def test_misplaced_system_messages_fold_when_natively_supported(self) -> None:
+        """Placements the model rejects keep folding into the ``system`` field."""
+        request = MessageCreateParams.model_validate(
+            {
+                "model": "ignored",
+                "max_tokens": 16,
+                "messages": [
+                    {"role": "system", "content": "Be terse."},
+                    {"role": "user", "content": "Hello."},
+                    {"role": "system", "content": "Answer in one word."},
+                    {"role": "user", "content": "And now?"},
+                ],
+            }
+        )
+        payload = await mantle_convert.messages_payload(
+            request, "model-id", system_message_as_messages=True
+        )
+        assert payload["system"] == "Be terse.\n\nAnswer in one word."
+        assert [message["role"] for message in payload["messages"]] == ["user", "user"]
+
+    async def test_trailing_system_message_is_forwarded(self) -> None:
+        """A directive ending the message list is accepted by the model as-is."""
+        request = MessageCreateParams.model_validate(
+            {
+                "model": "ignored",
+                "max_tokens": 16,
+                "messages": [
+                    {"role": "user", "content": "Hello."},
+                    {"role": "system", "content": "Answer in one word."},
+                ],
+            }
+        )
+        payload = await mantle_convert.messages_payload(
+            request, "model-id", system_message_as_messages=True
+        )
+        assert "system" not in payload
+        assert [message["role"] for message in payload["messages"]] == [
+            "user",
+            "system",
+        ]
+
+    async def test_consecutive_system_messages_are_forwarded(self) -> None:
+        """Consecutive directives are one section, placed as a whole."""
+        request = MessageCreateParams.model_validate(
+            {
+                "model": "ignored",
+                "max_tokens": 16,
+                "messages": [
+                    {"role": "user", "content": "Hello."},
+                    {"role": "system", "content": "Answer in one word."},
+                    {"role": "system", "content": "Stay factual."},
+                    {"role": "assistant", "content": "Hi."},
+                    {"role": "user", "content": "And now?"},
+                ],
+            }
+        )
+        payload = await mantle_convert.messages_payload(
+            request, "model-id", system_message_as_messages=True
+        )
+        assert "system" not in payload
+        assert [message["role"] for message in payload["messages"]] == [
+            "user",
+            "system",
+            "system",
+            "assistant",
+            "user",
+        ]
+
+    async def test_system_messages_folded_when_not_natively_supported(self) -> None:
+        """Mid-conversation system messages fold into ``system`` by default."""
+        request = MessageCreateParams.model_validate(
+            {
+                "model": "ignored",
+                "max_tokens": 16,
+                "system": "Be helpful.",
+                "messages": [
+                    {"role": "user", "content": "Hello."},
+                    {"role": "system", "content": "Answer in one word."},
+                    {"role": "assistant", "content": "Hi."},
+                    {"role": "user", "content": "And now?"},
+                ],
+            }
+        )
+        payload = await mantle_convert.messages_payload(request, "model-id")
+        assert payload["system"] == "Be helpful.\n\nAnswer in one word."
+        assert [message["role"] for message in payload["messages"]] == [
+            "user",
+            "assistant",
+            "user",
+        ]
+
 
 class TestResponsesPayloadBuilder:
     """Validated Responses requests dumped to the Mantle passthrough shape."""

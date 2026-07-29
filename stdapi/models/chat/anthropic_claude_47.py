@@ -1,6 +1,7 @@
 """Anthropic Claude 4.7 chat model implementation."""
 
 from types import MappingProxyType
+from typing import ClassVar
 
 from stdapi.models.chat._anthropic_claude import (
     _BETA_COMPUTER_USE_2025,
@@ -13,6 +14,9 @@ class ChatModel(AnthropicClaudeChatModel):
     """Anthropic Claude 4.7 chat model implementation."""
 
     MATCHER = "anthropic.claude-opus-4-7"
+    SYSTEM_MESSAGE_AS_MESSAGES_SUPPORTED: ClassVar[bool] = (
+        False  # "role 'system' is not supported on this model"
+    )
     TOOL_BETA_FLAGS = MappingProxyType(
         {
             "bash": _BETA_COMPUTER_USE_2025,

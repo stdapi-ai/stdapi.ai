@@ -827,14 +827,14 @@ ANTHROPIC_MODEL_MAPPINGS: dict[str, dict[str, str]] = {
         "chat": "anthropic.claude-haiku-4-5-20251001-v1:0",
         "chat_vision": "anthropic.claude-haiku-4-5-20251001-v1:0",
         "chat_reasoning": "anthropic.claude-sonnet-4-5-20250929-v1:0",
-        "chat_system_as_messages": "anthropic.claude-sonnet-5",
+        "chat_system_as_messages": "anthropic.claude-opus-5",
         "count_tokens": "anthropic.claude-3-5-sonnet-20240620-v1:0",
     },
     "anthropic": {
         "chat": "claude-haiku-4-5-20251001",
         "chat_vision": "claude-haiku-4-5-20251001",
         "chat_reasoning": "claude-sonnet-4-5-20250929",
-        "chat_system_as_messages": "claude-sonnet-5",
+        "chat_system_as_messages": "claude-opus-5",
         "count_tokens": "claude-haiku-4-5-20251001",
     },
 }
@@ -886,7 +886,7 @@ def anthropic_chat_reasoning_model(anthropic_models: dict[str, str]) -> str:
 
 @pytest.fixture(scope="session")
 def anthropic_system_as_messages_model(anthropic_models: dict[str, str]) -> str:
-    """Provide a model where system-role messages are forwarded as messages (Claude Opus 4.8+)."""
+    """Provide a model forwarding system-role messages natively (Claude Opus 4.8+, Fable, Mythos)."""
     return anthropic_models["chat_system_as_messages"]
 
 

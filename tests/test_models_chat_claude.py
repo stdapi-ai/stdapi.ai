@@ -137,3 +137,40 @@ class TestReasoningDisabled:
 
         assert not fields
         assert request_log["level"] == "warning"
+
+
+class TestSystemMessageAsMessages:
+    """Native mid-conversation system messages are enabled per model family."""
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "anthropic.claude-opus-4-8",
+            "anthropic.claude-opus-4-10",
+            "anthropic.claude-opus-5",
+            "anthropic.claude-sonnet-5",
+            "anthropic.claude-haiku-5",
+            "anthropic.claude-opus-6",
+            "anthropic.claude-fable-5",
+            "anthropic.claude-mythos-5",
+        ],
+    )
+    def test_opus_48_and_later_forward_system_messages(self, model_id: str) -> None:
+        """Opus 4.8+, Fable and Mythos accept system-role messages natively."""
+        assert _claude_model(model_id).SYSTEM_MESSAGE_AS_MESSAGES_SUPPORTED is True
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            # Generations before 4.8 fold system messages, whatever the family.
+            "anthropic.claude-opus-4-7",
+            "anthropic.claude-opus-4-6",
+            "anthropic.claude-haiku-4-5-20251001-v1:0",
+            "anthropic.claude-3-5-sonnet-20241022-v2:0",
+            "anthropic.claude-3-opus-20240229-v1:0",
+            "anthropic.claude-v2:1",
+        ],
+    )
+    def test_unsupported_models_fold_system_messages(self, model_id: str) -> None:
+        """Models rejecting system-role messages keep them folded into `system`."""
+        assert _claude_model(model_id).SYSTEM_MESSAGE_AS_MESSAGES_SUPPORTED is False

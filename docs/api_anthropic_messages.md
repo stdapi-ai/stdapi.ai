@@ -252,6 +252,32 @@ System prompts define the AI assistant's behavior, personality, and instructions
 !!! warning "Unsupported Models"
     Some models don't support system prompts (`mistral.mistral-7b-instruct-v0:2`, `mistral.mixtral-8x7b-instruct-v0:1`). By default, **stdapi.ai silently drops system messages** for these models, allowing cross-model compatibility. To receive errors instead, configure [`DROP_UNSUPPORTED_SYSTEM_PROMPT=false`](operations_configuration.md#drop-unsupported-system-prompt).
 
+### :material-message-cog: Mid-Conversation System Messages
+
+Beyond the top-level `system` parameter, a message may use the `system` role to steer the model from a specific point in the conversation onward.
+
+```json
+{
+  "model": "anthropic.claude-opus-5",
+  "max_tokens": 1024,
+  "system": "You are a helpful assistant.",
+  "messages": [
+    {"role": "user", "content": "Hello."},
+    {"role": "system", "content": "From now on, answer in one word."},
+    {"role": "assistant", "content": "Hi."},
+    {"role": "user", "content": "How are you?"}
+  ]
+}
+```
+
+**Handling:**
+
+- **Claude Opus 4.8+, Fable and Mythos** (`claude-opus-4-8`, `claude-opus-5`, `claude-fable-5`, `claude-mythos-*`): forwarded natively, so the directive applies from its position in the conversation.
+- **All other models** — including the Claude Sonnet and Haiku families, which Anthropic excludes from this feature: the content is appended to the `system` prompt instead, keeping the same request working across every model.
+
+!!! info "Placement"
+    A directive is forwarded natively only where the model accepts it: between a `user` turn and an `assistant` turn, as in the example above. Anywhere else — before the first turn, or right before the final `user` turn — it is appended to the `system` prompt instead, where it applies to the whole conversation. Requests therefore never fail because of placement.
+
 ### ![Amazon S3](styles/logo_amazon_s3.svg){ style="height: 1.2em; vertical-align: text-bottom;" } S3 Image Support
 
 Access images directly from your S3 buckets without generating pre-signed URLs or downloading files locally.

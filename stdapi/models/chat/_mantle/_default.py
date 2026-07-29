@@ -49,6 +49,7 @@ from stdapi.utils import hide_security_details
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Mapping
+    from re import Pattern
 
     from types_aiobotocore_bedrock.literals import RegionName
 
@@ -89,6 +90,19 @@ class ChatModel(ChatModelBase[Any, Any]):
 
     #: Input modalities advertised for this family.
     INPUT_MODALITIES: ClassVar[tuple[str, ...]] = ("TEXT",)
+
+    #: Model IDs natively handling mid-conversation ``system``-role messages.
+    SYSTEM_MESSAGE_AS_MESSAGES_MATCHER: ClassVar[Pattern[str] | None] = None
+
+    def _system_message_as_messages(self) -> bool:
+        """Whether the served model natively handles ``system``-role messages.
+
+        Returns:
+            True when mid-conversation system messages must be forwarded as-is
+            instead of being folded into the ``system`` field.
+        """
+        matcher = self.SYSTEM_MESSAGE_AS_MESSAGES_MATCHER
+        return matcher is not None and matcher.match(self._model_id) is not None
 
     def _supported_apis(self) -> frozenset[MantleApi]:
         """Return the model's currently-known supported Mantle APIs."""
@@ -614,7 +628,11 @@ class ChatModel(ChatModelBase[Any, Any]):
         Returns:
             ``Message`` or streaming ``EventSourceResponse``.
         """
-        payload = await convert.messages_payload(request, self._model_id)
+        payload = await convert.messages_payload(
+            request,
+            self._model_id,
+            system_message_as_messages=self._system_message_as_messages(),
+        )
         if request.stream:
             return await self._stream_serve(
                 "messages", payload, strip_usage_chunk=False
