@@ -13,6 +13,7 @@ from stdapi.models.chat._adapters._openai_chat_completion import (
     extract_output_text,
     format_stream,
     map_messages,
+    translate_request,
 )
 from stdapi.types.openai_chat_completions import (
     Audio,
@@ -20,6 +21,7 @@ from stdapi.types.openai_chat_completions import (
     ChatCompletionSystemMessageParam,
     ChatCompletionToolMessageParam,
     ChatCompletionUserMessageParam,
+    CompletionCreateParams,
 )
 
 if TYPE_CHECKING:
@@ -151,6 +153,62 @@ class TestMapMessagesRoleAlternation:
         )
         assert system_blocks == [{"text": "rules"}]
         assert messages == [{"role": "user", "content": [{"text": "a"}, {"text": "b"}]}]
+
+
+class TestLegacyFunctionDetection:
+    """Legacy function format detected from history survives ``translate_request``."""
+
+    @staticmethod
+    async def _legacy_flag(payload: dict[str, Any]) -> bool:
+        """Map the payload messages then translate it, returning the legacy flag.
+
+        Args:
+            payload: Raw chat completion request payload.
+
+        Returns:
+            The legacy function format flag seen by the response formatters.
+        """
+        request = CompletionCreateParams.model_validate(payload)
+        token = _LEGACY_FUNCTION.set(False)
+        try:
+            await map_messages(request.messages)
+            translate_request(request, "model")
+            return _LEGACY_FUNCTION.get()
+        finally:
+            _LEGACY_FUNCTION.reset(token)
+
+    async def test_function_message_history_enables_legacy_format(self) -> None:
+        """A replayed `function` message keeps the legacy format without `functions`."""
+        assert await self._legacy_flag(
+            {
+                "model": "model",
+                "messages": [
+                    {"role": "user", "content": "hi"},
+                    {"role": "function", "name": "f", "content": "ok"},
+                ],
+            }
+        )
+
+    async def test_declared_tools_disable_legacy_format(self) -> None:
+        """Declared `tools` win over legacy history detection."""
+        assert not await self._legacy_flag(
+            {
+                "model": "model",
+                "messages": [
+                    {"role": "user", "content": "hi"},
+                    {"role": "function", "name": "f", "content": "ok"},
+                ],
+                "tools": [
+                    {"type": "function", "function": {"name": "f", "parameters": {}}}
+                ],
+            }
+        )
+
+    async def test_plain_request_keeps_tool_calls_format(self) -> None:
+        """A request without legacy history or `functions` stays on tool_calls format."""
+        assert not await self._legacy_flag(
+            {"model": "model", "messages": [{"role": "user", "content": "hi"}]}
+        )
 
 
 class TestExtractOutputText:

@@ -374,7 +374,12 @@ def translate_request(
     )
     tool_config = build_tool_config(request)
 
-    _LEGACY_FUNCTION.set(request.functions is not None)
+    # Legacy format is declared by `functions`, or detected from the message history
+    # by `map_messages` (which runs first) when no `tools` are declared.
+    _LEGACY_FUNCTION.set(
+        request.functions is not None
+        or (request.tools is None and _LEGACY_FUNCTION.get(False))
+    )
     return (
         inference_cfg,
         additional_request_fields,
