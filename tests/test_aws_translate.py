@@ -25,10 +25,12 @@ class _StubTranslateClient:
     def __init__(self, outcome: dict[str, str] | Exception) -> None:
         self._outcome = outcome
         self.calls = 0
+        self.requests: list[dict[str, str]] = []
 
-    async def translate_text(self, **_kwargs: str) -> dict[str, str]:
-        """Return the fixed payload or raise the configured error."""
+    async def translate_text(self, **kwargs: str) -> dict[str, str]:
+        """Record the request and return the fixed payload or raise the error."""
         self.calls += 1
+        self.requests.append(kwargs)
         if isinstance(self._outcome, Exception):
             raise self._outcome
         return self._outcome
@@ -114,3 +116,36 @@ class TestTranslateFailover:
         assert await translate("hello", "en-US") == "hello"
 
         assert clients["us-east-1"].calls == 0
+
+
+class TestTranslateSourceLanguageCode:
+    """translate(): region subtags are stripped, except distinct Translate variants."""
+
+    @pytest.mark.parametrize(
+        ("source", "expected"),
+        [
+            ("fr-FR", "fr"),
+            ("fr-CA", "fr-CA"),
+            ("es-US", "es"),
+            ("es-MX", "es-MX"),
+            ("zh-CN", "zh"),
+            ("zh-TW", "zh-TW"),
+            ("pt-PT", "pt-PT"),
+            ("pt-BR", "pt"),
+            ("fa-IR", "fa"),
+            ("fa-AF", "fa-AF"),
+        ],
+    )
+    async def test_source_language_code_sent_to_translate(
+        self, monkeypatch: pytest.MonkeyPatch, source: str, expected: str
+    ) -> None:
+        """Distinct Translate variants keep their region subtag; others are stripped."""
+        client = _StubTranslateClient({"TranslatedText": "hi"})
+        monkeypatch.setattr(
+            stdapi.aws, "get_client", lambda _service, _region=None: client
+        )
+
+        await translate("bonjour", source)
+
+        (request,) = client.requests
+        assert request["SourceLanguageCode"] == expected

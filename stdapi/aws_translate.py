@@ -25,6 +25,10 @@ class TranslationError(Exception):
     """Exception raised when translation fails."""
 
 
+#: Region-qualified codes AWS Translate treats as distinct from their base language
+_TRANSLATE_DISTINCT_LANGUAGE_CODES = {"es-MX", "fa-AF", "fr-CA", "pt-PT", "zh-TW"}
+
+
 async def translate(
     text: str, source_language_code: str, target_language_code: str = "en"
 ) -> str:
@@ -41,7 +45,8 @@ async def translate(
     Raises:
         ApiError: When translation fails
     """
-    source_language_code = source_language_code.split("-", 1)[0]
+    if source_language_code not in _TRANSLATE_DISTINCT_LANGUAGE_CODES:
+        source_language_code = source_language_code.split("-", 1)[0]
     if not text.strip() or source_language_code == "en":
         return text
 
