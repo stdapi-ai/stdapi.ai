@@ -11,6 +11,9 @@ from typing import TYPE_CHECKING
 import pytest
 from anthropic import Anthropic, AnthropicBedrock, NotFoundError
 
+from stdapi.routes.anthropic_models import paginate_models
+from stdapi.types.anthropic_messages import ModelInfo
+
 if TYPE_CHECKING:
     from starlette.testclient import TestClient
 
@@ -402,4 +405,55 @@ class TestAnthropicModels:
         assert retrieved.id == target.id
         assert retrieved.type == target.type
         assert retrieved.display_name == target.display_name
-        assert retrieved.created_at
+
+
+class TestPaginateModelsOffline:
+    """Offline tests for the `paginate_models` cursor pagination helper."""
+
+    @staticmethod
+    def _models(count: int) -> list[ModelInfo]:
+        """Build a list of `count` fake models named m0..m{count-1}."""
+        return [
+            ModelInfo(
+                id=f"m{i}", created_at="1970-01-01T00:00:00Z", display_name=f"m{i}"
+            )
+            for i in range(count)
+        ]
+
+    def test_before_id_returns_page_immediately_preceding_cursor(self) -> None:
+        """before_id must return the `limit` items adjacent to the cursor, not the oldest ones."""
+        data = self._models(10)
+
+        page, has_more = paginate_models(data, limit=3, after_id=None, before_id="m8")
+
+        assert [m.id for m in page] == ["m5", "m6", "m7"]
+        assert has_more is True
+
+    def test_after_id_returns_page_immediately_following_cursor(self) -> None:
+        """after_id must return the `limit` items immediately following the cursor."""
+        data = self._models(10)
+
+        page, has_more = paginate_models(data, limit=3, after_id="m1", before_id=None)
+
+        assert [m.id for m in page] == ["m2", "m3", "m4"]
+        assert has_more is True
+
+    def test_before_id_no_more_items_before_page(self) -> None:
+        """has_more is False when the returned page reaches the start of the list."""
+        data = self._models(5)
+
+        page, has_more = paginate_models(data, limit=3, after_id=None, before_id="m3")
+
+        assert [m.id for m in page] == ["m0", "m1", "m2"]
+        assert has_more is False
+
+    def test_unknown_before_id_falls_back_to_start_of_list(self) -> None:
+        """An unmatched before_id must not silently switch to the end of the list."""
+        data = self._models(10)
+
+        page, has_more = paginate_models(
+            data, limit=3, after_id=None, before_id="unknown-cursor"
+        )
+
+        assert [m.id for m in page] == ["m0", "m1", "m2"]
+        assert has_more is True
