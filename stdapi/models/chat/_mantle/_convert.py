@@ -1290,8 +1290,9 @@ def _chat_to_messages_request(payload: dict[str, Any]) -> dict[str, Any]:
         out["metadata"] = {"user_id": user}
     if tools := _anthropic_tools_from_chat(payload.get("tools") or []):
         out["tools"] = tools
+    parallel = payload.get("parallel_tool_calls") if tools else None
     if (
-        choice := _anthropic_tool_choice_from_chat(payload.get("tool_choice"))
+        choice := _anthropic_tool_choice_from_chat(payload.get("tool_choice"), parallel)
     ) is not None:
         out["tool_choice"] = choice
     return out
@@ -1494,29 +1495,40 @@ def _anthropic_tools_from_chat(tools: list[dict[str, Any]]) -> list[dict[str, An
 
 
 def _anthropic_tool_choice_from_chat(
-    tool_choice: str | dict[str, Any] | None,
+    tool_choice: str | dict[str, Any] | None, parallel_tool_calls: object
 ) -> dict[str, Any] | None:
     """Convert a Chat Completions tool choice to the Anthropic shape.
 
+    Anthropic carries the parallel-call switch on the tool choice itself, so
+    ``parallel_tool_calls: false`` adds ``disable_parallel_tool_use`` (and
+    synthesises the default ``auto`` choice when none was requested).
+
     Args:
         tool_choice: Chat Completions tool choice value.
+        parallel_tool_calls: Chat Completions ``parallel_tool_calls`` value.
 
     Returns:
         Anthropic tool choice value, or ``None`` when unmappable.
     """
+    disabled = parallel_tool_calls is False
     match tool_choice:
         case "auto":
-            return {"type": "auto"}
+            choice: dict[str, Any] = {"type": "auto"}
         case "required":
-            return {"type": "any"}
+            choice = {"type": "any"}
         case "none":
             return {"type": "none"}
         case {"type": "function", "function": dict() as function_choice}:
-            return {"type": "tool", "name": function_choice.get("name") or ""}
+            choice = {"type": "tool", "name": function_choice.get("name") or ""}
         case {"type": "function"}:
-            return {"type": "tool", "name": ""}
+            choice = {"type": "tool", "name": ""}
+        case None if disabled:
+            choice = {"type": "auto"}
         case _:
             return None
+    if disabled:
+        choice["disable_parallel_tool_use"] = True
+    return choice
 
 
 def _messages_to_chat_request(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1548,10 +1560,11 @@ def _messages_to_chat_request(payload: dict[str, Any]) -> dict[str, Any]:
         out["user"] = _openai_user(user)
     if tools := _chat_tools_from_anthropic(payload.get("tools") or []):
         out["tools"] = tools
-    if (
-        choice := _chat_tool_choice_from_anthropic(payload.get("tool_choice"))
-    ) is not None:
+    tool_choice = payload.get("tool_choice")
+    if (choice := _chat_tool_choice_from_anthropic(tool_choice)) is not None:
         out["tool_choice"] = choice
+    if isinstance(tool_choice, dict) and tool_choice.get("disable_parallel_tool_use"):
+        out["parallel_tool_calls"] = False
     return out
 
 

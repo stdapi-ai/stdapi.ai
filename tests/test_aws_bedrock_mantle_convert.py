@@ -439,6 +439,41 @@ class TestChatToMessagesRequestRich:
         out = mantle_convert._chat_to_messages_request(payload)  # noqa: SLF001
         assert out["tool_choice"] == expected
 
+    @pytest.mark.parametrize(
+        ("tool_choice", "expected"),
+        [
+            (None, {"type": "auto", "disable_parallel_tool_use": True}),
+            ("auto", {"type": "auto", "disable_parallel_tool_use": True}),
+            ("required", {"type": "any", "disable_parallel_tool_use": True}),
+            # Anthropic's `none` choice has no disable_parallel_tool_use field.
+            ("none", {"type": "none"}),
+            (
+                {"type": "function", "function": {"name": "f"}},
+                {"type": "tool", "name": "f", "disable_parallel_tool_use": True},
+            ),
+        ],
+    )
+    def test_parallel_tool_calls_false_disables_parallel_tool_use(
+        self, tool_choice: str | dict[str, Any] | None, expected: dict[str, Any]
+    ) -> None:
+        """``parallel_tool_calls: false`` maps to ``disable_parallel_tool_use``."""
+        payload: dict[str, Any] = {
+            "model": "m",
+            "messages": [],
+            "tools": [{"type": "function", "function": {"name": "f"}}],
+            "parallel_tool_calls": False,
+        }
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
+        out = mantle_convert._chat_to_messages_request(payload)  # noqa: SLF001
+        assert out["tool_choice"] == expected
+
+    def test_parallel_tool_calls_false_without_tools_adds_no_choice(self) -> None:
+        """Without tools the synthesised ``auto`` tool choice is not emitted."""
+        payload = {"model": "m", "messages": [], "parallel_tool_calls": False}
+        out = mantle_convert._chat_to_messages_request(payload)  # noqa: SLF001
+        assert "tool_choice" not in out
+
     def test_unknown_role_ignored(self) -> None:
         """A message with an unrecognized role produces no turn."""
         payload = {"model": "m", "messages": [{"role": "foo", "content": "bar"}]}
@@ -714,8 +749,8 @@ class TestMessagesToChatRequestEdges:
         out = mantle_convert._messages_to_chat_request(payload)  # noqa: SLF001
         assert out["tool_choice"] == expected
 
-    def test_disable_parallel_tool_use_has_no_chat_equivalent(self) -> None:
-        """``disable_parallel_tool_use`` has no Chat Completions field and is dropped."""
+    def test_disable_parallel_tool_use_becomes_parallel_tool_calls(self) -> None:
+        """``disable_parallel_tool_use`` maps to ``parallel_tool_calls: false``."""
         payload = {
             "model": "m",
             "messages": [],
@@ -727,6 +762,13 @@ class TestMessagesToChatRequestEdges:
         }
         out = mantle_convert._messages_to_chat_request(payload)  # noqa: SLF001
         assert out["tool_choice"] == {"type": "function", "function": {"name": "f"}}
+        assert out["parallel_tool_calls"] is False
+
+    def test_parallel_tool_use_left_enabled(self) -> None:
+        """Without ``disable_parallel_tool_use`` no ``parallel_tool_calls`` is set."""
+        payload = {"model": "m", "messages": [], "tool_choice": {"type": "auto"}}
+        out = mantle_convert._messages_to_chat_request(payload)  # noqa: SLF001
+        assert "parallel_tool_calls" not in out
 
     def test_stop_sequences_become_stop(self) -> None:
         """``stop_sequences`` maps to the Chat Completions ``stop`` field."""

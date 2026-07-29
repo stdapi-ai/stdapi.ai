@@ -225,6 +225,46 @@ class TestMantleChatCompletions:
         assert "logprobs" in body["message"]
         assert "not supported" in body["message"]
 
+    def test_claude_parallel_tool_calls_disabled_upstream(
+        self, openai_client: OpenAI
+    ) -> None:
+        """``parallel_tool_calls: false`` converts to a tool choice Mantle accepts.
+
+        Anthropic carries the switch as ``disable_parallel_tool_use`` on the
+        tool choice, so the conversion synthesises one; this checks the
+        upstream Messages API accepts it instead of returning a 400.
+
+        Validates:
+            - The converted request succeeds on the Anthropic upstream
+            - At most one tool call comes back
+        """
+        response = openai_client.chat.completions.create(
+            model=_CLAUDE_MANTLE,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "What is the weather in Paris and in Tokyo?",
+                }
+            ],
+            max_completion_tokens=128,
+            parallel_tool_calls=False,
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get the weather of a city.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"city": {"type": "string"}},
+                            "required": ["city"],
+                        },
+                    },
+                }
+            ],
+        )
+        assert len(response.choices[0].message.tool_calls or []) <= 1
+
     def test_luna_converted_to_responses(self, openai_client: OpenAI) -> None:
         """Chat completion on a Responses-only model is converted upstream.
 
