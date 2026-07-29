@@ -137,6 +137,9 @@ class ModerationModel(ModerationModelBase):
                 guardrailVersion=self._version,
                 source="INPUT",
                 content=[content],
+                # FULL also returns non-flagged filter entries with their real
+                # confidence, instead of omitting them (score would default to 0.0).
+                outputScope="FULL",
             )
         if text is None:
             record_guardrail_usage(self._model_id, images=1, region=self._region)

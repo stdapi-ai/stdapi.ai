@@ -383,6 +383,57 @@ class TestModerationsRoute:
         assert not any(result["categories"].values())
         assert all(score == 0.0 for score in result["category_scores"].values())
 
+    def test_requests_full_output_scope(
+        self,
+        client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        configured_guardrail: None,
+    ) -> None:
+        """apply_guardrail is called with outputScope=FULL to surface non-flagged confidences."""
+        stub, _ = _stub_client(monkeypatch, _CLEAN_RESPONSE)
+
+        client.post("/v1/moderations", json={"input": "some text"})
+
+        (request,) = stub.requests
+        assert request["outputScope"] == "FULL"
+
+    def test_non_detected_filter_confidence_is_surfaced(
+        self,
+        client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        configured_guardrail: None,
+    ) -> None:
+        """A non-detected filter entry (only returned under FULL scope) reports its real confidence."""
+        _stub_client(
+            monkeypatch,
+            {
+                "action": "NONE",
+                "assessments": [
+                    {
+                        "contentPolicy": {
+                            "filters": [
+                                {
+                                    "type": "INSULTS",
+                                    "confidence": "MEDIUM",
+                                    "detected": False,
+                                    "action": "NONE",
+                                }
+                            ]
+                        }
+                    }
+                ],
+            },
+        )
+
+        response = client.post("/v1/moderations", json={"input": "some text"})
+
+        assert response.status_code == 200, response.text
+        (result,) = response.json()["results"]
+        assert result["flagged"] is False
+        assert result["categories"]["harassment"] is False
+        # Non-zero even though the category was never flagged.
+        assert result["category_scores"]["harassment"] == 0.5
+
     def test_empty_string_input_is_clean_without_aws_call(
         self,
         client: TestClient,
