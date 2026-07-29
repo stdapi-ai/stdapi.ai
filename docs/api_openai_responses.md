@@ -266,6 +266,13 @@ The terminal event matches the outcome, exactly like the OpenAI API:
 
 If an error occurs mid-stream, a spec `error` event (with `code`, `message`, `param`, and `sequence_number`) is emitted, followed by a terminal `response.failed` snapshot.
 
+!!! note "Non-streaming failures"
+    Without `stream: true` there is no terminal event to carry the failure, so a
+    generation that ends in `status: "failed"` is reported as an HTTP `502` whose
+    `error.message` is the failure reason — never a `200` with an empty `output`.
+    Only `background: true` requests keep the `200` with the `failed` response
+    body, so the client can poll the stored response.
+
 ### Structured JSON Output
 
 Request machine-readable output using `text.format`.

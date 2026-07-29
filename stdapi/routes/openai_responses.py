@@ -80,7 +80,7 @@ from stdapi.types.openai_responses import (
     ResponseOutputText,
     ResponseUsage,
 )
-from stdapi.utils import validation_error_handler
+from stdapi.utils import hide_security_details, validation_error_handler
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -178,6 +178,25 @@ def _previous_response_not_found(previous_response_id: str) -> Never:
     error = ApiError(msg, status=404)
     error.param = "previous_response_id"
     raise error
+
+
+def _failed_response_error(response: Response) -> Never:
+    """Raise the 502 for a synchronous terminal ``failed`` Response.
+
+    A ``status="failed"`` Response carries the upstream failure in its ``error``
+    field and no usable output; a synchronous request must report the failure
+    instead of returning an empty 200 body, matching the Mantle-served path.
+
+    Args:
+        response: The Response object with ``status == "failed"``.
+
+    Raises:
+        ApiError: Always, with status 502.
+    """
+    message = response.error.message if response.error else None
+    if not message:
+        message = "The model failed to generate a valid response."
+    raise ApiError(hide_security_details(502, message), status=502)
 
 
 async def _apply_previous_response(
@@ -551,6 +570,15 @@ async def create_response(
             created_at,
             moderation_builder=partial(build_response_moderation, request.moderation),
         )
+        if (
+            isinstance(result, Response)
+            and result.status == "failed"
+            and not request.background
+        ):
+            # A synchronous request must not swallow an upstream failure into
+            # a 200 with empty output (Mantle models already enforce this
+            # upstream); background requests keep the failed terminal state.
+            _failed_response_error(result)
     except BaseException:
         if store:
             await discard_stored_response_session(response_id, "response")
