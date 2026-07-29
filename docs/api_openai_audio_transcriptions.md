@@ -56,8 +56,8 @@ Transcribe audio to text with Amazon Transcribe or Amazon Bedrock audio-capable 
 | **Advanced**               |                                          |                                                                  |
 | `timestamp_granularities`  |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Word or segment level; requires `response_format=verbose_json` (Amazon Transcribe only) |
 | Speaker diarization        |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Automatic speaker separation; requires `response_format=diarized_json` (Amazon Transcribe only) |
-| `known_speaker_names`      | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Rejected with an error if provided                               |
-| `known_speaker_references` | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Rejected with an error if provided                               |
+| `known_speaker_names`      | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Accepted but ignored — diarization falls back to generic speaker labels |
+| `known_speaker_references` | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Accepted but ignored — diarization falls back to generic speaker labels |
 | `chunking_strategy`        |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Only `auto` is accepted; other values are rejected               |
 | `temperature`              |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Bedrock models only; rejected by Amazon Transcribe               |
 | `prompt`                   |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Bedrock models only; rejected by Amazon Transcribe               |
@@ -124,7 +124,7 @@ Transcribe audio to text with Amazon Transcribe or Amazon Bedrock audio-capable 
 
     This alias enables seamless compatibility with OpenAI-based tools and applications without any configuration changes. You can also [customize or override this alias](operations_configuration.md#model-aliases) to suit your needs.
 
-**Note:** With `amazon.transcribe`, the `prompt`, `temperature`, and `include` parameters are rejected with an error to ensure consistent transcription accuracy. The `known_speaker_names` and `known_speaker_references` parameters are unsupported for every model: Amazon Transcribe provides automatic speaker diarization without requiring known speaker references.
+**Note:** With `amazon.transcribe`, the `prompt`, `temperature`, and `include` parameters are rejected with an error to ensure consistent transcription accuracy. The `known_speaker_names` and `known_speaker_references` parameters are accepted but ignored for every model: Amazon Transcribe's automatic speaker diarization runs without known speaker references, falling back to generic speaker labels.
 
 !!! tip "Performance Tips: Optimize Speed & Cost"
     - **Specify the language** if you know it—skips auto-detection for faster processing and lower AWS costs

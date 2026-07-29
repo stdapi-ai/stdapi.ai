@@ -412,12 +412,12 @@ class TranscriptionCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=
     known_speaker_names: list[str] | None = Field(
         default=None,
         description="Speaker names matching `known_speaker_references[]` (e.g. `customer`, `agent`). "
-        "UNSUPPORTED.",
+        "Accepted but ignored: diarization degrades to generic speaker labels.",
     )
     known_speaker_references: list[str] | None = Field(
         default=None,
         description="Audio samples (data URLs, 2-10s) for known-speaker diarization. "
-        "UNSUPPORTED.",
+        "Accepted but ignored: diarization degrades to generic speaker labels.",
     )
     language: str | None = Field(
         default=None,
@@ -454,6 +454,8 @@ class TranscriptionCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=
         Rules implemented:
         - timestamp_granularities may only be used with response_format == 'verbose_json'.
         - chunking_strategy other than 'auto' is unsupported.
+        - known_speaker_names/known_speaker_references are accepted and ignored:
+          diarization degrades to generic speaker labels instead of failing the request.
         - prompt is unsupported.
         - temperature values other than 0.0 are unsupported.
         """
