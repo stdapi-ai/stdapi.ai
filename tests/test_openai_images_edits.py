@@ -10,6 +10,7 @@ from starlette.testclient import TestClient
 
 from stdapi.api_errors import UnsupportedModelError
 from stdapi.routes import openai_images_edits
+from stdapi.types.openai_images import ImageEditParams
 
 # Import validation helpers from generations tests
 from .test_openai_images_generations import (
@@ -255,6 +256,30 @@ class TestImagesEditsBasic:
         )
 
         # Validate the streaming response structure
+        assert response is not None
+        validate_streaming_image_response(response)
+
+    @pytest.mark.expensive
+    @pytest.mark.parametrize("partial_images_value", [0, 2, 3])
+    def test_stream_with_partial_images(
+        self, openai_client: OpenAI, sample_image_file: bytes, partial_images_value: int
+    ) -> None:
+        """Test editing with various partial_images values.
+
+        This test validates that all valid partial_images values (0, 2, 3) work
+        correctly when stream=True is enabled, even though no available model
+        currently emits partial preview events (the final image arrives as a
+        single event).
+        """
+        response = openai_client.images.edit(
+            image=sample_image_file,
+            prompt="A test image",
+            model="amazon.nova-canvas-v1:0",
+            size="512x512",
+            stream=True,
+            partial_images=partial_images_value,
+        )
+
         assert response is not None
         validate_streaming_image_response(response)
 
@@ -562,6 +587,27 @@ class TestImagesEditsModelField:
         assert response.status_code == 400
         assert response.json()["error"]["code"] == "model_not_found"
         assert probed_model_ids == ["probe-model-id"]
+
+
+@pytest.mark.local
+class TestPartialImagesAccepted:
+    """ImageEditParams.partial_images: accepted (0-3) even though no model emits partials."""
+
+    @pytest.mark.parametrize("value", [0, 1, 2, 3])
+    def test_value_is_accepted(self, value: int) -> None:
+        """`partial_images` in 0-3 is accepted; no current model emits partial events."""
+        params = ImageEditParams(model="m", stream=True, partial_images=value)
+        assert params.partial_images == value
+
+    def test_omitted_is_accepted(self) -> None:
+        """Omitting `partial_images` (None) is accepted."""
+        params = ImageEditParams(model="m", stream=True)
+        assert params.partial_images is None
+
+    def test_requires_stream(self) -> None:
+        """`partial_images` without `stream=True` is still rejected."""
+        with pytest.raises(ValueError, match="partial_images"):
+            ImageEditParams(model="m", partial_images=0)
 
 
 @pytest.mark.local

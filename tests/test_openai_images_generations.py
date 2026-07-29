@@ -783,3 +783,27 @@ class TestSizeAutoAccepted:
         """A non-`auto`, non-`WIDTHxHEIGHT` size is still rejected."""
         with pytest.raises(ValueError, match="size"):
             ImageGenerateParams(model="m", prompt="p", size="invalid-size")
+
+
+class TestPartialImagesAccepted:
+    """ImageGenerateParams.partial_images: accepted (0-3) even though no model emits partials."""
+
+    pytestmark = pytest.mark.local
+
+    @pytest.mark.parametrize("value", [0, 1, 2, 3])
+    def test_value_is_accepted(self, value: int) -> None:
+        """`partial_images` in 0-3 is accepted; no current model emits partial events."""
+        params = ImageGenerateParams(
+            model="m", prompt="p", stream=True, partial_images=value
+        )
+        assert params.partial_images == value
+
+    def test_omitted_is_accepted(self) -> None:
+        """Omitting `partial_images` (None) is accepted."""
+        params = ImageGenerateParams(model="m", prompt="p", stream=True)
+        assert params.partial_images is None
+
+    def test_requires_stream(self) -> None:
+        """`partial_images` without `stream=True` is still rejected."""
+        with pytest.raises(ValueError, match="partial_images"):
+            ImageGenerateParams(model="m", prompt="p", partial_images=0)

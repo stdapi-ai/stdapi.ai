@@ -159,7 +159,6 @@ def _merge_image_parameters(
                                 "model": "amazon.nova-canvas-v1:0",
                                 "prompt": "A sunset over mountains",
                                 "stream": True,
-                                "partial_images": 2,
                             },
                         },
                     }
@@ -188,7 +187,6 @@ def _merge_image_parameters(
                                     {"image_url": "https://example.com/image.png"}
                                 ],
                                 "stream": True,
-                                "partial_images": 2,
                             },
                         },
                     }
@@ -288,8 +286,8 @@ async def edit_images(
         Form(
             description="Number of partial images to generate during streaming "
             "(0-3; requires `stream=true`). 0 sends the final image as a single event. "
-            "The final image may arrive before all partial images if generation "
-            "finishes early, and partial images are only sent if the model supports them.",
+            "The final image may arrive before all partial images if generation finishes "
+            "early, and partial images are only sent if the model supports them.",
             ge=0,
             le=3,
         ),

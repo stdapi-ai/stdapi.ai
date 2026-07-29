@@ -51,7 +51,7 @@ Generate images with Amazon Bedrock image models like Stability AI and Amazon No
 | `output_format`                |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | `png`, `jpeg`, or `webp` (model-specific)                           |
 | `output_compression`           |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Compression level 1-100% (default: 100)                             |
 | `stream`                       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Generate images in streaming mode with partial results              |
-| `partial_images`               |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Number of partial images in stream (0-3, model-specific)            |
+| `partial_images`               | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Accepted (0-3) but ignored — no available model currently streams partial images; the final image is always sent as a single event |
 | `background`                   |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Accepts `auto` (default) and `opaque`; `transparent` is unsupported — responses report `opaque` |
 | `moderation`                   | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Only the default `auto` is accepted; other values are rejected with an error |
 | Extra model-specific params    | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Extra model-specific parameters via JSON body                       |
