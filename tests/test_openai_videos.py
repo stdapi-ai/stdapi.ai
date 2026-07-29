@@ -578,7 +578,7 @@ def _advertised_model_ids(
 class TestOpenAIVideoIntegration:
     """Live /v1/videos lifecycle through the OpenAI SDK (local or official API)."""
 
-    @pytest.mark.expensive
+    @pytest.mark.video
     @pytest.mark.slow
     def test_video_generation_lifecycle(
         self, openai_client: OpenAI, video_generation_model: str, use_official_api: bool
@@ -610,7 +610,7 @@ class TestOpenAIVideoIntegration:
             with suppress(Exception):
                 openai_client.videos.delete(video.id)
 
-    @pytest.mark.expensive
+    @pytest.mark.video
     @pytest.mark.slow
     def test_video_generation_from_reference_image(
         self, openai_client: OpenAI, video_generation_model: str, use_official_api: bool
@@ -631,7 +631,7 @@ class TestOpenAIVideoIntegration:
             with suppress(Exception):
                 openai_client.videos.delete(video.id)
 
-    @pytest.mark.expensive
+    @pytest.mark.video
     @pytest.mark.slow
     def test_every_advertised_model_generates(
         self,
@@ -665,7 +665,7 @@ class TestOpenAIVideoIntegration:
                 with suppress(Exception):
                     openai_client.videos.delete(video.id)
 
-    @pytest.mark.expensive
+    @pytest.mark.video
     @pytest.mark.slow
     def test_nova_reel_multi_shot_duration(
         self,

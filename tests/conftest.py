@@ -319,7 +319,7 @@ OUTPUT_DIR = Path(__file__).parent / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
 _OPENAI_ORGANIZATION = "tests_stdapi.ai"
 #: Markers whose tests are collected only when the matching ``--<marker>`` flag is passed.
-_OPT_IN_MARKERS = ("expensive", "agentic", "slow")
+_OPT_IN_MARKERS = ("expensive", "agentic", "slow", "video")
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -356,6 +356,9 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption(
         "--slow", action="store_true", default=False, help="Run slow tests"
     )
+    parser.addoption(
+        "--video", action="store_true", default=False, help="Run video generation tests"
+    )
 
 
 def pytest_report_header() -> str | None:
@@ -371,8 +374,8 @@ def pytest_collection_modifyitems(
     """Skip opt-in tests, and local tests against a remote target, at collection time.
 
     ``local``-marked tests are skipped when ``--server-url`` or
-    ``--use-official-api`` selects a remote target; ``expensive``/``agentic``/
-    ``slow`` tests are skipped unless their matching flag is passed.
+    ``--use-official-api`` selects a remote target; the ``_OPT_IN_MARKERS``
+    tests are skipped unless their matching flag is passed.
     """
     if config.getoption("--server-url") or config.getoption("--use-official-api"):
         skip_marker = pytest.mark.skip(
