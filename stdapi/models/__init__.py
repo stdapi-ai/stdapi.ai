@@ -184,6 +184,43 @@ def _count_grounding_tool_uses(response: ConverseResponseTypeDef) -> int:
     )
 
 
+def _catalog_model_id(reference: str) -> str | None:
+    """Return the catalog model ID *reference* designates, if it is a known model.
+
+    Accepts a bare model ID, a foundation-model or inference-profile ARN, and the
+    ``<geography>.`` prefixed IDs of cross-region inference profiles.
+
+    Args:
+        reference: Model ID, inference profile ID, or Bedrock ARN.
+
+    Returns:
+        The matching :data:`_ALL_MODELS` key, or None when none matches.
+    """
+    model_id = reference.rsplit("/", 1)[-1]
+    if model_id in _ALL_MODELS:
+        return model_id
+    stripped = model_id.split(".", 1)[-1]
+    return stripped if stripped in _ALL_MODELS else None
+
+
+def _invoked_model_id(response: Mapping[str, Any]) -> str | None:
+    """Return the prompt router's actually-invoked model ID from *response*'s trace.
+
+    A prompt router resolves to one of its target models per invocation; the
+    caller's static model ID (the router's configured/first target) may not be
+    the model that actually served the request and should be billed for it.
+
+    Args:
+        response: Converse response or ConverseStream metadata event.
+
+    Returns:
+        The invoked model's catalog ID, or None if the trace has none or it does
+        not name a configured model.
+    """
+    invoked = response.get("trace", {}).get("promptRouter", {}).get("invokedModelId")
+    return _catalog_model_id(invoked) if invoked else None
+
+
 #: Bedrock models details
 _MODELS: dict[str, ModelDetails] = {}
 
@@ -674,13 +711,19 @@ class ModelBase[RequestT, ResponseT]:
             requested_tier: The request's tier, used when the response
                 doesn't report the tier that actually served it.
             routing: Serving profile of the call.
+
+        Note:
+            When ``self._model_id`` names a prompt router, usage is billed to the
+            trace's ``promptRouter.invokedModelId`` (the model the router actually
+            selected) instead of the router's static first target model, when known
+            (see :func:`_invoked_model_id`).
         """
         # Bill counted grounding calls even on a missing/empty usage block.
         usage = response.get("usage") or {}
         if not usage and not grounding_requests:
             return
         record_bedrock_usage(
-            self._model_id,
+            _invoked_model_id(response) or self._model_id,
             # AWS reports the tier that actually served the call; it takes
             # precedence over the requested one.
             tier=(response.get("serviceTier") or {}).get("type") or requested_tier,

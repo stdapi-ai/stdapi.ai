@@ -5,9 +5,10 @@ Covers ``_count_grounding_tool_uses`` (non-streaming Converse responses) and
 ``grounding_requests`` billed dimension (see tests/test_usage.py for its
 pricing/log-entry coverage). Also covers ``_record_converse_usage`` billing
 details (cacheDetails TTL breakdown, effective-tier pricing, concurrent-call
-region attribution), exactly-once recording across ``converse()`` failover,
-and ``_converse`` stripping the ConverseStream-only guardrail
-``streamProcessingMode`` field before calling the non-streaming Converse API.
+region attribution, prompt-router invoked-model attribution), exactly-once
+recording across ``converse()`` failover, and ``_converse`` stripping the
+ConverseStream-only guardrail ``streamProcessingMode`` field before calling
+the non-streaming Converse API.
 """
 
 from asyncio import Event, create_task, gather, wait_for
@@ -262,6 +263,86 @@ class TestRecordConverseUsageEffectiveTier:
             {"usage": {"inputTokens": 5, "outputTokens": 1, "totalTokens": 6}}  # type: ignore[typeddict-item]
         )
         assert next(iter(usage.USAGE.get())).tier == "priority"
+
+
+class TestRecordConverseUsagePromptRouterAttribution:
+    """_record_converse_usage: bill the prompt router's actually-invoked model."""
+
+    def test_bills_the_trace_invoked_model_when_known(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression: usage is attributed to promptRouter.invokedModelId, not the router."""
+        monkeypatch.setitem(
+            stdapi.models._ALL_MODELS,  # noqa: SLF001
+            "anthropic.claude-3-haiku-20240307-v1:0",
+            cast("Any", object()),
+        )
+        ModelBase("my-router")._record_converse_usage(  # noqa: SLF001
+            {  # type: ignore[typeddict-item]
+                "usage": {"inputTokens": 5, "outputTokens": 1, "totalTokens": 6},
+                "trace": {
+                    "promptRouter": {
+                        "invokedModelId": (
+                            "arn:aws:bedrock:us-east-1::foundation-model/"
+                            "anthropic.claude-3-haiku-20240307-v1:0"
+                        )
+                    }
+                },
+            }
+        )
+        key = next(iter(usage.USAGE.get()))
+        assert key.model == "anthropic.claude-3-haiku-20240307-v1:0"
+
+    def test_bills_the_base_model_of_an_invoked_inference_profile(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Routers report an inference profile ARN: its geography prefix is stripped."""
+        monkeypatch.setitem(
+            stdapi.models._ALL_MODELS,  # noqa: SLF001
+            "anthropic.claude-3-haiku-20240307-v1:0",
+            cast("Any", object()),
+        )
+        ModelBase("my-router")._record_converse_usage(  # noqa: SLF001
+            {  # type: ignore[typeddict-item]
+                "usage": {"inputTokens": 5, "outputTokens": 1, "totalTokens": 6},
+                "trace": {
+                    "promptRouter": {
+                        "invokedModelId": (
+                            "arn:aws:bedrock:us-east-1:123456789012:inference-profile/"
+                            "us.anthropic.claude-3-haiku-20240307-v1:0"
+                        )
+                    }
+                },
+            }
+        )
+        key = next(iter(usage.USAGE.get()))
+        assert key.model == "anthropic.claude-3-haiku-20240307-v1:0"
+
+    def test_falls_back_to_static_model_id_when_invoked_model_unknown(self) -> None:
+        """An invokedModelId naming an unrecognised model must not corrupt billing."""
+        ModelBase("my-router")._record_converse_usage(  # noqa: SLF001
+            {  # type: ignore[typeddict-item]
+                "usage": {"inputTokens": 5, "outputTokens": 1, "totalTokens": 6},
+                "trace": {
+                    "promptRouter": {
+                        "invokedModelId": (
+                            "arn:aws:bedrock:us-east-1::foundation-model/"
+                            "unregistered-fake-model"
+                        )
+                    }
+                },
+            }
+        )
+        key = next(iter(usage.USAGE.get()))
+        assert key.model == "my-router"
+
+    def test_falls_back_to_static_model_id_without_trace(self) -> None:
+        """A plain (non-router) Converse response bills as before, no trace needed."""
+        ModelBase("plain-model")._record_converse_usage(  # noqa: SLF001
+            {"usage": {"inputTokens": 5, "outputTokens": 1, "totalTokens": 6}}  # type: ignore[typeddict-item]
+        )
+        key = next(iter(usage.USAGE.get()))
+        assert key.model == "plain-model"
 
 
 class TestPerCallAttribution:
