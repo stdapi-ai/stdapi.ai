@@ -69,7 +69,7 @@ Generate conversational AI responses with Amazon Bedrock foundation models—inc
 | `logit_bias`                             |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Not all models support biasing                                  |
 | `top_logprobs`                           |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Forwarded to the model as a provider-specific field; honored only by models that support it. Usable even though `logprobs` is rejected |
 | `top_k` (From Qwen API)                  |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Candidate token set size for sampling                           |
-| `reasoning_effort` (OpenAI API-compatible) |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Reasoning control: none/minimal/low/medium/high/xhigh (accepted for all models) |
+| `reasoning_effort` (OpenAI API-compatible) |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Reasoning control: none/minimal/low/medium/high/xhigh/max (accepted for all models) |
 | `enable_thinking` (Qwen API-compatible)  |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Enable/disable thinking mode (accepted for all reasoning models) |
 | `thinking_budget` (Qwen API-compatible)  |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Thinking token budget (accepted for all reasoning models)      |
 | `thinking` (Moonshot API-compatible)     |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Thinking config: {"type": "enabled"/"disabled"} (accepted for all models) |
@@ -601,6 +601,7 @@ Use the `reasoning_effort` parameter with predefined effort levels. This format 
 - `medium` - Balanced reasoning for most use cases
 - `high` - Deep reasoning for complex problems
 - `xhigh` - Maximum reasoning for complex problems
+- `max` - Alias of `xhigh`
 
 **What You Get:**
 

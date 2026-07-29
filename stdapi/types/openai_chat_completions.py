@@ -30,7 +30,7 @@ from stdapi.types.openai import (
 )
 
 #: Reasoning effort selector for reasoning models.
-ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
+ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
 
 #: Finish reasons compatible with OpenAI.
 FinishReason = Literal[
@@ -1126,8 +1126,9 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
     )
     reasoning_effort: ReasoningEffort | None = Field(
         default=None,
-        description="Reasoning effort: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`. "
-        "Calculated as fraction of `max_completion_tokens`: minimal=0.25x, low=0.5x, medium=0.75x, high=xhigh=max.",
+        description="Reasoning effort: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. "
+        "On budget-based models, calculated as a fraction of `max_completion_tokens`: "
+        "`low`=0.25x, `medium`=0.5x, `high`=0.75x, `xhigh`/`max`=1x (`minimal` uses the minimal budget).",
     )
     response_format: ResponseFormat | None = Field(
         default=None,
