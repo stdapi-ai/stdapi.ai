@@ -286,6 +286,30 @@ class TestMistralVoxtralTranscriptions:
                 response_format="verbose_json",
             )
 
+    @pytest.mark.expensive
+    @pytest.mark.parametrize("model_id", VOXTRAL_SAMPLE)
+    def test_logprobs_accepted_but_not_populated(
+        self,
+        openai_client: OpenAI,
+        use_official_api: bool,
+        sample_audio_mp3_file: bytes,
+        model_id: str,
+    ) -> None:
+        """include=["logprobs"] is accepted but the response never carries log probabilities."""
+        if use_official_api:
+            pytest.skip(
+                "Mistral Voxtral models are not available on the official OpenAI API"
+            )
+
+        response = openai_client.audio.transcriptions.create(
+            file=("test.mp3", sample_audio_mp3_file),
+            model=model_id,
+            include=["logprobs"],
+        )
+
+        assert response.text.strip()  # type: ignore[union-attr]
+        assert getattr(response, "logprobs", None) is None
+
     @pytest.mark.parametrize("model_id", VOXTRAL_SAMPLE)
     def test_srt_format_unsupported(
         self,

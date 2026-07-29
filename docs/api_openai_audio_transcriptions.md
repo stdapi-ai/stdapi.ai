@@ -61,7 +61,7 @@ Transcribe audio to text with Amazon Transcribe or Amazon Bedrock audio-capable 
 | `chunking_strategy`        |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Only `auto` is accepted; other values are rejected               |
 | `temperature`              |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Bedrock models only; rejected by Amazon Transcribe               |
 | `prompt`                   |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Bedrock models only; rejected by Amazon Transcribe               |
-| `include` (`logprobs`)     |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Bedrock models only; requires `response_format=json`; rejected by Amazon Transcribe |
+| `include` (`logprobs`)     |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Accepted on Bedrock models but never populated (`logprobs` is always `null`); rejected by Amazon Transcribe |
 | Extra model-specific params | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Amazon Transcribe optional settings via JSON body (see below)  |
 | **Usage tracking**         |                                          |                                                                  |
 | Input audio duration       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Seconds (billing unit on Amazon Transcribe)                      |
