@@ -760,6 +760,9 @@ curl -X POST "$BASE/v1/messages/count_tokens" \
 {"input_tokens": 13}
 ```
 
+!!! info "Counted Request"
+    The count is computed on the exact request `anthropic_message` would send for the same body: `thinking`/`output_config.effort`, server tools in their model-native form, `cache_control` breakpoints, and mid-conversation system message placement are all taken into account.
+
 ---
 
 **Ready to build with AI?** Check out the [Models API](api_openai_models.md) to see all available foundation models!

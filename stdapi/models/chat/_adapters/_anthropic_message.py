@@ -130,6 +130,7 @@ if TYPE_CHECKING:
     )
 
     from stdapi.models.chat import ReasoningParams
+    from stdapi.models.chat._default import ChatModel
     from stdapi.types import JsonMapping
     from stdapi.types.anthropic_messages import ServerTools
 
@@ -881,11 +882,13 @@ async def translate_request(
     )
 
 
-def extract_reasoning(request: MessageCreateParams) -> ReasoningParams | None:
+def extract_reasoning(
+    request: MessageCreateParams | MessageCountTokensParams,
+) -> ReasoningParams | None:
     """Extract reasoning parameters from an Anthropic Messages request.
 
     Args:
-        request: Anthropic message creation parameters.
+        request: Anthropic message creation or count-tokens parameters.
 
     Returns:
         Reasoning parameters to configure, or None if the request has no
@@ -912,7 +915,8 @@ def extract_reasoning(request: MessageCreateParams) -> ReasoningParams | None:
             if request.thinking is not None and request.thinking.type == "enabled"
             else None
         ),
-        "max_tokens": request.max_tokens,
+        # MessageCountTokensParams has no max_tokens field.
+        "max_tokens": getattr(request, "max_tokens", None),
     }
 
 
@@ -1764,36 +1768,73 @@ async def count_tokens_via_bedrock(
     request: MessageCountTokensParams,
     model_id: str,
     region: RegionName,
-    *,
-    system_message_as_messages: bool = False,
+    chat_model: ChatModel,
 ) -> int:
     """Count tokens using the AWS Bedrock Runtime CountTokens API.
 
-    Builds a Converse-compatible input from the Anthropic request and calls
-    the Bedrock ``count_tokens`` API for an accurate, model-specific count.
+    Builds a Converse-compatible input from the Anthropic request the same way
+    ``create_message`` does — system-message placement, cache points, server-tool
+    promotion and reasoning config included — so the count matches what the model
+    actually consumes, then calls the Bedrock ``count_tokens`` API.
 
     Args:
         request: The count tokens request containing messages, system prompt, and tools.
         model_id: The Bedrock model identifier.
         region: The AWS region of the model.
-        system_message_as_messages: When True, system-role messages are forwarded
-            directly to Bedrock as messages instead of being extracted into the
-            system-blocks field.
+        chat_model: Model instance providing the request-building hooks.
 
     Returns:
         The total number of input tokens.
     """
+    # Mirrors translate_request: explicit per-block cache_control markers are only
+    # honored when the top-level cache_control (automatic caching) is unset.
+    allow_explicit_caching = (
+        request.cache_control is None and chat_model.PROMPT_CACHING_SUPPORTED
+    )
+    allow_tool_caching = chat_model.PROMPT_CACHING_TOOL_SUPPORTED
     messages, combined_system = _prepare_messages_and_system(
         request.messages,
         request.system,
-        system_message_as_messages=system_message_as_messages,
+        system_message_as_messages=chat_model.SYSTEM_MESSAGE_AS_MESSAGES_SUPPORTED,
     )
-    req: ConverseTokensRequestTypeDef = {"messages": await _map_messages(messages)}
-    if system_blocks := _map_system_blocks(combined_system):
+    bedrock_messages = await _map_messages(
+        messages,
+        allow_explicit_caching=allow_explicit_caching,
+        allow_tool_caching=allow_tool_caching,
+        req_map_content_block=chat_model._req_map_content_block,  # noqa: SLF001
+    )
+    req: ConverseTokensRequestTypeDef = {"messages": bedrock_messages}
+    if system_blocks := _map_system_blocks(
+        combined_system, allow_explicit_caching=allow_explicit_caching
+    ):
         req["system"] = system_blocks
-    tool_config = _build_tool_config(request.tools, request.tool_choice)
+    tool_config = chat_model._req_promote_system_tools(  # noqa: SLF001
+        _build_tool_config(
+            request.tools,
+            request.tool_choice,
+            allow_explicit_caching=allow_explicit_caching and allow_tool_caching,
+            tool_name_map=chat_model.CANONICAL_TO_BEDROCK_TOOL_MAP,
+        )
+    )
+    additional_request_fields: JsonMapping = {}
+    if reasoning := extract_reasoning(request):
+        chat_model._req_configure_reasoning(  # noqa: SLF001
+            additional_request_fields=additional_request_fields, **reasoning
+        )
+    chat_model._req_configure_tools(  # noqa: SLF001
+        tool_config=tool_config,
+        additional_request_fields=additional_request_fields,
+        server_tools=[
+            t.model_dump(exclude_none=True)
+            for t in (request.tools or ())
+            if not isinstance(t, ToolParam)
+        ],
+        bedrock_messages=bedrock_messages,
+    )
     if tool_config:
         req["toolConfig"] = tool_config
+    if additional_request_fields:
+        req["additionalModelRequestFields"] = additional_request_fields
 
     with handle_bedrock_client_error():
         resp: CountTokensResponseTypeDef = await get_client(

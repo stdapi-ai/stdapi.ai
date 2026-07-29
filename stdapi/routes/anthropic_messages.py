@@ -38,6 +38,8 @@ if TYPE_CHECKING:
     from sse_starlette import EventSourceResponse
     from types_aiobotocore_bedrock.literals import RegionName
 
+    from stdapi.models.chat._default import ChatModel
+
 register_route_capability(
     "anthropic_message",
     f"{SETTINGS.anthropic_routes_prefix}/v1/messages",
@@ -317,11 +319,8 @@ async def count_tokens(
                 request,
                 model_id,
                 model.regions[0],
-                system_message_as_messages=getattr(
-                    get_chat_model(model_id),
-                    "SYSTEM_MESSAGE_AS_MESSAGES_SUPPORTED",
-                    False,
-                ),
+                # Not Mantle-served, so this is always a Converse chat model.
+                cast("ChatModel", get_chat_model(model_id)),
             )
         )
     )

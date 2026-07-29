@@ -2611,34 +2611,28 @@ class TestAnthropicCountTokens:
 
         assert response.input_tokens > 0
 
-    def test_count_tokens_web_search_tool_ignored(
-        self,
-        anthropic_client: Anthropic,
-        anthropic_count_tokens_model: str,
-        use_official_api: bool,
+    def test_count_tokens_web_search_tool_rejected(
+        self, anthropic_client: Anthropic, anthropic_count_tokens_model: str
     ) -> None:
-        """Test that web search tools are ignored during token counting.
+        """Test that unsupported server tools are rejected during token counting.
 
         Validates:
-            - Token counting succeeds when web_search tool is present
-            - The system tool does not cause an error
+            - count_tokens validates server tools like create_message does,
+              matching the official API's rejection of server tools here
         """
-        if use_official_api:
-            pytest.skip("the official API rejects server tools in count_tokens")
         try:
-            response = anthropic_client.messages.count_tokens(
-                model=anthropic_count_tokens_model,
-                messages=[{"role": "user", "content": "Hello"}],
-                tools=[{"type": "web_search_20250305", "name": "web_search"}],
-            )
+            with pytest.raises(BadRequestError):
+                anthropic_client.messages.count_tokens(
+                    model=anthropic_count_tokens_model,
+                    messages=[{"role": "user", "content": "Hello"}],
+                    tools=[{"type": "web_search_20250305", "name": "web_search"}],
+                )
         except AnthropicError as exc:
             if isinstance(
                 anthropic_client, AnthropicBedrock
             ) and "not supported" in str(exc):
                 pytest.xfail("Token counting is not supported in Bedrock yet")
             raise
-
-        assert response.input_tokens > 0
 
     def test_count_tokens_with_system_blocks(
         self, anthropic_client: Anthropic, anthropic_count_tokens_model: str
