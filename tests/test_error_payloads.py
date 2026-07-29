@@ -160,9 +160,13 @@ class TestFormatErrorFunctions:
     @pytest.mark.parametrize(
         ("status", "expected_type", "expected_status"),
         [
+            (402, "billing_error", 402),
+            (409, "conflict_error", 409),
+            (413, "request_too_large", 413),
             (500, "api_error", 500),
             (502, "api_error", 502),
             (503, "overloaded_error", 529),
+            (504, "timeout_error", 504),
             (529, "overloaded_error", 529),
         ],
     )
