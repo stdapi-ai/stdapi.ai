@@ -12,9 +12,13 @@ from stdapi.types.openai_chat_completions import (
 from stdapi.types.openai_responses import (
     AdditionalTools,
     CompactParams,
+    FunctionCallInput,
+    FunctionTool,
     InputTokenCountParams,
+    Mcp,
     Reasoning,
     ResponseCreateParams,
+    ResponseError,
     ResponseItemList,
     ResponseOutputItem,
 )
@@ -65,6 +69,15 @@ class TestResponseCreateParity:
         assert params.reasoning is not None
         assert params.reasoning.context == "all_turns"
 
+    @pytest.mark.parametrize("mode", ["pro", "future-mode"])
+    def test_reasoning_mode_is_accepted_and_ignored(self, mode: str) -> None:
+        """reasoning.mode is accepted for compatibility, open like the SDK type."""
+        params = ResponseCreateParams(
+            model="m", input="x", reasoning=Reasoning(mode=mode)
+        )
+        assert params.reasoning is not None
+        assert params.reasoning.mode == mode
+
 
 class TestAdditionalToolsItem:
     """additional_tools output items parse through the output item union."""
@@ -112,6 +125,68 @@ class TestClientCompatibilityFields:
         assert params.tools
 
 
+class TestReasoningEffortParity:
+    """reasoning.effort accepts the upstream SDK's `max` literal."""
+
+    def test_max_effort_is_accepted(self) -> None:
+        """reasoning.effort="max" validates like the other SDK literals."""
+        params = ResponseCreateParams(
+            model="m", input="x", reasoning=Reasoning(effort="max")
+        )
+        assert params.reasoning is not None
+        assert params.reasoning.effort == "max"
+
+
+class TestToolAllowedCallersParity:
+    """allowed_callers/output_schema/tunnel_id round-trip on tool definitions."""
+
+    def test_function_tool_accepts_allowed_callers_and_output_schema(self) -> None:
+        """FunctionTool keeps allowed_callers and output_schema instead of dropping them."""
+        tool = FunctionTool(
+            name="f",
+            type="function",
+            allowed_callers=["direct", "programmatic"],
+            output_schema={"type": "object"},
+        )
+        assert tool.allowed_callers == ["direct", "programmatic"]
+        assert tool.output_schema == {"type": "object"}
+
+    def test_mcp_accepts_allowed_callers_and_tunnel_id(self) -> None:
+        """Mcp keeps allowed_callers and tunnel_id instead of dropping them."""
+        tool = Mcp(
+            server_label="s", type="mcp", allowed_callers=["direct"], tunnel_id="t-1"
+        )
+        assert tool.allowed_callers == ["direct"]
+        assert tool.tunnel_id == "t-1"
+
+
+class TestResponseErrorCodeParity:
+    """ResponseErrorCode includes the full upstream error-code enum."""
+
+    @pytest.mark.parametrize("code", ["data_residency_mismatch", "bio_policy"])
+    def test_upstream_only_codes_are_accepted(self, code: str) -> None:
+        """Error codes present upstream but previously missing here validate."""
+        error = ResponseError(code=code, message="m")  # type: ignore[arg-type]
+        assert error.code == code
+
+
+class TestToolCallerParity:
+    """Tool-call items keep the `caller` provenance field when echoed as input."""
+
+    def test_function_call_input_accepts_program_caller(self) -> None:
+        """A function_call input item retains a program caller instead of dropping it."""
+        item = FunctionCallInput(
+            arguments="{}",
+            call_id="c1",
+            name="f",
+            type="function_call",
+            caller={"type": "program", "caller_id": "p1"},
+        )
+        assert item.caller is not None
+        assert item.caller.type == "program"
+        assert item.caller.caller_id == "p1"  # type: ignore[union-attr]
+
+
 class TestPromptCacheRetentionParity:
     """prompt_cache_retention uses the OpenAI SDK literal `in_memory`."""
 
@@ -129,6 +204,22 @@ class TestPromptCacheRetentionParity:
         assert params.prompt_cache_retention == "in_memory"
         with pytest.raises(ValidationError, match="prompt_cache_retention"):
             params_type(model="m", prompt_cache_retention="in-memory", **extra)
+
+
+class TestPromptCacheOptionsParity:
+    """prompt_cache_options is accepted on the Responses create/compact request bodies."""
+
+    @pytest.mark.parametrize("params_type", [ResponseCreateParams, CompactParams])
+    def test_prompt_cache_options_is_accepted(self, params_type: type) -> None:
+        """The explicit prompt_cache_options object round-trips instead of being dropped."""
+        params = params_type(
+            model="m",
+            input="x",
+            prompt_cache_options={"mode": "explicit", "ttl": "30m"},
+        )
+        assert params.prompt_cache_options is not None
+        assert params.prompt_cache_options.mode == "explicit"
+        assert params.prompt_cache_options.ttl == "30m"
 
 
 class TestPaginatedListEnvelopeParity:
@@ -170,6 +261,26 @@ class TestAdditionalToolsInputEcho:
                 {
                     "id": "at-1",
                     "role": "assistant",
+                    "type": "additional_tools",
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "get_weather",
+                            "parameters": {"type": "object"},
+                        }
+                    ],
+                }  # type: ignore[list-item]
+            ],
+        )
+        assert params.input
+
+    def test_additional_tools_id_is_optional(self) -> None:
+        """additional_tools without `id` still validates, matching the upstream shape."""
+        params = ResponseCreateParams(
+            model="m",
+            input=[
+                {
+                    "role": "developer",
                     "type": "additional_tools",
                     "tools": [
                         {

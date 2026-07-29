@@ -33,7 +33,7 @@ ResponseStatus = Literal[
 ResponseItemStatus = Literal["in_progress", "completed", "incomplete"]
 
 #: Reasoning effort levels for reasoning models.
-ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
+ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
 
 #: Verbosity levels used across multiple parameters.
 VerbosityLevel = Literal["low", "medium", "high"]
@@ -261,6 +261,9 @@ class LocalEnvironment(BaseModelRequest):
 # Tool definitions
 # ---------------------------------------------------------------------------
 
+#: Which caller types may invoke a tool: a direct model call or a program call.
+ToolAllowedCallers = list[Literal["direct", "programmatic"]] | None
+
 
 # Ref: openai.types.responses.function_tool.FunctionTool
 class FunctionTool(BaseModelRequest):
@@ -268,12 +271,18 @@ class FunctionTool(BaseModelRequest):
 
     name: str = Field(description="Function name.")
     type: Literal["function"] = Field(description="Function tool type.")
+    allowed_callers: ToolAllowedCallers = Field(
+        default=None, description="Caller types allowed to invoke this tool."
+    )
     defer_loading: bool | None = Field(
         default=None,
         description="Whether this function is deferred and loaded via tool search.",
     )
     description: str | None = Field(
         default=None, description="Function description for the model."
+    )
+    output_schema: JsonMapping | None = Field(
+        default=None, description="JSON schema describing the function output."
     )
     parameters: JsonMapping | None = Field(
         default=None, description="JSON schema for function parameters."
@@ -486,6 +495,9 @@ class Mcp(BaseModelRequest):
 
     server_label: str = Field(description="Label for this MCP server.")
     type: Literal["mcp"] = Field(description="MCP tool type.")
+    allowed_callers: ToolAllowedCallers = Field(
+        default=None, description="Caller types allowed to invoke this tool."
+    )
     allowed_tools: McpAllowedTools = Field(
         default=None, description="Allowed tool names or filter."
     )
@@ -524,6 +536,9 @@ class Mcp(BaseModelRequest):
         default=None,
         description="MCP server URL. Requires `server_url` or `connector_id`.",
     )
+    tunnel_id: str | None = Field(
+        default=None, description="Tunnel ID for connecting to a local MCP server."
+    )
 
 
 # Ref: openai.types.responses.tool.CodeInterpreterContainerCodeInterpreterToolAuto
@@ -554,6 +569,9 @@ class CodeInterpreter(BaseModelRequest):
         default=None, description="Code interpreter container (ID or config)."
     )
     type: Literal["code_interpreter"] = Field(description="Code interpreter tool type.")
+    allowed_callers: ToolAllowedCallers = Field(
+        default=None, description="Caller types allowed to invoke this tool."
+    )
 
 
 # Ref: openai.types.responses.tool.ImageGenerationInputImageMask
@@ -642,6 +660,9 @@ class FunctionShellTool(BaseModelRequest):
     """
 
     type: Literal["shell"] = Field(description="Shell tool type.")
+    allowed_callers: ToolAllowedCallers = Field(
+        default=None, description="Caller types allowed to invoke this tool."
+    )
     environment: FunctionShellEnvironment = Field(
         default=None, description="Environment for shell commands."
     )
@@ -656,6 +677,9 @@ class CustomTool(BaseModelRequest):
 
     name: str = Field(description="Custom tool name.")
     type: Literal["custom"] = Field(description="Custom tool type.")
+    allowed_callers: ToolAllowedCallers = Field(
+        default=None, description="Caller types allowed to invoke this tool."
+    )
     defer_loading: bool | None = Field(
         default=None, description="Deferred and discovered via tool search."
     )
@@ -727,6 +751,9 @@ class ApplyPatchTool(BaseModelRequest):
     """
 
     type: Literal["apply_patch"] = Field(description="Apply patch tool type.")
+    allowed_callers: ToolAllowedCallers = Field(
+        default=None, description="Caller types allowed to invoke this tool."
+    )
 
 
 # Ref: openai.types.responses.tool.Tool
@@ -845,7 +872,8 @@ class Reasoning(BaseModelRequest):
 
     effort: ReasoningEffort | None = Field(
         default=None,
-        description="Reasoning effort: `none`, `minimal`, `low`, `medium`, `high`, or `xhigh`.",
+        description="Reasoning effort: `none`, `minimal`, `low`, `medium`, `high`, "
+        "`xhigh`, or `max`.",
     )
     generate_summary: Literal["auto", "concise", "detailed"] | None = Field(
         default=None, description="Deprecated: use `summary` instead."
@@ -856,6 +884,11 @@ class Reasoning(BaseModelRequest):
     context: Literal["auto", "current_turn", "all_turns"] | None = Field(
         default=None,
         description="Reasoning context scope. Accepted for compatibility and ignored.",
+    )
+    mode: str | None = Field(
+        default=None,
+        description="Reasoning mode, such as `standard` or `pro`. Accepted for "
+        "compatibility and ignored.",
     )
 
 
@@ -1021,6 +1054,25 @@ ApplyPatchOperation = Annotated[
 # ---------------------------------------------------------------------------
 
 
+# Ref: openai.types.responses.response_function_tool_call.CallerDirect
+class CallerDirect(BaseModelRequest):
+    """A tool call made directly by the model."""
+
+    type: Literal["direct"] = Field(description="Direct caller type.")
+
+
+# Ref: openai.types.responses.response_function_tool_call.CallerProgram
+class CallerProgram(BaseModelRequest):
+    """A tool call made by a program during programmatic tool calling."""
+
+    caller_id: str = Field(description="ID of the program that made the call.")
+    type: Literal["program"] = Field(description="Program caller type.")
+
+
+# Ref: openai.types.responses.response_function_tool_call.ResponseFunctionToolCall.caller
+Caller = Annotated[CallerDirect | CallerProgram, Field(discriminator="type")] | None
+
+
 # Ref: openai.types.responses.easy_input_message.EasyInputMessage
 class EasyInputMessage(BaseModelRequest):
     """A message input to the model with a role indicating instruction following hierarchy."""
@@ -1104,6 +1156,10 @@ class FunctionCallInput(BaseModelRequest):
     id: str | None = Field(
         default=None, description="The unique ID of the function tool call."
     )
+    caller: Caller = Field(
+        default=None,
+        description="Provenance of this tool call: direct or programmatic.",
+    )
     namespace: str | None = Field(
         default=None, description="The namespace of the function to run."
     )
@@ -1128,6 +1184,10 @@ class FunctionCallOutput(BaseModelRequest):
     id: str | None = Field(
         default=None,
         description="The unique ID of the function tool call output. Populated when this item is returned via API.",
+    )
+    caller: Caller = Field(
+        default=None,
+        description="Provenance of this tool call: direct or programmatic.",
     )
     status: ResponseItemStatus | None = Field(
         default=None,
@@ -1298,6 +1358,10 @@ class ShellCall(BaseModelRequest):
         default=None,
         description="The unique ID of the shell tool call. Populated when this item is returned via API.",
     )
+    caller: Caller = Field(
+        default=None,
+        description="Provenance of this tool call: direct or programmatic.",
+    )
     environment: ShellCallEnvironment = Field(
         default=None, description="The environment to execute the shell commands in."
     )
@@ -1322,6 +1386,10 @@ class ShellCallOutput(BaseModelRequest):
     id: str | None = Field(
         default=None,
         description="The unique ID of the shell tool call output. Populated when this item is returned via API.",
+    )
+    caller: Caller = Field(
+        default=None,
+        description="Provenance of this tool call: direct or programmatic.",
     )
     max_output_length: int | None = Field(
         default=None,
@@ -1352,6 +1420,10 @@ class ApplyPatchCall(BaseModelRequest):
         default=None,
         description="The unique ID of the apply patch tool call. Populated when this item is returned via API.",
     )
+    caller: Caller = Field(
+        default=None,
+        description="Provenance of this tool call: direct or programmatic.",
+    )
 
 
 # Ref: openai.types.responses.response_input_item.ApplyPatchCallOutput
@@ -1370,6 +1442,10 @@ class ApplyPatchCallOutput(BaseModelRequest):
     id: str | None = Field(
         default=None,
         description="The unique ID of the apply patch tool call output. Populated when this item is returned via API.",
+    )
+    caller: Caller = Field(
+        default=None,
+        description="Provenance of this tool call: direct or programmatic.",
     )
     output: str | None = Field(
         default=None,
@@ -1582,6 +1658,10 @@ class CustomToolCallInput(BaseModelRequest):
     id: str | None = Field(
         default=None, description="The unique ID of the custom tool call."
     )
+    caller: Caller = Field(
+        default=None,
+        description="Provenance of this tool call: direct or programmatic.",
+    )
     namespace: str | None = Field(
         default=None, description="The namespace of the custom tool being called."
     )
@@ -1603,13 +1683,16 @@ class CustomToolCallOutput(BaseModelRequest):
     id: str | None = Field(
         default=None, description="The unique ID of the custom tool call output."
     )
+    caller: Caller = Field(
+        default=None,
+        description="Provenance of this tool call: direct or programmatic.",
+    )
 
 
 # Ref: openai.types.responses.response_output_item.AdditionalTools (input variant)
 class AdditionalToolsInput(BaseModelRequest):
     """An echoed additional-tools advertisement item (as input item)."""
 
-    id: str = Field(description="The unique ID of the item.")
     role: Literal[
         "unknown",
         "user",
@@ -1624,6 +1707,7 @@ class AdditionalToolsInput(BaseModelRequest):
     type: Literal["additional_tools"] = Field(
         description="The type of the item. Always `additional_tools`."
     )
+    id: str | None = Field(default=None, description="The unique ID of the item.")
 
 
 # Ref: openai.types.responses.response_input_param.CompactionTrigger
@@ -2885,6 +2969,8 @@ ResponseErrorCode = Literal[
     "server_error",
     "rate_limit_exceeded",
     "invalid_prompt",
+    "data_residency_mismatch",
+    "bio_policy",
     "vector_store_timeout",
     "invalid_image",
     "invalid_image_format",
@@ -3914,6 +4000,20 @@ class ConversationObject(BaseModelRequest):
 ConversationParam = str | ConversationObject | None
 
 
+# Ref: openai.types.responses.response_create_params.PromptCacheOptions
+class PromptCacheOptions(BaseModelRequest):
+    """Explicit prompt-caching configuration for a request.
+
+    Accepted for compatibility and ignored; caching is instead driven by
+    `prompt_cache_key`/`prompt_cache_retention`.
+    """
+
+    mode: Literal["implicit", "explicit"] | None = Field(
+        default=None, description="Caching mode: `implicit` or `explicit`."
+    )
+    ttl: Literal["30m"] | None = Field(default=None, description="Cache TTL.")
+
+
 # Ref: openai.types.responses.response_create_params.ResponseCreateParamsBase
 class ResponseCreateParams(BaseModelRequest):
     """Request body for POST /v1/responses."""
@@ -3986,6 +4086,9 @@ class ResponseCreateParams(BaseModelRequest):
     )
     prompt_cache_key: str | None = Field(
         default=None, description="Cache key for similar requests."
+    )
+    prompt_cache_options: PromptCacheOptions | None = Field(
+        default=None, description="Explicit prompt-caching configuration."
     )
     prompt_cache_retention: PromptCacheRetention | None = Field(
         default=None, description="Cache retention policy."
@@ -4172,6 +4275,9 @@ class CompactParams(BaseModelRequest):
     )
     prompt_cache_key: str | None = Field(
         default=None, description="Cache key for similar requests."
+    )
+    prompt_cache_options: PromptCacheOptions | None = Field(
+        default=None, description="Explicit prompt-caching configuration."
     )
     prompt_cache_retention: PromptCacheRetention | None = Field(
         default=None, description="Cache retention policy."
