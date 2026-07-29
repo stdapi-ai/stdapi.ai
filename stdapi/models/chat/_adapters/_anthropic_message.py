@@ -152,7 +152,7 @@ def _build_cache_point(
 _STOP_REASONS: dict[StopReasonType | str | None, StopReason] = {
     "end_turn": "end_turn",
     "max_tokens": "max_tokens",
-    "model_context_window_exceeded": "max_tokens",
+    "model_context_window_exceeded": "model_context_window_exceeded",
     "stop_sequence": "stop_sequence",
     "tool_use": "tool_use",
     "content_filtered": "refusal",

@@ -14,7 +14,13 @@ from stdapi.types import (
 
 #: Ref: anthropic.types.stop_reason.StopReason
 StopReason = Literal[
-    "end_turn", "max_tokens", "stop_sequence", "tool_use", "pause_turn", "refusal"
+    "end_turn",
+    "max_tokens",
+    "stop_sequence",
+    "tool_use",
+    "pause_turn",
+    "refusal",
+    "model_context_window_exceeded",
 ]
 
 #: Tool choice literal values
