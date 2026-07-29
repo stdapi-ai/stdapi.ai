@@ -1009,6 +1009,7 @@ async def format_response(
 def _stream_get_content_block_delta(
     choice_delta: ChoiceDelta,
     delta_block: ContentBlockDeltaEventTypeDef,
+    tool_call_indices: dict[int, int],
     *,
     legacy_function: bool,
 ) -> None:
@@ -1017,6 +1018,8 @@ def _stream_get_content_block_delta(
     Args:
         choice_delta: The choice delta object to update.
         delta_block: The delta event containing changes.
+        tool_call_indices: Mutable mapping of content block index to tool call
+            position.
         legacy_function: Whether to use legacy function handling.
     """
     delta = delta_block["delta"]
@@ -1033,7 +1036,9 @@ def _stream_get_content_block_delta(
     else:
         choice_delta.tool_calls = [
             ChoiceDeltaToolCall(
-                index=delta_block["contentBlockIndex"],
+                index=tool_call_indices.setdefault(
+                    delta_block["contentBlockIndex"], len(tool_call_indices)
+                ),
                 type="function",
                 function=function,
             )
@@ -1046,6 +1051,7 @@ def _stream_delta_chunk(
     model_id: str,
     event: ConverseStreamOutputTypeDef,
     service_tier: ServiceTiers | None,
+    tool_call_indices: dict[int, int],
     *,
     legacy_function: bool,
     chunk: ChatCompletionChunk | None = None,
@@ -1058,6 +1064,8 @@ def _stream_delta_chunk(
         model_id: The model identifier.
         event: The event data containing updates.
         service_tier: The service tier information.
+        tool_call_indices: Mutable mapping of content block index to tool call
+            position.
         legacy_function: Whether to use legacy function handling.
         chunk: The current chunk to update. Defaults to None.
 
@@ -1093,7 +1101,9 @@ def _stream_delta_chunk(
             else:
                 choice_delta.tool_calls = [
                     ChoiceDeltaToolCall(
-                        index=start_block["contentBlockIndex"],
+                        index=tool_call_indices.setdefault(
+                            start_block["contentBlockIndex"], len(tool_call_indices)
+                        ),
                         id=tool_id,
                         type="function",
                         function=function,
@@ -1102,7 +1112,10 @@ def _stream_delta_chunk(
 
         case {"contentBlockDelta": delta_block}:
             _stream_get_content_block_delta(
-                choice_delta, delta_block, legacy_function=legacy_function
+                choice_delta,
+                delta_block,
+                tool_call_indices,
+                legacy_function=legacy_function,
             )
 
         case {"messageStop": stop_block}:
@@ -1194,6 +1207,8 @@ async def format_stream(
     end_state = False
     chunk: ChatCompletionChunk | None = None
     suppressed_indices: set[int] = set()
+    # Bedrock content block index -> contiguous position in the OpenAI tool_calls array
+    tool_call_indices: dict[int, int] = {}
     async for event in stream:
         if suppress_tool_names and _suppress_system_tool_event(
             event, suppress_tool_names, suppressed_indices
@@ -1220,6 +1235,7 @@ async def format_stream(
             model_id,
             event,
             service_tier,
+            tool_call_indices,
             legacy_function=legacy_function,
             chunk=chunk,
         )
