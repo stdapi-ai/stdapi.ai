@@ -638,12 +638,18 @@ def _build_output_config(
             # "any JSON object" is therefore an object with no declared
             # properties and additional properties disallowed.
             return {"schema": '{"type": "object", "additionalProperties": false}'}
-        case ResponseFormatTextJSONSchemaConfig(schema_=schema):
-            return {
+        case ResponseFormatTextJSONSchemaConfig(
+            name=name, schema_=schema, description=description
+        ):
+            json_schema: JsonSchemaDefinitionTypeDef = {
                 "schema": schema
                 if isinstance(schema, str)
-                else to_json(schema).decode()
+                else to_json(schema).decode(),
+                "name": name,
             }
+            if description is not None:
+                json_schema["description"] = description
+            return json_schema
         case _:  # pragma: no cover
             return None
 
