@@ -7,7 +7,7 @@ and round-robin routing strategies.
 
 from asyncio import gather
 from dataclasses import dataclass
-from math import isinf
+from math import ceil, isinf
 from secrets import randbelow
 from statistics import mean, pstdev
 from time import monotonic
@@ -17,10 +17,11 @@ from aiohttp import ClientError as AIOHTTPClientError
 from aiohttp import ClientSession, ClientTimeout
 
 from stdapi.config import AWS_SESSION, SETTINGS
-from stdapi.monitoring import RegionLatenciesStatsKeys, log_error_details
+from stdapi.monitoring import REQUEST, RegionLatenciesStatsKeys, log_error_details
 from stdapi.server import HTTP_CLIENT_HEADERS
 
 if TYPE_CHECKING:
+    from fastapi import Request
     from types_aiobotocore_bedrock.literals import RegionName
 
 #: Resolves each region's partition-correct hostname (aws / aws-cn / aws-eusc / ...).
@@ -56,6 +57,41 @@ ORDERED_BEDROCK_REGIONS: list[RegionName] = (
     SETTINGS.aws_bedrock_regions.copy()  # typing: ignore[assignment]
 )
 
+#: Request-scope state key carrying the quota backoff to surface as ``retry-after``.
+_QUOTA_BACKOFF_STATE_KEY: str = "stdapi_quota_backoff_seconds"
+
+
+def _publish_quota_backoff(seconds: float) -> None:
+    """Record a quota backoff on the current request scope.
+
+    The ASGI scope is shared across the whole middleware stack, so the value
+    survives the task boundaries that isolate ``ContextVar`` writes made while
+    serving the request. The smallest backoff seen wins: the request can be
+    retried as soon as the first blocked region leaves its cooldown.
+
+    Args:
+        seconds: Backoff just applied to the region that returned a quota error.
+    """
+    if (request := REQUEST.get(None)) is None:
+        return
+    state = request.scope.setdefault("state", {})
+    if seconds < state.get(_QUOTA_BACKOFF_STATE_KEY, float("inf")):
+        state[_QUOTA_BACKOFF_STATE_KEY] = seconds
+
+
+def quota_retry_after(request: Request) -> int | None:
+    """Return the ``retry-after`` delay recorded while serving *request*.
+
+    Args:
+        request: Request whose scope may carry a recorded quota backoff.
+
+    Returns:
+        The router's quota backoff rounded up to whole seconds, or None when no
+        region was blocked for a quota error during the request (no delay known).
+    """
+    seconds = (request.scope.get("state") or {}).get(_QUOTA_BACKOFF_STATE_KEY)
+    return ceil(seconds) if seconds is not None else None
+
 
 @dataclass(slots=True)
 class RegionState:
@@ -77,7 +113,7 @@ class RegionState:
 
     @property
     def is_usable(self) -> bool:
-        """Returns True if the region is not currently blocked by any backoff.
+        """Whether the region is currently usable.
 
         Returns:
             True when both quota and unavailability cooldowns have expired.
@@ -163,10 +199,9 @@ class RegionRouter:
     def mark_error(self, model_id: str, region: str, error_code: str) -> None:
         """Applies a backoff penalty to a region based on the AWS error code received.
 
-        Quota errors use exponential escalation: the backoff doubles each time the
-        region is hit while already blocked, up to _MAX_QUOTA_BACKOFF. The counter
-        resets when the region was usable at the time of the error.
-        Unavailability errors apply a fixed backoff regardless of prior state.
+        Quota errors escalate exponentially up to _MAX_QUOTA_BACKOFF, and are
+        published on the request scope so a terminal 429 can carry them as a
+        ``retry-after`` header. Unavailability errors apply a fixed backoff.
 
         Args:
             model_id: Bedrock model identifier.
@@ -178,10 +213,8 @@ class RegionRouter:
 
         if error_code in _QUOTA_ERROR_CODES:
             if (now - state.last_quota_error_time) > _QUOTA_STALE_THRESHOLD:
-                # Last error was long ago — treat as fresh start.
-                state.consecutive_quota_errors = 1
+                state.consecutive_quota_errors = 1  # Stale: restart the escalation.
             else:
-                # Either within a previous backoff window or a recent error — escalate.
                 state.consecutive_quota_errors += 1
             state.last_quota_error_time = now
             backoff = min(
@@ -190,6 +223,7 @@ class RegionRouter:
                 _MAX_QUOTA_BACKOFF,
             )
             state.quota_blocked_until = now + backoff
+            _publish_quota_backoff(backoff)
             message = (
                 f"warning: Region {region} blocked for model {model_id} "
                 f"due to {error_code} (backoff: {backoff}s)"
@@ -288,9 +322,8 @@ async def _single_probe(session: ClientSession, url: str | None) -> float:
 def _bedrock_probe_url(region: RegionName) -> str | None:
     """Return the partition-correct bedrock-runtime probe URL for *region*.
 
-    Uses botocore's endpoint resolver so aws-cn/aws-eusc/... regions probe their
-    own hostname instead of a hardcoded ``.amazonaws.com`` suffix that would
-    never resolve for them.
+    Resolved via botocore so aws-cn/aws-eusc/... regions probe their own
+    hostname instead of an ``.amazonaws.com`` one that never resolves for them.
 
     Args:
         region: AWS region to resolve.

@@ -114,6 +114,7 @@ Common issues when deploying stdapi.ai for the first time. If your error isn't l
     - Add more regions to `AWS_BEDROCK_REGIONS`. Each region has its own independent quota — three regions ≈ triple the throughput.
     - See [Resilience & Failover](operations_resilience.md) for multi-region routing configuration.
     - Check quotas in the AWS Service Quotas console for **Amazon Bedrock**.
+    - When the router put a region on a quota backoff while serving the request, the response carries a `retry-after` header (in seconds) telling the client exactly how long to wait — OpenAI, Anthropic and Cohere SDKs honour it automatically instead of guessing an exponential backoff, up to the 60 s ceiling their retry loops apply to server-supplied delays.
 
 ??? failure "`400 Bad Request` — This model is not available under data retention mode 'default'."
     A specific model is unavailable or requests to it are rejected because your account's data retention mode is incompatible with what that model requires.

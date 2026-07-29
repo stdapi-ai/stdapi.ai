@@ -66,7 +66,7 @@ from stdapi.pricing import (
     start_price_catalog,
     stop_price_catalog,
 )
-from stdapi.region_routing import measure_region_latencies
+from stdapi.region_routing import measure_region_latencies, quota_retry_after
 from stdapi.routes import discover_routers
 from stdapi.server import SERVER_VERSION
 from stdapi.utils import hide_security_details
@@ -275,6 +275,22 @@ if SETTINGS.cors_allow_origins:
     )
 
 
+def set_retry_after_header(request: Request, response: Response) -> None:
+    """Attach ``retry-after`` to a rate-limited response when a delay is known.
+
+    Rate-limited responses advertise the region router's own quota backoff, so
+    OpenAI/Anthropic/Cohere SDKs wait the server-driven delay instead of falling
+    back to blind exponential backoff. The header is omitted when no region was
+    put on a quota backoff while serving the request, rather than guessing.
+
+    Args:
+        request: Incoming HTTP request.
+        response: Outgoing response object.
+    """
+    if response.status_code == 429 and (seconds := quota_retry_after(request)):
+        response.headers["retry-after"] = str(seconds)
+
+
 @app.middleware("http")
 async def _middleware(
     request: Request, call_next: Callable[[Request], Awaitable[Response]]
@@ -309,6 +325,7 @@ async def _middleware(
             response.headers[get_request_id_header(request)] = log["id"]
             set_log_fields(request, log)
         set_response_headers(request, response, log["execution_time_ms"])
+        set_retry_after_header(request, response)
         if CLEANUPS.get():
             response.background = BackgroundTask(run_scheduled_cleanups, log["id"])
     response.headers["server"] = "stdapi.ai"

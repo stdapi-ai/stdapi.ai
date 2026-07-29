@@ -13,12 +13,18 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from botocore.exceptions import ClientError
 from starlette.requests import Request
+from starlette.responses import Response
 
+from stdapi.api_providers.anthropic import TAG_ANTHROPIC
 from stdapi.api_providers.anthropic import _format_error as anthropic_format_error
+from stdapi.api_providers.cohere import TAG_COHERE
 from stdapi.api_providers.cohere import _format_error as cohere_format_error
 from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.api_providers.openai import _format_error as openai_format_error
-from stdapi.main import handle_botocore_client_error
+from stdapi.config import SETTINGS
+from stdapi.main import handle_botocore_client_error, set_retry_after_header
+from stdapi.monitoring import REQUEST
+from stdapi.region_routing import RegionRouter, quota_retry_after
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -600,3 +606,110 @@ class TestBotocoreClientErrorEnvelope:
         assert err["type"] == "invalid_request_error"
         assert err["param"] is None
         assert err["code"] == code
+
+
+def _tagged_request(tag: str) -> Request:
+    """Build a request whose resolved route carries the given API provider tag.
+
+    Args:
+        tag: Route tag identifying the API provider.
+
+    Returns:
+        Starlette request usable by the response-header stage.
+    """
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/",
+            "headers": [],
+            "route": SimpleNamespace(tags=[tag]),
+        }
+    )
+
+
+class TestRetryAfterHeader:
+    """Verify 429 responses advertise the region router's quota backoff.
+
+    ``retry-after`` is a standard HTTP header shared by all three provider
+    envelopes, so it is emitted by the common response-header stage.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _request_log_context(self) -> Iterator[None]:
+        """Provide the request-log context that ``mark_error`` logging needs."""
+        from stdapi.monitoring import REQUEST_LOG  # noqa: PLC0415
+
+        token = REQUEST_LOG.set({"level": "info"})  # type: ignore[typeddict-item]
+        yield
+        REQUEST_LOG.reset(token)
+
+    @staticmethod
+    def _mark_error(
+        request: Request,
+        code: str,
+        region: str = "us-east-1",
+        router: RegionRouter | None = None,
+    ) -> None:
+        """Record *code* against *region* while *request* is the active request."""
+        token = REQUEST.set(request)
+        try:
+            (router or RegionRouter()).mark_error(
+                "amazon.nova-micro-v1:0", region, code
+            )
+        finally:
+            REQUEST.reset(token)
+
+    @pytest.mark.parametrize("tag", [TAG_OPENAI, TAG_ANTHROPIC, TAG_COHERE])
+    def test_quota_backoff_is_advertised_on_429(self, tag: str) -> None:
+        """Every provider envelope gets the router backoff as ``retry-after`` on a 429."""
+        request = _tagged_request(tag)
+        self._mark_error(request, "ThrottlingException")
+        response = Response(status_code=429)
+        set_retry_after_header(request, response)
+        assert response.headers["retry-after"] == str(
+            SETTINGS.aws_bedrock_region_routing_quota_backoff_seconds
+        )
+
+    def test_no_header_when_no_backoff_was_applied(self) -> None:
+        """Without a recorded quota backoff the header is omitted, not invented."""
+        response = Response(status_code=429)
+        set_retry_after_header(_tagged_request(TAG_OPENAI), response)
+        assert "retry-after" not in response.headers
+
+    def test_unavailability_backoff_is_not_advertised(self) -> None:
+        """Unavailability backoffs drive 503/529 responses and carry no ``retry-after``."""
+        request = _tagged_request(TAG_OPENAI)
+        self._mark_error(request, "ServiceUnavailableException")
+        assert quota_retry_after(request) is None
+
+    def test_header_only_on_rate_limited_responses(self) -> None:
+        """A successful response never carries ``retry-after``."""
+        request = _tagged_request(TAG_OPENAI)
+        self._mark_error(request, "ThrottlingException")
+        response = Response(status_code=200)
+        set_retry_after_header(request, response)
+        assert "retry-after" not in response.headers
+
+    def test_fractional_backoff_is_rounded_up(self) -> None:
+        """Sub-second precision rounds up so the client never retries too early."""
+        request = _tagged_request(TAG_OPENAI)
+        request.scope["state"] = {"stdapi_quota_backoff_seconds": 12.1}
+        assert quota_retry_after(request) == 13
+
+    def test_smallest_backoff_across_regions_wins(self) -> None:
+        """With several regions blocked, the earliest one to recover sets the delay."""
+        base = SETTINGS.aws_bedrock_region_routing_quota_backoff_seconds
+        router = RegionRouter()
+        self._mark_error(
+            _tagged_request(TAG_OPENAI), "ThrottlingException", router=router
+        )
+
+        request = _tagged_request(TAG_OPENAI)
+        # us-east-1 escalates to twice the base backoff; us-west-2 is still fresh.
+        self._mark_error(request, "ThrottlingException", router=router)
+        assert quota_retry_after(request) == 2 * base
+        self._mark_error(
+            request, "ThrottlingException", region="us-west-2", router=router
+        )
+        assert quota_retry_after(request) == base
