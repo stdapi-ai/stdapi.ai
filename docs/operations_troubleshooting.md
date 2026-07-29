@@ -160,16 +160,19 @@ Common issues when deploying stdapi.ai for the first time. If your error isn't l
 
 ### AWS error → HTTP status mapping
 
-stdapi.ai translates upstream AWS error codes into standard HTTP responses with an OpenAI/Anthropic-style error type. Use this table to map a status code back to its likely AWS cause:
+stdapi.ai translates upstream AWS error codes into standard HTTP responses with an OpenAI/Anthropic-style error type. Use this table to map a status code back to its likely AWS cause. HTTP status and error type are as returned on OpenAI-compatible routes (`/v1/...`); Anthropic-compatible routes (`/anthropic/...`) diverge on the two footnoted rows.
 
-| HTTP  | Error type              | AWS error codes                                                                                         | Typical cause                                 |
-|-------|-------------------------|---------------------------------------------------------------------------------------------------------|-----------------------------------------------|
-| `400` | `invalid_request_error` | `ValidationException`, `BadRequestException`                                                            | Unsupported/invalid request parameters        |
-| `401` | `authentication_error`  | `UnrecognizedClientException`, `InvalidSignatureException`, `ExpiredTokenException`                     | stdapi.ai's AWS credentials missing/expired   |
-| `403` | `permission_error`      | `AccessDeniedException`                                                                                 | IAM task role lacks permission / model access |
-| `404` | `not_found_error`       | `ResourceNotFoundException`                                                                             | Model or resource not available in the region |
-| `429` | `rate_limit_error`      | `ThrottlingException`, `TooManyRequestsException`, `ServiceQuotaExceededException`                      | Bedrock quota / throttling                    |
-| `503` | `server_error`          | `ServiceUnavailableException`, `InternalServerException`, `ServiceFailureException`, `ReadTimeoutError` | Transient AWS-side error — retry              |
+| HTTP  | Error type                  | AWS error codes                                                                                         | Typical cause                                 |
+|-------|------------------------------|---------------------------------------------------------------------------------------------------------|-----------------------------------------------|
+| `400` | `invalid_request_error`     | `ValidationException`, `BadRequestException`                                                            | Unsupported/invalid request parameters        |
+| `401` | `authentication_error`      | `UnrecognizedClientException`, `InvalidSignatureException`, `ExpiredTokenException`                     | stdapi.ai's AWS credentials missing/expired   |
+| `403` | `permission_error`          | `AccessDeniedException`                                                                                 | IAM task role lacks permission / model access |
+| `404` | `invalid_request_error`[^1] | `ResourceNotFoundException`                                                                             | Model or resource not available in the region |
+| `429` | `rate_limit_error`          | `ThrottlingException`, `TooManyRequestsException`, `ServiceQuotaExceededException`                      | Bedrock quota / throttling                    |
+| `503` | `server_error`[^2]          | `ServiceUnavailableException`, `InternalServerException`, `ServiceFailureException`, `ReadTimeoutError` | Transient AWS-side error — retry              |
+
+[^1]: Anthropic-compatible routes return `not_found_error` instead.
+[^2]: Anthropic-compatible routes return HTTP `529` with error type `overloaded_error` instead.
 
 !!! note "Where to find the detail"
     For security, `401` and `403` responses returned to clients contain only a generic message. The full diagnostic detail is captured in the server logs under `error_detail` and can be correlated via the `x-request-id` response header — see [Logging & Monitoring](operations_logging_monitoring.md).
