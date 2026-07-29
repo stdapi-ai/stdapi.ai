@@ -10,6 +10,7 @@ import pytest
 from stdapi.config import SETTINGS
 from stdapi.models.chat._adapters._openai_chat_completion import (
     _LEGACY_FUNCTION,
+    extract_output_text,
     format_stream,
     map_messages,
 )
@@ -150,6 +151,28 @@ class TestMapMessagesRoleAlternation:
         )
         assert system_blocks == [{"text": "rules"}]
         assert messages == [{"role": "user", "content": [{"text": "a"}, {"text": "b"}]}]
+
+
+class TestExtractOutputText:
+    """Non-streaming text matches the concatenation of the streamed deltas."""
+
+    def test_multiple_text_blocks_are_concatenated_without_separator(self) -> None:
+        """Two text blocks join exactly like their streamed deltas would."""
+        content, reasoning = extract_output_text(
+            [{"text": "A"}, {"citationsContent": {}}, {"text": "B"}]  # type: ignore[list-item]
+        )
+        assert content == "AB"
+        assert reasoning is None
+
+    def test_multiple_reasoning_blocks_are_concatenated_without_separator(self) -> None:
+        """Two reasoning blocks join exactly like their streamed deltas would."""
+        _, reasoning = extract_output_text(
+            [
+                {"reasoningContent": {"reasoningText": {"text": "A"}}},
+                {"reasoningContent": {"reasoningText": {"text": "B"}}},
+            ]  # type: ignore[list-item]
+        )
+        assert reasoning == "AB"
 
 
 class TestMapMessagesEmptyContent:

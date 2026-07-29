@@ -772,6 +772,9 @@ def extract_output_text(
 ) -> tuple[str | None, str | None]:
     """Extracts output text and reasoning text from content blocks.
 
+    Blocks are concatenated without separator so the result matches the
+    concatenation of the streamed deltas.
+
     Args:
         contents: A list of Bedrock content blocks.
 
@@ -786,8 +789,8 @@ def extract_output_text(
         if (rc := block.get("reasoningContent")) and (rt := rc.get("reasoningText")):
             reasoning_text.append(rt["text"])
     return (
-        "\n".join(content_text) if content_text else None,
-        "\n".join(reasoning_text) if reasoning_text else None,
+        "".join(content_text) if content_text else None,
+        "".join(reasoning_text) if reasoning_text else None,
     )
 
 
