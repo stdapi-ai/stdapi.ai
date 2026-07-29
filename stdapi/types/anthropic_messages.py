@@ -2193,8 +2193,12 @@ class OutputConfigParam(BaseModelRequest):
 
 
 # Ref: anthropic.types.thinking_config_enabled_param.ThinkingConfigEnabledParam
-class ThinkingConfigEnabledParam(BaseModelRequest):
-    """Enabled thinking configuration."""
+class ThinkingConfigEnabledParam(BaseModelRequestWithExtra):
+    """Enabled thinking configuration.
+
+    Newer client fields (e.g. ``display``) are accepted and ignored where the
+    backend does not support them.
+    """
 
     type: Literal["enabled"] = Field(
         description="Thinking config type. Always `enabled`."

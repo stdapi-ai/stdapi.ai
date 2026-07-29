@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from stdapi.types.anthropic_messages import (
     MessageCreateParams,
     ThinkingConfigAdaptiveParam,
+    ThinkingConfigEnabledParam,
     ToolInputSchema,
 )
 
@@ -64,6 +65,24 @@ class TestThinkingConfigAdaptiveParamParity:
             {"type": "adaptive", "display": "compact"}
         )
         assert config.model_dump()["display"] == "compact"
+
+
+class TestThinkingConfigEnabledParamParity:
+    """The upstream 'display' field (summarized/omitted) on ThinkingConfigEnabledParam."""
+
+    def test_display_field_is_accepted(self) -> None:
+        """A 'display' field validates without error, matching the adaptive variant."""
+        config = ThinkingConfigEnabledParam.model_validate(
+            {"type": "enabled", "budget_tokens": 1024, "display": "omitted"}
+        )
+        assert config.type == "enabled"
+
+    def test_display_field_survives_model_dump(self) -> None:
+        """The 'display' field is retained on the model (available via model_dump)."""
+        config = ThinkingConfigEnabledParam.model_validate(
+            {"type": "enabled", "budget_tokens": 1024, "display": "omitted"}
+        )
+        assert config.model_dump()["display"] == "omitted"
 
 
 class TestTopPRange:

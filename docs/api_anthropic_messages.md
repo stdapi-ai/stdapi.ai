@@ -536,6 +536,9 @@ curl -X POST "$BASE/v1/messages" \
 
 `thinking` accepts `{"type": "enabled", "budget_tokens": <n>}` (the budget must be less than `max_tokens`), `{"type": "disabled"}`, or `{"type": "adaptive"}`. Alternatively, control reasoning depth with `output_config.effort` (`low`, `medium`, `high`, `xhigh`, `max`).
 
+!!! note "`display` Not Honored"
+    The `display` field (`summarized`/`omitted`) is accepted but has no effect: Bedrock's reasoning configuration has no equivalent, so full thinking text is always returned.
+
 **Response with Thinking:**
 
 When extended thinking is enabled, the response includes thinking content blocks:
