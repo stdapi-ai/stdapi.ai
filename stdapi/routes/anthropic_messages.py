@@ -27,6 +27,7 @@ from stdapi.models.chat import get_chat_model, serves_via_mantle
 from stdapi.models.chat._adapters._anthropic_message import count_tokens_via_bedrock
 from stdapi.models.chat._mantle._convert import messages_payload
 from stdapi.monitoring import REQUEST_ID, log_request_params, log_response_params
+from stdapi.region_routing import REGION_ROUTER
 from stdapi.types.anthropic_messages import (
     Message,
     MessageCountTokensParams,
@@ -86,7 +87,10 @@ async def _count_tokens_via_mantle(
     payload.pop("max_tokens", None)
     model = MANTLE_MODELS.get(model_id)
     regions = model.regions if model else SETTINGS.aws_bedrock_mantle_regions
-    single_region = len(regions) == 1
+    # route_and_execute only retries across regions when the region router is
+    # enabled and there is more than one candidate; otherwise it calls the first
+    # candidate exactly once, so the in-region retry below must cover it instead.
+    single_region = len(regions) == 1 or REGION_ROUTER is None
 
     async def call(region: RegionName) -> int:
         """Count the request's tokens via one region's Mantle endpoint."""

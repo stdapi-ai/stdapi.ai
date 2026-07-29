@@ -22,6 +22,7 @@ from starlette.testclient import TestClient
 import stdapi.models as _models_mod
 from stdapi.models import ModelDetails
 from stdapi.routes import anthropic_messages
+from stdapi.types.anthropic_messages import MessageCountTokensParams, MessageParam
 
 #: Non-Anthropic model used to validate that extended thinking is rejected for non-Claude models.
 NON_ANTHROPIC_THINKING = "amazon.nova-2-lite-v1:0"
@@ -2951,3 +2952,76 @@ class TestAnthropicMessagesMaxTokensOptional:
         )
         assert response.status_code == 200, response.text
         assert response.json()["content"][0]["text"] == "hi"
+
+
+class TestCountTokensViaMantleSingleRegion:
+    """Offline unit tests for the ``single_region`` flag passed to Mantle's retry.
+
+    ``route_and_execute`` only retries across regions when the region router is
+    enabled and there is more than one candidate; otherwise it calls the first
+    candidate exactly once, so ``_count_tokens_via_mantle``'s own in-region retry
+    (gated by ``single_region``) must cover that case instead.
+    """
+
+    pytestmark = pytest.mark.local
+
+    @staticmethod
+    async def _run(monkeypatch: pytest.MonkeyPatch, *, region_router: object) -> bool:
+        """Invoke ``_count_tokens_via_mantle`` and return the ``single_region`` it used."""
+        monkeypatch.setattr(anthropic_messages, "REGION_ROUTER", region_router)
+        monkeypatch.setattr(
+            anthropic_messages.SETTINGS,
+            "aws_bedrock_mantle_regions",
+            ["us-east-1", "eu-west-1"],
+        )
+        monkeypatch.setattr(
+            anthropic_messages, "messages_payload", AsyncMock(return_value={})
+        )
+        monkeypatch.setattr(
+            anthropic_messages, "set_effective_region", lambda *_a, **_k: None
+        )
+
+        captured: dict[str, object] = {}
+
+        async def _fake_invoke(
+            _region: object,
+            _path: object,
+            _payload: object,
+            *,
+            single_region: bool,
+            **_kw: object,
+        ) -> dict[str, int]:
+            captured["single_region"] = single_region
+            return {"input_tokens": 5}
+
+        async def _fake_route_and_execute(
+            _model_id: object, regions: list[object], fn: object
+        ) -> object:
+            return await fn(regions[0])  # type: ignore[operator]
+
+        monkeypatch.setattr(anthropic_messages, "invoke", _fake_invoke)
+        monkeypatch.setattr(
+            anthropic_messages, "route_and_execute", _fake_route_and_execute
+        )
+
+        request = MessageCountTokensParams(
+            model="test.fake-mantle-model",
+            messages=[MessageParam(role="user", content="hi")],
+        )
+        tokens = await anthropic_messages._count_tokens_via_mantle(  # noqa: SLF001
+            request, "test.fake-mantle-model"
+        )
+        assert tokens == 5
+        return bool(captured["single_region"])
+
+    async def test_single_region_true_with_region_router_disabled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With region routing disabled and several regions, retries stay in-region."""
+        assert await self._run(monkeypatch, region_router=None) is True
+
+    async def test_single_region_false_with_region_router_enabled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With region routing enabled, ``route_and_execute`` handles the retry."""
+        assert await self._run(monkeypatch, region_router=object()) is False
