@@ -444,27 +444,6 @@ class ToolUseBlockParam(BaseModelRequest):
     caller: Caller | None = Field(default=None, description="Caller.")
 
 
-# Ref: anthropic.types.tool_result_block_param.ToolResultBlockParam
-class ToolResultBlockParam(BaseModelRequest):
-    """Tool result content block parameter."""
-
-    type: Literal["tool_result"] = Field(
-        description="Content block type. Always `tool_result`."
-    )
-    tool_use_id: str = Field(
-        description="ID of the tool use this result corresponds to."
-    )
-    content: str | list[TextBlockParam | ImageBlockParam] = Field(
-        description="Tool result content."
-    )
-    is_error: bool | None = Field(
-        default=None, description="Whether this is an error result."
-    )
-    cache_control: CacheControlEphemeralParam | None = Field(
-        default=None, description="Cache control for this content block."
-    )
-
-
 # Ref: anthropic.types.thinking_block.ThinkingBlock
 class ThinkingBlock(BaseModelResponse):
     """Thinking content block for extended thinking."""
@@ -1320,6 +1299,34 @@ class ToolSearchToolResultBlockParam(BaseModelRequest):
     type: Literal["tool_search_tool_result"] = Field(description="Type discriminator.")
     cache_control: CacheControlEphemeralParam | None = Field(
         default=None, description="Cache control breakpoint."
+    )
+
+
+# Ref: anthropic.types.tool_result_block_param.ToolResultBlockParam
+class ToolResultBlockParam(BaseModelRequest):
+    """Tool result content block parameter."""
+
+    type: Literal["tool_result"] = Field(
+        description="Content block type. Always `tool_result`."
+    )
+    tool_use_id: str = Field(
+        description="ID of the tool use this result corresponds to."
+    )
+    content: (
+        str
+        | list[
+            TextBlockParam
+            | ImageBlockParam
+            | DocumentBlockParam
+            | SearchResultBlockParam
+            | ToolReferenceBlockParam
+        ]
+    ) = Field(description="Tool result content.")
+    is_error: bool | None = Field(
+        default=None, description="Whether this is an error result."
+    )
+    cache_control: CacheControlEphemeralParam | None = Field(
+        default=None, description="Cache control for this content block."
     )
 
 

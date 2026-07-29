@@ -78,6 +78,7 @@ from stdapi.types.anthropic_messages import (
     ToolChoiceToolParam,
     ToolComputerParam,
     ToolParam,
+    ToolReferenceBlockParam,
     ToolResultBlockParam,
     ToolSearchToolBm25Param,
     ToolSearchToolRegexParam,
@@ -239,6 +240,56 @@ async def _map_image_to_bedrock(
             raise ApiError(msg)
 
 
+def _map_search_result_to_bedrock(block: SearchResultBlockParam) -> ContentBlockTypeDef:
+    """Convert an Anthropic search result block to a Bedrock content block.
+
+    Args:
+        block: Anthropic search result block param.
+
+    Returns:
+        Bedrock content block dict with ``searchResult`` key.
+    """
+    return {
+        "searchResult": {
+            "source": block.source,
+            "title": block.title,
+            "content": [{"text": item.text} for item in block.content if item.text],
+        }
+    }
+
+
+async def _map_tool_result_part_to_bedrock(
+    part: TextBlockParam
+    | ImageBlockParam
+    | DocumentBlockParam
+    | SearchResultBlockParam
+    | ToolReferenceBlockParam,
+) -> ContentBlockTypeDef:
+    """Convert a single ``tool_result`` content part to a Bedrock content block.
+
+    Args:
+        part: One item from a ``ToolResultBlockParam.content`` list.
+
+    Returns:
+        Bedrock content block dict.
+
+    Raises:
+        ApiError: If the part type has no Bedrock equivalent.
+    """
+    match part:
+        case TextBlockParam(text=text):
+            return {"text": text}
+        case ImageBlockParam(source=source):
+            return await _map_image_to_bedrock(source)
+        case DocumentBlockParam():
+            return await _map_document_to_bedrock(part)
+        case SearchResultBlockParam():
+            return _map_search_result_to_bedrock(part)
+        case _:  # ToolReferenceBlockParam has no Bedrock equivalent.
+            msg = f"Unsupported tool_result content part type: {type(part)}"
+            raise ApiError(msg)
+
+
 async def _map_tool_result_to_bedrock(
     block: ToolResultBlockParam,
 ) -> ContentBlockTypeDef:
@@ -256,10 +307,7 @@ async def _map_tool_result_to_bedrock(
             content_parts = [{"text": text}]
         case _:
             content_parts = [
-                {"text": part.text}
-                if isinstance(part, TextBlockParam)
-                else await _map_image_to_bedrock(part.source)
-                for part in block.content
+                await _map_tool_result_part_to_bedrock(part) for part in block.content
             ]
 
     result: ToolResultBlockTypeDef = {
@@ -372,14 +420,8 @@ async def _map_content_block_to_bedrock(  # noqa: PLR0911
             return await _map_image_to_bedrock(source)
         case DocumentBlockParam():
             return await _map_document_to_bedrock(block)
-        case SearchResultBlockParam(source=source, title=title, content=sr_blocks):
-            return {
-                "searchResult": {
-                    "source": source,
-                    "title": title,
-                    "content": [{"text": b.text} for b in sr_blocks if b.text],
-                }
-            }
+        case SearchResultBlockParam():
+            return _map_search_result_to_bedrock(block)
         case ServerToolUseBlockParam(id=id_, name=name, input=input_):
             return {
                 "toolUse": {
