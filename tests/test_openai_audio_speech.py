@@ -67,7 +67,6 @@ class TestAudioSpeech:
         # Check response headers
         assert response.response.headers.get("content-type") == "audio/mpeg"
 
-    @pytest.mark.expensive
     def test_basic_speech_long_generation(
         self, openai_client: OpenAI, speech_standard_model: str
     ) -> None:
@@ -256,7 +255,6 @@ class TestAudioSpeech:
                 extra_body={"Invalid": "invalid_value"},
             )
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize(
         "voice",
         ["alloy", "echo", "fable", "onyx", "nova", "shimmer", "ash", "sage", "coral"],
@@ -287,7 +285,6 @@ class TestAudioSpeech:
         assert len(audio_data) > 0
         assert response.response.headers.get("content-type") == "audio/mpeg"
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize("voice", ["Amy", "amy"])
     def test_polly_voices_compatibility(
         self,
@@ -319,7 +316,6 @@ class TestAudioSpeech:
 
         assert isinstance(response.content, bytes)
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize("speed", [0.25, 1.0, 2.0])
     def test_speed_parameter_validation(
         self, openai_client: OpenAI, speech_standard_model: str, speed: float
@@ -349,7 +345,6 @@ class TestAudioSpeech:
         assert len(audio_data) > 0
         assert response.response.headers.get("content-type") == "audio/mpeg"
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize(
         ("format_name", "content_type", "signature_check"),
         [

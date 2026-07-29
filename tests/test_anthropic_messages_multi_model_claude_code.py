@@ -17,7 +17,7 @@ Architecture:
 Requirements:
     - ``claude`` CLI installed and in PATH (tests skip otherwise).
     - AWS Bedrock credentials in the environment (same as for the normal test suite).
-    - Pass ``--expensive`` to pytest to enable these tests.
+    - Pass ``--agentic`` to pytest to enable these tests.
 
 Task difficulty:
     All tasks are designed to require the model to navigate multiple files and make
@@ -188,7 +188,7 @@ _MODEL_CONFIGS = [
     # ── Reference baseline ────────────────────────────────────────────────────
     pytest.param(
         {
-            "model_env": "anthropic.claude-sonnet-4-6",
+            "model_env": "anthropic.claude-haiku-4-5-20251001-v1:0",
             "extra_env": {
                 "ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES": (
                     "effort,thinking,adaptive_thinking,interleaved_thinking"
@@ -196,7 +196,7 @@ _MODEL_CONFIGS = [
             },
             "supports_effort": True,
         },
-        id="claude-sonnet-4-6",
+        id="claude-haiku-4-5",
     ),
     # ── Amazon ────────────────────────────────────────────────────────────────
     pytest.param(
@@ -229,12 +229,15 @@ _MODEL_CONFIGS = [
         id="qwen3-coder-30b",
     ),
     pytest.param(
+        # Notably slower than its siblings; give each agent run extra headroom.
         {
             "model_env": "qwen.qwen3-coder-next",
             "extra_env": {"DISABLE_PROMPT_CACHING": "1", "MAX_THINKING_TOKENS": "0"},
             "supports_effort": False,
+            "timeout": 600,
         },
         id="qwen3-coder-next",
+        marks=pytest.mark.slow,
     ),
     # ── MiniMax ───────────────────────────────────────────────────────────────
     # M2.5 is a native-reasoning model; set MAX_THINKING_TOKENS=0 to suppress
@@ -480,10 +483,16 @@ def _assert_model_identity(
     unexpected = [m for m in model_ids_seen if not m.startswith(expected_prefix)]
     if unexpected and any(m.startswith(expected_prefix) for m in model_ids_seen):
         # Background calls with Claude Code's built-in defaults are fine as
-        # long as the conversation itself reached the expected model.
-        unexpected = [
-            m for m in unexpected if not m.startswith(_CLI_AUXILIARY_MODEL_PREFIXES)
-        ]
+        # long as the conversation itself reached the expected model. Drop
+        # any auxiliary prefix that the expected model's own prefix itself
+        # matches, so a mis-route to a *different* build of the expected
+        # model's own family (e.g. another Haiku) is never whitelisted.
+        aux_prefixes = tuple(
+            p
+            for p in _CLI_AUXILIARY_MODEL_PREFIXES
+            if not expected_prefix.startswith(p)
+        )
+        unexpected = [m for m in unexpected if not m.startswith(aux_prefixes)]
     assert not unexpected, (
         f"Model identity mismatch: expected requests to {expected_model_id!r}, "
         f"but saw {list(dict.fromkeys(unexpected))} in server logs."
@@ -755,7 +764,7 @@ def _log_metrics(data: dict, model_id: str, test_name: str) -> None:  # type: ig
     Output is visible with ``pytest -s`` or in the failure output.
     Collect all results with::
 
-        pytest --expensive -s 2>&1 | grep CC-METRICS
+        pytest --agentic -s 2>&1 | grep CC-METRICS
     """
     turns = data.get("num_turns", 0)
     duration_s = data.get("duration_ms", 0) / 1000
@@ -894,6 +903,7 @@ class TestClaudeCodePipeline:
             model_env=model_config["model_env"],
             test_name=request.node.originalname,
             extra_env=model_config["extra_env"],
+            timeout=model_config.get("timeout", 300),
         )
         _log_metrics(data, model_config["model_env"], "test_trace_request_pipeline")
         result = _assert_result(
@@ -928,6 +938,7 @@ class TestClaudeCodePipeline:
             model_env=model_config["model_env"],
             test_name=request.node.originalname,
             extra_env=model_config["extra_env"],
+            timeout=model_config.get("timeout", 300),
         )
         _log_metrics(data, model_config["model_env"], "test_trace_streaming_path")
         result = _assert_result(data, model_env=model_config["model_env"], min_turns=2)
@@ -971,6 +982,7 @@ class TestClaudeCodeAnalysis:
             model_env=model_config["model_env"],
             test_name=request.node.originalname,
             extra_env=model_config["extra_env"],
+            timeout=model_config.get("timeout", 300),
         )
         _log_metrics(data, model_config["model_env"], "test_audit_parameter_mapping")
         result = _assert_result(data, model_env=model_config["model_env"], min_turns=2)
@@ -1003,6 +1015,7 @@ class TestClaudeCodeAnalysis:
             model_env=model_config["model_env"],
             test_name=request.node.originalname,
             extra_env=model_config["extra_env"],
+            timeout=model_config.get("timeout", 300),
         )
         _log_metrics(data, model_config["model_env"], "test_enumerate_model_overrides")
         result = _assert_result(data, model_env=model_config["model_env"], min_turns=4)
@@ -1054,6 +1067,7 @@ class TestClaudeCodeEffortLevels:
             test_name=request.node.originalname,
             extra_env=model_config["extra_env"],
             effort=effort,
+            timeout=model_config.get("timeout", 300),
         )
         _log_metrics(
             data, model_config["model_env"], f"test_effort_parameter_mapping[{effort}]"

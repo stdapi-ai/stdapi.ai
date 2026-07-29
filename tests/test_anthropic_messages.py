@@ -47,7 +47,7 @@ class TestAnthropicMessages:
     # --- Basic functionality ---
 
     def test_basic_message(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
         """Test fundamental message creation with default parameters.
 
@@ -58,7 +58,7 @@ class TestAnthropicMessages:
             - Response structure matches Anthropic specification
         """
         response = anthropic_client.messages.create(
-            model=anthropic_chat_model,
+            model=anthropic_chat_basic_model,
             max_tokens=100,
             messages=[{"role": "user", "content": "Say hello in one word."}],
         )
@@ -78,7 +78,7 @@ class TestAnthropicMessages:
         assert response.usage.output_tokens > 0
 
     def test_multi_turn_conversation(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
         """Test multi-turn conversation with alternating user/assistant messages.
 
@@ -88,7 +88,7 @@ class TestAnthropicMessages:
             - Response structure is valid
         """
         response = anthropic_client.messages.create(
-            model=anthropic_chat_model,
+            model=anthropic_chat_basic_model,
             max_tokens=100,
             messages=[
                 {"role": "user", "content": "My name is Alice."},
@@ -104,7 +104,7 @@ class TestAnthropicMessages:
         assert "Alice" in response.content[0].text
 
     def test_content_as_block_list(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
         """Test message with content provided as a list of content blocks.
 
@@ -114,7 +114,7 @@ class TestAnthropicMessages:
             - Response is valid
         """
         response = anthropic_client.messages.create(
-            model=anthropic_chat_model,
+            model=anthropic_chat_basic_model,
             max_tokens=100,
             messages=[
                 {"role": "user", "content": [{"type": "text", "text": "Say hi."}]}
@@ -128,7 +128,7 @@ class TestAnthropicMessages:
     # --- System prompt ---
 
     def test_system_prompt_string(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
         """Test system prompt provided as a plain string.
 
@@ -137,7 +137,7 @@ class TestAnthropicMessages:
             - Model follows system instructions
         """
         response = anthropic_client.messages.create(
-            model=anthropic_chat_model,
+            model=anthropic_chat_basic_model,
             max_tokens=100,
             system="You are a pirate. Always respond with 'Arrr!'.",
             messages=[{"role": "user", "content": "Hello"}],
@@ -148,7 +148,7 @@ class TestAnthropicMessages:
         assert response.content[0].type == "text"
 
     def test_system_prompt_text_blocks(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
         """Test system prompt provided as a list of text blocks.
 
@@ -157,7 +157,7 @@ class TestAnthropicMessages:
             - Response is valid
         """
         response = anthropic_client.messages.create(
-            model=anthropic_chat_model,
+            model=anthropic_chat_basic_model,
             max_tokens=100,
             system=[
                 {"type": "text", "text": "You are a helpful assistant."},
@@ -172,7 +172,7 @@ class TestAnthropicMessages:
     def test_system_role_in_messages(
         self,
         anthropic_client: Anthropic,
-        anthropic_chat_model: str,
+        anthropic_chat_basic_model: str,
         use_official_api: bool,
     ) -> None:
         """Test system prompt provided as a message with role='system'.
@@ -184,7 +184,7 @@ class TestAnthropicMessages:
         if use_official_api:
             pytest.skip("system-role messages in `messages` are a stdapi extension")
         response = anthropic_client.messages.create(
-            model=anthropic_chat_model,
+            model=anthropic_chat_basic_model,
             max_tokens=100,
             messages=[
                 {
@@ -202,7 +202,7 @@ class TestAnthropicMessages:
     def test_system_role_merged_with_system_field(
         self,
         anthropic_client: Anthropic,
-        anthropic_chat_model: str,
+        anthropic_chat_basic_model: str,
         use_official_api: bool,
     ) -> None:
         """Test that system-role messages are merged with the top-level system field.
@@ -214,7 +214,7 @@ class TestAnthropicMessages:
         if use_official_api:
             pytest.skip("system-role messages in `messages` are a stdapi extension")
         response = anthropic_client.messages.create(
-            model=anthropic_chat_model,
+            model=anthropic_chat_basic_model,
             max_tokens=100,
             system="You are a helpful assistant.",
             messages=[
@@ -229,7 +229,7 @@ class TestAnthropicMessages:
     def test_system_role_list_content_in_messages(
         self,
         anthropic_client: Anthropic,
-        anthropic_chat_model: str,
+        anthropic_chat_basic_model: str,
         use_official_api: bool,
     ) -> None:
         """Test system-role message with list-of-blocks content is extracted correctly.
@@ -242,7 +242,7 @@ class TestAnthropicMessages:
         if use_official_api:
             pytest.skip("system-role messages in `messages` are a stdapi extension")
         response = anthropic_client.messages.create(
-            model=anthropic_chat_model,
+            model=anthropic_chat_basic_model,
             max_tokens=100,
             messages=[
                 {
@@ -332,7 +332,7 @@ class TestAnthropicMessages:
     # --- Streaming ---
 
     def test_streaming_basic(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
         """Test basic streaming functionality.
 
@@ -346,7 +346,7 @@ class TestAnthropicMessages:
         accumulated_text = ""
 
         response = anthropic_client.messages.create(
-            model=anthropic_chat_model,
+            model=anthropic_chat_basic_model,
             max_tokens=100,
             messages=[{"role": "user", "content": "Count to 3."}],
             stream=True,
@@ -366,7 +366,7 @@ class TestAnthropicMessages:
         assert len(accumulated_text) > 0
 
     def test_streaming_with_create(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
         """Test streaming using create() with stream=True.
 
@@ -375,7 +375,7 @@ class TestAnthropicMessages:
             - Events can be iterated
         """
         response = anthropic_client.messages.create(
-            model=anthropic_chat_model,
+            model=anthropic_chat_basic_model,
             max_tokens=100,
             messages=[{"role": "user", "content": "Say hello."}],
             stream=True,
@@ -421,7 +421,7 @@ class TestAnthropicMessages:
     # --- Temperature and sampling ---
 
     def test_temperature_parameter(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
         """Test temperature parameter for controlling randomness.
 
@@ -432,7 +432,7 @@ class TestAnthropicMessages:
         """
         for temp in (0.0, 1.0):
             response = anthropic_client.messages.create(
-                model=anthropic_chat_model,
+                model=anthropic_chat_basic_model,
                 max_tokens=50,
                 messages=[{"role": "user", "content": "Say hi."}],
                 temperature=temp,
@@ -441,7 +441,7 @@ class TestAnthropicMessages:
             assert len(response.content) >= 1
 
     def test_top_p_parameter(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
         """Test top_p nucleus sampling parameter.
 
@@ -450,7 +450,7 @@ class TestAnthropicMessages:
             - Response is valid
         """
         response = anthropic_client.messages.create(
-            model=anthropic_chat_model,
+            model=anthropic_chat_basic_model,
             max_tokens=50,
             messages=[{"role": "user", "content": "Say hi."}],
             top_p=0.9,
@@ -712,7 +712,7 @@ class TestAnthropicMessages:
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_reasoning_model,
-            max_tokens=4000,
+            max_tokens=1500,
             messages=[{"role": "user", "content": "What is 15 * 27?"}],
             thinking={"type": "enabled", "budget_tokens": 1024},
         )
@@ -742,7 +742,7 @@ class TestAnthropicMessages:
 
         response = anthropic_client.messages.create(
             model=NON_ANTHROPIC_THINKING,
-            max_tokens=4000,
+            max_tokens=2048,
             messages=[{"role": "user", "content": "What is 15 * 27?"}],
             thinking={"type": "adaptive"},
         )
@@ -799,7 +799,7 @@ class TestAnthropicMessages:
         events = list(
             anthropic_client.messages.create(
                 model=anthropic_chat_reasoning_model,
-                max_tokens=4000,
+                max_tokens=1500,
                 messages=[{"role": "user", "content": "What is 15 * 27?"}],
                 thinking={"type": "enabled", "budget_tokens": 1024},
                 stream=True,
@@ -830,7 +830,7 @@ class TestAnthropicMessages:
         events = list(
             anthropic_client.messages.create(
                 model=NON_ANTHROPIC_THINKING,
-                max_tokens=4000,
+                max_tokens=2048,
                 messages=[{"role": "user", "content": "What is 15 * 27?"}],
                 thinking={"type": "adaptive"},
                 stream=True,
@@ -891,7 +891,7 @@ class TestAnthropicMessages:
     # --- Max tokens ---
 
     def test_max_tokens_limit(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
         """Test that max_tokens limits the response length.
 
@@ -900,7 +900,7 @@ class TestAnthropicMessages:
             - stop_reason may be max_tokens
         """
         response = anthropic_client.messages.create(
-            model=anthropic_chat_model,
+            model=anthropic_chat_basic_model,
             max_tokens=5,
             messages=[
                 {
@@ -916,7 +916,7 @@ class TestAnthropicMessages:
     # --- Metadata ---
 
     def test_metadata_user_id(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
         """Test metadata with user_id parameter.
 
@@ -925,7 +925,7 @@ class TestAnthropicMessages:
             - Response is valid
         """
         response = anthropic_client.messages.create(
-            model=anthropic_chat_model,
+            model=anthropic_chat_basic_model,
             max_tokens=50,
             messages=[{"role": "user", "content": "Say hi."}],
             metadata={"user_id": "test-user-123"},
@@ -937,7 +937,7 @@ class TestAnthropicMessages:
     # --- Error handling ---
 
     def test_empty_messages_error(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
         """Test that empty messages list produces an error.
 
@@ -947,7 +947,7 @@ class TestAnthropicMessages:
         """
         with pytest.raises(BadRequestError):
             anthropic_client.messages.create(
-                model=anthropic_chat_model, max_tokens=100, messages=[]
+                model=anthropic_chat_basic_model, max_tokens=100, messages=[]
             )
 
     def test_invalid_model_error(self, anthropic_client: Anthropic) -> None:
@@ -965,7 +965,7 @@ class TestAnthropicMessages:
             )
 
     def test_invalid_temperature_error(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
         """Test that invalid temperature values produce errors.
 
@@ -975,7 +975,7 @@ class TestAnthropicMessages:
         """
         with pytest.raises(BadRequestError):
             anthropic_client.messages.create(
-                model=anthropic_chat_model,
+                model=anthropic_chat_basic_model,
                 max_tokens=100,
                 messages=[{"role": "user", "content": "Hello"}],
                 temperature=2.0,
@@ -984,7 +984,7 @@ class TestAnthropicMessages:
     def test_invalid_max_tokens_error(
         self,
         anthropic_client: Anthropic,
-        anthropic_chat_model: str,
+        anthropic_chat_basic_model: str,
         use_official_api: bool,
     ) -> None:
         """Test that invalid max_tokens value produces an error.
@@ -996,13 +996,13 @@ class TestAnthropicMessages:
             pytest.skip("the AWS-hosted official endpoint accepts max_tokens=0")
         with pytest.raises(BadRequestError):
             anthropic_client.messages.create(
-                model=anthropic_chat_model,
+                model=anthropic_chat_basic_model,
                 max_tokens=0,
                 messages=[{"role": "user", "content": "Hello"}],
             )
 
     def test_invalid_top_p_error(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
         """Test that invalid top_p values produce errors.
 
@@ -1011,7 +1011,7 @@ class TestAnthropicMessages:
         """
         with pytest.raises(BadRequestError):
             anthropic_client.messages.create(
-                model=anthropic_chat_model,
+                model=anthropic_chat_basic_model,
                 max_tokens=100,
                 messages=[{"role": "user", "content": "Hello"}],
                 top_p=1.5,
@@ -1063,7 +1063,7 @@ class TestAnthropicMessages:
     # --- Streaming message_start event ---
 
     def test_streaming_message_start_has_usage(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
         """Test that streaming message_start event includes usage info.
 
@@ -1075,7 +1075,7 @@ class TestAnthropicMessages:
         message_start_event = None
 
         response = anthropic_client.messages.create(
-            model=anthropic_chat_model,
+            model=anthropic_chat_basic_model,
             max_tokens=50,
             messages=[{"role": "user", "content": "Hi."}],
             stream=True,
@@ -1092,7 +1092,7 @@ class TestAnthropicMessages:
         assert message_start_event.message.usage.input_tokens >= 0
 
     def test_streaming_message_delta_has_usage(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
         """Test that streaming message_delta event includes output usage.
 
@@ -1102,7 +1102,7 @@ class TestAnthropicMessages:
         message_delta_event = None
 
         response = anthropic_client.messages.create(
-            model=anthropic_chat_model,
+            model=anthropic_chat_basic_model,
             max_tokens=50,
             messages=[{"role": "user", "content": "Hi."}],
             stream=True,
@@ -1225,7 +1225,7 @@ class TestAnthropicMessages:
     # --- Service tier ---
 
     def test_service_tier_parameter(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
         """Test service_tier parameter.
 
@@ -1237,7 +1237,7 @@ class TestAnthropicMessages:
             pytest.xfail("Bedrock does not support service_tier parameter")
 
         response = anthropic_client.messages.create(
-            model=anthropic_chat_model,
+            model=anthropic_chat_basic_model,
             max_tokens=50,
             messages=[{"role": "user", "content": "Say hi."}],
             service_tier="auto",
@@ -1249,7 +1249,7 @@ class TestAnthropicMessages:
     # --- Streaming with system prompt ---
 
     def test_streaming_with_system_prompt(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
         """Test streaming with a system prompt.
 
@@ -1260,7 +1260,7 @@ class TestAnthropicMessages:
         accumulated_text = ""
 
         response = anthropic_client.messages.create(
-            model=anthropic_chat_model,
+            model=anthropic_chat_basic_model,
             max_tokens=100,
             system="You are a helpful assistant. Be very concise.",
             messages=[{"role": "user", "content": "What is 2+2?"}],
@@ -1276,7 +1276,7 @@ class TestAnthropicMessages:
     # --- Content block index in streaming ---
 
     def test_streaming_content_block_indices(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
         """Test that streaming events have correct content block indices.
 
@@ -1288,7 +1288,7 @@ class TestAnthropicMessages:
         indices: dict[str, list[int]] = {"start": [], "delta": [], "stop": []}
 
         response = anthropic_client.messages.create(
-            model=anthropic_chat_model,
+            model=anthropic_chat_basic_model,
             max_tokens=50,
             messages=[{"role": "user", "content": "Say hi."}],
             stream=True,
@@ -1310,7 +1310,7 @@ class TestAnthropicMessages:
     # --- Long conversation ---
 
     def test_long_multi_turn_conversation(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
         """Test a longer multi-turn conversation.
 
@@ -1319,7 +1319,7 @@ class TestAnthropicMessages:
             - Response remains coherent
         """
         response = anthropic_client.messages.create(
-            model=anthropic_chat_model,
+            model=anthropic_chat_basic_model,
             max_tokens=100,
             messages=[
                 {"role": "user", "content": "Remember the number 42."},
@@ -1339,7 +1339,7 @@ class TestAnthropicMessages:
     # --- Stop reason validation ---
 
     def test_stop_reason_end_turn(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
         """Test that normal completion has end_turn stop reason.
 
@@ -1347,7 +1347,7 @@ class TestAnthropicMessages:
             - Normal completion returns end_turn stop_reason
         """
         response = anthropic_client.messages.create(
-            model=anthropic_chat_model,
+            model=anthropic_chat_basic_model,
             max_tokens=100,
             messages=[{"role": "user", "content": "Say OK."}],
         )
@@ -1355,7 +1355,7 @@ class TestAnthropicMessages:
         assert response.stop_reason == "end_turn"
 
     def test_stop_reason_max_tokens(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
         """Test that hitting max_tokens returns max_tokens stop reason.
 
@@ -1363,7 +1363,7 @@ class TestAnthropicMessages:
             - Hitting token limit returns max_tokens stop_reason
         """
         response = anthropic_client.messages.create(
-            model=anthropic_chat_model,
+            model=anthropic_chat_basic_model,
             max_tokens=1,
             messages=[
                 {
@@ -1410,7 +1410,7 @@ class TestAnthropicMessages:
     def test_response_model_field(
         self,
         anthropic_client: Anthropic,
-        anthropic_chat_model: str,
+        anthropic_chat_basic_model: str,
         use_anthropic_api: bool,
     ) -> None:
         """Test that response includes the model field matching the requested model.
@@ -1420,7 +1420,7 @@ class TestAnthropicMessages:
             - On local gateway: response model echoes the requested model name exactly
         """
         response = anthropic_client.messages.create(
-            model=anthropic_chat_model,
+            model=anthropic_chat_basic_model,
             max_tokens=50,
             messages=[{"role": "user", "content": "Hi."}],
         )
@@ -1429,12 +1429,12 @@ class TestAnthropicMessages:
         assert len(response.model) > 0
         if not use_anthropic_api:
             # Our gateway must echo back the exact requested model name
-            assert response.model == anthropic_chat_model
+            assert response.model == anthropic_chat_basic_model
 
     # --- Response ID format ---
 
     def test_response_id_format(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
         """Test that response ID has expected format.
 
@@ -1442,7 +1442,7 @@ class TestAnthropicMessages:
             - Response ID starts with 'msg_'
         """
         response = anthropic_client.messages.create(
-            model=anthropic_chat_model,
+            model=anthropic_chat_basic_model,
             max_tokens=50,
             messages=[{"role": "user", "content": "Hi."}],
         )
@@ -1452,7 +1452,7 @@ class TestAnthropicMessages:
     # --- Streaming final message ---
 
     def test_streaming_get_final_message(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
         """Test getting the final assembled message from a stream.
 
@@ -1461,7 +1461,7 @@ class TestAnthropicMessages:
             - Final state contains complete message info
         """
         response = anthropic_client.messages.create(
-            model=anthropic_chat_model,
+            model=anthropic_chat_basic_model,
             max_tokens=100,
             messages=[{"role": "user", "content": "Say hello."}],
             stream=True,
@@ -1490,7 +1490,7 @@ class TestAnthropicMessages:
     # --- Streaming get_final_text ---
 
     def test_streaming_get_final_text(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
         """Test getting the final text from a stream.
 
@@ -1498,7 +1498,7 @@ class TestAnthropicMessages:
             - Accumulated text from streaming is coherent
         """
         response = anthropic_client.messages.create(
-            model=anthropic_chat_model,
+            model=anthropic_chat_basic_model,
             max_tokens=100,
             messages=[{"role": "user", "content": "Say hello."}],
             stream=True,
@@ -1515,7 +1515,7 @@ class TestAnthropicMessages:
     # --- Multiple user content blocks ---
 
     def test_multiple_text_blocks_in_user_message(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
         """Test user message with multiple text content blocks.
 
@@ -1524,7 +1524,7 @@ class TestAnthropicMessages:
             - Model processes all blocks
         """
         response = anthropic_client.messages.create(
-            model=anthropic_chat_model,
+            model=anthropic_chat_basic_model,
             max_tokens=100,
             messages=[
                 {
@@ -1802,7 +1802,6 @@ class TestAnthropicMessages:
 
     # --- Extended thinking multi-turn ---
 
-    @pytest.mark.expensive
     def test_extended_thinking_multi_turn(
         self, anthropic_client: Anthropic, anthropic_chat_reasoning_model: str
     ) -> None:
@@ -1815,7 +1814,7 @@ class TestAnthropicMessages:
         """
         first = anthropic_client.messages.create(
             model=anthropic_chat_reasoning_model,
-            max_tokens=4000,
+            max_tokens=1500,
             messages=[{"role": "user", "content": "What is 15 * 27?"}],
             thinking={"type": "enabled", "budget_tokens": 1024},
         )
@@ -1826,7 +1825,7 @@ class TestAnthropicMessages:
         # Send the full assistant content (including thinking blocks) back
         second = anthropic_client.messages.create(
             model=anthropic_chat_reasoning_model,
-            max_tokens=4000,
+            max_tokens=1500,
             messages=[
                 {"role": "user", "content": "What is 15 * 27?"},
                 {"role": "assistant", "content": first.content},
@@ -1840,7 +1839,6 @@ class TestAnthropicMessages:
         assert len(text_blocks) >= 1
         assert len(text_blocks[0].text) > 0
 
-    @pytest.mark.expensive
     def test_extended_thinking_streaming_content(
         self, anthropic_client: Anthropic, anthropic_chat_reasoning_model: str
     ) -> None:
@@ -1854,7 +1852,7 @@ class TestAnthropicMessages:
         events = list(
             anthropic_client.messages.create(
                 model=anthropic_chat_reasoning_model,
-                max_tokens=4000,
+                max_tokens=1500,
                 messages=[{"role": "user", "content": "What is 15 * 27?"}],
                 thinking={"type": "enabled", "budget_tokens": 1024},
                 stream=True,
@@ -1972,7 +1970,7 @@ class TestAnthropicMessages:
         assert response.stop_reason == "stop_sequence"
 
     def test_anthropic_beta_header_passthrough(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
         """Test that the anthropic-beta header is passed through to Bedrock.
 
@@ -1982,7 +1980,7 @@ class TestAnthropicMessages:
             - The header is accepted and does not cause errors
         """
         response = anthropic_client.messages.create(
-            model=anthropic_chat_model,
+            model=anthropic_chat_basic_model,
             max_tokens=100,
             messages=[{"role": "user", "content": "Say hello in one word."}],
             extra_headers={"anthropic-beta": "context-management-2025-06-27"},
@@ -1999,7 +1997,7 @@ class TestAnthropicMessages:
         assert response.usage.output_tokens > 0
 
     def test_anthropic_beta_header_passthrough_filter(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
         """Test that the unsupported anthropic-beta header is filtered.
 
@@ -2008,7 +2006,7 @@ class TestAnthropicMessages:
             - The header is accepted and does not cause errors
         """
         anthropic_client.messages.create(
-            model=anthropic_chat_model,
+            model=anthropic_chat_basic_model,
             max_tokens=100,
             messages=[{"role": "user", "content": "Say hello in one word."}],
             extra_headers={"anthropic-beta": "claude-code-20250219"},
@@ -2191,7 +2189,7 @@ class TestAnthropicMessages:
     def test_tool_choice_none_raises_error(
         self,
         anthropic_client: Anthropic,
-        anthropic_chat_model: str,
+        anthropic_chat_basic_model: str,
         use_anthropic_api: bool,
     ) -> None:
         """Test that tool_choice 'none' raises an error on this implementation.
@@ -2204,7 +2202,7 @@ class TestAnthropicMessages:
 
         with pytest.raises(BadRequestError):
             anthropic_client.messages.create(
-                model=anthropic_chat_model,
+                model=anthropic_chat_basic_model,
                 max_tokens=100,
                 messages=[{"role": "user", "content": "Hello"}],
                 tools=[
@@ -2359,7 +2357,7 @@ class TestAnthropicMessages:
     # --- Negative temperature ---
 
     def test_invalid_negative_temperature_error(
-        self, anthropic_client: Anthropic, anthropic_chat_model: str
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
         """Test that negative temperature value produces an error.
 
@@ -2368,7 +2366,7 @@ class TestAnthropicMessages:
         """
         with pytest.raises(BadRequestError):
             anthropic_client.messages.create(
-                model=anthropic_chat_model,
+                model=anthropic_chat_basic_model,
                 max_tokens=100,
                 messages=[{"role": "user", "content": "Hello"}],
                 temperature=-0.5,

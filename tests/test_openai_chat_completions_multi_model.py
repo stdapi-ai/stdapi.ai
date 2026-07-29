@@ -47,7 +47,7 @@ if TYPE_CHECKING:
 _BASIC_MODELS = pytest.mark.parametrize(
     "model",
     [
-        "anthropic.claude-sonnet-4-6",  # Claude (reference)
+        "anthropic.claude-haiku-4-5-20251001-v1:0",  # Claude (reference)
         "amazon.nova-micro-v1:0",  # Amazon Nova (cheapest)
         # "ai21.jamba-1-5-mini-v1:0",  # AI21 Jamba (SSM/Transformer hybrid, 256k ctx)
         "deepseek.v3-v1:0",  # DeepSeek V3 (fast non-reasoning)
@@ -55,14 +55,7 @@ _BASIC_MODELS = pytest.mark.parametrize(
         "meta.llama3-3-70b-instruct-v1:0",  # Meta Llama
         "minimax.minimax-m2.5",  # MiniMax
         "mistral.mistral-7b-instruct-v0:2",  # Mistral (cheapest)
-        "mistral.mistral-large-2402-v1:0",  # Mistral Large
-        pytest.param(
-            "mistral.pixtral-large-2502-v1:0",
-            marks=pytest.mark.xfail(
-                strict=False,
-                reason="Pixtral non-deterministically misidentifies colour of 1x1 PNG",
-            ),
-        ),  # Mistral Pixtral Large (vision)
+        "mistral.mistral-large-3-675b-instruct",  # Mistral Large 3
         "moonshotai.kimi-k2.5",  # Moonshot Kimi K2.5
         "nvidia.nemotron-nano-3-30b",  # NVIDIA Nemotron Nano 30B
         "qwen.qwen3-32b-v1:0",  # Qwen3 32B
@@ -77,7 +70,7 @@ _BASIC_MODELS = pytest.mark.parametrize(
 _TOOL_MODELS = pytest.mark.parametrize(
     "model",
     [
-        "anthropic.claude-sonnet-4-6",  # Claude (reference)
+        "anthropic.claude-haiku-4-5-20251001-v1:0",  # Claude (reference)
         "amazon.nova-lite-v1:0",  # Amazon Nova
         "amazon.nova-2-lite-v1:0",  # Amazon Nova 2
         # "ai21.jamba-1-5-mini-v1:0",  # AI21 Jamba Mini
@@ -86,7 +79,7 @@ _TOOL_MODELS = pytest.mark.parametrize(
         "deepseek.v3.2",  # DeepSeek V3.2 (newer revision)
         "meta.llama3-1-70b-instruct-v1:0",  # Meta Llama 3.1 70B
         "minimax.minimax-m2.5",  # MiniMax
-        "mistral.mistral-large-2402-v1:0",  # Mistral Large
+        "mistral.mistral-large-3-675b-instruct",  # Mistral Large 3
         "mistral.pixtral-large-2502-v1:0",  # Mistral Pixtral Large
         "moonshotai.kimi-k2.5",  # Moonshot Kimi K2.5
         pytest.param(
@@ -110,7 +103,7 @@ _TOOL_MODELS = pytest.mark.parametrize(
 _STREAMING_TOOL_MODELS = pytest.mark.parametrize(
     "model",
     [
-        "anthropic.claude-sonnet-4-6",  # Claude (reference)
+        "anthropic.claude-haiku-4-5-20251001-v1:0",  # Claude (reference)
         "amazon.nova-lite-v1:0",  # Amazon Nova
         "amazon.nova-2-lite-v1:0",  # Amazon Nova 2
         # "ai21.jamba-1-5-mini-v1:0",  # AI21 Jamba Mini
@@ -119,7 +112,7 @@ _STREAMING_TOOL_MODELS = pytest.mark.parametrize(
         "deepseek.v3.2",  # DeepSeek V3.2 (newer revision)
         "meta.llama3-1-70b-instruct-v1:0",  # Meta Llama 3.1 70B
         "minimax.minimax-m2.5",  # MiniMax
-        "mistral.mistral-large-2402-v1:0",  # Mistral Large
+        "mistral.mistral-large-3-675b-instruct",  # Mistral Large 3
         "mistral.pixtral-large-2502-v1:0",  # Mistral Pixtral Large
         "moonshotai.kimi-k2.5",  # Moonshot Kimi K2.5
         pytest.param(
@@ -142,7 +135,7 @@ _STREAMING_TOOL_MODELS = pytest.mark.parametrize(
 _AGENTIC_MODELS = pytest.mark.parametrize(
     "model",
     [
-        "anthropic.claude-sonnet-4-6",  # Claude (reference)
+        "anthropic.claude-haiku-4-5-20251001-v1:0",  # Claude (reference)
         "amazon.nova-lite-v1:0",  # Amazon Nova
         "amazon.nova-2-lite-v1:0",  # Amazon Nova 2
         # "ai21.jamba-1-5-mini-v1:0",  # AI21 Jamba Mini
@@ -151,7 +144,7 @@ _AGENTIC_MODELS = pytest.mark.parametrize(
         "deepseek.v3.2",  # DeepSeek V3.2 (newer revision)
         "meta.llama3-1-70b-instruct-v1:0",  # Meta Llama 3.1 70B
         "minimax.minimax-m2.5",  # MiniMax
-        "mistral.mistral-large-2402-v1:0",  # Mistral Large
+        "mistral.mistral-large-3-675b-instruct",  # Mistral Large 3
         "mistral.pixtral-large-2502-v1:0",  # Mistral Pixtral Large
         "moonshotai.kimi-k2.5",  # Moonshot Kimi K2.5
         pytest.param(
@@ -517,6 +510,7 @@ class TestMultiModelToolUse:
         )
 
     @pytest.mark.expensive
+    @pytest.mark.agentic
     @_AGENTIC_MODELS
     def test_agentic_loop_directory_and_file(
         self, model: str, openai_client: OpenAI, use_official_api: bool
@@ -592,7 +586,7 @@ class TestStructuredOutput:
     @pytest.mark.parametrize(
         "model",
         [
-            "anthropic.claude-sonnet-4-6",
+            "anthropic.claude-haiku-4-5-20251001-v1:0",
             "amazon.nova-lite-v1:0",
             "deepseek.v3-v1:0",
             "minimax.minimax-m2.5",
@@ -670,7 +664,7 @@ def _make_1x1_red_png_b64() -> str:
 _VISION_MODELS = pytest.mark.parametrize(
     "model",
     [
-        "anthropic.claude-sonnet-4-6",  # Claude (reference)
+        "anthropic.claude-haiku-4-5-20251001-v1:0",  # Claude (reference)
         "amazon.nova-lite-v1:0",  # Amazon Nova
         pytest.param(
             "mistral.pixtral-large-2502-v1:0",

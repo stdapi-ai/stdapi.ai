@@ -666,6 +666,7 @@ class TestImageGeneration:
 class TestImageGenerationUsage:
     """Tests for usage logging on /v1/images/generations."""
 
+    @pytest.mark.expensive
     def test_image_generation_usage_logged(
         self,
         test_client: TestClientType | None,

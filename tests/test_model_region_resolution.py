@@ -35,6 +35,9 @@ from stdapi.region_routing import RegionRouter
 if TYPE_CHECKING:
     from types_aiobotocore_bedrock.literals import RegionName
 
+#: All tests in this module exercise the local implementation in-process.
+pytestmark = pytest.mark.local
+
 
 def _model(
     inference_profiles: dict[str, str] | None, regions: list[str]

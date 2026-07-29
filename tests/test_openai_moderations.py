@@ -1177,6 +1177,7 @@ def live_guardrail(use_official_api: bool) -> Iterator[str]:
     bedrock.delete_guardrail(guardrailIdentifier=guardrail_id)
 
 
+@pytest.mark.slow
 @pytest.mark.xdist_group("moderations_guardrail")
 class TestModerationsLive:
     """Live moderation against a real guardrail or the official API."""

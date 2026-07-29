@@ -16,7 +16,6 @@ VOXTRAL_SAMPLE = (VOXTRAL_MINI,)
 class TestMistralVoxtralTranslations:
     """Basic behavior checks for Mistral Voxtral translation models."""
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", VOXTRAL_ALL)
     def test_basic_translation_json(
         self,
@@ -41,7 +40,6 @@ class TestMistralVoxtralTranslations:
         assert isinstance(response.text, str)
         assert len(response.text.strip()) > 0
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", VOXTRAL_ALL)
     def test_translation_text_format(
         self,

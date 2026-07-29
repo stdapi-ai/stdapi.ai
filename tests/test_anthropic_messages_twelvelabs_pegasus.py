@@ -24,7 +24,7 @@ class TestTwelveLabsPegasusAnthropicMessages:
 
         response = anthropic_client.messages.create(
             model=PEGASUS_MODEL,
-            max_tokens=1024,
+            max_tokens=256,
             messages=[
                 {
                     "role": "user",
@@ -64,7 +64,7 @@ class TestTwelveLabsPegasusAnthropicMessages:
 
         with anthropic_client.messages.stream(
             model=PEGASUS_MODEL,
-            max_tokens=1024,
+            max_tokens=256,
             messages=[
                 {
                     "role": "user",
@@ -114,7 +114,7 @@ class TestTwelveLabsPegasusAnthropicMessages:
 
         response = anthropic_client.messages.create(
             model=PEGASUS_MODEL,
-            max_tokens=1024,
+            max_tokens=256,
             messages=[
                 {
                     "role": "user",
@@ -137,7 +137,6 @@ class TestTwelveLabsPegasusAnthropicMessages:
         assert response.content[0].type == "text"
         assert response.content[0].text
 
-    @pytest.mark.expensive
     def test_no_video_returns_400(
         self, anthropic_client: Anthropic, use_official_api: bool
     ) -> None:
@@ -148,7 +147,7 @@ class TestTwelveLabsPegasusAnthropicMessages:
         with pytest.raises(BadRequestError):
             anthropic_client.messages.create(
                 model=PEGASUS_MODEL,
-                max_tokens=1024,
+                max_tokens=256,
                 messages=[{"role": "user", "content": "Hello"}],
             )
 
@@ -204,7 +203,7 @@ class TestTwelveLabsPegasusAnthropicMessages:
 
         response = anthropic_client.messages.create(
             model=PEGASUS_MODEL,
-            max_tokens=1024,
+            max_tokens=256,
             messages=[
                 {
                     "role": "user",
@@ -248,7 +247,7 @@ class TestTwelveLabsPegasusAnthropicMessages:
 
         response = anthropic_client.messages.create(
             model=PEGASUS_MODEL,
-            max_tokens=1024,
+            max_tokens=256,
             system="You are a helpful assistant.",
             messages=[
                 {

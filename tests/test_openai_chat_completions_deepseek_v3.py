@@ -34,7 +34,6 @@ class TestDeepseekChatCompletions:
         msg = resp.choices[0].message
         assert msg.role == "assistant"
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize("model", DEEPSEEK_SAMPLE)
     def test_reasoning_effort_none_explicit_disable(
         self, openai_client: OpenAI, use_official_api: bool, model: str

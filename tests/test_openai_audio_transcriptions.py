@@ -53,7 +53,7 @@ class TestAudioTranscriptions:
     - File format support and audio processing capabilities
     """
 
-    @pytest.mark.expensive
+    @pytest.mark.slow
     def test_basic_transcription(
         self, openai_client: OpenAI, sample_audio_file: bytes, transcription_model: str
     ) -> None:
@@ -81,7 +81,7 @@ class TestAudioTranscriptions:
         assert hasattr(response, "text")
         assert isinstance(response.text, str)
 
-    @pytest.mark.expensive
+    @pytest.mark.slow
     @pytest.mark.parametrize(
         "response_format", ["json", "text", "srt", "vtt", "verbose_json"]
     )
@@ -135,7 +135,7 @@ class TestAudioTranscriptions:
             assert isinstance(response.duration, int | float)
             assert response.duration >= 0
 
-    @pytest.mark.expensive
+    @pytest.mark.slow
     def test_timestamp_granularities(
         self, openai_client: OpenAI, sample_audio_file: bytes, transcription_model: str
     ) -> None:
@@ -182,7 +182,7 @@ class TestAudioTranscriptions:
             assert hasattr(word, "start")
             assert hasattr(word, "end")
 
-    @pytest.mark.expensive
+    @pytest.mark.slow
     def test_streaming_transcription(
         self,
         openai_client: OpenAI,
@@ -492,7 +492,7 @@ class TestAudioTranscriptions:
             for word in ["format", "supported", "invalid", "flac", "mp3", "wav"]
         )
 
-    @pytest.mark.expensive
+    @pytest.mark.slow
     @pytest.mark.parametrize("audio_format", ["mp3", "wav", "flac"])
     def test_supported_audio_formats(
         self,
@@ -535,7 +535,7 @@ class TestAudioTranscriptions:
         assert isinstance(response.text, str)
         assert len(response.text.strip()) > 0
 
-    @pytest.mark.expensive
+    @pytest.mark.slow
     @pytest.mark.parametrize("language", ["en", "fr"])
     def test_language_parameter_validation(
         self,
@@ -569,7 +569,7 @@ class TestAudioTranscriptions:
         assert hasattr(response, "text")
         assert isinstance(response.text, str)
 
-    @pytest.mark.expensive
+    @pytest.mark.slow
     def test_single_timestamp_granularities(
         self, openai_client: OpenAI, sample_audio_file: bytes, transcription_model: str
     ) -> None:
@@ -620,7 +620,7 @@ class TestAudioTranscriptions:
             assert hasattr(word, "start")
             assert hasattr(word, "end")
 
-    @pytest.mark.expensive
+    @pytest.mark.slow
     def test_response_format_consistency(
         self, openai_client: OpenAI, sample_audio_file: bytes, transcription_model: str
     ) -> None:
@@ -660,7 +660,7 @@ class TestAudioTranscriptions:
                 assert isinstance(response.text, str)
                 assert len(response.text.strip()) > 0
 
-    @pytest.mark.expensive
+    @pytest.mark.slow
     def test_verbose_json_structure(
         self, openai_client: OpenAI, sample_audio_file: bytes, transcription_model: str
     ) -> None:
@@ -712,7 +712,7 @@ class TestAudioTranscriptions:
                 assert hasattr(word, "start")
                 assert hasattr(word, "end")
 
-    @pytest.mark.expensive
+    @pytest.mark.slow
     def test_diarized_json_response(
         self,
         openai_client: OpenAI,
@@ -783,7 +783,7 @@ class TestAudioTranscriptions:
                 assert segment.speaker.isupper()
                 assert len(segment.speaker) == 1
 
-    @pytest.mark.expensive
+    @pytest.mark.slow
     def test_transcription_usage_logged(
         self,
         test_client: TestClientType | None,
@@ -869,7 +869,7 @@ class TestAudioTranscriptionsJsonBody:
         assert error["type"] == "invalid_request_error"
         assert error["code"] == "model_not_found"
 
-    @pytest.mark.expensive
+    @pytest.mark.slow
     def test_json_body_transcription(
         self,
         openai_client: OpenAI,
@@ -888,7 +888,7 @@ class TestAudioTranscriptionsJsonBody:
         assert isinstance(body.get("text"), str)
         assert len(body["text"].strip()) > 0
 
-    @pytest.mark.expensive
+    @pytest.mark.slow
     def test_json_body_transcription_with_transcribe_extra_params(
         self,
         openai_client: OpenAI,

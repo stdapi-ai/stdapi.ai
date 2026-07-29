@@ -351,6 +351,7 @@ class TestMantleServiceHeader:
 class TestMantleRecordedBilling:
     """Server-side usage recording on the converted (non-passthrough) paths."""
 
+    @pytest.mark.slow
     def test_luna_conversion_records_usage(
         self,
         openai_client: OpenAI,
@@ -762,6 +763,7 @@ class TestMantleMessages:
         assert bad_request.value.status_code == 400
         assert "server tools are not supported" in str(bad_request.value)
 
+    @pytest.mark.slow
     def test_luna_converted_to_responses(self, anthropic_client: Anthropic) -> None:
         """Messages on a Responses-only model are converted upstream."""
         message = anthropic_client.messages.create(

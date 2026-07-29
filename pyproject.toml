@@ -160,8 +160,9 @@ addopts = [
     "--dist=loadgroup",
 ]
 markers = [
-    "expensive: compute/cost/time expensive tests, skipped unless --expensive is passed",
+    "expensive: compute/cost expensive tests, skipped unless --expensive is passed",
     "agentic: agentic tests, skipped unless --agentic is passed",
+    "slow: cheap but slow tests, skipped unless --slow is passed",
     "local: tests the local implementation in-process, skipped with --server-url or --use-official-api",
     "xdist_group: group tests to run on the same xdist worker",
 ]

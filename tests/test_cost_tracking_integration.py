@@ -1,7 +1,7 @@
 """Full integration tests for cost tracking: live catalog, pricing API, usage logs.
 
 These load the real AWS Price List catalog (and make one tiny Bedrock call),
-so they run only with ``--expensive``, like the pricing coverage test.
+so they run only with ``--slow``, like the pricing coverage test.
 """
 
 from decimal import Decimal
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from stdapi.monitoring import EventLog
 
 #: Small, widely available chat model used for the one live Bedrock call.
-_CHAT_MODEL = "amazon.nova-lite-v1:0"
+_CHAT_MODEL = "amazon.nova-micro-v1:0"
 
 #: One live catalog load shared by all tests (reloads get throttled by AWS).
 _CATALOG_CACHE: dict[pricing.PriceKey, pricing.Price] = {}
@@ -45,7 +45,7 @@ async def live_catalog(
     the load runs through a fresh client on this test loop instead. Skips
     before loading anything when not running against the local test server
     (same reason as the ``client`` fixture) -- otherwise a ``--server-url
-    --expensive`` run would pay for a full Price List load just to skip.
+    --slow`` run would pay for a full Price List load just to skip.
     """
     if test_client is None:
         pytest.skip("Requires local test server")
@@ -68,7 +68,7 @@ async def live_catalog(
     assert pricing._state.price_index  # noqa: SLF001
 
 
-@pytest.mark.expensive
+@pytest.mark.slow
 @pytest.mark.usefixtures("live_catalog")
 @pytest.mark.xdist_group("cost_tracking_integration")
 class TestCostTrackingIntegration:

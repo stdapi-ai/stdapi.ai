@@ -108,7 +108,7 @@ class TestStabilityUpscaleModels:
         self,
         openai_client: OpenAI,
         use_official_api: bool,
-        chat_vision_model: str,
+        chat_vision_judge_model: str,
         model_id: str,
     ) -> None:
         """Test creative/conservative upscale models using AWS documentation example."""
@@ -149,7 +149,7 @@ class TestStabilityUpscaleModels:
 
         # VLM validation
         validation_response = openai_client.chat.completions.create(
-            model=chat_vision_model,
+            model=chat_vision_judge_model,
             messages=[
                 {  # type: ignore[misc,list-item]
                     "role": "user",
@@ -187,7 +187,10 @@ class TestStabilityEditModels:
 
     @pytest.mark.expensive
     def test_search_recolor(
-        self, openai_client: OpenAI, use_official_api: bool, chat_vision_model: str
+        self,
+        openai_client: OpenAI,
+        use_official_api: bool,
+        chat_vision_judge_model: str,
     ) -> None:
         """Test search and recolor model using AWS documentation example."""
         if use_official_api:
@@ -219,7 +222,7 @@ class TestStabilityEditModels:
 
         # VLM validation
         validation_response = openai_client.chat.completions.create(
-            model=chat_vision_model,
+            model=chat_vision_judge_model,
             messages=[
                 {  # type: ignore[misc,list-item]
                     "role": "user",
@@ -270,7 +273,10 @@ class TestStabilityEditModels:
 
     @pytest.mark.expensive
     def test_search_replace(
-        self, openai_client: OpenAI, use_official_api: bool, chat_vision_model: str
+        self,
+        openai_client: OpenAI,
+        use_official_api: bool,
+        chat_vision_judge_model: str,
     ) -> None:
         """Test search and replace model using AWS documentation example."""
         if use_official_api:
@@ -302,7 +308,7 @@ class TestStabilityEditModels:
 
         # VLM validation
         validation_response = openai_client.chat.completions.create(
-            model=chat_vision_model,
+            model=chat_vision_judge_model,
             messages=[
                 {  # type: ignore[misc,list-item]
                     "role": "user",
@@ -353,7 +359,10 @@ class TestStabilityEditModels:
 
     @pytest.mark.expensive
     def test_inpaint(
-        self, openai_client: OpenAI, use_official_api: bool, chat_vision_model: str
+        self,
+        openai_client: OpenAI,
+        use_official_api: bool,
+        chat_vision_judge_model: str,
     ) -> None:
         """Test inpaint model with mask using AWS documentation example."""
         if use_official_api:
@@ -386,7 +395,7 @@ class TestStabilityEditModels:
 
         # VLM validation
         validation_response = openai_client.chat.completions.create(
-            model=chat_vision_model,
+            model=chat_vision_judge_model,
             messages=[
                 {  # type: ignore[misc,list-item]
                     "role": "user",
@@ -439,7 +448,10 @@ class TestStabilityEditModels:
 
     @pytest.mark.expensive
     def test_erase(
-        self, openai_client: OpenAI, use_official_api: bool, chat_vision_model: str
+        self,
+        openai_client: OpenAI,
+        use_official_api: bool,
+        chat_vision_judge_model: str,
     ) -> None:
         """Test erase model with mask using AWS documentation example."""
         if use_official_api:
@@ -473,7 +485,10 @@ class TestStabilityEditModels:
 
     @pytest.mark.expensive
     def test_remove_background(
-        self, openai_client: OpenAI, use_official_api: bool, chat_vision_model: str
+        self,
+        openai_client: OpenAI,
+        use_official_api: bool,
+        chat_vision_judge_model: str,
     ) -> None:
         """Test background removal model using AWS documentation example."""
         if use_official_api:
@@ -504,7 +519,7 @@ class TestStabilityEditModels:
 
         # VLM validation
         validation_response = openai_client.chat.completions.create(
-            model=chat_vision_model,
+            model=chat_vision_judge_model,
             messages=[
                 {  # type: ignore[misc,list-item]
                     "role": "user",
@@ -542,7 +557,10 @@ class TestStabilityControlModels:
 
     @pytest.mark.expensive
     def test_control_sketch(
-        self, openai_client: OpenAI, use_official_api: bool, chat_vision_model: str
+        self,
+        openai_client: OpenAI,
+        use_official_api: bool,
+        chat_vision_judge_model: str,
     ) -> None:
         """Test control sketch model using AWS documentation example."""
         if use_official_api:
@@ -573,7 +591,7 @@ class TestStabilityControlModels:
 
         # VLM validation
         validation_response = openai_client.chat.completions.create(
-            model=chat_vision_model,
+            model=chat_vision_judge_model,
             messages=[
                 {  # type: ignore[misc,list-item]
                     "role": "user",
@@ -607,7 +625,10 @@ class TestStabilityControlModels:
 
     @pytest.mark.expensive
     def test_control_structure(
-        self, openai_client: OpenAI, use_official_api: bool, chat_vision_model: str
+        self,
+        openai_client: OpenAI,
+        use_official_api: bool,
+        chat_vision_judge_model: str,
     ) -> None:
         """Test control structure model using AWS documentation example."""
         if use_official_api:
@@ -640,7 +661,7 @@ class TestStabilityControlModels:
 
         # VLM validation
         validation_response = openai_client.chat.completions.create(
-            model=chat_vision_model,
+            model=chat_vision_judge_model,
             messages=[
                 {  # type: ignore[misc,list-item]
                     "role": "user",
@@ -697,7 +718,10 @@ class TestStabilityStyleModels:
 
     @pytest.mark.expensive
     def test_style_transfer_with_mask_as_style_image(
-        self, openai_client: OpenAI, use_official_api: bool, chat_vision_model: str
+        self,
+        openai_client: OpenAI,
+        use_official_api: bool,
+        chat_vision_judge_model: str,
     ) -> None:
         """Test style-transfer model with mask parameter used as style image."""
         if use_official_api:
@@ -730,7 +754,7 @@ class TestStabilityStyleModels:
 
         # VLM validation
         validation_response = openai_client.chat.completions.create(
-            model=chat_vision_model,
+            model=chat_vision_judge_model,
             messages=[
                 {  # type: ignore[misc,list-item]
                     "role": "user",
@@ -764,7 +788,10 @@ class TestStabilityStyleModels:
 
     @pytest.mark.expensive
     def test_style_transfer_with_style_image_parameter(
-        self, openai_client: OpenAI, use_official_api: bool, chat_vision_model: str
+        self,
+        openai_client: OpenAI,
+        use_official_api: bool,
+        chat_vision_judge_model: str,
     ) -> None:
         """Test style-transfer model with style_image in extra_body."""
         if use_official_api:
@@ -802,7 +829,7 @@ class TestStabilityStyleModels:
 
         # VLM validation
         validation_response = openai_client.chat.completions.create(
-            model=chat_vision_model,
+            model=chat_vision_judge_model,
             messages=[
                 {  # type: ignore[misc,list-item]
                     "role": "user",

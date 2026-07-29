@@ -243,7 +243,7 @@ class TestAmazonNovaCanvasEditing:
         self,
         openai_client: OpenAI,
         use_official_api: bool,
-        chat_vision_model: str,
+        chat_vision_judge_model: str,
         model_id: str,
         mask_type: str,
     ) -> None:
@@ -316,7 +316,7 @@ class TestAmazonNovaCanvasEditing:
 
         # Use VLM to validate the result
         validation_response = openai_client.chat.completions.create(
-            model=chat_vision_model,
+            model=chat_vision_judge_model,
             messages=[
                 {
                     "role": "user",

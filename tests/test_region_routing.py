@@ -36,6 +36,8 @@ MODEL = "amazon.nova-micro-v1:0"
 _MESSAGES: list[ChatCompletionUserMessageParam] = [
     {"role": "user", "content": "Say the number 1 only."}
 ]
+#: Output-token cap for the routing calls -- only the presence of content is asserted.
+_MAX_TOKENS = 8
 ROUTING_PRIMARY: RegionName = "us-east-1"
 ROUTING_SECONDARY: RegionName = "us-west-2"
 _ROUTING_REGIONS: list[RegionName] = [ROUTING_PRIMARY, ROUTING_SECONDARY]
@@ -275,7 +277,7 @@ class TestOrderedRouting:
     def test_success_uses_primary_region(self, routing_ordered: RoutingFixture) -> None:
         """Successful request goes to the primary region with no quota errors recorded."""
         response = routing_ordered.openai.chat.completions.create(
-            model=MODEL, messages=_MESSAGES
+            model=MODEL, messages=_MESSAGES, max_tokens=_MAX_TOKENS
         )
         assert response.choices[0].message.content
         assert routing_ordered.get_state(MODEL, ROUTING_PRIMARY).is_usable
@@ -292,7 +294,7 @@ class TestOrderedRouting:
             ROUTING_PRIMARY, [("converse", "ThrottlingException")]
         ):
             response = routing_ordered.openai.chat.completions.create(
-                model=MODEL, messages=_MESSAGES
+                model=MODEL, messages=_MESSAGES, max_tokens=_MAX_TOKENS
             )
         assert response.choices[0].message.content
         assert not routing_ordered.get_state(MODEL, ROUTING_PRIMARY).is_usable
@@ -313,7 +315,7 @@ class TestOrderedRouting:
             ROUTING_PRIMARY, [("converse", "ServiceUnavailableException")]
         ):
             response = routing_ordered.openai.chat.completions.create(
-                model=MODEL, messages=_MESSAGES
+                model=MODEL, messages=_MESSAGES, max_tokens=_MAX_TOKENS
             )
         assert response.choices[0].message.content
         state = routing_ordered.get_state(MODEL, ROUTING_PRIMARY)
@@ -334,7 +336,7 @@ class TestOrderedRouting:
             pytest.raises(APIError),
         ):
             routing_ordered.openai.chat.completions.create(
-                model=MODEL, messages=_MESSAGES
+                model=MODEL, messages=_MESSAGES, max_tokens=_MAX_TOKENS
             )
         # Primary remains usable — validation errors do not trigger backoff
         assert routing_ordered.get_state(MODEL, ROUTING_PRIMARY).is_usable
@@ -359,7 +361,7 @@ class TestOrderedRouting:
             pytest.raises(APIError),
         ):
             routing_ordered.openai.chat.completions.create(
-                model=MODEL, messages=_MESSAGES
+                model=MODEL, messages=_MESSAGES, max_tokens=_MAX_TOKENS
             )
         assert not routing_ordered.get_state(MODEL, ROUTING_PRIMARY).is_usable
         assert not routing_ordered.get_state(MODEL, ROUTING_SECONDARY).is_usable
@@ -381,7 +383,7 @@ class TestQuotaBackoffEscalation:
             ROUTING_PRIMARY, [("converse", "ThrottlingException")]
         ):
             routing_ordered.openai.chat.completions.create(
-                model=MODEL, messages=_MESSAGES
+                model=MODEL, messages=_MESSAGES, max_tokens=_MAX_TOKENS
             )
 
         state = routing_ordered.get_state(MODEL, ROUTING_PRIMARY)
@@ -405,14 +407,14 @@ class TestQuotaBackoffEscalation:
             ROUTING_PRIMARY, [("converse", "ThrottlingException")]
         ):
             routing_ordered.openai.chat.completions.create(
-                model=MODEL, messages=_MESSAGES
+                model=MODEL, messages=_MESSAGES, max_tokens=_MAX_TOKENS
             )
         assert not routing_ordered.get_state(MODEL, ROUTING_PRIMARY).is_usable
 
         routing_ordered.mark_success(MODEL, ROUTING_PRIMARY)
 
         response = routing_ordered.openai.chat.completions.create(
-            model=MODEL, messages=_MESSAGES
+            model=MODEL, messages=_MESSAGES, max_tokens=_MAX_TOKENS
         )
         assert response.choices[0].message.content
         state = routing_ordered.get_state(MODEL, ROUTING_PRIMARY)
@@ -454,7 +456,7 @@ class TestRoundRobinRouting:
             ROUTING_PRIMARY, [("converse", "ThrottlingException")]
         ):
             response = routing_round_robin.openai.chat.completions.create(
-                model=MODEL, messages=_MESSAGES
+                model=MODEL, messages=_MESSAGES, max_tokens=_MAX_TOKENS
             )
         assert response.choices[0].message.content
         assert routing_round_robin.router is not None
@@ -476,7 +478,7 @@ class TestLowestLatencyRouting:
     ) -> None:
         """Request succeeds and at least one region remains usable."""
         response = routing_lowest_latency.openai.chat.completions.create(
-            model=MODEL, messages=_MESSAGES
+            model=MODEL, messages=_MESSAGES, max_tokens=_MAX_TOKENS
         )
         assert response.choices[0].message.content
         assert (
@@ -492,7 +494,7 @@ class TestLowestLatencyRouting:
             ROUTING_PRIMARY, [("converse", "ThrottlingException")]
         ):
             response = routing_lowest_latency.openai.chat.completions.create(
-                model=MODEL, messages=_MESSAGES
+                model=MODEL, messages=_MESSAGES, max_tokens=_MAX_TOKENS
             )
         assert response.choices[0].message.content
         assert not routing_lowest_latency.get_state(MODEL, ROUTING_PRIMARY).is_usable
@@ -515,7 +517,7 @@ class TestStreamingFailover:
                 ROUTING_PRIMARY, [("converse_stream", "ThrottlingException")]
             ),
             routing_lowest_latency.openai.chat.completions.create(
-                model=MODEL, messages=_MESSAGES, stream=True
+                model=MODEL, messages=_MESSAGES, max_tokens=_MAX_TOKENS, stream=True
             ) as stream,
         ):
             content = "".join(
@@ -546,7 +548,7 @@ class TestSingleRegionMode:
     ) -> None:
         """Non-streaming chat completion works when REGION_ROUTER is None."""
         response = routing_single_region.openai.chat.completions.create(
-            model=MODEL, messages=_MESSAGES
+            model=MODEL, messages=_MESSAGES, max_tokens=_MAX_TOKENS
         )
         assert response.choices[0].message.content
 
@@ -555,7 +557,7 @@ class TestSingleRegionMode:
     ) -> None:
         """Streaming chat completion works when REGION_ROUTER is None."""
         with routing_single_region.openai.chat.completions.create(
-            model=MODEL, messages=_MESSAGES, stream=True
+            model=MODEL, messages=_MESSAGES, max_tokens=_MAX_TOKENS, stream=True
         ) as stream:
             content = "".join(
                 chunk.choices[0].delta.content or ""

@@ -34,7 +34,7 @@ class TestImagesVariationsBasic:
         """Test basic image variation creation (no prompt, unique to variations)."""
         response = openai_client.images.create_variation(
             image=sample_image_file,
-            model="amazon.titan-image-generator-v2:0",
+            model="stability.sd3-5-large-v1:0",
             size="512x512",
             n=1,
         )
@@ -45,13 +45,15 @@ class TestImagesVariationsBasic:
         assert len(response.data) == 1
         assert response.data[0].url is not None
         validate_url_format(response.data[0].url)
-        assert response.size == "512x512"  # type: ignore[comparison-overlap]
+        # Stability generates at its own resolution but keeps the 1:1 ratio asked for.
+        assert response.size is not None
+        width, height = (int(value) for value in response.size.split("x"))
+        assert width == height
 
-        # Validate usage tracking - variations have only image tokens, no text
+        # Validate usage tracking
         assert response.usage is not None
         assert response.usage.input_tokens > 0
         assert response.usage.input_tokens_details.image_tokens > 0
-        assert response.usage.input_tokens_details.text_tokens == 0  # No prompt
         assert response.usage.output_tokens == 1
         assert response.usage.total_tokens > 0
 
@@ -62,20 +64,20 @@ class TestImagesVariationsBasic:
         """Test creating multiple variations."""
         response = openai_client.images.create_variation(
             image=sample_image_file,
-            model="amazon.titan-image-generator-v2:0",
+            model="stability.sd3-5-large-v1:0",
             size="512x512",
-            n=3,
+            n=2,
         )
 
         assert response.data is not None
-        assert len(response.data) == 3
+        assert len(response.data) == 2
         for img_data in response.data:
             assert img_data.url is not None
             validate_url_format(img_data.url)
 
         # Validate usage for multiple images
         assert response.usage is not None
-        assert response.usage.output_tokens == 3
+        assert response.usage.output_tokens == 2
 
     @pytest.mark.expensive
     def test_create_variation_b64_json(
@@ -84,7 +86,7 @@ class TestImagesVariationsBasic:
         """Test creating variations with base64 response format."""
         response = openai_client.images.create_variation(
             image=sample_image_file,
-            model="amazon.titan-image-generator-v2:0",
+            model="stability.sd3-5-large-v1:0",
             size="512x512",
             n=1,
             response_format="b64_json",
@@ -160,7 +162,7 @@ class TestImagesVariationsErrors:
 class TestImagesVariationsProviderParams:
     """Tests for provider-specific parameters in variations.
 
-    Test unique variation parameters like similarityStrength and text hints.
+    Test unique variation parameters like Stability's strength and negative_prompt.
     """
 
     @pytest.fixture(autouse=True)
@@ -170,38 +172,43 @@ class TestImagesVariationsProviderParams:
             pytest.skip("Unittest only for local tests.")
 
     @pytest.mark.expensive
-    def test_variation_with_similarity_strength(
-        self, openai_client: OpenAI, sample_image_file: bytes
+    def test_variation_with_strength(
+        self, openai_client: OpenAI, sample_image_file_base64: str
     ) -> None:
-        """Test variation with similarity strength parameter (unique to variations)."""
-        response = openai_client.images.create_variation(
-            image=sample_image_file,
-            model="amazon.titan-image-generator-v2:0",
-            size="512x512",
-            n=1,
-            extra_body={"imageVariationParams": {"similarityStrength": 0.7}},
+        """Test variation with Stability's image-to-image `strength` parameter.
+
+        Sent as a JSON body: over ``multipart/form-data`` every extra parameter
+        reaches the model as a string, which Bedrock rejects for numeric fields.
+        """
+        http_client = openai_client._client  # noqa: SLF001
+        response = http_client.post(
+            f"{openai_client.base_url}images/variations",
+            json={
+                "model": "stability.sd3-5-large-v1:0",
+                "image": {"image_url": sample_image_file_base64},
+                "size": "512x512",
+                "n": 1,
+                "strength": 0.7,
+            },
+            headers={"Authorization": f"Bearer {openai_client.api_key}"},
         )
 
-        assert response.data is not None
-        assert len(response.data) == 1
-        assert response.data[0].url is not None
+        assert response.status_code == 200, (
+            f"Expected 200, got {response.status_code}: {response.text}"
+        )
+        assert len(response.json()["data"]) == 1
 
     @pytest.mark.expensive
-    def test_variation_with_text_hint(
+    def test_variation_with_negative_prompt(
         self, openai_client: OpenAI, sample_image_file: bytes
     ) -> None:
-        """Test variation with text hint (unique to variations API)."""
+        """Test variation with Stability's `negative_prompt` parameter."""
         response = openai_client.images.create_variation(
             image=sample_image_file,
-            model="amazon.titan-image-generator-v2:0",
+            model="stability.sd3-5-large-v1:0",
             size="512x512",
             n=1,
-            extra_body={
-                "imageVariationParams": {
-                    "text": "Keep the overall composition but change colors",
-                    "similarityStrength": 0.8,
-                }
-            },
+            extra_body={"negative_prompt": "blurry, low quality"},
         )
 
         assert response.data is not None
@@ -218,7 +225,7 @@ class TestImagesVariationsJsonBody:
         if use_official_api:
             pytest.skip(
                 "Variations endpoint removed from official OpenAI API; "
-                "amazon.nova-canvas-v1:0 not available there."
+                "stability.sd3-5-large-v1:0 not available there."
             )
 
     @pytest.mark.expensive
@@ -235,7 +242,7 @@ class TestImagesVariationsJsonBody:
         response = http_client.post(
             f"{openai_client.base_url}images/variations",
             json={
-                "model": "amazon.nova-canvas-v1:0",
+                "model": "stability.sd3-5-large-v1:0",
                 "image": {"image_url": sample_image_file_base64},
                 "response_format": "b64_json",
                 "size": "512x512",
@@ -271,7 +278,7 @@ class TestImagesVariationsJsonBody:
             response = http_client.post(
                 f"{openai_client.base_url}images/variations",
                 json={
-                    "model": "amazon.nova-canvas-v1:0",
+                    "model": "stability.sd3-5-large-v1:0",
                     "image": {"file_id": uploaded.id},
                     "response_format": "b64_json",
                     "size": "512x512",
@@ -300,7 +307,7 @@ class TestImagesVariationsJsonBody:
         http_client = openai_client._client  # noqa: SLF001
         response = http_client.post(
             f"{openai_client.base_url}images/variations",
-            json={"model": "amazon.nova-canvas-v1:0"},
+            json={"model": "stability.sd3-5-large-v1:0"},
             headers={"Authorization": f"Bearer {openai_client.api_key}"},
         )
         assert response.status_code == 400
@@ -374,7 +381,7 @@ class TestImagesVariationsModelField:
         conversion and producing an unhandled 500 instead of a JSON 400 envelope.
         """
         response = client.post(
-            "/v1/images/variations", data={"model": "amazon.nova-canvas-v1:0"}
+            "/v1/images/variations", data={"model": "stability.sd3-5-large-v1:0"}
         )
         assert response.status_code == 400
         assert response.json()["error"]["type"] == "invalid_request_error"

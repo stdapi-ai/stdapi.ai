@@ -1099,7 +1099,7 @@ class TestChatCompletions:
                 },
             ],
             tools=tools,  # type: ignore[arg-type]
-            max_completion_tokens=50,
+            max_completion_tokens=256,
         )
         assert response.choices[0].message.content is not None
 
@@ -1128,7 +1128,9 @@ class TestChatCompletions:
                 },
             ],
             tools=tools,  # type: ignore[arg-type]
-            max_completion_tokens=50,
+            # Room for a follow-up tool call: truncating one mid-JSON makes Bedrock
+            # fail the turn with "Model produced invalid sequence as part of ToolUse".
+            max_completion_tokens=256,
         )
         assert response2.choices[0].message.content is not None
 
@@ -1366,7 +1368,6 @@ class TestChatCompletions:
         assert choice.finish_reason in ("stop", "tool_calls", "length")
         assert response.usage is not None
 
-    @pytest.mark.expensive
     def test_multimodal_with_https_image_url(
         self, openai_client: OpenAI, chat_vision_model: str
     ) -> None:
@@ -1397,7 +1398,6 @@ class TestChatCompletions:
         assert isinstance(choice.message.content, str)
         assert len(choice.message.content) > 0
 
-    @pytest.mark.expensive
     def test_multimodal_with_data_url_base64_success(
         self,
         openai_client: OpenAI,
@@ -2251,6 +2251,7 @@ class TestChatCompletions:
                 extra_body={"enable_thinking": True, "thinking_budget": 1100},
             )
 
+    @pytest.mark.slow
     def test_deepseek_reasoning_response_parameter(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
@@ -2274,6 +2275,7 @@ class TestChatCompletions:
         resp = openai_client.chat.completions.create(
             model="deepseek.r1-v1:0",
             messages=[{"role": "user", "content": "Reply with OK."}],
+            max_completion_tokens=512,
         )
         msg = resp.choices[0].message
         assert msg.role == "assistant"
@@ -2559,6 +2561,7 @@ class TestChatCompletions:
             # This validates audio is not generated for tool call responses
             assert choice.finish_reason == "tool_calls"
 
+    @pytest.mark.slow
     async def test_inference_profile_as_model(
         self,
         openai_client: OpenAI,

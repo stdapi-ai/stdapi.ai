@@ -579,12 +579,17 @@ class TestOpenAIVideoIntegration:
     """Live /v1/videos lifecycle through the OpenAI SDK (local or official API)."""
 
     @pytest.mark.expensive
+    @pytest.mark.slow
     def test_video_generation_lifecycle(
-        self, openai_client: OpenAI, video_generation_model: str
+        self, openai_client: OpenAI, video_generation_model: str, use_official_api: bool
     ) -> None:
         """Create, poll, download, and delete a video with the default model."""
+        # Luma bills 540p at half the 720p rate; Sora has no 540p size.
+        size = "1280x720" if use_official_api else "960x540"
         video = openai_client.videos.create(
-            model=video_generation_model, prompt="A calico cat playing a piano"
+            model=video_generation_model,
+            prompt="A calico cat playing a piano",
+            size=size,  # type: ignore[arg-type]
         )
         try:
             assert video.object == "video"
@@ -606,11 +611,13 @@ class TestOpenAIVideoIntegration:
                 openai_client.videos.delete(video.id)
 
     @pytest.mark.expensive
+    @pytest.mark.slow
     def test_video_generation_from_reference_image(
-        self, openai_client: OpenAI, video_generation_model: str
+        self, openai_client: OpenAI, video_generation_model: str, use_official_api: bool
     ) -> None:
         """An uploaded reference image drives image-to-video generation."""
-        size = "1280x720"
+        # Luma bills 540p at half the 720p rate; Sora has no 540p size.
+        size = "1280x720" if use_official_api else "960x540"
         video = openai_client.videos.create(
             model=video_generation_model,
             prompt="The camera slowly zooms in",
@@ -625,6 +632,7 @@ class TestOpenAIVideoIntegration:
                 openai_client.videos.delete(video.id)
 
     @pytest.mark.expensive
+    @pytest.mark.slow
     def test_every_advertised_model_generates(
         self,
         request: pytest.FixtureRequest,
@@ -658,6 +666,7 @@ class TestOpenAIVideoIntegration:
                     openai_client.videos.delete(video.id)
 
     @pytest.mark.expensive
+    @pytest.mark.slow
     def test_nova_reel_multi_shot_duration(
         self,
         request: pytest.FixtureRequest,

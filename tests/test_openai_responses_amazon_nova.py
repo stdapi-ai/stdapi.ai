@@ -41,7 +41,6 @@ class TestNovaResponses:
         )
         assert resp.output_text
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize("model", NOVA_ALL)
     def test_reasoning_effort_none_explicit_disable(
         self, openai_client: OpenAI, use_official_api: bool, model: str

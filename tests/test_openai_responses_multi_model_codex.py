@@ -170,8 +170,8 @@ _STDAPI_SRC = Path(__file__).resolve().parent.parent
 _MODEL_CONFIGS = [
     # ── Reference baseline ────────────────────────────────────────────────────
     pytest.param(
-        {"model_env": "anthropic.claude-sonnet-4-6", "extra_env": {}},
-        id="claude-sonnet-4-6",
+        {"model_env": "anthropic.claude-haiku-4-5-20251001-v1:0", "extra_env": {}},
+        id="claude-haiku-4-5",
     ),
     # ── Amazon ────────────────────────────────────────────────────────────────
     pytest.param(
@@ -190,6 +190,7 @@ _MODEL_CONFIGS = [
         # Notably slower than its siblings; give each agent run extra headroom.
         {"model_env": "qwen.qwen3-coder-next", "extra_env": {}, "timeout": 1200},
         id="qwen3-coder-next",
+        marks=pytest.mark.slow,
     ),
     # ── MiniMax ───────────────────────────────────────────────────────────────
     pytest.param(

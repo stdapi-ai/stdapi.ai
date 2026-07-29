@@ -268,19 +268,24 @@ MODEL_MAPPINGS = {
         "speech_standard": "amazon.polly-standard",
         "chat": "amazon.nova-micro-v1:0",
         "completion": "amazon.nova-micro-v1:0",
-        "chat_vision": "anthropic.claude-haiku-4-5-20251001-v1:0",
-        "chat_legacy": "anthropic.claude-haiku-4-5-20251001-v1:0",
-        "chat_reasoning": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "chat_vision": "amazon.nova-lite-v1:0",
+        # Claude Haiku 4.5 judges image outputs: stronger VLM than the cheap vision model.
+        "chat_vision_judge": "anthropic.claude-haiku-4-5-20251001-v1:0",
+        "chat_legacy": "amazon.nova-micro-v1:0",
+        "chat_reasoning": "anthropic.claude-haiku-4-5-20251001-v1:0",
         "chat_audio": "mistral.voxtral-mini-3b-2507",
         "embedding": "amazon.titan-embed-text-v2:0",
         "responses": "amazon.nova-micro-v1:0",
+        # Bedrock ``outputConfig`` is rejected by Nova: keep the cheapest Claude.
         "responses_json_output": "anthropic.claude-haiku-4-5-20251001-v1:0",
         "responses_web_search": "amazon.nova-2-lite-v1:0",
         "responses_code_interpreter": "amazon.nova-2-lite-v1:0",
-        "input_tokens": "anthropic.claude-3-5-sonnet-20240620-v1:0",
-        "image_generation": "amazon.nova-canvas-v1:0",
+        # Bedrock CountTokens only supports Anthropic models; the call is unbilled.
+        "input_tokens": "anthropic.claude-haiku-4-5-20251001-v1:0",
+        "image_generation": "stability.stable-image-core-v1:1",
+        # Nova Canvas is the only model mapping OpenAI ``quality``/``style`` to Bedrock params.
         "image_generation_hd": "amazon.nova-canvas-v1:0",
-        "image_generation_stream": "amazon.nova-canvas-v1:0",
+        "image_generation_stream": "stability.stable-image-core-v1:1",
         # Luma is the only non-legacy video model (Nova Reel is LEGACY on AWS).
         "video_generation": "luma.ray-v2:0",
     },
@@ -292,6 +297,7 @@ MODEL_MAPPINGS = {
         "chat": "gpt-5-nano",
         "completion": "gpt-3.5-turbo-instruct",
         "chat_vision": "gpt-5-nano",
+        "chat_vision_judge": "gpt-5-nano",
         "chat_legacy": "gpt-4o-mini",
         "chat_reasoning": "gpt-5-nano",
         "chat_audio": "gpt-audio",
@@ -312,6 +318,8 @@ SAMPLES_DIR = Path(__file__).parent / "samples"
 OUTPUT_DIR = Path(__file__).parent / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
 _OPENAI_ORGANIZATION = "tests_stdapi.ai"
+#: Markers whose tests are collected only when the matching ``--<marker>`` flag is passed.
+_OPT_IN_MARKERS = ("expensive", "agentic", "slow")
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -340,10 +348,13 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--expensive",
         action="store_true",
         default=False,
-        help="Run compute/cost/time expensive tests",
+        help="Run compute/cost expensive tests",
     )
     parser.addoption(
         "--agentic", action="store_true", default=False, help="Run agentic tests"
+    )
+    parser.addoption(
+        "--slow", action="store_true", default=False, help="Run slow tests"
     )
 
 
@@ -357,11 +368,11 @@ def pytest_report_header() -> str | None:
 def pytest_collection_modifyitems(
     config: pytest.Config, items: list[pytest.Item]
 ) -> None:
-    """Skip expensive/agentic tests, and local tests against a remote target, at collection time.
+    """Skip opt-in tests, and local tests against a remote target, at collection time.
 
     ``local``-marked tests are skipped when ``--server-url`` or
-    ``--use-official-api`` selects a remote target; ``expensive``/``agentic``
-    tests are skipped unless their matching flag is passed.
+    ``--use-official-api`` selects a remote target; ``expensive``/``agentic``/
+    ``slow`` tests are skipped unless their matching flag is passed.
     """
     if config.getoption("--server-url") or config.getoption("--use-official-api"):
         skip_marker = pytest.mark.skip(
@@ -370,17 +381,14 @@ def pytest_collection_modifyitems(
         for item in items:
             if item.get_closest_marker("local"):
                 item.add_marker(skip_marker)
-    if not config.getoption("--expensive"):
+    for marker in _OPT_IN_MARKERS:
+        if config.getoption(f"--{marker}"):
+            continue
         skip_marker = pytest.mark.skip(
-            reason="Need --expensive option to run this test"
+            reason=f"Need --{marker} option to run this test"
         )
         for item in items:
-            if item.get_closest_marker("expensive"):
-                item.add_marker(skip_marker)
-    if not config.getoption("--agentic"):
-        skip_marker = pytest.mark.skip(reason="Need --agentic option to run this test")
-        for item in items:
-            if item.get_closest_marker("agentic"):
+            if item.get_closest_marker(marker):
                 item.add_marker(skip_marker)
 
 
@@ -436,6 +444,12 @@ def completion_model(models: dict[str, str]) -> str:
 def chat_vision_model(models: dict[str, str]) -> str:
     """Provide a chat model that supports IMAGE input."""
     return models["chat_vision"]
+
+
+@pytest.fixture(scope="session")
+def chat_vision_judge_model(models: dict[str, str]) -> str:
+    """Provide a vision model used as a judge in image tests."""
+    return models["chat_vision_judge"]
 
 
 @pytest.fixture(scope="session")
@@ -825,15 +839,17 @@ async def aws_account_id(aws_session_info: tuple[str, str]) -> str:
 ANTHROPIC_MODEL_MAPPINGS: dict[str, dict[str, str]] = {
     "local": {
         "chat": "anthropic.claude-haiku-4-5-20251001-v1:0",
-        "chat_vision": "anthropic.claude-haiku-4-5-20251001-v1:0",
-        "chat_reasoning": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "chat_basic": "amazon.nova-micro-v1:0",
+        "chat_vision": "amazon.nova-lite-v1:0",
+        "chat_reasoning": "anthropic.claude-haiku-4-5-20251001-v1:0",
         "chat_system_as_messages": "anthropic.claude-opus-5",
-        "count_tokens": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+        "count_tokens": "anthropic.claude-haiku-4-5-20251001-v1:0",
     },
     "anthropic": {
         "chat": "claude-haiku-4-5-20251001",
+        "chat_basic": "claude-haiku-4-5-20251001",
         "chat_vision": "claude-haiku-4-5-20251001",
-        "chat_reasoning": "claude-sonnet-4-5-20250929",
+        "chat_reasoning": "claude-haiku-4-5-20251001",
         "chat_system_as_messages": "claude-opus-5",
         "count_tokens": "claude-haiku-4-5-20251001",
     },
@@ -841,8 +857,17 @@ ANTHROPIC_MODEL_MAPPINGS: dict[str, dict[str, str]] = {
 ANTHROPIC_MODEL_MAPPINGS["bedrock"] = {
     key: f"global.{value}" for key, value in ANTHROPIC_MODEL_MAPPINGS["local"].items()
 }
+# Amazon models have no ``global.`` profile and reject the Anthropic-native payload:
+# keep the official-API/Bedrock parity lane on Claude.
+ANTHROPIC_MODEL_MAPPINGS["bedrock"]["chat_basic"] = (
+    "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+)
+ANTHROPIC_MODEL_MAPPINGS["bedrock"]["chat_vision"] = (
+    "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+)
+# CountTokens accepts the base model ID directly, no inference profile needed.
 ANTHROPIC_MODEL_MAPPINGS["bedrock"]["count_tokens"] = (
-    "anthropic.claude-3-5-sonnet-20240620-v1:0"
+    "anthropic.claude-haiku-4-5-20251001-v1:0"
 )
 
 
@@ -870,6 +895,12 @@ def anthropic_models(use_anthropic_api: bool) -> dict[str, str]:
 def anthropic_chat_model(anthropic_models: dict[str, str]) -> str:
     """Provide the appropriate Anthropic chat model."""
     return anthropic_models["chat"]
+
+
+@pytest.fixture(scope="session")
+def anthropic_chat_basic_model(anthropic_models: dict[str, str]) -> str:
+    """Provide a cheap Anthropic-route chat model for API plumbing tests."""
+    return anthropic_models["chat_basic"]
 
 
 @pytest.fixture(scope="session")
@@ -1004,6 +1035,7 @@ def cohere_client(
 _UNAVAILABLE_MODEL_MARKERS = (
     "marked by provider as Legacy",  # AWS deprecation / 30-day inactivity lock-out
     "model identifier is invalid",  # absent from the cross-region inference catalog
+    "is not allowed from unsupported countries",  # geo-restricted provider (Meta Llama)
 )
 
 
@@ -1014,8 +1046,9 @@ def pytest_runtest_makereport(
     """Report failures caused by an unavailable model as xfail.
 
     A model deprecated by its provider (marked Legacy, or not invoked by the
-    account within AWS's 30-day window) or absent from the cross-region inference
-    catalog is an environmental limitation, not a defect.  Any live test whose
+    account within AWS's 30-day window), absent from the cross-region inference
+    catalog, or geo-restricted for the account's country is an environmental
+    limitation, not a defect.  Any live test whose
     failure output carries one of these markers -- including cases where it only
     surfaces in the server logs behind a bare status assertion -- is converted to
     ``xfail`` so the run stays informative without blocking the release.

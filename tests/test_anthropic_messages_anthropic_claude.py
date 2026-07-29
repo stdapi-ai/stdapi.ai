@@ -40,6 +40,15 @@ from tests.test_openai_chat_completions_anthropic_claude import (
     CLAUDE_ALL as _CLAUDE_ALL,
 )
 
+#: Claude models covering every system-tool code branch (old and new computer-use
+#: tool types, and the unsupported-model skip), for tools billed on every call.
+_CLAUDE_SYSTEM_TOOLS = (
+    "anthropic.claude-haiku-4-5-20251001-v1:0",
+    "anthropic.claude-sonnet-4-6",
+    "anthropic.claude-sonnet-5",
+    "anthropic.claude-opus-5",
+)
+
 # ===========================================================================
 # Module-level fixture: skip when running with --use-official-api
 # ===========================================================================
@@ -165,7 +174,7 @@ def anthropic_chat_model(
 # ===========================================================================
 
 
-@pytest.mark.parametrize("model_id", _CLAUDE_ALL)
+@pytest.mark.parametrize("model_id", _CLAUDE_SYSTEM_TOOLS)
 class TestTextEditorTool:
     """Tests for the ``str_replace_based_edit_tool`` (text editor) on Claude models.
 
@@ -203,7 +212,7 @@ class TestTextEditorTool:
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[{"role": "user", "content": "Say hello."}],
             tools=[_TEXT_EDITOR_TOOL],  # type: ignore[list-item]
         )
@@ -228,7 +237,7 @@ class TestTextEditorTool:
         """
         response = anthropic_client.messages.create(  # type: ignore[call-overload]
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[{"role": "user", "content": "View the file /etc/hostname"}],
             tools=[_TEXT_EDITOR_TOOL],
             tool_choice={"type": "any"},
@@ -254,7 +263,7 @@ class TestTextEditorTool:
         """
         response = anthropic_client.messages.create(  # type: ignore[call-overload]
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[{"role": "user", "content": "List the files in /tmp"}],
             tools=[_TEXT_EDITOR_TOOL],
             tool_choice={"type": "any"},
@@ -279,7 +288,7 @@ class TestTextEditorTool:
         """
         response = anthropic_client.messages.create(  # type: ignore[call-overload]
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[{"role": "user", "content": "View lines 1 to 5 of /etc/hosts"}],
             tools=[_TEXT_EDITOR_TOOL],
             tool_choice={"type": "any"},
@@ -306,7 +315,7 @@ class TestTextEditorTool:
 
         resp1 = anthropic_client.messages.create(  # type: ignore[call-overload]
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[{"role": "user", "content": user_prompt}],
             tools=tools,
             tool_choice={"type": "any"},
@@ -319,7 +328,7 @@ class TestTextEditorTool:
 
         resp2 = anthropic_client.messages.create(
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[
                 {"role": "user", "content": user_prompt},
                 {"role": "assistant", "content": list(resp1.content)},
@@ -373,7 +382,7 @@ class TestTextEditorTool:
         for _ in range(5):
             resp = anthropic_client.messages.create(  # type: ignore[call-overload]
                 model=anthropic_chat_model,
-                max_tokens=4096,
+                max_tokens=1024,
                 messages=messages,
                 tools=tools,
                 tool_choice={"type": "any"},
@@ -444,7 +453,7 @@ class TestTextEditorTool:
         """
         response = anthropic_client.messages.create(  # type: ignore[call-overload]
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[
                 {
                     "role": "user",
@@ -483,7 +492,7 @@ class TestTextEditorTool:
 
         resp1 = anthropic_client.messages.create(  # type: ignore[call-overload]
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[{"role": "user", "content": user_prompt}],
             tools=tools,
             tool_choice={"type": "any"},
@@ -512,7 +521,7 @@ class TestTextEditorTool:
 
         resp2 = anthropic_client.messages.create(  # type: ignore[call-overload]
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[
                 {"role": "user", "content": user_prompt},
                 {"role": "assistant", "content": list(resp1.content)},
@@ -554,7 +563,7 @@ class TestTextEditorTool:
 
         resp1 = anthropic_client.messages.create(  # type: ignore[call-overload]
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[{"role": "user", "content": user_prompt}],
             tools=tools,
             tool_choice={"type": "any"},
@@ -567,7 +576,7 @@ class TestTextEditorTool:
         assert tool_block.id
         resp2 = anthropic_client.messages.create(
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[
                 {"role": "user", "content": user_prompt},
                 {"role": "assistant", "content": list(resp1.content)},
@@ -603,7 +612,7 @@ class TestTextEditorTool:
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[{"role": "user", "content": "Say hello."}],
             tools=[{**_TEXT_EDITOR_TOOL, "max_characters": 1000}],  # type: ignore[list-item]
         )
@@ -622,7 +631,7 @@ class TestTextEditorTool:
         """
         response = anthropic_client.messages.create(  # type: ignore[call-overload]
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[{"role": "user", "content": "View the file /etc/hostname"}],
             tools=[{**_TEXT_EDITOR_TOOL, "max_characters": 1000}],
             tool_choice={"type": "any"},
@@ -650,7 +659,7 @@ class TestTextEditorTool:
 
         resp1 = anthropic_client.messages.create(  # type: ignore[call-overload]
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[{"role": "user", "content": user_prompt}],
             tools=tools,
             tool_choice={"type": "any"},
@@ -663,7 +672,7 @@ class TestTextEditorTool:
 
         resp2 = anthropic_client.messages.create(
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[
                 {"role": "user", "content": user_prompt},
                 {"role": "assistant", "content": list(resp1.content)},
@@ -689,7 +698,7 @@ class TestTextEditorTool:
 # ===========================================================================
 
 
-@pytest.mark.parametrize("model_id", _CLAUDE_ALL)
+@pytest.mark.parametrize("model_id", _CLAUDE_SYSTEM_TOOLS)
 class TestBashTool:
     """Tests for the bash system tool (``bash_20250124``) on Claude models.
 
@@ -722,7 +731,7 @@ class TestBashTool:
         extra_headers = {"anthropic-beta": _BASH_BETA} if use_anthropic_api else {}
         response = anthropic_client.messages.create(
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[{"role": "user", "content": "Say hello."}],
             tools=[_BASH_TOOL],  # type: ignore[list-item]
             extra_headers=extra_headers,
@@ -749,7 +758,7 @@ class TestBashTool:
         extra_headers = {"anthropic-beta": _BASH_BETA} if use_anthropic_api else {}
         response = anthropic_client.messages.create(  # type: ignore[call-overload]
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[{"role": "user", "content": "Run: echo hello_test"}],
             tools=[_BASH_TOOL],
             tool_choice={"type": "any"},
@@ -782,7 +791,7 @@ class TestBashTool:
 
         resp1 = anthropic_client.messages.create(  # type: ignore[call-overload]
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[{"role": "user", "content": user_prompt}],
             tools=tools,
             tool_choice={"type": "any"},
@@ -796,7 +805,7 @@ class TestBashTool:
 
         resp2 = anthropic_client.messages.create(
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[
                 {"role": "user", "content": user_prompt},
                 {"role": "assistant", "content": list(resp1.content)},
@@ -838,7 +847,7 @@ class TestBashTool:
 
         resp1 = anthropic_client.messages.create(  # type: ignore[call-overload]
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[{"role": "user", "content": user_prompt}],
             tools=tools,
             tool_choice={"type": "any"},
@@ -852,7 +861,7 @@ class TestBashTool:
         assert tool_block.id
         resp2 = anthropic_client.messages.create(
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[
                 {"role": "user", "content": user_prompt},
                 {"role": "assistant", "content": list(resp1.content)},
@@ -896,7 +905,7 @@ class TestBashTool:
 
         resp1 = anthropic_client.messages.create(  # type: ignore[call-overload]
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[{"role": "user", "content": user_prompt}],
             tools=tools,
             tool_choice={"type": "any"},
@@ -910,7 +919,7 @@ class TestBashTool:
         assert tool_block.id
         resp2 = anthropic_client.messages.create(
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[
                 {"role": "user", "content": user_prompt},
                 {"role": "assistant", "content": list(resp1.content)},
@@ -936,7 +945,7 @@ class TestBashTool:
 # ===========================================================================
 
 
-@pytest.mark.parametrize("model_id", _CLAUDE_ALL)
+@pytest.mark.parametrize("model_id", _CLAUDE_SYSTEM_TOOLS)
 class TestMemoryTool:
     """Tests for the memory system tool (``memory_20250818``) on Claude models.
 
@@ -974,7 +983,7 @@ class TestMemoryTool:
         extra_headers = {"anthropic-beta": _MEMORY_BETA} if use_anthropic_api else {}
         response = anthropic_client.messages.create(
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[{"role": "user", "content": "Say hello."}],
             tools=[_MEMORY_TOOL],  # type: ignore[list-item]
             extra_headers=extra_headers,
@@ -1002,7 +1011,7 @@ class TestMemoryTool:
         extra_headers = {"anthropic-beta": _MEMORY_BETA} if use_anthropic_api else {}
         response = anthropic_client.messages.create(  # type: ignore[call-overload]
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[
                 {
                     "role": "user",
@@ -1038,7 +1047,7 @@ class TestMemoryTool:
         extra_headers = {"anthropic-beta": _MEMORY_BETA} if use_anthropic_api else {}
         response = anthropic_client.messages.create(  # type: ignore[call-overload]
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[
                 {
                     "role": "user",
@@ -1076,7 +1085,7 @@ class TestMemoryTool:
 
         resp1 = anthropic_client.messages.create(  # type: ignore[call-overload]
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[{"role": "user", "content": user_prompt}],
             tools=tools,
             tool_choice={"type": "any"},
@@ -1090,7 +1099,7 @@ class TestMemoryTool:
 
         resp2 = anthropic_client.messages.create(
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[
                 {"role": "user", "content": user_prompt},
                 {"role": "assistant", "content": list(resp1.content)},
@@ -1168,7 +1177,7 @@ class TestCodeExecutionTool:
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[{"role": "user", "content": "Say hello."}],
             tools=[_CODE_EXECUTION_TOOL],  # type: ignore[list-item]
         )
@@ -1187,7 +1196,7 @@ class TestCodeExecutionTool:
         """
         response = anthropic_client.messages.create(  # type: ignore[call-overload]
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[{"role": "user", "content": "Compute 2 + 2 using code."}],
             tools=[_CODE_EXECUTION_TOOL],
             tool_choice={"type": "any"},
@@ -1216,7 +1225,7 @@ class TestCodeExecutionTool:
 
         resp1 = anthropic_client.messages.create(  # type: ignore[call-overload]
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[{"role": "user", "content": user_prompt}],
             tools=tools,
             tool_choice={"type": "any"},
@@ -1229,7 +1238,7 @@ class TestCodeExecutionTool:
 
         resp2 = anthropic_client.messages.create(
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[
                 {"role": "user", "content": user_prompt},
                 {"role": "assistant", "content": list(resp1.content)},
@@ -1266,7 +1275,7 @@ class TestCodeExecutionTool:
 
         resp1 = anthropic_client.messages.create(  # type: ignore[call-overload]
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[{"role": "user", "content": user_prompt}],
             tools=tools,
             tool_choice={"type": "any"},
@@ -1279,7 +1288,7 @@ class TestCodeExecutionTool:
         assert tool_block.id
         resp2 = anthropic_client.messages.create(
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[
                 {"role": "user", "content": user_prompt},
                 {"role": "assistant", "content": list(resp1.content)},
@@ -1305,7 +1314,7 @@ class TestCodeExecutionTool:
 # ===========================================================================
 
 
-@pytest.mark.parametrize("model_id", _CLAUDE_ALL)
+@pytest.mark.parametrize("model_id", _CLAUDE_SYSTEM_TOOLS)
 class TestComputerUseTool:
     """Tests for the computer use system tool on Claude models.
 
@@ -1435,7 +1444,7 @@ class TestComputerUseTool:
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[{"role": "user", "content": "Take a screenshot."}],
             tools=[self._computer_tool(anthropic_chat_model)],  # type: ignore[list-item]
             extra_headers=self._beta_headers(anthropic_chat_model, use_anthropic_api),
@@ -1458,7 +1467,7 @@ class TestComputerUseTool:
         """
         response = anthropic_client.messages.create(  # type: ignore[call-overload]
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[{"role": "user", "content": "Take a screenshot of the screen."}],
             tools=[self._computer_tool(anthropic_chat_model)],
             tool_choice={"type": "any"},
@@ -1497,7 +1506,7 @@ class TestComputerUseTool:
 
         resp1 = anthropic_client.messages.create(
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[{"role": "user", "content": user_prompt}],
             tools=tools,  # type: ignore[arg-type]
             extra_headers=extra_headers,
@@ -1511,7 +1520,7 @@ class TestComputerUseTool:
 
         resp2 = anthropic_client.messages.create(
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[
                 {"role": "user", "content": user_prompt},
                 {"role": "assistant", "content": list(resp1.content)},
@@ -1553,7 +1562,7 @@ class TestComputerUseTool:
         # Provide the screenshot up-front so Claude can see the desktop immediately
         resp = anthropic_client.messages.create(  # type: ignore[call-overload]
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[
                 {
                     "role": "user",
@@ -1628,6 +1637,7 @@ class TestWebSearchTool:
                 "these tests only run without --use-official-api"
             )
 
+    @pytest.mark.expensive
     def test_basic(self, anthropic_client: Anthropic) -> None:
         """Basic web search on Nova Premier returns a valid response.
 
@@ -1638,7 +1648,7 @@ class TestWebSearchTool:
         """
         response = anthropic_client.messages.create(
             model=self.NOVA_PREMIER_MODEL,
-            max_tokens=2048,
+            max_tokens=256,
             messages=[
                 {
                     "role": "user",
@@ -1651,6 +1661,7 @@ class TestWebSearchTool:
         assert response.role == "assistant"
         assert len(response.content) >= 1
 
+    @pytest.mark.expensive
     def test_streaming(self, anthropic_client: Anthropic) -> None:
         """Streaming with web search on Nova Premier completes without error.
 
@@ -1660,7 +1671,7 @@ class TestWebSearchTool:
         """
         with anthropic_client.messages.stream(
             model=self.NOVA_PREMIER_MODEL,
-            max_tokens=2048,
+            max_tokens=256,
             messages=[
                 {"role": "user", "content": "What is the current weather in Seattle?"}
             ],
@@ -1871,7 +1882,7 @@ class TestWebFetchTool:
 # ===========================================================================
 
 
-@pytest.mark.parametrize("model_id", _CLAUDE_ALL)
+@pytest.mark.parametrize("model_id", _CLAUDE_SYSTEM_TOOLS)
 class TestMixedServerAndCustomTools:
     """Tests combining Anthropic system tools with user-defined custom tools.
 
@@ -1893,7 +1904,7 @@ class TestMixedServerAndCustomTools:
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[{"role": "user", "content": "Say hello in one word."}],
             tools=[
                 _BASH_TOOL,  # type: ignore[list-item]
@@ -1919,7 +1930,7 @@ class TestMixedServerAndCustomTools:
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_model,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[{"role": "user", "content": "Say hello."}],
             tools=[_BASH_TOOL, _TEXT_EDITOR_TOOL],  # type: ignore[list-item]
         )

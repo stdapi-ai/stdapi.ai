@@ -85,7 +85,7 @@ class TestCodeExecutionTool:
 
         response = anthropic_client.messages.create(
             model=_NOVA_2_LITE,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[
                 {
                     "role": "user",
@@ -135,7 +135,7 @@ class TestCodeExecutionTool:
         # ── Turn 1 ──────────────────────────────────────────────────────────
         resp1 = anthropic_client.messages.create(
             model=_NOVA_2_LITE,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[
                 {
                     "role": "user",
@@ -165,7 +165,7 @@ class TestCodeExecutionTool:
         # ── Turn 2 ──────────────────────────────────────────────────────────
         resp2 = anthropic_client.messages.create(
             model=_NOVA_2_LITE,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[
                 {
                     "role": "user",
@@ -210,7 +210,7 @@ class TestCodeExecutionTool:
 
         response = anthropic_client.messages.create(
             model=_NOVA_2_LITE,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[
                 {
                     "role": "user",
@@ -264,7 +264,7 @@ class TestCodeExecutionToolStreaming:
 
         with anthropic_client.messages.stream(
             model=_NOVA_2_LITE,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[
                 {
                     "role": "user",
@@ -315,7 +315,7 @@ class TestCodeExecutionToolStreaming:
 
         with anthropic_client.messages.stream(
             model=_NOVA_2_LITE,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[{"role": "user", "content": "Compute 4 ** 4 using code."}],
             tools=[_CODE_EXECUTION_TOOL],  # type: ignore[list-item]
         ) as stream:
@@ -344,7 +344,7 @@ class TestCodeExecutionToolStreaming:
         # ── Turn 1 ──────────────────────────────────────────────────────────
         with anthropic_client.messages.stream(
             model=_NOVA_2_LITE,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[{"role": "user", "content": "Compute 5 ** 5 using code."}],
             tools=[_CODE_EXECUTION_TOOL],  # type: ignore[list-item]
         ) as stream:
@@ -373,7 +373,7 @@ class TestCodeExecutionToolStreaming:
         # ── Turn 2 ──────────────────────────────────────────────────────────
         with anthropic_client.messages.stream(
             model=_NOVA_2_LITE,
-            max_tokens=4096,
+            max_tokens=1024,
             messages=[
                 {"role": "user", "content": "Compute 5 ** 5 using code."},
                 {"role": "assistant", "content": resp1.content},

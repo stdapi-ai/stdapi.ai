@@ -108,7 +108,6 @@ class TestAmazonNovaEmbeddings:
         assert isinstance(item.embedding, list)
         assert len(item.embedding) > 0
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", NOVA_ALL)
     def test_image_single(
         self,
@@ -132,7 +131,6 @@ class TestAmazonNovaEmbeddings:
         assert isinstance(item.embedding, list)
         assert len(item.embedding) > 0
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", NOVA_SAMPLE)
     def test_image_batch(
         self,
@@ -157,7 +155,6 @@ class TestAmazonNovaEmbeddings:
             assert isinstance(item.embedding, list)
             assert len(item.embedding) > 0
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", NOVA_SAMPLE)
     def test_mixed_text_image_batch(
         self,
@@ -190,7 +187,6 @@ class TestAmazonNovaEmbeddings:
             assert isinstance(item.embedding, list)
             assert len(item.embedding) > 0
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", NOVA_ALL)
     def test_audio_single(
         self,
@@ -217,7 +213,7 @@ class TestAmazonNovaEmbeddings:
         assert isinstance(item.embedding, list)
         assert len(item.embedding) > 0
 
-    @pytest.mark.expensive
+    @pytest.mark.slow
     @pytest.mark.parametrize("model_id", NOVA_ALL)
     def test_video_single(
         self,
@@ -249,7 +245,6 @@ class TestAmazonNovaEmbeddings:
         assert isinstance(item.embedding, list)
         assert len(item.embedding) > 0
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", NOVA_SAMPLE)
     def test_multimodal_batch(
         self,
@@ -283,7 +278,6 @@ class TestAmazonNovaEmbeddings:
             assert isinstance(item.embedding, list)
             assert len(item.embedding) > 0
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", NOVA_SAMPLE)
     def test_image_with_dimensions(
         self,
@@ -309,7 +303,6 @@ class TestAmazonNovaEmbeddings:
         assert isinstance(item.embedding, list)
         assert len(item.embedding) == dimensions
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", NOVA_SAMPLE)
     def test_clustering_purpose(
         self, openai_client: OpenAI, use_official_api: bool, model_id: str
@@ -336,7 +329,6 @@ class TestAmazonNovaEmbeddings:
             assert isinstance(item.embedding, list)
             assert len(item.embedding) > 0
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", NOVA_SAMPLE)
     def test_force_s3_data_with_small_image(
         self,
@@ -367,7 +359,6 @@ class TestAmazonNovaEmbeddings:
         assert isinstance(item.embedding, list)
         assert len(item.embedding) > 0
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", NOVA_SAMPLE)
     def test_force_s3_data_with_audio(
         self,
@@ -394,7 +385,7 @@ class TestAmazonNovaEmbeddings:
         assert isinstance(item.embedding, list)
         assert len(item.embedding) > 0
 
-    @pytest.mark.expensive
+    @pytest.mark.slow
     @pytest.mark.parametrize("model_id", NOVA_SAMPLE)
     def test_force_s3_data_with_video(
         self,
@@ -425,7 +416,6 @@ class TestAmazonNovaEmbeddings:
         assert isinstance(item.embedding, list)
         assert len(item.embedding) > 0
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", NOVA_SAMPLE)
     def test_force_s3_data_with_multimodal_batch(
         self,

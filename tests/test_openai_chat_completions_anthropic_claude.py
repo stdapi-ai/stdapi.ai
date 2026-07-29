@@ -13,8 +13,9 @@ The gateway detects them by name and translates to Bedrock
 Tool responses use standard OpenAI ``tool_calls`` + ``tool`` role messages
 instead of Anthropic ``tool_use`` / ``tool_result`` blocks.
 
-All tests that require actual model inference are marked ``@pytest.mark.expensive``.
-Tests that only validate error paths are not expensive.
+Tests that only exercise the cheap ``_CLAUDE_CHEAP`` (Haiku 4.5) model run
+unmarked by default. ``@pytest.mark.expensive`` is reserved for tests that
+sweep the full ``CLAUDE_ALL`` model matrix (Opus/Fable tiers).
 
 Tests are always skipped when ``--use-official-api`` is set because Anthropic
 Claude is not available on the official OpenAI API.
@@ -72,7 +73,6 @@ _WEB_FETCH_TOOL: dict[str, object] = {
 
 #: Anthropic models supporting reasoning.
 CLAUDE_ALL = (
-    "anthropic.claude-3-7-sonnet-20250219-v1:0",
     "anthropic.claude-fable-5",
     "anthropic.claude-haiku-4-5-20251001-v1:0",
     # "anthropic.claude-opus-4-20250514-v1:0", # Disabled, no more available
@@ -141,7 +141,6 @@ class TestTextEditorTool:
 
     # --- acceptance ---
 
-    @pytest.mark.expensive
     def test_accepted(self, openai_client: OpenAI, use_official_api: bool) -> None:
         """Text editor tool definition is accepted without error.
 
@@ -163,7 +162,6 @@ class TestTextEditorTool:
 
     # --- view command ---
 
-    @pytest.mark.expensive
     def test_view_file_triggers_tool_use(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
@@ -197,7 +195,6 @@ class TestTextEditorTool:
         assert args.get("command") == "view"
         assert args.get("path")
 
-    @pytest.mark.expensive
     def test_view_directory_triggers_tool_use(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
@@ -225,7 +222,6 @@ class TestTextEditorTool:
         assert tc.id
         assert _tool_call_args(tc).get("command") == "view"
 
-    @pytest.mark.expensive
     def test_view_file_with_range_emits_view_command(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
@@ -253,7 +249,6 @@ class TestTextEditorTool:
         assert tc.id
         assert _tool_call_args(tc).get("command") == "view"
 
-    @pytest.mark.expensive
     def test_view_multiturn(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
@@ -310,7 +305,6 @@ class TestTextEditorTool:
 
     # --- str_replace command ---
 
-    @pytest.mark.expensive
     def test_str_replace_command_shape(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
@@ -403,7 +397,6 @@ class TestTextEditorTool:
 
     # --- create command ---
 
-    @pytest.mark.expensive
     def test_create_command_shape(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
@@ -442,7 +435,6 @@ class TestTextEditorTool:
 
     # --- insert command ---
 
-    @pytest.mark.expensive
     def test_insert_command_shape(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
@@ -524,7 +516,6 @@ class TestTextEditorTool:
 
     # --- error result ---
 
-    @pytest.mark.expensive
     def test_error_tool_result_accepted(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
@@ -586,7 +577,6 @@ class TestTextEditorTool:
 
     # --- max_characters ---
 
-    @pytest.mark.expensive
     def test_max_characters_accepted(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
@@ -616,7 +606,6 @@ class TestTextEditorTool:
         assert len(resp.choices) >= 1
         assert resp.choices[0].message.role == "assistant"
 
-    @pytest.mark.expensive
     def test_max_characters_triggers_tool_use(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
@@ -655,7 +644,6 @@ class TestTextEditorTool:
         assert tc.function.name == "str_replace_based_edit_tool"
         assert "command" in _tool_call_args(tc)
 
-    @pytest.mark.expensive
     def test_max_characters_multiturn(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
@@ -738,7 +726,6 @@ class TestBashTool:
     - A restart acknowledgement as tool result accepted
     """
 
-    @pytest.mark.expensive
     def test_accepted(self, openai_client: OpenAI, use_official_api: bool) -> None:
         """Bash tool definition is accepted without error.
 
@@ -758,7 +745,6 @@ class TestBashTool:
         assert len(resp.choices) >= 1
         assert resp.choices[0].message.role == "assistant"
 
-    @pytest.mark.expensive
     def test_accepted_via_function_format(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
@@ -789,7 +775,6 @@ class TestBashTool:
         assert tc.type == "function"
         assert tc.function.name == "bash"
 
-    @pytest.mark.expensive
     def test_triggers_tool_use(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
@@ -820,7 +805,6 @@ class TestBashTool:
         assert tc.function.name == "bash"
         assert _tool_call_args(tc)  # non-empty; key name varies by model version
 
-    @pytest.mark.expensive
     def test_multiturn(self, openai_client: OpenAI, use_official_api: bool) -> None:
         """Bash multi-turn: command in Turn 1, stdout tool result in Turn 2.
 
@@ -875,7 +859,6 @@ class TestBashTool:
         assert resp2.choices[0].finish_reason == "stop"
         assert resp2.choices[0].message.content
 
-    @pytest.mark.expensive
     def test_command_error_output_accepted(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
@@ -935,7 +918,6 @@ class TestBashTool:
         )
         assert resp2.choices[0].message.role == "assistant"
 
-    @pytest.mark.expensive
     def test_restart_tool_result_accepted(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
@@ -1012,7 +994,6 @@ class TestMemoryTool:
     - Multi-turn: view → directory listing tool result → accepted response
     """
 
-    @pytest.mark.expensive
     def test_accepted(self, openai_client: OpenAI, use_official_api: bool) -> None:
         """Memory tool definition is accepted without error.
 
@@ -1032,7 +1013,6 @@ class TestMemoryTool:
         assert len(resp.choices) >= 1
         assert resp.choices[0].message.role == "assistant"
 
-    @pytest.mark.expensive
     def test_auto_views_directory_first(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
@@ -1068,7 +1048,6 @@ class TestMemoryTool:
         assert args.get("command") == "view"
         assert args.get("path") == "/memories"
 
-    @pytest.mark.expensive
     def test_triggers_tool_use(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
@@ -1102,7 +1081,6 @@ class TestMemoryTool:
         assert tc.function.name == "memory"
         assert _tool_call_args(tc)
 
-    @pytest.mark.expensive
     def test_multiturn(self, openai_client: OpenAI, use_official_api: bool) -> None:
         """Memory multi-turn: view → directory listing tool result → accepted response.
 
@@ -1518,7 +1496,6 @@ class TestMixedServerAndCustomTools:
     - Two system tools together (bash + text_editor): accepted
     """
 
-    @pytest.mark.expensive
     def test_server_tool_with_custom_tool(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
@@ -1550,7 +1527,6 @@ class TestMixedServerAndCustomTools:
         assert len(resp.choices) >= 1
         assert resp.choices[0].message.role == "assistant"
 
-    @pytest.mark.expensive
     def test_multiple_server_tools_together(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
@@ -1606,7 +1582,6 @@ class TestAnthropicClaudeChatCompletions:
         msg = resp.choices[0].message
         assert msg.role == "assistant"
 
-    @pytest.mark.expensive
     def test_reasoning_effort_medium(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
@@ -1652,7 +1627,6 @@ class TestAnthropicClaudeChatCompletions:
         assert len(chunks) > 0
         assert len(accumulated_content) > 0
 
-    @pytest.mark.expensive
     def test_reasoning_effort_none_explicit_disable(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:

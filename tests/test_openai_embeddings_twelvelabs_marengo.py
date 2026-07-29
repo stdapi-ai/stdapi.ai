@@ -32,7 +32,6 @@ class TestTwelveLabsMarengoEmbeddings:
         assert isinstance(item.embedding, list)
         assert len(item.embedding) > 0
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", MARANGO_ALL)
     def test_image_single(
         self,
@@ -56,7 +55,7 @@ class TestTwelveLabsMarengoEmbeddings:
         assert isinstance(item.embedding, list)
         assert len(item.embedding) > 0
 
-    @pytest.mark.expensive
+    @pytest.mark.slow
     @pytest.mark.parametrize("model_id", MARANGO_ALL)
     def test_video_single(
         self,
@@ -124,7 +123,7 @@ class TestTwelveLabsMarengoEmbeddings:
                 model=model_id, input="Dims not supported.", dimensions=128
             )
 
-    @pytest.mark.expensive
+    @pytest.mark.slow
     @pytest.mark.parametrize("model_id", MARANGO_ALL)
     def test_force_s3_data_with_small_image(
         self,
@@ -155,7 +154,7 @@ class TestTwelveLabsMarengoEmbeddings:
         assert isinstance(item.embedding, list)
         assert len(item.embedding) > 0
 
-    @pytest.mark.expensive
+    @pytest.mark.slow
     @pytest.mark.parametrize("model_id", MARANGO_ALL)
     def test_force_s3_data_with_video(
         self,
@@ -186,7 +185,7 @@ class TestTwelveLabsMarengoEmbeddings:
         assert isinstance(item.embedding, list)
         assert len(item.embedding) > 0
 
-    @pytest.mark.expensive
+    @pytest.mark.slow
     @pytest.mark.parametrize("model_id", MARANGO_ALL)
     def test_force_s3_data_with_audio(
         self,
@@ -213,7 +212,7 @@ class TestTwelveLabsMarengoEmbeddings:
         assert isinstance(item.embedding, list)
         assert len(item.embedding) > 0
 
-    @pytest.mark.expensive
+    @pytest.mark.slow
     @pytest.mark.parametrize("model_id", MARANGO_ALL)
     def test_force_s3_data_with_mixed_batch(
         self,
@@ -253,7 +252,6 @@ class TestTwelveLabsMarengoEmbeddings:
             assert isinstance(item.embedding, list)
             assert len(item.embedding) > 0
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", [MARANGO_V3])
     def test_text_image_pair_v3(
         self,
@@ -283,7 +281,6 @@ class TestTwelveLabsMarengoEmbeddings:
         assert isinstance(item.embedding, list)
         assert len(item.embedding) > 0
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", [MARANGO_V2])
     def test_text_image_pair_not_combined_v2(
         self,

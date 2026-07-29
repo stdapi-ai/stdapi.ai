@@ -67,7 +67,7 @@ class TestAudioTranslations:
     - File format support and audio processing capabilities
     """
 
-    @pytest.mark.expensive
+    @pytest.mark.slow
     def test_core_translation_functionality(
         self, openai_client: OpenAI, sample_audio_file: bytes, transcription_model: str
     ) -> None:
@@ -100,7 +100,7 @@ class TestAudioTranslations:
         assert isinstance(response.text, str)
         assert len(response.text.strip()) > 0
 
-    @pytest.mark.expensive
+    @pytest.mark.slow
     def test_translation_specific_response_formats(
         self, openai_client: OpenAI, sample_audio_file: bytes, transcription_model: str
     ) -> None:
@@ -243,7 +243,7 @@ class TestAudioTranslations:
             for word in ["format", "supported", "invalid", "flac", "mp3", "wav"]
         )
 
-    @pytest.mark.expensive
+    @pytest.mark.slow
     def test_subtitle_format_translation(
         self, openai_client: OpenAI, sample_audio_file: bytes, transcription_model: str
     ) -> None:
@@ -325,7 +325,7 @@ class TestAudioTranslations:
             # Expected behavior for invalid/minimal audio - translation service should handle gracefully
             pass
 
-    @pytest.mark.expensive
+    @pytest.mark.slow
     def test_translation_usage_logged(
         self,
         test_client: TestClientType | None,
@@ -411,7 +411,7 @@ class TestAudioTranslationsJsonBody:
         assert error["type"] == "invalid_request_error"
         assert error["code"] == "model_not_found"
 
-    @pytest.mark.expensive
+    @pytest.mark.slow
     def test_json_body_translation(
         self,
         openai_client: OpenAI,
@@ -430,7 +430,7 @@ class TestAudioTranslationsJsonBody:
         assert isinstance(body.get("text"), str)
         assert len(body["text"].strip()) > 0
 
-    @pytest.mark.expensive
+    @pytest.mark.slow
     def test_json_body_translation_with_translate_settings(
         self,
         openai_client: OpenAI,

@@ -68,7 +68,6 @@ class TestCohereEmbeddings:
         assert isinstance(item.embedding, list)
         assert len(item.embedding) > 0
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", COHERE_ALL)
     def test_image_single(
         self,
@@ -113,7 +112,6 @@ class TestCohereEmbeddings:
             assert isinstance(item.embedding, list)
             assert len(item.embedding) > 0
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", COHERE_SAMPLE)
     def test_image_batch(
         self,
@@ -140,7 +138,6 @@ class TestCohereEmbeddings:
             assert isinstance(item.embedding, list)
             assert len(item.embedding) > 0
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", COHERE_SAMPLE)
     def test_mixed_text_image_batch(
         self,

@@ -532,7 +532,6 @@ class TestCohereRerankIntegration:
                 max_tokens_per_doc=512,
             )
 
-    @pytest.mark.expensive
     def test_over_one_hundred_documents_bill_two_units(
         self, cohere_client: cohere.ClientV2, live_rerank_model: str
     ) -> None:

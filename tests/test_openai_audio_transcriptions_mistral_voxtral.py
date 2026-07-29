@@ -17,7 +17,6 @@ VOXTRAL_SAMPLE = (VOXTRAL_MINI,)
 class TestMistralVoxtralTranscriptions:
     """Basic behavior checks for Mistral Voxtral transcription models."""
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", VOXTRAL_ALL)
     def test_basic_transcription_json(
         self,
@@ -64,7 +63,6 @@ class TestMistralVoxtralTranscriptions:
             audio_tokens = response.usage.input_token_details.audio_tokens
             assert audio_tokens is not None
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", VOXTRAL_ALL)
     def test_transcription_text_format(
         self,
@@ -88,7 +86,6 @@ class TestMistralVoxtralTranscriptions:
         assert isinstance(response, str)
         assert len(response.strip()) > 0
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", VOXTRAL_SAMPLE)
     def test_transcription_with_temperature(
         self,
@@ -114,7 +111,6 @@ class TestMistralVoxtralTranscriptions:
         assert isinstance(response.text, str)
         assert len(response.text.strip()) > 0
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", VOXTRAL_SAMPLE)
     def test_transcription_with_prompt(
         self,
@@ -140,7 +136,6 @@ class TestMistralVoxtralTranscriptions:
         assert isinstance(response.text, str)
         assert len(response.text.strip()) > 0
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", VOXTRAL_SAMPLE)
     def test_transcription_with_language(
         self,
@@ -166,7 +161,6 @@ class TestMistralVoxtralTranscriptions:
         assert isinstance(response.text, str)
         assert len(response.text.strip()) > 0
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", VOXTRAL_SAMPLE)
     def test_transcription_all_parameters(
         self,
@@ -196,7 +190,6 @@ class TestMistralVoxtralTranscriptions:
         assert hasattr(response, "usage")
         assert response.usage is not None
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", VOXTRAL_ALL)
     def test_streaming_transcription(
         self,
@@ -286,7 +279,6 @@ class TestMistralVoxtralTranscriptions:
                 response_format="verbose_json",
             )
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", VOXTRAL_SAMPLE)
     def test_logprobs_accepted_but_not_populated(
         self,

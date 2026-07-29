@@ -3840,7 +3840,7 @@ class TestStartPriceCatalogBackgroundLoad:
         assert "already completed" in str(events[-1]["error_detail"])
 
 
-@pytest.mark.expensive
+@pytest.mark.slow
 async def test_bedrock_model_pricing_coverage() -> None:
     """Every registered + deprecated-but-still-live Bedrock model must have pricing.
 

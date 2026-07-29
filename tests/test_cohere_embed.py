@@ -858,7 +858,6 @@ class TestCohereEmbedIntegration:
         (vector,) = response.embeddings.binary
         assert len(vector) > 0
 
-    @pytest.mark.expensive
     def test_embed_image(
         self,
         cohere_client: cohere.ClientV2,
@@ -884,7 +883,7 @@ class TestCohereEmbedIntegration:
         assert image.height > 0
         assert image.format
 
-    @pytest.mark.expensive
+    @pytest.mark.slow
     def test_every_advertised_model_embeds(
         self, cohere_client: cohere.ClientV2, live_client: httpx.Client
     ) -> None:
@@ -979,7 +978,6 @@ class TestCohereEmbedV1Integration:
         (vector,) = response.embeddings
         assert len(vector) > 0
 
-    @pytest.mark.expensive
     def test_embed_image(
         self,
         cohere_client_v1: cohere.Client,

@@ -19,6 +19,8 @@ if TYPE_CHECKING:
 NOVA_ALL = ("amazon.nova-2-lite-v1:0",)
 
 #: Nova Premier model — only available in US regions, where nova_grounding is supported.
+# TODO(EOL 2026-09-14): no other model accepts nova_grounding; re-probe Nova 2
+# Lite with explicit `us.` routing before this model retires.
 _NOVA_PREMIER = "amazon.nova-premier-v1:0"
 
 _GROUNDING_TOOL: list[dict[str, object]] = [
@@ -47,7 +49,6 @@ class TestNovaChatCompletions:
         assert msg.role == "assistant"
         assert msg.reasoning_content  # type: ignore[attr-defined]
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize("model", NOVA_ALL)
     def test_reasoning_effort_none_explicit_disable(
         self, openai_client: OpenAI, use_official_api: bool, model: str
@@ -67,6 +68,7 @@ class TestNovaChatCompletions:
 
     # --- System tool routing ---
 
+    @pytest.mark.expensive
     def test_nova_grounding_tool_name_auto_promoted_to_system_tool(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
@@ -134,6 +136,7 @@ class TestNovaChatCompletions:
 # ===========================================================================
 
 
+@pytest.mark.expensive
 class TestNovaGrounding:
     """Tests for nova_grounding web search via the OpenAI Chat Completions route.
 

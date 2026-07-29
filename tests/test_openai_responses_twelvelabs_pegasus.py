@@ -16,6 +16,7 @@ class TestTwelveLabsPegasusResponses:
     """OpenAI Responses API tests for TwelveLabs Pegasus video model."""
 
     @pytest.mark.expensive
+    @pytest.mark.slow
     def test_video_basic(
         self,
         openai_client: OpenAI,
@@ -48,6 +49,7 @@ class TestTwelveLabsPegasusResponses:
         assert response.output_text
 
     @pytest.mark.expensive
+    @pytest.mark.slow
     def test_video_streaming(
         self,
         openai_client: OpenAI,
@@ -87,7 +89,6 @@ class TestTwelveLabsPegasusResponses:
         )
         assert has_text_delta
 
-    @pytest.mark.expensive
     def test_no_video_returns_400(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
@@ -102,6 +103,7 @@ class TestTwelveLabsPegasusResponses:
             )
 
     @pytest.mark.expensive
+    @pytest.mark.slow
     def test_response_format_json_schema(
         self,
         openai_client: OpenAI,
@@ -144,6 +146,7 @@ class TestTwelveLabsPegasusResponses:
         json.loads(response.output_text)
 
     @pytest.mark.expensive
+    @pytest.mark.slow
     def test_tools_silently_ignored(
         self,
         openai_client: OpenAI,

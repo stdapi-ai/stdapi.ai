@@ -13,6 +13,9 @@ from stdapi import aws, server
 if TYPE_CHECKING:
     from collections.abc import Generator
 
+#: All tests in this module exercise the local implementation in-process.
+pytestmark = pytest.mark.local
+
 #: Task ARN returned by the fake ECS container metadata endpoint
 _TASK_ARN = "arn:aws:ecs:eu-west-3:123456789012:task/cluster/abcdef0123456789"
 

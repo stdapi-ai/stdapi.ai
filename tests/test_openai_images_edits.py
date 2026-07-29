@@ -38,7 +38,7 @@ class TestImagesEditsBasic:
             image=sample_image_file,
             mask=sample_mask_file,
             prompt="A blue circle in the masked area",
-            model="amazon.nova-canvas-v1:0",
+            model="stability.stable-image-inpaint-v1:0",
             size="512x512",
             n=1,
         )
@@ -71,7 +71,7 @@ class TestImagesEditsBasic:
             image=sample_image_file,
             mask=sample_mask_file,
             prompt="A colorful pattern",
-            model="amazon.nova-canvas-v1:0",
+            model="stability.stable-image-inpaint-v1:0",
             size="512x512",
             n=1,
             response_format="b64_json",
@@ -109,7 +109,7 @@ class TestImagesEditsBasic:
                 image=sample_image_file,
                 mask=invalid_mask,
                 prompt="A test image",
-                model="amazon.nova-canvas-v1:0",
+                model="stability.stable-image-inpaint-v1:0",
                 size="512x512",
             )
         validate_error_response(exc_info.value)
@@ -140,7 +140,7 @@ class TestImagesEditsBasic:
             f"{openai_client.base_url}images/edits",
             data={
                 "prompt": "test",
-                "model": "amazon.nova-canvas-v1:0",
+                "model": "stability.stable-image-inpaint-v1:0",
                 "size": "512x512",
                 "image[]": "not_a_file",
             },
@@ -170,10 +170,6 @@ class TestImagesEditsBasic:
             or "edit" in error_msg
         )
 
-    @pytest.mark.xfail(
-        reason="Multiple images are miss-interpreted as 'image[]' by FastAPI instead of 'image'."
-        "Currently, there is no model that support multiple images, so this is not an issue."
-    )
     def test_multiple_images_error(
         self, openai_client: OpenAI, sample_image_file: bytes
     ) -> None:
@@ -183,7 +179,7 @@ class TestImagesEditsBasic:
             openai_client.images.edit(
                 image=[sample_image_file, sample_image_file],
                 prompt="Edit this image",
-                model="amazon.nova-canvas-v1:0",
+                model="stability.stable-image-inpaint-v1:0",
                 size="512x512",
             )
 
@@ -249,7 +245,7 @@ class TestImagesEditsBasic:
             image=sample_image_file,
             mask=sample_mask_file,
             prompt="Add colorful elements",
-            model="amazon.nova-canvas-v1:0",
+            model="stability.stable-image-inpaint-v1:0",
             size="512x512",
             n=1,
             stream=True,
@@ -274,7 +270,7 @@ class TestImagesEditsBasic:
         response = openai_client.images.edit(
             image=sample_image_file,
             prompt="A test image",
-            model="amazon.nova-canvas-v1:0",
+            model="stability.stable-image-inpaint-v1:0",
             size="512x512",
             stream=True,
             partial_images=partial_images_value,
@@ -304,7 +300,7 @@ class TestImagesEditsBasic:
         }
         data_image = {
             "prompt": "A red square",
-            "model": "amazon.nova-canvas-v1:0",
+            "model": "stability.stable-image-inpaint-v1:0",
             "size": "512x512",
             "n": "1",
         }
@@ -333,7 +329,7 @@ class TestImagesEditsBasic:
         }
         data_image_array = {
             "prompt": "A blue circle",
-            "model": "amazon.nova-canvas-v1:0",
+            "model": "stability.stable-image-inpaint-v1:0",
             "size": "512x512",
             "n": "1",
         }
@@ -358,7 +354,7 @@ class TestImagesEditsBasic:
         # Test error case: no image provided
         data_no_image = {
             "prompt": "A test image",
-            "model": "amazon.nova-canvas-v1:0",
+            "model": "stability.stable-image-inpaint-v1:0",
             "size": "512x512",
             "n": "1",
         }
@@ -382,7 +378,7 @@ class TestImagesEditsBasic:
         # Test error case: invalid type for image[] (string instead of file)
         data_invalid_type = {
             "prompt": "A test image",
-            "model": "amazon.nova-canvas-v1:0",
+            "model": "stability.stable-image-inpaint-v1:0",
             "size": "512x512",
             "n": "1",
             "image[]": "not_a_file",  # String instead of file upload
@@ -416,7 +412,7 @@ class TestImagesEditsJsonBody:
         """Skip when running against the official API (model not available there)."""
         if use_official_api:
             pytest.skip(
-                "amazon.nova-canvas-v1:0 not available on the official OpenAI API"
+                "stability.stable-image-inpaint-v1:0 not available on the official OpenAI API"
             )
 
     @pytest.mark.expensive
@@ -433,7 +429,7 @@ class TestImagesEditsJsonBody:
         response = http_client.post(
             f"{openai_client.base_url}images/edits",
             json={
-                "model": "amazon.nova-canvas-v1:0",
+                "model": "stability.stable-image-inpaint-v1:0",
                 "prompt": "Make it look like a painting",
                 "images": [{"image_url": sample_image_file_base64}],
                 "response_format": "b64_json",
@@ -470,8 +466,8 @@ class TestImagesEditsJsonBody:
             response = http_client.post(
                 f"{openai_client.base_url}images/edits",
                 json={
-                    "model": "amazon.nova-canvas-v1:0",
-                    "prompt": "Add a subtle vignette effect",
+                    "model": "stability.stable-image-inpaint-v1:0",
+                    "prompt": "Make it darker",
                     "images": [{"file_id": uploaded.id}],
                     "response_format": "b64_json",
                     "size": "512x512",
@@ -500,7 +496,10 @@ class TestImagesEditsJsonBody:
         http_client = openai_client._client  # noqa: SLF001
         response = http_client.post(
             f"{openai_client.base_url}images/edits",
-            json={"model": "amazon.nova-canvas-v1:0", "prompt": "Make it darker"},
+            json={
+                "model": "stability.stable-image-inpaint-v1:0",
+                "prompt": "Make it darker",
+            },
             headers={"Authorization": f"Bearer {openai_client.api_key}"},
         )
         assert response.status_code == 400
@@ -518,7 +517,7 @@ class TestImagesEditsJsonBody:
         response = http_client.post(
             f"{openai_client.base_url}images/edits",
             json={
-                "model": "amazon.nova-canvas-v1:0",
+                "model": "stability.stable-image-inpaint-v1:0",
                 "prompt": "Make it darker",
                 "images": [{}],
             },

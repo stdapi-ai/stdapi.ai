@@ -11,10 +11,11 @@ available on AWS Bedrock, including:
   - Structured JSON output
   - Vision / image input
 
-All tests require actual Bedrock access and are therefore marked
-``@pytest.mark.expensive``.  Run with::
+All tests require actual Bedrock access and are marked both
+``@pytest.mark.expensive`` and ``@pytest.mark.slow``.  The markers are
+conjunctive, so run with::
 
-    pytest --expensive tests/test_openai_responses_multi_model.py
+    pytest --expensive --slow tests/test_openai_responses_multi_model.py
 
 A ``Claude`` model is included in every parametrized list as the reference
 baseline.  Feature-gated tests (streaming+tools) carry narrower parametrize
@@ -37,6 +38,9 @@ from openai import BadRequestError, NotFoundError
 if TYPE_CHECKING:
     from openai import OpenAI
 
+#: ~87 sequential live calls across many model families; requires --expensive --slow.
+pytestmark = pytest.mark.slow
+
 # ---------------------------------------------------------------------------
 # Model lists — one representative per family, prefer fast/cheap variants
 # ---------------------------------------------------------------------------
@@ -45,7 +49,7 @@ if TYPE_CHECKING:
 _BASIC_MODELS = pytest.mark.parametrize(
     "model",
     [
-        "anthropic.claude-sonnet-4-6",  # Claude (reference)
+        "anthropic.claude-haiku-4-5-20251001-v1:0",  # Claude (reference)
         "amazon.nova-micro-v1:0",  # Amazon Nova (cheapest)
         # "ai21.jamba-1-5-mini-v1:0",  # AI21 Jamba (SSM/Transformer hybrid, 256k ctx)
         "deepseek.v3-v1:0",  # DeepSeek V3 (fast non-reasoning)
@@ -81,7 +85,7 @@ _BASIC_MODELS = pytest.mark.parametrize(
 _TOOL_MODELS = pytest.mark.parametrize(
     "model",
     [
-        "anthropic.claude-sonnet-4-6",  # Claude (reference)
+        "anthropic.claude-haiku-4-5-20251001-v1:0",  # Claude (reference)
         "amazon.nova-lite-v1:0",  # Amazon Nova
         "amazon.nova-2-lite-v1:0",  # Amazon Nova 2
         # "ai21.jamba-1-5-mini-v1:0",  # AI21 Jamba Mini
@@ -106,7 +110,7 @@ _TOOL_MODELS = pytest.mark.parametrize(
 _STREAMING_TOOL_MODELS = pytest.mark.parametrize(
     "model",
     [
-        "anthropic.claude-sonnet-4-6",  # Claude (reference)
+        "anthropic.claude-haiku-4-5-20251001-v1:0",  # Claude (reference)
         "amazon.nova-lite-v1:0",  # Amazon Nova
         "amazon.nova-2-lite-v1:0",  # Amazon Nova 2
         # "ai21.jamba-1-5-mini-v1:0",  # AI21 Jamba Mini
@@ -410,7 +414,7 @@ def _make_1x1_red_png_b64() -> str:
 _VISION_MODELS = pytest.mark.parametrize(
     "model",
     [
-        "anthropic.claude-sonnet-4-6",  # Claude (reference)
+        "anthropic.claude-haiku-4-5-20251001-v1:0",  # Claude (reference)
         "amazon.nova-lite-v1:0",  # Amazon Nova
         pytest.param(
             "mistral.pixtral-large-2502-v1:0",

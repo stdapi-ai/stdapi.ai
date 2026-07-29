@@ -225,7 +225,6 @@ class TestTwelveLabsPegasusChatCompletions:
         # Verify it's valid JSON
         json.loads(content)
 
-    @pytest.mark.expensive
     def test_no_video_returns_400(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:

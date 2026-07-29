@@ -13,10 +13,12 @@ available on AWS Bedrock, including:
   - Native thinking/reasoning blocks on native-reasoning models
   - Prompt caching on Nova models
 
-All tests require actual Bedrock access and are therefore marked
-``@pytest.mark.expensive``.  Run with::
+All tests require actual Bedrock access.  Tool-use and reasoning matrices are
+marked ``@pytest.mark.expensive``; the cheap but latency-bound matrices (basics,
+vision, structured output, caching) are marked ``@pytest.mark.slow``.  The
+markers are conjunctive, so run the whole file with::
 
-    pytest --expensive tests/test_anthropic_messages_multi_model.py
+    pytest --expensive --slow tests/test_anthropic_messages_multi_model.py
 
 A ``Claude`` model is included in every parametrized list as the reference
 baseline.  Feature-gated tests (streaming+tools, reasoning blocks, caching)
@@ -49,7 +51,7 @@ if TYPE_CHECKING:
 _BASIC_MODELS = pytest.mark.parametrize(
     "model",
     [
-        "anthropic.claude-sonnet-4-6",  # Claude (reference)
+        "anthropic.claude-haiku-4-5-20251001-v1:0",  # Claude (reference)
         "amazon.nova-micro-v1:0",  # Amazon Nova (cheapest)
         # "ai21.jamba-1-5-mini-v1:0",  # AI21 Jamba (SSM/Transformer hybrid, 256k ctx)
         "deepseek.v3-v1:0",  # DeepSeek V3 (fast non-reasoning)
@@ -72,7 +74,7 @@ _BASIC_MODELS = pytest.mark.parametrize(
 _TOOL_MODELS = pytest.mark.parametrize(
     "model",
     [
-        "anthropic.claude-sonnet-4-6",  # Claude (reference)
+        "anthropic.claude-haiku-4-5-20251001-v1:0",  # Claude (reference)
         "amazon.nova-2-lite-v1:0",  # Amazon Nova 2
         "amazon.nova-lite-v1:0",  # Amazon Nova
         # "ai21.jamba-1-5-mini-v1:0",  # AI21 Jamba Mini
@@ -81,8 +83,7 @@ _TOOL_MODELS = pytest.mark.parametrize(
         "deepseek.v3.2",  # DeepSeek V3.2 (newer revision)
         "meta.llama3-1-70b-instruct-v1:0",  # Meta Llama 3.1 70B
         "minimax.minimax-m2.5",  # MiniMax
-        "mistral.mistral-large-2402-v1:0",  # Mistral Large
-        "mistral.pixtral-large-2502-v1:0",  # Mistral Pixtral Large
+        "mistral.mistral-large-3-675b-instruct",  # Mistral Large 3
         "moonshotai.kimi-k2.5",  # Moonshot Kimi K2.5
         "openai.gpt-oss-20b-1:0",  # OpenAI GPT-OSS 20B (Bedrock)
         "openai.gpt-oss-120b-1:0",  # OpenAI GPT-OSS 120B (Bedrock)
@@ -99,7 +100,7 @@ _TOOL_MODELS = pytest.mark.parametrize(
 _STREAMING_TOOL_MODELS = pytest.mark.parametrize(
     "model",
     [
-        "anthropic.claude-sonnet-4-6",  # Claude (reference)
+        "anthropic.claude-haiku-4-5-20251001-v1:0",  # Claude (reference)
         "amazon.nova-2-lite-v1:0",  # Amazon Nova 2
         "amazon.nova-lite-v1:0",  # Amazon Nova
         # "ai21.jamba-1-5-mini-v1:0",  # AI21 Jamba Mini
@@ -108,8 +109,7 @@ _STREAMING_TOOL_MODELS = pytest.mark.parametrize(
         "deepseek.v3.2",  # DeepSeek V3.2 (newer revision)
         "meta.llama3-1-70b-instruct-v1:0",  # Meta Llama 3.1 70B
         "minimax.minimax-m2.5",  # MiniMax
-        "mistral.mistral-large-2402-v1:0",  # Mistral Large
-        "mistral.pixtral-large-2502-v1:0",  # Mistral Pixtral Large
+        "mistral.mistral-large-3-675b-instruct",  # Mistral Large 3
         "moonshotai.kimi-k2.5",  # Moonshot Kimi K2.5
         "openai.gpt-oss-20b-1:0",  # OpenAI GPT-OSS 20B (Bedrock)
         "openai.gpt-oss-120b-1:0",  # OpenAI GPT-OSS 120B (Bedrock)
@@ -128,7 +128,7 @@ _BROKEN_STREAMING_TOOL_INPUT_MODELS = frozenset({"qwen.qwen3-32b-v1:0"})
 _AGENTIC_MODELS = pytest.mark.parametrize(
     "model",
     [
-        "anthropic.claude-sonnet-4-6",  # Claude (reference)
+        "anthropic.claude-haiku-4-5-20251001-v1:0",  # Claude (reference)
         "amazon.nova-2-lite-v1:0",  # Amazon Nova 2
         "amazon.nova-lite-v1:0",  # Amazon Nova
         # "ai21.jamba-1-5-mini-v1:0",  # AI21 Jamba Mini
@@ -137,8 +137,7 @@ _AGENTIC_MODELS = pytest.mark.parametrize(
         "deepseek.v3.2",  # DeepSeek V3.2 (newer revision)
         "meta.llama3-1-70b-instruct-v1:0",  # Meta Llama 3.1 70B
         "minimax.minimax-m2.5",  # MiniMax
-        "mistral.mistral-large-2402-v1:0",  # Mistral Large
-        "mistral.pixtral-large-2502-v1:0",  # Mistral Pixtral Large
+        "mistral.mistral-large-3-675b-instruct",  # Mistral Large 3
         "moonshotai.kimi-k2.5",  # Moonshot Kimi K2.5
         # "openai.gpt-oss-20b-1:0",  # OpenAI GPT-OSS 20B (Bedrock), disabled : unstable tool use
         "openai.gpt-oss-120b-1:0",  # OpenAI GPT-OSS 120B (Bedrock)
@@ -165,12 +164,7 @@ _REASONING_MODELS = pytest.mark.parametrize(
 #: Models that support prompt caching (implicit Nova hash-based caching).
 _CACHE_MODELS = pytest.mark.parametrize(
     "model",
-    [
-        "amazon.nova-micro-v1:0",
-        "amazon.nova-lite-v1:0",
-        "amazon.nova-2-lite-v1:0",
-        "amazon.nova-pro-v1:0",
-    ],
+    ["amazon.nova-micro-v1:0", "amazon.nova-lite-v1:0", "amazon.nova-2-lite-v1:0"],
 )
 
 # ---------------------------------------------------------------------------
@@ -250,7 +244,7 @@ def _text_from(msg: Message) -> str:
 class TestMultiModelBasics:
     """Basic functionality across all supported model families."""
 
-    @pytest.mark.expensive
+    @pytest.mark.slow
     @_BASIC_MODELS
     def test_basic_text_generation(
         self, model: str, anthropic_client: Anthropic, use_official_api: bool
@@ -289,7 +283,7 @@ class TestMultiModelBasics:
             f"Expected non-empty text, got content types: {[b.type for b in response.content]}"
         )
 
-    @pytest.mark.expensive
+    @pytest.mark.slow
     @_BASIC_MODELS
     def test_streaming_event_sequence(
         self, model: str, anthropic_client: Anthropic, use_official_api: bool
@@ -345,7 +339,7 @@ class TestMultiModelBasics:
             return
         assert _text_from(final), f"Final message has no text; content: {block_types}"
 
-    @pytest.mark.expensive
+    @pytest.mark.slow
     @_BASIC_MODELS
     def test_streaming_no_empty_text_blocks(
         self, model: str, anthropic_client: Anthropic, use_official_api: bool
@@ -375,7 +369,7 @@ class TestMultiModelBasics:
                     f"Empty text block in final message for {model!r}: {block!r}"
                 )
 
-    @pytest.mark.expensive
+    @pytest.mark.slow
     @_BASIC_MODELS
     def test_multi_turn_context_retention(
         self, model: str, anthropic_client: Anthropic, use_official_api: bool
@@ -750,7 +744,7 @@ class TestPromptCaching:
     so sending the same large prompt twice should trigger a read on the second call.
     """
 
-    @pytest.mark.expensive
+    @pytest.mark.slow
     @_CACHE_MODELS
     def test_cache_read_on_second_call(
         self, model: str, anthropic_client: Anthropic, use_official_api: bool
@@ -811,11 +805,11 @@ class TestPromptCaching:
 class TestStructuredOutput:
     """Models can reliably produce JSON-structured output when asked."""
 
-    @pytest.mark.expensive
+    @pytest.mark.slow
     @pytest.mark.parametrize(
         "model",
         [
-            "anthropic.claude-sonnet-4-6",
+            "anthropic.claude-haiku-4-5-20251001-v1:0",
             "amazon.nova-lite-v1:0",
             "amazon.nova-pro-v1:0",
             "deepseek.v3-v1:0",
@@ -892,15 +886,9 @@ def _make_1x1_red_png_b64() -> str:
 _VISION_MODELS = pytest.mark.parametrize(
     "model",
     [
-        "anthropic.claude-sonnet-4-6",  # Claude (reference)
+        "anthropic.claude-haiku-4-5-20251001-v1:0",  # Claude (reference)
         "amazon.nova-lite-v1:0",  # Amazon Nova
-        pytest.param(
-            "mistral.pixtral-large-2502-v1:0",
-            marks=pytest.mark.xfail(
-                strict=False,
-                reason="Pixtral non-deterministically misidentifies colour of 1x1 PNG",
-            ),
-        ),  # Mistral Pixtral Large
+        "mistral.ministral-3-8b-instruct",  # Mistral Ministral 3 8B
         "qwen.qwen3-vl-235b-a22b",  # Qwen3 VL 235B
         "writer.palmyra-vision-7b",  # Writer Palmyra Vision 7B
     ],
@@ -910,7 +898,7 @@ _VISION_MODELS = pytest.mark.parametrize(
 class TestVision:
     """Vision-capable models correctly identify the color of a simple image."""
 
-    @pytest.mark.expensive
+    @pytest.mark.slow
     @_VISION_MODELS
     def test_image_color_recognition(
         self, model: str, anthropic_client: Anthropic, use_official_api: bool

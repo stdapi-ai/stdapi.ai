@@ -83,7 +83,6 @@ class TestAmazonTitanEmbeddings:
         assert isinstance(item.embedding, list)
         assert len(item.embedding) == dimensions
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", TITAN_IMAGE_SAMPLE)
     def test_image_single(
         self,

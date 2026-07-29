@@ -31,7 +31,6 @@ class TestKimiK25ChatCompletions:
         msg = resp.choices[0].message
         assert msg.role == "assistant"
 
-    @pytest.mark.expensive
     @pytest.mark.parametrize("model", KIMI_ALL)
     def test_thinking_disabled(
         self, openai_client: OpenAI, use_official_api: bool, model: str
@@ -63,6 +62,7 @@ class TestKimiK25ChatCompletions:
                 {"role": "user", "content": "What is 1+1? Reply with the answer only."}
             ],
             extra_body={"enable_thinking": True},
+            max_completion_tokens=512,
         )
         assert hasattr(resp, "choices")
         assert len(resp.choices) >= 1
