@@ -929,6 +929,35 @@ class TestRegionRouterUnit:
 
 
 # ---------------------------------------------------------------------------
+# Group 8b — _bedrock_probe_url (pure logic, local botocore endpoint data only)
+# ---------------------------------------------------------------------------
+
+
+class TestBedrockProbeUrl:
+    """_bedrock_probe_url: partition-correct hostname resolution, not a hardcoded suffix."""
+
+    @pytest.mark.parametrize(
+        ("region", "url"),
+        [
+            ("us-east-1", "https://bedrock-runtime.us-east-1.amazonaws.com"),
+            # Regression: the aws-eusc and aws-cn partitions must not be probed
+            # on the never-resolving .amazonaws.com suffix.
+            ("eusc-de-east-1", "https://bedrock-runtime.eusc-de-east-1.amazonaws.eu"),
+            ("cn-north-1", "https://bedrock-runtime.cn-north-1.amazonaws.com.cn"),
+            # A region with no known endpoint resolves to None instead of raising.
+            ("not-a-real-region", None),
+        ],
+    )
+    def test_region_resolves_to_its_own_partition_hostname(
+        self, region: RegionName, url: str | None
+    ) -> None:
+        """Each region is probed on the hostname of its own AWS partition."""
+        import stdapi.region_routing as _rr_mod  # noqa: PLC0415
+
+        assert _rr_mod._bedrock_probe_url(region) == url  # noqa: SLF001
+
+
+# ---------------------------------------------------------------------------
 # Group 9 — measure_region_latencies (pure logic, no real network)
 # ---------------------------------------------------------------------------
 

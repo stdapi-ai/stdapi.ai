@@ -16,12 +16,15 @@ from typing import TYPE_CHECKING
 from aiohttp import ClientError as AIOHTTPClientError
 from aiohttp import ClientSession, ClientTimeout
 
-from stdapi.config import SETTINGS
+from stdapi.config import AWS_SESSION, SETTINGS
 from stdapi.monitoring import RegionLatenciesStatsKeys, log_error_details
 from stdapi.server import HTTP_CLIENT_HEADERS
 
 if TYPE_CHECKING:
     from types_aiobotocore_bedrock.literals import RegionName
+
+#: Resolves each region's partition-correct hostname (aws / aws-cn / aws-eusc / ...).
+_ENDPOINT_RESOLVER = AWS_SESSION.get_component("endpoint_resolver")
 
 
 #: AWS error codes that trigger quota-based exponential backoff.
@@ -260,16 +263,19 @@ REGION_ROUTER: RegionRouter | None = (
 )
 
 
-async def _single_probe(session: ClientSession, url: str) -> float:
+async def _single_probe(session: ClientSession, url: str | None) -> float:
     """Runs a single HEAD probe and returns latency in ms.
 
     Args:
         session: Shared aiohttp ClientSession to reuse across probes.
-        url: Endpoint URL to probe.
+        url: Endpoint URL to probe, or None if the region's endpoint could not
+            be resolved (returns inf without probing).
 
     Returns:
         Round-trip latency in milliseconds, or inf if the probe fails.
     """
+    if url is None:
+        return float("inf")
     t0 = monotonic()
     try:
         async with session.head(url):
@@ -277,6 +283,23 @@ async def _single_probe(session: ClientSession, url: str) -> float:
     except TimeoutError, AIOHTTPClientError, OSError:
         return float("inf")
     return (monotonic() - t0) * 1000
+
+
+def _bedrock_probe_url(region: RegionName) -> str | None:
+    """Return the partition-correct bedrock-runtime probe URL for *region*.
+
+    Uses botocore's endpoint resolver so aws-cn/aws-eusc/... regions probe their
+    own hostname instead of a hardcoded ``.amazonaws.com`` suffix that would
+    never resolve for them.
+
+    Args:
+        region: AWS region to resolve.
+
+    Returns:
+        HTTPS probe URL, or None if the region has no known endpoint.
+    """
+    endpoint = _ENDPOINT_RESOLVER.construct_endpoint("bedrock-runtime", region)
+    return f"https://{endpoint['hostname']}" if endpoint else None
 
 
 async def measure_region_latencies() -> (
@@ -293,20 +316,15 @@ async def measure_region_latencies() -> (
         return None
 
     probes_count = 3
+    probe_urls = [
+        _bedrock_probe_url(region)
+        for region in ORDERED_BEDROCK_REGIONS
+        for _ in range(probes_count)
+    ]
     async with ClientSession(
         headers=HTTP_CLIENT_HEADERS, timeout=ClientTimeout(total=5)
     ) as session:
-        raw = list(
-            await gather(
-                *(
-                    _single_probe(
-                        session, f"https://bedrock-runtime.{region}.amazonaws.com"
-                    )
-                    for region in ORDERED_BEDROCK_REGIONS
-                    for _ in range(probes_count)
-                )
-            )
-        )
+        raw = list(await gather(*(_single_probe(session, url) for url in probe_urls)))
 
     results: dict[RegionName, dict[RegionLatenciesStatsKeys, float]] = {}
     for i, region in enumerate(ORDERED_BEDROCK_REGIONS):
