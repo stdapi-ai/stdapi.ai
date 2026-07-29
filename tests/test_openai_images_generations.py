@@ -18,6 +18,7 @@ from stdapi.models.image import ImageGenerationJobBase, ImageGenerationResponse
 from stdapi.monitoring import REQUEST_LOG, REQUEST_TIME, EventLog
 from stdapi.routes._images_common import build_images_response
 from stdapi.routes.openai_images_generations import stream_generator
+from stdapi.types.openai_images import ImageGenerateParams
 from tests.conftest import logged_usage_entries
 
 if TYPE_CHECKING:
@@ -761,3 +762,24 @@ class TestStreamGeneratorUsageMatchesNonStream:
             )
         finally:
             REQUEST_LOG.reset(log_token)
+
+
+class TestSizeAutoAccepted:
+    """ImageGenerateParams.size: the OpenAI literal `auto` is accepted, not rejected."""
+
+    pytestmark = pytest.mark.local
+
+    def test_auto_size_resolves_to_default(self) -> None:
+        """`size="auto"` is accepted and resolved to a concrete `WIDTHxHEIGHT` size."""
+        params = ImageGenerateParams(model="m", prompt="p", size="auto")
+        assert re.fullmatch(r"\d+x\d+", params.size)
+
+    def test_explicit_size_is_unchanged(self) -> None:
+        """An explicit `WIDTHxHEIGHT` size passes through unmodified."""
+        params = ImageGenerateParams(model="m", prompt="p", size="512x512")
+        assert params.size == "512x512"
+
+    def test_invalid_size_still_rejected(self) -> None:
+        """A non-`auto`, non-`WIDTHxHEIGHT` size is still rejected."""
+        with pytest.raises(ValueError, match="size"):
+            ImageGenerateParams(model="m", prompt="p", size="invalid-size")

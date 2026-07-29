@@ -562,3 +562,44 @@ class TestImagesEditsModelField:
         assert response.status_code == 400
         assert response.json()["error"]["code"] == "model_not_found"
         assert probed_model_ids == ["probe-model-id"]
+
+
+@pytest.mark.local
+class TestImagesEditsSizeAuto:
+    """Multipart form `size`: the OpenAI literal `auto` is accepted, not rejected."""
+
+    @pytest.fixture
+    def client(self, api_key: str) -> TestClient:
+        """Test client without lifespan (no AWS startup), pre-authenticated."""
+        from stdapi.main import app  # noqa: PLC0415
+
+        return TestClient(app, headers={"Authorization": f"Bearer {api_key}"})
+
+    def test_multipart_form_auto_size_reaches_model_resolution(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`size=auto` in multipart form data is resolved instead of rejected with 422.
+
+        Regression: the Form `size` parameter's pattern only matched
+        `WIDTHxHEIGHT`, rejecting the OpenAI `auto` literal already accepted
+        by the JSON body path.
+        """
+
+        async def _validate_model(
+            model_id: str, *_args: object, **_kwargs: object
+        ) -> None:
+            raise UnsupportedModelError(model_id, status=400)
+
+        monkeypatch.setattr(openai_images_edits, "validate_model", _validate_model)
+        response = client.post(
+            "/v1/images/edits",
+            data={
+                "model": "probe-model-id",
+                "prompt": "test",
+                "size": "auto",
+                "response_format": "b64_json",
+            },
+            files={"image": ("image.png", b"fake-bytes", "image/png")},
+        )
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "model_not_found"

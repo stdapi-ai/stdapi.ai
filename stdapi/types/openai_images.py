@@ -52,6 +52,9 @@ ImageBackgroundAuto = Auto | ImageBackground
 #: Supported image input fidelity
 ImageInputFidelity = Literal["low", "high"]
 
+#: Default image size used when `size="auto"` is requested
+_DEFAULT_SIZE = "1024x1024"
+
 
 # Ref: openai.types.image_input_reference_param.ImageInputReferenceParam
 class ImageInputReferenceParam(BaseModelRequest):
@@ -226,10 +229,10 @@ class _ImageBaseParams(BaseModelRequestWithExtra):
     )
     n: int = Field(default=1, description="Number of images to generate.", ge=1, le=10)
     size: str = Field(  # Support different values than OpenAI
-        default="1024x1024",
-        pattern=r"^(\d+)x(\d+)$",
-        description="Size of the generated images. "
-        "Supported values depend on the model; output size may differ.",
+        default=_DEFAULT_SIZE,
+        pattern=r"^(auto|\d+x\d+)$",
+        description="Size of the generated images, as `WIDTHxHEIGHT`, or `auto` to let "
+        "the model pick. Supported values depend on the model; output size may differ.",
     )
     user: str | None = Field(
         default=None,
@@ -237,6 +240,19 @@ class _ImageBaseParams(BaseModelRequestWithExtra):
         min_length=1,
         max_length=255,
     )
+
+    @field_validator("size", mode="after")
+    @classmethod
+    def _resolve_auto_size(cls, value: str) -> str:
+        """Resolve `auto` to the default `WIDTHxHEIGHT` size.
+
+        Args:
+            value: The requested size, possibly `auto`.
+
+        Returns:
+            A concrete `WIDTHxHEIGHT` size.
+        """
+        return _DEFAULT_SIZE if value == "auto" else value
 
     @field_validator("response_format", mode="after")
     @classmethod
