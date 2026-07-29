@@ -19,6 +19,7 @@ Run with::
 from typing import TYPE_CHECKING
 
 import pytest
+from anthropic import BadRequestError
 from anthropic.types import (
     CodeExecutionResultBlock,
     CodeExecutionToolResultBlock,
@@ -579,3 +580,25 @@ class TestWebSearchTool:
         assert inv2.id.startswith("srvtoolu_"), (
             f"Turn 2: expected srvtoolu_ prefix, got: {inv2.id!r}"
         )
+
+    def test_web_search_filters_are_rejected(
+        self, anthropic_client: Anthropic, use_official_api: bool
+    ) -> None:
+        """Search filters nova_grounding cannot honor are rejected, not dropped.
+
+        Validates:
+            - ``allowed_domains`` on a system-tool web search returns 400
+            - The message names the unsupported field
+        """
+        if use_official_api:
+            pytest.skip("nova_grounding is only available on AWS Bedrock")
+
+        with pytest.raises(BadRequestError) as exc_info:
+            anthropic_client.messages.create(
+                model=_NOVA_PREMIER,
+                max_tokens=16,
+                messages=[{"role": "user", "content": "What is the Python version?"}],
+                tools=[{**_WEB_SEARCH_TOOL, "allowed_domains": ["python.org"]}],  # type: ignore[list-item]
+            )
+
+        assert "allowed_domains" in str(exc_info.value)

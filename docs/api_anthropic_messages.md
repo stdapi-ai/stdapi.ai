@@ -384,6 +384,7 @@ curl -X POST "$BASE/v1/messages" \
 
 - **No citation text in response blocks**: Unlike native Anthropic `web_search`, the `web_search_tool_result` content block carries only the `url` and `title` of each result — never `cited_text` or `encrypted_index`. The cited content itself is reflected only through the text content of the response.
 - **No streaming citation data**: Citation information is not emitted in streaming events. The `server_tool_use` block is streamed as a start event with empty input — no citation delta is produced.
+- **No search filtering on non-Claude models**: Amazon's `systemTool` grounding has no equivalent for `allowed_domains`, `blocked_domains`, `max_uses`, or `user_location`. Requests to a system-tool web search model (e.g. Amazon Nova 2) that set any of these fields are rejected with a `400 Bad Request` rather than silently running an unfiltered search. Anthropic Claude models forward these fields natively and are unaffected.
 
 !!! note "Model Compatibility"
     Requesting `web_search` on a model that does not support it will return a `400 Bad Request` error.

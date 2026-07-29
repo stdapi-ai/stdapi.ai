@@ -678,12 +678,27 @@ def _handle_system_tool(
         tool_name_map: Anthropic → Bedrock name map.
 
     Raises:
-        ApiError: If *tool_name_map* is provided and the tool name is absent.
+        ApiError: If *tool_name_map* is provided and the tool name is absent, or
+            *tool* is a ``web_search`` tool with filter fields that Bedrock's
+            ``systemTool`` (e.g. Amazon Nova grounding) cannot honor.
     """
     if tool_name_map:
         if tool.name not in tool_name_map:
             tool_type = getattr(tool, "type", type(tool).__name__)
             msg = f"Server tool '{tool_type}' is not supported by this model."
+            raise ApiError(msg)
+        if isinstance(tool, WebSearchToolParam) and (
+            tool.allowed_domains
+            or tool.blocked_domains
+            or tool.max_uses is not None
+            or tool.user_location is not None
+        ):
+            msg = (
+                "web_search allowed_domains, blocked_domains, max_uses, and "
+                "user_location are not supported by this model's system-tool "
+                "web search (e.g. Amazon Nova grounding); remove them or use "
+                "an Anthropic Claude model instead."
+            )
             raise ApiError(msg)
         bedrock_name: str = tool_name_map[tool.name]  # type: ignore[index]
     else:
