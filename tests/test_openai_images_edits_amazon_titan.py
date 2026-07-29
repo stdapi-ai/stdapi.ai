@@ -124,6 +124,41 @@ class TestAmazonTitanEditing:
 
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
+    def test_edit_with_outpainting_task_type_and_alpha_mask(
+        self,
+        openai_client: OpenAI,
+        use_official_api: bool,
+        sample_image_file: bytes,
+        sample_alpha_mask_file: bytes,
+        model_id: str,
+    ) -> None:
+        """Test OUTPAINTING with an OpenAI-style alpha-transparency mask.
+
+        The mask's transparent (edit) region must be converted to Titan's
+        outpainting polarity (white=generate), not inpainting's
+        (black=edit), for Bedrock to accept the request.
+        """
+        if use_official_api:
+            pytest.skip("Amazon Titan is not available on the official OpenAI API")
+
+        response = openai_client.images.edit(
+            image=sample_image_file,
+            mask=sample_alpha_mask_file,
+            prompt="Extend the scene with a forest",
+            model=model_id,
+            size="512x512",
+            n=1,
+            response_format="b64_json",
+            extra_body={"taskType": "OUTPAINTING"},
+        )
+
+        assert response.created > 0
+        assert response.data is not None
+        assert len(response.data) == 1
+        assert response.data[0].b64_json is not None
+
+    @pytest.mark.expensive
+    @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
     def test_edit_with_background_removal_task_type(
         self,
         openai_client: OpenAI,

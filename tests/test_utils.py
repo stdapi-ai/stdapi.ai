@@ -7,10 +7,12 @@ from io import BytesIO
 
 import pytest
 from PIL import Image
+from pybase64 import b64decode as pybase64_b64decode
 from pybase64 import b64encode
 
 from stdapi import utils
 from stdapi.utils import (
+    alpha_mask_to_bw,
     get_base64_image_size,
     hide_security_details,
     match_bedrock_app_profile_arn,
@@ -166,3 +168,69 @@ def test_http_input_file_repr_hides_presigned_signature() -> None:
     assert "X-Amz-Signature" not in text
     assert "AKIAEXAMPLE" not in text
     assert text == "https://bucket.s3.amazonaws.com/key.png?<redacted>"
+
+
+def _b64_png(image: Image.Image) -> str:
+    """Encode a Pillow image as a base64 PNG string."""
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return b64encode(buffer.getvalue()).decode()
+
+
+async def test_alpha_mask_to_bw_passes_through_masks_without_alpha() -> None:
+    """A mask with no alpha channel (already black/white RGB) is returned unchanged."""
+    source = _b64_png(Image.new("RGB", (4, 4), (0, 0, 0)))
+    assert await alpha_mask_to_bw(source) == source
+
+
+async def test_alpha_mask_to_bw_passes_through_undecodable_content() -> None:
+    """Non-image content is returned unchanged so downstream validation rejects it."""
+    source = b64encode(b"not a valid image").decode()
+    assert await alpha_mask_to_bw(source) == source
+
+
+async def test_alpha_mask_to_bw_converts_transparent_pixels_to_black() -> None:
+    """Transparent (low-alpha) pixels become pure black -- the OpenAI 'edit' region."""
+    image = Image.new("RGBA", (1, 1), (10, 20, 30, 0))
+    result = await alpha_mask_to_bw(_b64_png(image))
+
+    with BytesIO(pybase64_b64decode(result)) as buffer, Image.open(buffer) as converted:
+        assert converted.mode == "RGB"
+        assert converted.getpixel((0, 0)) == (0, 0, 0)
+
+
+async def test_alpha_mask_to_bw_converts_opaque_pixels_to_white() -> None:
+    """Opaque pixels become pure white -- the OpenAI 'preserve' region."""
+    image = Image.new("RGBA", (1, 1), (10, 20, 30, 255))
+    result = await alpha_mask_to_bw(_b64_png(image))
+
+    with BytesIO(pybase64_b64decode(result)) as buffer, Image.open(buffer) as converted:
+        assert converted.mode == "RGB"
+        assert converted.getpixel((0, 0)) == (255, 255, 255)
+
+
+async def test_alpha_mask_to_bw_threshold_is_inclusive_on_the_white_side() -> None:
+    """Alpha exactly at the threshold resolves to white (preserve), not black."""
+    image = Image.new("RGBA", (1, 1), (0, 0, 0, 127))
+    result = await alpha_mask_to_bw(_b64_png(image), threshold=127)
+
+    with BytesIO(pybase64_b64decode(result)) as buffer, Image.open(buffer) as converted:
+        assert converted.getpixel((0, 0)) == (255, 255, 255)
+
+
+async def test_alpha_mask_to_bw_invert_converts_transparent_pixels_to_white() -> None:
+    """With invert=True (outpainting polarity), transparent pixels become white."""
+    image = Image.new("RGBA", (1, 1), (10, 20, 30, 0))
+    result = await alpha_mask_to_bw(_b64_png(image), invert=True)
+
+    with BytesIO(pybase64_b64decode(result)) as buffer, Image.open(buffer) as converted:
+        assert converted.getpixel((0, 0)) == (255, 255, 255)
+
+
+async def test_alpha_mask_to_bw_invert_converts_opaque_pixels_to_black() -> None:
+    """With invert=True (outpainting polarity), opaque pixels become black."""
+    image = Image.new("RGBA", (1, 1), (10, 20, 30, 255))
+    result = await alpha_mask_to_bw(_b64_png(image), invert=True)
+
+    with BytesIO(pybase64_b64decode(result)) as buffer, Image.open(buffer) as converted:
+        assert converted.getpixel((0, 0)) == (0, 0, 0)

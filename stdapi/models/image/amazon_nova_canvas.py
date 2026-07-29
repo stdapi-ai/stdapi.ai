@@ -19,7 +19,7 @@ from stdapi.models.image.amazon_titan_image_generator import (
     random_seed,
 )
 from stdapi.usage import IMAGE_SPEC
-from stdapi.utils import get_data_uri_data
+from stdapi.utils import alpha_mask_to_bw, get_data_uri_data
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Iterable
@@ -335,9 +335,11 @@ class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
         if task_type == "TEXT_IMAGE":
             request = self._get_request_text_image(image_generation_config, [image])
         elif task_type == "INPAINTING":
-            request = self._get_request_inpainting(image_generation_config, image, mask)
+            request = await self._get_request_inpainting(
+                image_generation_config, image, mask
+            )
         elif task_type == "OUTPAINTING":
-            request = self._get_request_outpainting(
+            request = await self._get_request_outpainting(
                 image_generation_config, image, mask
             )
         elif task_type == "BACKGROUND_REMOVAL":
@@ -387,7 +389,7 @@ class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
 
         return await self._invoke_and_process_response(request)
 
-    def _get_request_inpainting(
+    async def _get_request_inpainting(
         self,
         image_generation_config: _ImageGenerationConfig,
         image: str,
@@ -410,13 +412,13 @@ class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
         )
 
         if mask:
-            request["inPaintingParams"]["maskImage"] = mask
+            request["inPaintingParams"]["maskImage"] = await alpha_mask_to_bw(mask)
 
         self._apply_extra_params(request, "inPaintingParams")
         self._response_quality = "medium"
         return request
 
-    def _get_request_outpainting(
+    async def _get_request_outpainting(
         self,
         image_generation_config: _ImageGenerationConfig,
         image: str,
@@ -439,7 +441,9 @@ class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
         )
 
         if mask:
-            request["outPaintingParams"]["maskImage"] = mask
+            request["outPaintingParams"]["maskImage"] = await alpha_mask_to_bw(
+                mask, invert=True
+            )
 
         self._apply_extra_params(request, "outPaintingParams")
         self._response_quality = "medium"

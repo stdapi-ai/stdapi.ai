@@ -15,6 +15,7 @@ from stdapi.models.image import (
     ImageModelBase,
 )
 from stdapi.usage import IMAGE_SPEC
+from stdapi.utils import alpha_mask_to_bw
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Iterable
@@ -305,9 +306,11 @@ class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
         image = self._get_one_image_from_list(images)
         task_type: TaskType = self._extra_params.get("taskType", "INPAINTING")  # type: ignore[assignment]
         if task_type == "INPAINTING":
-            request = self._get_request_inpainting(image_generation_config, image, mask)
+            request = await self._get_request_inpainting(
+                image_generation_config, image, mask
+            )
         elif task_type == "OUTPAINTING":
-            request = self._get_request_outpainting(
+            request = await self._get_request_outpainting(
                 image_generation_config, image, mask
             )
         elif task_type == "BACKGROUND_REMOVAL":
@@ -453,7 +456,7 @@ class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
         self._set_extra_config(request, "imageVariationParams")
         return request
 
-    def _get_request_inpainting(
+    async def _get_request_inpainting(
         self,
         image_generation_config: _ImageGenerationConfig,
         image: str,
@@ -478,11 +481,11 @@ class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
             imageGenerationConfig=image_generation_config,
         )
         if mask:
-            request["inPaintingParams"]["maskImage"] = mask
+            request["inPaintingParams"]["maskImage"] = await alpha_mask_to_bw(mask)
         self._set_extra_config(request, "inPaintingParams")
         return request
 
-    def _get_request_outpainting(
+    async def _get_request_outpainting(
         self,
         image_generation_config: _ImageGenerationConfig,
         image: str,
@@ -514,7 +517,9 @@ class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
             imageGenerationConfig=image_generation_config,
         )
         if mask:
-            request["outPaintingParams"]["maskImage"] = mask
+            request["outPaintingParams"]["maskImage"] = await alpha_mask_to_bw(
+                mask, invert=True
+            )
         self._set_extra_config(request, "outPaintingParams")
         return request
 

@@ -301,26 +301,13 @@ curl -X POST "$BASE/v1/images/edits" \
 
 #### Inpainting with Masks (Amazon Models)
 
-**With Transparent Areas (Automatic Mask):**
-
-If your source image has transparent regions (alpha channel), those areas will automatically be used as the edit mask:
-
-```bash
-# Edit using a PNG image with transparent areas
-# The transparent regions will be automatically detected as the mask
-curl -X POST "$BASE/v1/images/edits" \
-  -H "Authorization: Bearer $OPENAI_API_KEY" \
-  -H "Content-Type: multipart/form-data" \
-  -F image=@image_with_transparency.png \
-  -F prompt="A blue circle in the center" \
-  -F model="amazon.nova-canvas-v1:0"
-```
-
-**Image format**: PNG with alpha channel where transparent pixels indicate regions to edit.
+An image submitted without a `mask` is **not** auto-masked from its own transparency:
+it is sent as a conditioning image for text-to-image generation instead of an
+inpainting edit. To edit specific regions, always provide an explicit `mask`.
 
 **With Explicit Mask:**
 
-For more control, provide an explicit mask image where transparent areas indicate regions to edit:
+Provide an explicit mask image where transparent areas indicate regions to edit:
 
 ```bash
 # Edit with explicit mask
@@ -334,7 +321,11 @@ curl -X POST "$BASE/v1/images/edits" \
   -F model="amazon.nova-canvas-v1:0"
 ```
 
-**Mask format**: PNG with alpha channel where transparent pixels indicate regions to edit, opaque pixels are preserved.
+**Mask format**: PNG with alpha channel where transparent pixels indicate regions to
+edit, opaque pixels are preserved (standard OpenAI edits-API mask). A mask with an
+alpha channel is automatically converted to the black/white RGB format Nova
+Canvas/Titan require; a mask that is already black/white RGB (no alpha channel) is
+passed through unchanged.
 
 ### Provider-Specific Parameters
 

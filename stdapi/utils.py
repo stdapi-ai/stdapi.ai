@@ -26,7 +26,7 @@ from uuid import uuid7 as uuid
 
 from fastapi.exceptions import RequestValidationError
 from langcodes import Language
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 from pybase64 import b64decode as _b64decode
 from pybase64 import b64encode as _b64encode
 from pydantic import BaseModel, JsonValue, ValidationError
@@ -345,6 +345,70 @@ async def convert_base64_image(
         output_format=output_format.upper(),  # type: ignore[arg-type]
         compression=compression,
     )
+
+
+#: Alpha threshold below which a pixel is treated as the OpenAI-style "edit" region.
+_MASK_ALPHA_THRESHOLD = 127
+
+
+def _alpha_mask_to_bw(content: bytes, threshold: int, *, invert: bool) -> bytes:
+    """Convert an OpenAI-style alpha-transparency mask to a black/white RGB mask.
+
+    Nova Canvas/Titan require a black-and-white ``maskImage`` (no alpha channel).
+    For inpainting, pure black marks the region to edit and pure white the
+    region to preserve; outpainting uses the opposite polarity. OpenAI-style
+    masks use a transparent (low-alpha) pixel to mark the region to edit.
+    Masks without an alpha channel are returned unchanged, since they already
+    use, or are assumed to use, the target task's black/white format.
+
+    Args:
+        content: Decoded mask image bytes.
+        threshold: Alpha value below which a pixel is treated as the edit region.
+        invert: If True, render the edit region white and the preserve region
+            black (outpainting polarity) instead of the inpainting default.
+
+    Returns:
+        PNG-encoded black/white RGB mask bytes, or *content* unchanged if the
+        mask has no alpha channel or is not a decodable image (downstream
+        validation then rejects it as before).
+    """
+    try:
+        image = Image.open(BytesIO(content))
+    except UnidentifiedImageError, Image.DecompressionBombError:
+        return content
+    with image:
+        if image.mode not in ("RGBA", "LA", "PA"):
+            return content
+        edit_color, preserve_color = (255, 0) if invert else (0, 255)
+        alpha = image.convert("RGBA").split()[-1]
+        bw = alpha.point(
+            lambda value: edit_color if value < threshold else preserve_color
+        )
+        with BytesIO() as output_buffer:
+            bw.convert("RGB").save(output_buffer, format="PNG")
+            return output_buffer.getvalue()
+
+
+async def alpha_mask_to_bw(
+    content: str, threshold: int = _MASK_ALPHA_THRESHOLD, *, invert: bool = False
+) -> str:
+    """Convert a base64-encoded alpha-transparency mask to a black/white RGB mask.
+
+    A no-op passthrough for masks that have no alpha channel.
+
+    Args:
+        content: Base64-encoded mask image.
+        threshold: Alpha value below which a pixel is treated as the edit region.
+        invert: If True, render the edit region white and the preserve region
+            black — the outpainting mask polarity, opposite of inpainting's.
+
+    Returns:
+        Base64-encoded black/white PNG mask, or *content* unchanged if the
+        mask has no alpha channel.
+    """
+    decoded = await b64decode(content)
+    converted = await to_thread(_alpha_mask_to_bw, decoded, threshold, invert=invert)
+    return content if converted == decoded else await b64encode(converted)
 
 
 async def get_base64_image_size(content: str | Buffer) -> tuple[int, int]:

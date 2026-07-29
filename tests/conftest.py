@@ -706,6 +706,28 @@ def sample_mask_file(sample_image_file: bytes) -> bytes:
 
 
 @pytest.fixture(scope="session")
+def sample_alpha_mask_file(sample_image_file: bytes) -> bytes:
+    """Create an OpenAI-style RGBA mask, transparent in the center (edit zone).
+
+    Args:
+        sample_image_file: Sample image file to get dimensions from
+
+    Returns:
+        Mask image bytes with an alpha channel.
+    """
+    width, height = PILImage.open(BytesIO(sample_image_file)).size
+
+    mask = PILImage.new("RGBA", (width, height), color=(0, 0, 0, 255))
+    for x in range(width // 4, 3 * width // 4):
+        for y in range(height // 4, 3 * height // 4):
+            mask.putpixel((x, y), (0, 0, 0, 0))
+
+    buffer = BytesIO()
+    mask.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+@pytest.fixture(scope="session")
 def sample_video_file() -> bytes:
     """Return a local mp4 video file as sample for testing."""
     video_file = _CACHE_DIR / "video.mp4"

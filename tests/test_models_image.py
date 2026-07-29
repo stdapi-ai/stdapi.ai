@@ -2,9 +2,13 @@
 
 from asyncio import CancelledError, Event, sleep, wait_for
 from decimal import Decimal
+from io import BytesIO
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
+from PIL import Image
+from pybase64 import b64decode as pybase64_b64decode
+from pybase64 import b64encode
 
 import stdapi.models
 from stdapi import usage
@@ -14,6 +18,7 @@ from stdapi.models.image import (
     ImageGenerationResponse,
     ImageModelBase,
 )
+from stdapi.models.image import amazon_nova_canvas as nova_canvas
 from stdapi.models.image._stability import (
     StabilityImageGenerationJobBase,
     StabilityImageModelBase,
@@ -146,6 +151,172 @@ class TestTitanResponseQualityEcho:
         )
         job._set_extra_config(request, "textToImageParams")  # noqa: SLF001
         assert job.quality == expected
+
+
+def _b64_rgba_png(alpha: int) -> str:
+    """Encode a 1x1 RGBA PNG with the given alpha as a base64 string."""
+    buffer = BytesIO()
+    Image.new("RGBA", (1, 1), (1, 2, 3, alpha)).save(buffer, format="PNG")
+    return b64encode(buffer.getvalue()).decode()
+
+
+def _b64_rgb_png() -> str:
+    """Encode a 1x1 black RGB (no-alpha) PNG as a base64 string."""
+    buffer = BytesIO()
+    Image.new("RGB", (1, 1), (0, 0, 0)).save(buffer, format="PNG")
+    return b64encode(buffer.getvalue()).decode()
+
+
+class TestMaskAlphaConversion:
+    """_get_request_inpainting/_get_request_outpainting: OpenAI alpha mask -> B/W RGB."""
+
+    async def test_titan_inpainting_mask_with_alpha_is_converted_to_bw(self) -> None:
+        """A transparent Titan inpainting mask is converted to pure black."""
+        job = _ImageGenerationJob(
+            model=cast("Any", None),
+            prompt="a cat",
+            count=1,
+            width=512,
+            height=512,
+            quality=None,
+            style=None,
+            output_format=None,
+            output_compression=0,
+            extra_params={},
+        )
+        config = _ImageGenerationConfig(width=512, height=512, numberOfImages=1)
+        request = await job._get_request_inpainting(config, "image", _b64_rgba_png(0))  # noqa: SLF001
+        mask = request["inPaintingParams"]["maskImage"]
+
+        with BytesIO(pybase64_b64decode(mask)) as buffer, Image.open(buffer) as image:
+            assert image.mode == "RGB"
+            assert image.getpixel((0, 0)) == (0, 0, 0)
+
+    async def test_titan_outpainting_mask_without_alpha_passes_through(self) -> None:
+        """A Titan outpainting mask with no alpha channel is forwarded unchanged."""
+        job = _ImageGenerationJob(
+            model=cast("Any", None),
+            prompt="a cat",
+            count=1,
+            width=512,
+            height=512,
+            quality=None,
+            style=None,
+            output_format=None,
+            output_compression=0,
+            extra_params={},
+        )
+        config = _ImageGenerationConfig(width=512, height=512, numberOfImages=1)
+        mask_input = _b64_rgb_png()
+        request = await job._get_request_outpainting(config, "image", mask_input)  # noqa: SLF001
+        assert request["outPaintingParams"]["maskImage"] == mask_input
+
+    async def test_titan_outpainting_mask_with_alpha_uses_inverted_polarity(
+        self,
+    ) -> None:
+        """A transparent Titan outpainting mask is converted to pure white.
+
+        Outpainting uses the opposite mask polarity from inpainting: white
+        marks the region to generate, black the region to preserve.
+        """
+        job = _ImageGenerationJob(
+            model=cast("Any", None),
+            prompt="a cat",
+            count=1,
+            width=512,
+            height=512,
+            quality=None,
+            style=None,
+            output_format=None,
+            output_compression=0,
+            extra_params={},
+        )
+        config = _ImageGenerationConfig(width=512, height=512, numberOfImages=1)
+        request = await job._get_request_outpainting(config, "image", _b64_rgba_png(0))  # noqa: SLF001
+        mask = request["outPaintingParams"]["maskImage"]
+
+        with BytesIO(pybase64_b64decode(mask)) as buffer, Image.open(buffer) as image:
+            assert image.mode == "RGB"
+            assert image.getpixel((0, 0)) == (255, 255, 255)
+
+    async def test_nova_canvas_inpainting_mask_with_alpha_is_converted_to_bw(
+        self,
+    ) -> None:
+        """A transparent Nova Canvas inpainting mask is converted to pure black."""
+        job = nova_canvas._ImageGenerationJob(  # noqa: SLF001
+            model=cast("Any", None),
+            prompt="a cat",
+            count=1,
+            width=1024,
+            height=1024,
+            quality=None,
+            style=None,
+            output_format=None,
+            output_compression=0,
+            extra_params={},
+        )
+        config = nova_canvas._ImageGenerationConfig(  # noqa: SLF001
+            width=1024, height=1024, numberOfImages=1
+        )
+        request = await job._get_request_inpainting(config, "image", _b64_rgba_png(0))  # noqa: SLF001
+        mask = request["inPaintingParams"]["maskImage"]
+
+        with BytesIO(pybase64_b64decode(mask)) as buffer, Image.open(buffer) as image:
+            assert image.mode == "RGB"
+            assert image.getpixel((0, 0)) == (0, 0, 0)
+
+    async def test_nova_canvas_outpainting_mask_without_alpha_passes_through(
+        self,
+    ) -> None:
+        """A Nova Canvas outpainting mask with no alpha channel is forwarded unchanged."""
+        job = nova_canvas._ImageGenerationJob(  # noqa: SLF001
+            model=cast("Any", None),
+            prompt="a cat",
+            count=1,
+            width=1024,
+            height=1024,
+            quality=None,
+            style=None,
+            output_format=None,
+            output_compression=0,
+            extra_params={},
+        )
+        config = nova_canvas._ImageGenerationConfig(  # noqa: SLF001
+            width=1024, height=1024, numberOfImages=1
+        )
+        mask_input = _b64_rgb_png()
+        request = await job._get_request_outpainting(config, "image", mask_input)  # noqa: SLF001
+        assert request["outPaintingParams"]["maskImage"] == mask_input
+
+    async def test_nova_canvas_outpainting_mask_with_alpha_uses_inverted_polarity(
+        self,
+    ) -> None:
+        """A transparent Nova Canvas outpainting mask is converted to pure white.
+
+        Outpainting uses the opposite mask polarity from inpainting: white
+        marks the region to generate, black the region to preserve.
+        """
+        job = nova_canvas._ImageGenerationJob(  # noqa: SLF001
+            model=cast("Any", None),
+            prompt="a cat",
+            count=1,
+            width=1024,
+            height=1024,
+            quality=None,
+            style=None,
+            output_format=None,
+            output_compression=0,
+            extra_params={},
+        )
+        config = nova_canvas._ImageGenerationConfig(  # noqa: SLF001
+            width=1024, height=1024, numberOfImages=1
+        )
+        request = await job._get_request_outpainting(config, "image", _b64_rgba_png(0))  # noqa: SLF001
+        mask = request["outPaintingParams"]["maskImage"]
+
+        with BytesIO(pybase64_b64decode(mask)) as buffer, Image.open(buffer) as image:
+            assert image.mode == "RGB"
+            assert image.getpixel((0, 0)) == (255, 255, 255)
 
 
 class _FakeBody:
