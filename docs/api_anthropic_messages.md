@@ -382,7 +382,7 @@ curl -X POST "$BASE/v1/messages" \
 
 **Limitations:**
 
-- **No citation text in response blocks**: Unlike native Anthropic `web_search`, the `server_tool_use` content block does not include `cited_text` or `encrypted_index` fields. Web search results are reflected only through the text content of the response.
+- **No citation text in response blocks**: Unlike native Anthropic `web_search`, the `web_search_tool_result` content block carries only the `url` and `title` of each result — never `cited_text` or `encrypted_index`. The cited content itself is reflected only through the text content of the response.
 - **No streaming citation data**: Citation information is not emitted in streaming events. The `server_tool_use` block is streamed as a start event with empty input — no citation delta is produced.
 
 !!! note "Model Compatibility"

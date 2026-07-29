@@ -91,6 +91,7 @@ from stdapi.types.anthropic_messages import (
     WebFetchToolParam,
     WebSearchResultBlock,
     WebSearchToolParam,
+    WebSearchToolResultBlock,
 )
 from stdapi.utils import b64decode, b64encode
 
@@ -882,20 +883,32 @@ def _map_citations_content_from_bedrock(
 
 
 def _map_search_result_from_bedrock(
-    search_result: dict[str, Any],
-) -> WebSearchResultBlock:
-    """Convert a Bedrock search result block to an Anthropic web search result block.
+    search_result: dict[str, Any], tool_use_id: str
+) -> WebSearchToolResultBlock:
+    """Convert a Bedrock search result block to an Anthropic web search tool result block.
+
+    Anthropic's ``ContentBlock`` union has no top-level ``web_search_result``
+    member; a search result is only valid nested inside a
+    ``web_search_tool_result`` block's ``content`` list.
 
     Args:
         search_result: Bedrock search result block dict.
+        tool_use_id: Anthropic ID of the nearest preceding tool use this result
+            corresponds to.
 
     Returns:
-        Anthropic WebSearchResultBlock.
+        Anthropic WebSearchToolResultBlock wrapping a single search result.
     """
-    return WebSearchResultBlock(
-        type="web_search_result",
-        url=search_result.get("source", ""),
-        title=search_result.get("title", ""),
+    return WebSearchToolResultBlock(
+        type="web_search_tool_result",
+        tool_use_id=tool_use_id,
+        content=[
+            WebSearchResultBlock(
+                type="web_search_result",
+                url=search_result.get("source", ""),
+                title=search_result.get("title", ""),
+            )
+        ],
     )
 
 
@@ -982,12 +995,15 @@ def _map_citations_from_bedrock(citations: list[dict[str, Any]]) -> list[TextCit
 
 
 async def _map_content_block_from_bedrock(  # noqa: PLR0911
-    block: ContentBlockOutputTypeDef,
+    block: ContentBlockOutputTypeDef, tool_use_id: str = ""
 ) -> ContentBlock | None:
     """Convert a Bedrock output content block to an Anthropic content block.
 
     Args:
         block: Bedrock output content block dict.
+        tool_use_id: Anthropic ID of the nearest preceding tool use, used to
+            correlate a ``searchResult`` block to its ``web_search_tool_result``
+            wrapper.
 
     Returns:
         Anthropic content block, or ``None`` if the block type is unrecognized.
@@ -1012,7 +1028,7 @@ async def _map_content_block_from_bedrock(  # noqa: PLR0911
         case {"citationsContent": citations_content}:
             return _map_citations_content_from_bedrock(citations_content)  # type: ignore[arg-type]
         case {"searchResult": search_result}:
-            return _map_search_result_from_bedrock(search_result)  # type: ignore[arg-type,return-value]
+            return _map_search_result_from_bedrock(search_result, tool_use_id)  # type: ignore[arg-type]
         case _:
             return None
 
@@ -1054,23 +1070,24 @@ async def format_response(
     # toolUseId → Bedrock tool name; populated as toolUse blocks are encountered
     # so that subsequent toolResult blocks can be resolved to a tool name.
     tool_use_id_to_name: dict[str, str] = {}
+    # Anthropic-side ID of the most recently emitted tool-use block, used to
+    # correlate a subsequent searchResult block (which carries no ID of its own).
+    last_tool_use_id = ""
     content_blocks: list[ContentBlock] = []
 
     for block in contents:
         match block:
             case {"toolUse": {"toolUseId": id_, "name": name}}:
                 tool_use_id_to_name[id_] = name
+                tool_use: ContentBlock | None = None
                 if resp_map_tool_use is not None:
                     tool_input: JsonMapping = block["toolUse"].get("input", {})
-                    override = resp_map_tool_use(id_, name, tool_input)
-                else:
-                    override = None
-                if override is not None:
-                    content_blocks.append(override)
-                elif (
-                    mapped := await _map_content_block_from_bedrock(block)
-                ) is not None:
-                    content_blocks.append(mapped)
+                    tool_use = resp_map_tool_use(id_, name, tool_input)
+                if tool_use is None:
+                    tool_use = await _map_content_block_from_bedrock(block)
+                if tool_use is not None:
+                    content_blocks.append(tool_use)
+                    last_tool_use_id = getattr(tool_use, "id", "")
             case {"toolResult": tool_result}:
                 id_ = tool_result.get("toolUseId", "")
                 content_items: list[ToolResultContentBlockOutputTypeDef] = (
@@ -1083,7 +1100,11 @@ async def format_response(
                     or ()
                 )
             case _:
-                if (mapped := await _map_content_block_from_bedrock(block)) is not None:
+                if (
+                    mapped := await _map_content_block_from_bedrock(
+                        block, last_tool_use_id
+                    )
+                ) is not None:
                     content_blocks.append(mapped)
 
     if forced_tool is not None:

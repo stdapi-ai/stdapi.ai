@@ -461,6 +461,13 @@ class TestWebSearchTool:
         assert invocation.id.startswith("srvtoolu_"), (
             f"Expected srvtoolu_ prefix, got: {invocation.id!r}"
         )
+        # Bedrock searchResult blocks are wrapped in web_search_tool_result and
+        # must reference the emitted server_tool_use, never the raw Bedrock ID.
+        for block in response.content:
+            if block.type == "web_search_tool_result":
+                assert block.tool_use_id == invocation.id, (
+                    f"Expected tool_use_id={invocation.id!r}, got: {block.tool_use_id!r}"
+                )
         assert response.stop_reason == "end_turn"
 
     @pytest.mark.expensive
