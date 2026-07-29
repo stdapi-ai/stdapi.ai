@@ -173,7 +173,7 @@ class TestCohereRerankRoute:
         )
         assert response.status_code == 404
         body = response.json()
-        assert set(body) == {"message"}
+        assert set(body) == {"message", "id"}
         assert "unknown-model" in body["message"]
 
     def test_resolved_model_not_rerank_capable_returns_cohere_error_envelope(
@@ -200,7 +200,7 @@ class TestCohereRerankRoute:
 
         assert response.status_code == 404
         body = response.json()
-        assert set(body) == {"message"}
+        assert set(body) == {"message", "id"}
         assert "anthropic.claude-3-5-haiku-20241022-v1:0" in body["message"]
         assert not rerank_backend.calls
 
@@ -347,7 +347,7 @@ class TestCohereRerankV1Route:
         )
         assert response.status_code == 400
         body = response.json()
-        assert set(body) == {"message"}
+        assert set(body) == {"message", "id"}
         assert "rank_fields" in body["message"]
         assert not rerank_backend.calls
 
@@ -366,7 +366,7 @@ class TestCohereRerankV1Route:
         )
         assert response.status_code == 400
         body = response.json()
-        assert set(body) == {"message"}
+        assert set(body) == {"message", "id"}
         assert "max_chunks_per_doc" in body["message"]
         assert not rerank_backend.calls
 
@@ -380,7 +380,7 @@ class TestCohereRerankV1Route:
         )
         assert response.status_code == 404
         body = response.json()
-        assert set(body) == {"message"}
+        assert set(body) == {"message", "id"}
         assert "unknown-model" in body["message"]
         assert not rerank_backend.calls
 

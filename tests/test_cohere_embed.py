@@ -325,7 +325,7 @@ class TestCohereEmbedRoute:
         )
         assert response.status_code == 404
         body = response.json()
-        assert set(body) == {"message"}
+        assert set(body) == {"message", "id"}
         assert "unknown-model" in body["message"]
         assert not embed_backend.calls
 
@@ -460,7 +460,7 @@ class TestCohereEmbedV1Route:
             "/cohere/v1/embed", json={"model": "cohere.embed-multilingual-v3"}
         )
         assert response.status_code == 400
-        assert set(response.json()) == {"message"}
+        assert set(response.json()) == {"message", "id"}
         assert not embed_backend.calls
 
     def test_fused_inputs_are_rejected(
@@ -499,7 +499,7 @@ class TestCohereEmbedV1Route:
         )
         assert response.status_code == 404
         body = response.json()
-        assert set(body) == {"message"}
+        assert set(body) == {"message", "id"}
         assert "unknown-model" in body["message"]
         assert not embed_backend.calls
 

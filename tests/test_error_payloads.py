@@ -2,8 +2,8 @@
 
 Verifies that error responses match the official API envelope formats:
 - OpenAI: ``{"error": {"message", "type", "param", "code"}}``
-- Anthropic: ``{"type": "error", "error": {"type", "message"}}``
-- Cohere: ``{"message": <str>}``
+- Anthropic: ``{"type": "error", "error": {"type", "message"}, "request_id": <str>}``
+- Cohere: ``{"message": <str>, "id": <str>}``
 """
 
 import json
@@ -117,7 +117,7 @@ def _assert_cohere_error_shape(body: dict[str, Any]) -> str:
 
     The expected shape is::
 
-        {"message": <str>}
+        {"message": <str>, "id": <str>}
 
     Args:
         body: Parsed JSON response body.
@@ -125,8 +125,11 @@ def _assert_cohere_error_shape(body: dict[str, Any]) -> str:
     Returns:
         The ``message`` string for further assertions.
     """
-    assert set(body.keys()) == {"message"}, f"Unexpected top-level keys: {body.keys()}"
+    assert set(body.keys()) == {"message", "id"}, (
+        f"Unexpected top-level keys: {body.keys()}"
+    )
     assert isinstance(body["message"], str)
+    assert isinstance(body["id"], str)
     return body["message"]
 
 
@@ -196,6 +199,17 @@ class TestFormatErrorFunctions:
         finally:
             REQUEST_ID.reset(token)
         assert body["request_id"] == "req_test123"
+
+    def test_cohere_format_error_includes_id(self) -> None:
+        """`_format_error` echoes the current request ID as the ``id`` field."""
+        from stdapi.monitoring import REQUEST_ID  # noqa: PLC0415
+
+        token = REQUEST_ID.set("req_test456")
+        try:
+            body, _ = cohere_format_error(404, "boom")
+        finally:
+            REQUEST_ID.reset(token)
+        assert body["id"] == "req_test456"
 
 
 class TestOpenaiErrorPayloads:

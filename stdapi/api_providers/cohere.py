@@ -7,6 +7,7 @@ from stdapi.api_providers import (
     SET_LOG_FIELDS_BY_TAG,
     SET_RESPONSE_HEADERS_BY_TAG,
 )
+from stdapi.monitoring import REQUEST_ID
 
 if TYPE_CHECKING:
     from stdapi.types import JsonMapping
@@ -32,7 +33,7 @@ def _format_error(
     Returns:
         A tuple containing the error response in JSON format and the corresponding HTTP status code.
     """
-    return {"message": message}, status
+    return {"message": message, "id": REQUEST_ID.get("")}, status
 
 
 FORMATTER_BY_TAG[TAG_COHERE] = _format_error
