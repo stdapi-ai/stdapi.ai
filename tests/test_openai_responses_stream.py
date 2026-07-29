@@ -807,6 +807,46 @@ class TestWebSearchSources:
         assert self._sources(response.output[0]) == ["https://early.example"]
 
 
+class TestWebSearchLifecycleEvents:
+    """The streamed web_search_call lifecycle matches the upstream event sequence."""
+
+    async def test_in_progress_then_searching_then_completed(self) -> None:
+        """in_progress and searching precede completed, in that order."""
+        events = await _collect(
+            format_stream(
+                "resp-1",
+                1.0,
+                "model",
+                _stream(
+                    [
+                        {
+                            "contentBlockStart": {
+                                "start": {
+                                    "toolUse": {
+                                        "toolUseId": "w1",
+                                        "name": "nova_grounding",
+                                    }
+                                },
+                                "contentBlockIndex": 0,
+                            }
+                        },
+                        {"contentBlockStop": {"contentBlockIndex": 0}},
+                        {"messageStop": {"stopReason": "end_turn"}},
+                        {"metadata": {"usage": {"inputTokens": 3, "outputTokens": 5}}},
+                    ]
+                ),
+                _request(),
+                web_search_tool_names=frozenset({"nova_grounding"}),
+            )
+        )
+        event_types = [sse.event for sse in events]
+        assert (
+            event_types.index("response.web_search_call.in_progress")
+            < event_types.index("response.web_search_call.searching")
+            < event_types.index("response.web_search_call.completed")
+        )
+
+
 class TestEmptyToolArguments:
     """Streamed tool calls without input deltas emit `{}` like non-streaming."""
 

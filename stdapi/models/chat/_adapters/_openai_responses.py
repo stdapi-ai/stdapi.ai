@@ -92,6 +92,7 @@ from stdapi.types.openai_responses import (
     ResponseUsage,
     ResponseWebSearchCallCompletedEvent,
     ResponseWebSearchCallInProgressEvent,
+    ResponseWebSearchCallSearchingEvent,
     Tool,
     ToolChoiceAllowed,
     ToolChoiceFunction,
@@ -1919,9 +1920,9 @@ def _handle_block_start(
     plus (for text blocks) ``response.content_part.added``.
 
     For web-search system tools (``nova_grounding``), emits a
-    ``web_search_call`` output item with ``in_progress`` status followed by a
-    ``response.web_search_call.in_progress`` event instead of a
-    ``function_call`` item.
+    ``web_search_call`` output item with ``in_progress`` status followed by
+    ``response.web_search_call.in_progress`` and ``.searching`` events
+    instead of a ``function_call`` item.
 
     Args:
         state: Mutable stream state.
@@ -1968,6 +1969,15 @@ def _handle_block_start(
                     output_index=state.output_index,
                     sequence_number=state.next_seq(),
                     type="response.web_search_call.in_progress",
+                ),
+            )
+            yield json_sse(
+                "response.web_search_call.searching",
+                ResponseWebSearchCallSearchingEvent(
+                    item_id=state.current_item_id,
+                    output_index=state.output_index,
+                    sequence_number=state.next_seq(),
+                    type="response.web_search_call.searching",
                 ),
             )
             return
