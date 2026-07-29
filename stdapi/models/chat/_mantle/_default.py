@@ -321,6 +321,7 @@ class ChatModel(ChatModelBase[Any, Any]):
         strip_usage_chunk: bool,
         region: RegionName | None = None,
         id_rewrites: dict[str, str] | None = None,
+        response_id: str | None = None,
         wrap: Callable[
             [AsyncGenerator[ServerSentEvent]], AsyncGenerator[ServerSentEvent]
         ]
@@ -336,6 +337,8 @@ class ChatModel(ChatModelBase[Any, Any]):
             region: Pinned region, if any.
             id_rewrites: Mutable native ID -> public ID substitutions applied
                 to the relayed events (stored-response region tagging).
+            response_id: Route-assigned response ID stamped on converted
+                Responses events (ignored when served natively).
             wrap: Optional converter applied to the relayed event stream.
 
         Returns:
@@ -351,6 +354,7 @@ class ChatModel(ChatModelBase[Any, Any]):
             serving_region,
             strip_usage_chunk=strip_usage_chunk,
             id_rewrites=id_rewrites,
+            response_id=response_id,
         )
         if wrap is not None:
             relayed = wrap(relayed)
@@ -394,6 +398,7 @@ class ChatModel(ChatModelBase[Any, Any]):
         *,
         strip_usage_chunk: bool,
         id_rewrites: dict[str, str] | None = None,
+        response_id: str | None = None,
     ) -> AsyncGenerator[ServerSentEvent]:
         """Relay upstream SSE events to the client, recording billed usage.
 
@@ -411,6 +416,8 @@ class ChatModel(ChatModelBase[Any, Any]):
             id_rewrites: Mutable native ID -> public ID substitutions, may be
                 pre-seeded (chained ``previous_response_id``) and is extended
                 in-place as stored-response IDs appear in the stream.
+            response_id: Route-assigned response ID stamped on converted
+                Responses events (native streams keep their tagged upstream ID).
 
         Yields:
             Server-sent events in the inbound wire format.
@@ -418,7 +425,7 @@ class ChatModel(ChatModelBase[Any, Any]):
         rewrites = id_rewrites if id_rewrites is not None else {}
         observed = self._observe_stream(api, events, region, rewrites)
         if api != inbound:
-            observed = convert.convert_stream(api, inbound, observed)
+            observed = convert.convert_stream(api, inbound, observed, response_id)
         async for event, data in observed:
             if (
                 strip_usage_chunk
@@ -663,6 +670,10 @@ class ChatModel(ChatModelBase[Any, Any]):
                 strip_usage_chunk=False,
                 region=pinned_region,
                 id_rewrites=rewrites,
+                # Converted streams carry the server-assigned ID for the same
+                # reason as the non-streaming branch below: a minted ID is not
+                # retrievable, and its `resp_` form is parsed as Mantle-tagged.
+                response_id=response_id,
             )
         api, region, raw = await self._serve_validated(
             "responses", payload, region=pinned_region

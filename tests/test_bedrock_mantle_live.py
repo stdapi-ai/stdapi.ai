@@ -550,6 +550,35 @@ class TestMantleResponses:
         finally:
             openai_client.responses.delete(first.id)
 
+    def test_gemma3_streamed_conversion_uses_the_route_response_id(
+        self, openai_client: OpenAI
+    ) -> None:
+        """A converted stream announces the route ID, not a minted Mantle-form one.
+
+        Validates:
+            - ``response.created`` is followed by ``response.in_progress``
+            - Every event carries the same route-assigned ``resp-`` ID (a
+              minted ``resp_`` one is parsed as Mantle-tagged and only 404s)
+        """
+        events = list(
+            openai_client.responses.create(
+                model=_GEMMA3,
+                input="Say OK.",
+                store=False,
+                stream=True,
+                max_output_tokens=32,
+            )
+        )
+        assert [event.type for event in events][:2] == [
+            "response.created",
+            "response.in_progress",
+        ]
+        ids = {
+            event.response.id for event in events if getattr(event, "response", None)
+        }
+        assert len(ids) == 1
+        assert ids.pop().startswith("resp-")
+
     def test_gemma3_store_dropped_on_api_fallback(
         self, openai_client: OpenAI, test_client: TestClientType | None
     ) -> None:

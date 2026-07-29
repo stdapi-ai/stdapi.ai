@@ -2455,7 +2455,7 @@ def _responses_event(
 
 
 async def _chat_stream_to_responses(
-    events: AsyncGenerator[SseEvent],
+    events: AsyncGenerator[SseEvent], response_id: str | None = None
 ) -> AsyncGenerator[SseEvent]:
     """Convert Chat Completions chunks to a Responses SSE stream.
 
@@ -2464,6 +2464,8 @@ async def _chat_stream_to_responses(
 
     Args:
         events: Chat Completions chunk events.
+        response_id: Route-assigned response ID carried by every emitted
+            event, so the streamed ID is the one the route can retrieve.
 
     Yields:
         Named Responses SSE events, ending with ``response.completed``.
@@ -2477,20 +2479,22 @@ async def _chat_stream_to_responses(
             raise MantleError(message, status=502)
         if (chunk := _parsed_chunk(data)) is None:
             continue
-        for event in _responses_chunk_events(state, chunk):
+        for event in _responses_chunk_events(state, chunk, response_id):
             yield event
     for event in _responses_stream_tail(state):
         yield event
 
 
 def _responses_chunk_events(
-    state: _ResponsesStreamState, chunk: dict[str, Any]
+    state: _ResponsesStreamState, chunk: dict[str, Any], response_id: str | None
 ) -> list[SseEvent]:
     """Emit the Responses events produced by one Chat Completions chunk.
 
     Args:
         state: Mutable stream state.
         chunk: Parsed Chat Completions chunk.
+        response_id: Route-assigned response ID to use instead of a minted
+            one; item IDs derive from it, as on the Converse path.
 
     Returns:
         Responses SSE events.
@@ -2498,7 +2502,7 @@ def _responses_chunk_events(
     events: list[SseEvent] = []
     if not state.response:
         state.response = {
-            "id": f"resp_{_id_token(chunk.get('id') or uuid4().hex)}",
+            "id": response_id or f"resp_{_id_token(chunk.get('id') or uuid4().hex)}",
             "object": "response",
             "created_at": int(chunk.get("created") or time()),
             "model": chunk.get("model") or "",
@@ -2814,11 +2818,13 @@ def _messages_event(name: str, payload: dict[str, Any]) -> SseEvent:
 
 async def _chat_stream_to_messages(
     events: AsyncGenerator[SseEvent],
+    response_id: str | None = None,  # noqa: ARG001 (uniform converter signature)
 ) -> AsyncGenerator[SseEvent]:
     """Convert Chat Completions chunks to an Anthropic SSE stream.
 
     Args:
         events: Chat Completions chunk events.
+        response_id: Unused; Anthropic message IDs are not retrievable.
 
     Yields:
         Named Anthropic SSE events, ending with ``message_delta`` (carrying
@@ -3010,12 +3016,16 @@ _TO_CHAT_STREAM: dict[
 
 #: Stream converters out of the Chat Completions shape, keyed by target API.
 _FROM_CHAT_STREAM: dict[
-    MantleApi, Callable[[AsyncGenerator[SseEvent]], AsyncGenerator[SseEvent]]
+    MantleApi,
+    Callable[[AsyncGenerator[SseEvent], str | None], AsyncGenerator[SseEvent]],
 ] = {"responses": _chat_stream_to_responses, "messages": _chat_stream_to_messages}
 
 
 def convert_stream(
-    upstream: MantleApi, inbound: MantleApi, events: AsyncGenerator[SseEvent]
+    upstream: MantleApi,
+    inbound: MantleApi,
+    events: AsyncGenerator[SseEvent],
+    response_id: str | None = None,
 ) -> AsyncGenerator[SseEvent]:
     """Convert an upstream SSE stream between Mantle wire formats.
 
@@ -3028,6 +3038,8 @@ def convert_stream(
         upstream: Wire format of *events*.
         inbound: Target wire format.
         events: Upstream SSE event generator.
+        response_id: Route-assigned response ID stamped on converted
+            Responses events, so the streamed ID stays retrievable.
 
     Returns:
         SSE event generator in the *inbound* shape (unchanged when identical).
@@ -3037,7 +3049,7 @@ def convert_stream(
     if upstream != "chat_completions":
         events = _TO_CHAT_STREAM[upstream](events)
     if inbound != "chat_completions":
-        events = _FROM_CHAT_STREAM[inbound](events)
+        events = _FROM_CHAT_STREAM[inbound](events, response_id)
     return events
 
 

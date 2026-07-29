@@ -1502,6 +1502,60 @@ class TestChatToResponsesStream:
         )
         assert "response.created" in _names(events)
 
+    async def test_route_assigned_id_is_carried_by_every_response_event(self) -> None:
+        """The plumbed route ID replaces the minted one on all events.
+
+        A minted ``resp_`` ID is parsed by the route as a Mantle-tagged ID
+        and always 404s: the streamed ID must be the retrievable one.
+        """
+        chunks = [
+            *self._cc_chunks(),
+            (
+                None,
+                dumps(
+                    {
+                        "choices": [],
+                        "usage": {
+                            "prompt_tokens": 10,
+                            "completion_tokens": 5,
+                            "total_tokens": 15,
+                        },
+                    }
+                ),
+            ),
+        ]
+        events = await _collect(
+            mantle_convert.convert_stream(
+                "chat_completions", "responses", _agen(chunks), "resp-request-id"
+            )
+        )
+        payloads = _payloads(events)
+        with_response = {
+            payload["type"]: payload["response"]["id"]
+            for payload in payloads
+            if "response" in payload
+        }
+        assert with_response == {
+            "response.created": "resp-request-id",
+            "response.in_progress": "resp-request-id",
+            "response.completed": "resp-request-id",
+        }
+        item_ids = {
+            payload["item"]["id"] for payload in payloads if "item" in payload
+        } | {payload["item_id"] for payload in payloads if "item_id" in payload}
+        assert item_ids
+        assert all(item_id.startswith("resp-request-id-") for item_id in item_ids)
+        assert not any("resp_" in data for _, data in events)
+
+    async def test_minted_id_is_used_when_no_route_id_is_plumbed(self) -> None:
+        """Without a route ID the converter still mints a synthetic response ID."""
+        events = await _collect(
+            mantle_convert.convert_stream(
+                "chat_completions", "responses", _agen(self._cc_chunks())
+            )
+        )
+        assert _payloads(events)[0]["response"]["id"].startswith("resp_")
+
 
 class TestChatToMessagesStream:
     """Chat Completions SSE chunks converted to an Anthropic Messages SSE stream."""
@@ -1670,6 +1724,15 @@ class TestChatToMessagesStream:
         message_delta = _payloads(events)[-2]
         assert message_delta["delta"]["stop_reason"] == "tool_use"
         assert message_delta["usage"]["output_tokens"] == 5
+
+    async def test_response_id_is_ignored_when_converting_to_messages(self) -> None:
+        """Anthropic message IDs stay minted: they are not retrievable."""
+        events = await _collect(
+            mantle_convert.convert_stream(
+                "chat_completions", "messages", _agen(self._cc_chunks()), "resp-req-id"
+            )
+        )
+        assert _payloads(events)[0]["message"]["id"].startswith("msg_")
 
     async def test_early_end_without_finish_or_usage_closes_open_block(self) -> None:
         """A stream ending mid tool-call still closes the block and defaults usage."""

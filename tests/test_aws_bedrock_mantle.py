@@ -56,7 +56,7 @@ from stdapi.models.chat._mantle.open_weight import ChatModel as OpenWeightChatMo
 from stdapi.models.chat._mantle.openai_gpt5 import ChatModel as GptChatModel
 from stdapi.models.chat._mantle.openai_gpt_oss import ChatModel as GptOssChatModel
 from stdapi.models.chat.openai_gpt import ChatModel as OpenAiGptChatModel
-from stdapi.monitoring import REQUEST, REQUEST_LOG, EventLog
+from stdapi.monitoring import REQUEST, REQUEST_ID, REQUEST_LOG, EventLog
 from stdapi.pricing import Service
 from stdapi.routes.openai_responses import _decode_mantle_id, _require_local_response_id
 from stdapi.types.anthropic_messages import Message, MessageCreateParams, MessageParam
@@ -2530,6 +2530,73 @@ class TestStreamWrapBranches:
         )
         result = await model.create_message(request, "msg_public")
         assert isinstance(result, EventSourceResponse)
+
+
+class TestStreamedResponseIdPlumbing:
+    """A converted Responses stream carries the route-assigned response ID."""
+
+    async def test_create_response_stream_uses_the_route_id(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The streamed ID is the route-assigned one, not a minted ``resp_`` ID."""
+
+        async def fake_invoke_stream(
+            region: RegionName,  # noqa: ARG001
+            path: str,  # noqa: ARG001
+            payload: Mapping[str, Any],  # noqa: ARG001
+            *,
+            single_region: bool,  # noqa: ARG001
+            headers: Mapping[str, str] | None = None,  # noqa: ARG001
+        ) -> AsyncGenerator[SseEvent]:
+            return _fake_stream(
+                [
+                    (
+                        None,
+                        dumps(
+                            {
+                                "id": "chatcmpl-native1",
+                                "created": 1,
+                                "model": "qwen.stream-response-id-model",
+                                "choices": [
+                                    {
+                                        "index": 0,
+                                        "delta": {"content": "hi"},
+                                        "finish_reason": "stop",
+                                    }
+                                ],
+                                "usage": {
+                                    "prompt_tokens": 10,
+                                    "completion_tokens": 5,
+                                    "total_tokens": 15,
+                                },
+                            }
+                        ),
+                    )
+                ]
+            )
+
+        monkeypatch.setattr(mantle_default, "invoke_stream", fake_invoke_stream)
+        model = OpenWeightChatModel("qwen.stream-response-id-model")
+        request = ResponseCreateParams(
+            model="qwen.stream-response-id-model", input="hi", stream=True
+        )
+        result = await model.create_response(request, "resp-localstore3", 0.0)
+        assert isinstance(result, EventSourceResponse)
+        token = REQUEST_ID.set("req-stream-id")
+        try:
+            events = [event async for event in result.body_iterator]
+        finally:
+            REQUEST_ID.reset(token)
+        assert [event.event for event in events][:2] == [
+            "response.created",
+            "response.in_progress",
+        ]
+        assert all("resp_" not in _event_data(event) for event in events)
+        assert {
+            loads(_event_data(event))["response"]["id"]
+            for event in events
+            if "response" in loads(_event_data(event))
+        } == {"resp-localstore3"}
 
 
 class TestScrubErrorEventResidualBranches:
