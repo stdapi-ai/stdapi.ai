@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from stdapi.api_errors import UnsupportedParameterError
+from stdapi.models.chat._adapters._openai_common import resolve_cache_ttl
 from stdapi.types.openai_chat_completions import CompletionCreateParams
 
 pytestmark = pytest.mark.local
@@ -35,21 +36,30 @@ class TestReasoningEffort:
 class TestPromptCacheOptions:
     """``prompt_cache_options`` is modeled, not forwarded to the model as an extra."""
 
-    def test_ttl_sets_prompt_cache_retention(self) -> None:
-        """`ttl: 30m` maps to the closest Bedrock retention and stays out of the extras."""
+    def test_ttl_does_not_mutate_the_request(self) -> None:
+        """`ttl` resolves at consumption: the parsed request stays what the client sent.
+
+        Injecting the Bedrock-mapped retention here would leak it into the
+        Mantle passthrough payload, where it is not a valid upstream value.
+        """
         request = CompletionCreateParams.model_validate(
             _BASE_REQUEST | {"prompt_cache_options": {"mode": "explicit", "ttl": "30m"}}
         )
-        assert request.prompt_cache_retention == "1h"
+        assert request.prompt_cache_retention is None
+        assert "prompt_cache_retention" not in request.model_fields_set
         assert request.model_extra == {}
+        assert resolve_cache_ttl(None, request.prompt_cache_options) is not None
 
     def test_explicit_prompt_cache_retention_wins(self) -> None:
-        """An explicit `prompt_cache_retention` is not overridden by `ttl`."""
+        """An explicit `prompt_cache_retention` takes precedence over `ttl`."""
         request = CompletionCreateParams.model_validate(
             _BASE_REQUEST
             | {"prompt_cache_options": {"ttl": "30m"}, "prompt_cache_retention": "5m"}
         )
         assert request.prompt_cache_retention == "5m"
+        assert resolve_cache_ttl(
+            request.prompt_cache_retention, request.prompt_cache_options
+        ) == resolve_cache_ttl("5m", None)
 
 
 class TestUnsupportedParameters:

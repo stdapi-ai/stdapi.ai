@@ -707,11 +707,13 @@ def translate_request(
         _build_tool_config(request, tool_name_map),
         _build_output_config(request.text),
         _openai_common.map_service_tier(request.service_tier)[0],
-        frozenset(_openai_common.parse_prompt_cache_key(request.prompt_cache_key)),
-        (
-            _openai_common.CACHE_TTL.get(request.prompt_cache_retention)
-            if request.prompt_cache_retention
-            else None
+        frozenset(
+            _openai_common.parse_prompt_cache_key(
+                request.prompt_cache_key, request.prompt_cache_options
+            )
+        ),
+        _openai_common.resolve_cache_ttl(
+            request.prompt_cache_retention, request.prompt_cache_options
         ),
         (dict(request.metadata) if request.metadata else None),
     )
@@ -793,10 +795,23 @@ def _append_or_merge(
         bedrock_messages.append({"role": role, "content": blocks})
 
 
+def _has_cache_breakpoint(part: object) -> bool:
+    """Whether an input content part carries an explicit prompt-cache breakpoint.
+
+    Args:
+        part: An input content part.
+
+    Returns:
+        True when the part sets ``prompt_cache_breakpoint``.
+    """
+    return getattr(part, "prompt_cache_breakpoint", None) is not None
+
+
 async def _map_message_item(
     item: EasyInputMessage | InputMessage,
     bedrock_messages: list[MessageTypeDef],
     system_blocks: list[SystemContentBlockTypeDef],
+    cache_point: ContentBlockTypeDef | None = None,
 ) -> None:
     """Map a single message item into Bedrock messages and system blocks.
 
@@ -807,26 +822,38 @@ async def _map_message_item(
         item: The message input item to map.
         bedrock_messages: Mutable Bedrock messages list to append to.
         system_blocks: Mutable system blocks list to append to.
+        cache_point: Cache point block to insert after each content part marked
+            with ``prompt_cache_breakpoint``, or ``None`` to ignore breakpoints.
     """
     content = item.content
     if (role := item.role) in _SYSTEM_ROLES:
-        text = (
-            content
-            if isinstance(content, str)
-            else " ".join(
-                p.text
-                for p in content
-                if isinstance(p, (ResponseInputText, ResponseOutputTextContent))
+        if isinstance(content, str):
+            system_blocks.extend(build_system_blocks(content))
+            return
+        text_parts = [
+            p
+            for p in content
+            if isinstance(p, (ResponseInputText, ResponseOutputTextContent))
+        ]
+        if cache_point is None or not any(map(_has_cache_breakpoint, text_parts)):
+            system_blocks.extend(
+                build_system_blocks(" ".join(p.text for p in text_parts))
             )
-        )
-        if text:
-            system_blocks.extend(build_system_blocks(text))
+            return
+        for text_part in text_parts:
+            system_blocks.extend(build_system_blocks(text_part.text))
+            if _has_cache_breakpoint(text_part) and system_blocks:
+                system_blocks.append(cache_point)
         return
 
     if isinstance(content, str):
         blocks: list[ContentBlockTypeDef] = [{"text": content}] if content else []
     else:
-        blocks = [await _convert_input_content(p) for p in content]
+        blocks = []
+        for part in content:
+            blocks.append(await _convert_input_content(part))
+            if cache_point is not None and _has_cache_breakpoint(part):
+                blocks.append(cache_point)
 
     bedrock_role: Literal["assistant", "user"] = (
         "assistant" if role == "assistant" else "user"
@@ -1047,13 +1074,21 @@ def _map_image_generation_call(
 
 
 async def map_input(
-    input_param: str | list[ResponseInputItem] | None, instructions: str | None
+    input_param: str | list[ResponseInputItem] | None,
+    instructions: str | None,
+    *,
+    allow_explicit_caching: bool = False,
+    cache_ttl: CacheTTLType | None = None,
 ) -> tuple[list[MessageTypeDef], list[SystemContentBlockTypeDef]]:
     """Convert a Responses API input to Bedrock messages and system blocks.
 
     Args:
         input_param: The ``input`` field from ResponseCreateParams.
         instructions: Optional system-level instruction string.
+        allow_explicit_caching: Whether ``prompt_cache_breakpoint`` marks on
+            input content parts emit a Bedrock cache point.  Breakpoints on
+            tool output items are always ignored.
+        cache_ttl: Cache TTL of the emitted cache points, ``None`` for the default.
 
     Returns:
         Tuple of ``(bedrock_messages, system_blocks)``.
@@ -1071,8 +1106,11 @@ async def map_input(
         bedrock_messages.append({"role": "user", "content": [{"text": input_param}]})
         return bedrock_messages, system_blocks
 
+    cache_point = (
+        _openai_common.build_cache_point(cache_ttl) if allow_explicit_caching else None
+    )
     for item in input_param:
-        await _map_input_item(item, bedrock_messages, system_blocks)
+        await _map_input_item(item, bedrock_messages, system_blocks, cache_point)
 
     return bedrock_messages, system_blocks
 
@@ -1081,6 +1119,7 @@ async def _map_input_item(
     item: ResponseInputItem,
     bedrock_messages: list[MessageTypeDef],
     system_blocks: list[SystemContentBlockTypeDef],
+    cache_point: ContentBlockTypeDef | None = None,
 ) -> None:
     """Map a single Responses input item to Bedrock messages or system blocks.
 
@@ -1091,10 +1130,12 @@ async def _map_input_item(
         item: The input item to map.
         bedrock_messages: Mutable Bedrock messages list to append to.
         system_blocks: Mutable system blocks list to append to.
+        cache_point: Cache point block to insert after each content part marked
+            with ``prompt_cache_breakpoint``, or ``None`` to ignore breakpoints.
     """
     match item:
         case EasyInputMessage() | InputMessage():
-            await _map_message_item(item, bedrock_messages, system_blocks)
+            await _map_message_item(item, bedrock_messages, system_blocks, cache_point)
         case ResponseOutputMessage():
             _map_output_message(item, bedrock_messages)
         case FunctionCallInput():
@@ -1747,6 +1788,7 @@ def _build_response_object(
         max_output_tokens=request.max_output_tokens,
         previous_response_id=request.previous_response_id,
         prompt_cache_key=request.prompt_cache_key,
+        prompt_cache_options=request.prompt_cache_options,
         prompt_cache_retention=request.prompt_cache_retention,
         reasoning=request.reasoning,
         service_tier=request.service_tier,

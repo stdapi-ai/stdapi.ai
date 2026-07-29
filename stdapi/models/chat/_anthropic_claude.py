@@ -104,6 +104,7 @@ class AnthropicClaudeChatModel(_BaseChatModel):
     ALIAS_MATCHER = re_compile(r"^anthropic\.(.+?)(?:-v\d+(?::\d+)?)?$")
     PROMPT_CACHING_SUPPORTED = True
     PROMPT_CACHING_TOOL_SUPPORTED = True
+    PROMPT_CACHING_TTL_SUPPORTED = True
     PASSTHROUGH_HEADERS = MappingProxyType(
         {"anthropic-beta": ("anthropic_beta", lambda v: v.split(","))}
     )

@@ -19,6 +19,14 @@ from stdapi.usage import record_bedrock_usage
 if TYPE_CHECKING:
     from starlette.testclient import TestClient as TestClientType
 
+#: Deterministic context long enough to exceed the minimum cacheable prompt size.
+_CACHEABLE_CONTEXT = (
+    "Amazon Bedrock is a fully managed service offering a choice of "
+    "high-performing foundation models from leading AI companies through a "
+    "single API, with the capabilities needed to build generative AI "
+    "applications with security, privacy and responsible AI. "
+) * 150
+
 
 class TestResponses:
     """Test suite for the /v1/responses endpoint.
@@ -1713,6 +1721,51 @@ class TestResponses:
         assert len(response.output) > 0
         assert isinstance(response.output_text, str)
         assert len(response.output_text) > 0
+
+    def test_explicit_prompt_cache_breakpoint(
+        self, openai_client: OpenAI, responses_model: str, use_official_api: bool
+    ) -> None:
+        """Test prompt_cache_breakpoint caches the marked prompt prefix.
+
+        Args:
+            openai_client: OpenAI client instance for API calls
+            responses_model: Responses model identifier
+            use_official_api: Whether the official OpenAI API is under test
+
+        Validates:
+            - A content part marked with prompt_cache_breakpoint is accepted
+            - prompt_cache_options is echoed back on the response
+            - The second identical request reads the prefix from cache
+        """
+        first, second = [
+            openai_client.responses.create(
+                model=responses_model,
+                prompt_cache_options={"mode": "explicit"},
+                input=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_text",
+                                "text": _CACHEABLE_CONTEXT,
+                                "prompt_cache_breakpoint": {"mode": "explicit"},
+                            },
+                            {"type": "input_text", "text": "Reply with OK."},
+                        ],
+                    }
+                ],
+            )
+            for _ in range(2)
+        ]
+
+        assert first.status == "completed"
+        assert first.prompt_cache_options is not None
+        assert first.prompt_cache_options.mode == "explicit"
+        assert second.usage is not None
+        cached_tokens = second.usage.input_tokens_details.cached_tokens
+        if use_official_api and not cached_tokens:
+            pytest.xfail("cached tokens may not be reported by the OpenAI API")
+        assert cached_tokens > 0
 
 
 # ---------------------------------------------------------------------------

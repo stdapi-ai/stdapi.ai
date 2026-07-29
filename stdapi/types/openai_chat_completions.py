@@ -1,6 +1,6 @@
 """Local OpenAI-compatible chat completions types."""
 
-from typing import Annotated, Any, ClassVar, Literal, Self
+from typing import Annotated, ClassVar, Literal, Self
 
 from pydantic import AliasChoices, Field, model_validator
 
@@ -60,11 +60,6 @@ PromptCacheRetention = Literal[
 #: Prompt cache retention of the `prompt_cache_options.ttl` field
 PromptCacheOptionsTTL = Literal["30m"]
 
-#: `prompt_cache_options.ttl` to `prompt_cache_retention` mapping
-_PROMPT_CACHE_OPTIONS_RETENTION: dict[PromptCacheOptionsTTL, PromptCacheRetention] = {
-    "30m": "1h"  # closest AWS Bedrock TTL covering 30 minutes
-}
-
 #: Tool choice literal values used in multiple request fields (OpenAI-compatible).
 ToolChoiceLiteral = Literal["none", "auto", "required"]
 
@@ -75,12 +70,33 @@ VerbosityLevel = Literal["low", "medium", "high"]
 OutputModalities = Literal["text", "audio"]
 
 
+# Ref: openai.types.chat.chat_completion_content_part_text_param.PromptCacheBreakpoint
+class PromptCacheBreakpoint(BaseModelRequest):
+    """Explicit prompt-cache breakpoint set on a content part."""
+
+    mode: Literal["explicit"] = Field(
+        default="explicit",
+        description="Breakpoint mode. Always `explicit`: the prompt prefix ending "
+        "with this content part is cached (AWS Bedrock `cachePoint`).",
+    )
+
+
+#: Description shared by every per-content-part `prompt_cache_breakpoint` field.
+_CACHE_BREAKPOINT_DESCRIPTION = (
+    "Cache the prompt prefix ending with this content part. Honored on models "
+    "supporting prompt caching, accepted and ignored on the others."
+)
+
+
 # Ref: openai.types.chat.chat_completion_content_part_text_param.ChatCompletionContentPartTextParam
 class ChatCompletionContentPartTextParam(BaseModelRequest):
     """Text message content part."""
 
     type: TextLiteral = Field(description="Content part type. Always `text`.")
     text: str = Field(description="Text content of the message part.")
+    prompt_cache_breakpoint: PromptCacheBreakpoint | None = Field(
+        default=None, description=_CACHE_BREAKPOINT_DESCRIPTION
+    )
 
 
 # Ref: openai.types.chat.chat_completion_content_part_refusal_param.ChatCompletionContentPartRefusalParam
@@ -89,6 +105,9 @@ class ChatCompletionContentPartRefusalParam(BaseModelRequest):
 
     type: Literal["refusal"] = Field(description="Content part type. Always `refusal`.")
     refusal: str = Field(description="Refusal content text.")
+    prompt_cache_breakpoint: PromptCacheBreakpoint | None = Field(
+        default=None, description=_CACHE_BREAKPOINT_DESCRIPTION
+    )
 
 
 # Ref: openai.types.chat.chat_completion_content_part_image.ImageURL
@@ -113,6 +132,9 @@ class ChatCompletionContentPartImageParam(BaseModelRequest):
     )
     image_url: ImageURL = Field(
         description="URL descriptor containing the image `url` field."
+    )
+    prompt_cache_breakpoint: PromptCacheBreakpoint | None = Field(
+        default=None, description=_CACHE_BREAKPOINT_DESCRIPTION
     )
 
 
@@ -154,6 +176,9 @@ class File(BaseModelRequest):
 
     type: Literal["file"] = Field(description="Content part type. Always `file`.")
     file: FileFile = Field(description="Content descriptor containing base64 bytes.")
+    prompt_cache_breakpoint: PromptCacheBreakpoint | None = Field(
+        default=None, description=_CACHE_BREAKPOINT_DESCRIPTION
+    )
 
 
 # Ref: openai.types.chat.chat_completion_content_part_input_audio_param.InputAudio
@@ -173,6 +198,9 @@ class ChatCompletionContentPartInputAudioParam(BaseModelRequest):
     input_audio: InputAudio = Field(description="Audio data descriptor.")
     type: Literal["input_audio"] = Field(
         description="Content part type. Always `input_audio`."
+    )
+    prompt_cache_breakpoint: PromptCacheBreakpoint | None = Field(
+        default=None, description=_CACHE_BREAKPOINT_DESCRIPTION
     )
 
 
@@ -624,7 +652,9 @@ class PromptCacheOptions(BaseModelRequest):
 
     mode: Literal["implicit", "explicit"] | None = Field(
         default=None,
-        description="Caching mode. Accepted but ignored: cached sections are selected with `prompt_cache_key`.",
+        description="Caching mode. `explicit`: only content parts marked with "
+        "`prompt_cache_breakpoint` are cached. `implicit` (default): sections "
+        "selected with `prompt_cache_key` are cached too.",
     )
     ttl: PromptCacheOptionsTTL | None = Field(
         default=None,
@@ -1144,7 +1174,8 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
     )
     prompt_cache_options: PromptCacheOptions | None = Field(
         default=None,
-        description="Prompt caching options. `ttl` sets `prompt_cache_retention` when the latter is unset.",
+        description="Prompt caching options. `ttl` `30m` maps to the closest Bedrock "
+        "cache TTL (1h) unless `prompt_cache_retention` is set.",
     )
     prompt_cache_retention: PromptCacheRetention | None = Field(
         default=None,
@@ -1284,25 +1315,6 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
         description="Apply an AWS Bedrock guardrail to this request; results "
         "are reported in the response `moderation` field (non-streaming only).",
     )
-
-    @model_validator(mode="before")
-    @classmethod
-    def _map_prompt_cache_options(cls, data: Any) -> Any:  # noqa: ANN401
-        """Map `prompt_cache_options.ttl` onto `prompt_cache_retention` when unset.
-
-        Args:
-            data: Raw request payload.
-
-        Returns:
-            The payload, with `prompt_cache_retention` filled in when applicable.
-        """
-        if not isinstance(data, dict) or data.get("prompt_cache_retention") is not None:
-            return data
-        options = data.get("prompt_cache_options")
-        ttl = options.get("ttl") if isinstance(options, dict) else None
-        if retention := _PROMPT_CACHE_OPTIONS_RETENTION.get(ttl):
-            data = data | {"prompt_cache_retention": retention}
-        return data
 
     # Extra validations
     _UNSUPPORTED: ClassVar[set[str]] = {

@@ -1983,6 +1983,92 @@ class TestChatCompletions:
             pytest.xfail("Cached tokens not available when testing against OpenAI API")
         assert cached_tokens > 0, f"Expected cached_tokens > 0, got {cached_tokens}"
 
+    def test_prompt_cache_explicit_breakpoint(
+        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
+    ) -> None:
+        """An explicit `prompt_cache_breakpoint` caches the marked prompt prefix.
+
+        Validates that:
+        - `prompt_cache_options.mode="explicit"` with a marked system content part
+          is accepted end to end
+        - A second identical request reports cached tokens for that prefix
+        """
+        messages: list[Any] = [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "You are a meticulous assistant. "
+                            "Follow these operating instructions exactly. " * 200
+                        ),
+                        "prompt_cache_breakpoint": {"mode": "explicit"},
+                    }
+                ],
+            },
+            {"role": "user", "content": "What is 2 + 2?"},
+        ]
+        for _ in range(2):
+            response = openai_client.chat.completions.create(
+                model=chat_model,
+                messages=messages,
+                prompt_cache_options={"mode": "explicit", "ttl": "30m"},
+                max_completion_tokens=32,
+            )
+        assert response.usage is not None
+        usage_details = response.usage.prompt_tokens_details
+        if use_official_api and (
+            usage_details is None or not usage_details.cached_tokens
+        ):
+            pytest.xfail("Cached tokens may not be available on the official API")
+        assert usage_details is not None
+        assert usage_details.cached_tokens
+
+    def test_metadata_over_bedrock_limits_rejected(
+        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
+    ) -> None:
+        """Metadata breaking the Bedrock requestMetadata limits returns a clean 400."""
+        if use_official_api:
+            pytest.skip("requestMetadata limits are a Bedrock-specific feature")
+        with pytest.raises(BadRequestError):
+            openai_client.chat.completions.create(
+                model=chat_model,
+                messages=[{"role": "user", "content": "Hi"}],
+                metadata={f"key-{index}": "value" for index in range(17)},
+            )
+        with pytest.raises(BadRequestError):
+            openai_client.chat.completions.create(
+                model=chat_model,
+                messages=[{"role": "user", "content": "Hi"}],
+                metadata={"key": "forbidden!char"},
+            )
+
+    def test_reasoning_effort_max_parameter(
+        self, openai_client: OpenAI, chat_reasoning_model: str
+    ) -> None:
+        """The upstream `max` effort level is accepted like `xhigh`."""
+        response = openai_client.chat.completions.create(
+            model=chat_reasoning_model,
+            messages=[{"role": "user", "content": "Reply with OK."}],
+            reasoning_effort="max",
+            max_completion_tokens=2048,
+        )
+        assert response.choices[0].message.role == "assistant"
+        assert response.usage is not None
+
+    def test_disabled_logprobs_accepted(
+        self, openai_client: OpenAI, chat_model: str
+    ) -> None:
+        """`logprobs: false` requests the default behavior and is not rejected."""
+        response = openai_client.chat.completions.create(
+            model=chat_model,
+            messages=[{"role": "user", "content": "Say OK."}],
+            logprobs=False,
+            max_completion_tokens=16,
+        )
+        assert response.choices[0].message.role == "assistant"
+
     def test_unsupported_modalities_audio_error(
         self, openai_client: OpenAI, chat_model: str, use_official_api: bool
     ) -> None:

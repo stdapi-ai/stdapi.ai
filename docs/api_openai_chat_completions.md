@@ -80,7 +80,8 @@ Generate conversational AI responses with Amazon Bedrock foundation models—inc
 | `verbosity`                              | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Model verbosity                                                 |
 | `web_search_options`                     | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Web search tool                                                 |
 | `prompt_cache_key`                       |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Cache prompts to reduce costs and latency                       |
-| `prompt_cache_options`                   |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | `ttl: "30m"` mapped to a 1 hour Amazon Bedrock retention when `prompt_cache_retention` is unset; `mode` is ignored |
+| `prompt_cache_options`                   |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | `mode: "explicit"` caches only the parts marked with `prompt_cache_breakpoint`; `ttl: "30m"` mapped to a 1 hour Amazon Bedrock retention on Anthropic models (other models use the default 5 minute TTL) when `prompt_cache_retention` is unset |
+| `prompt_cache_breakpoint` (content part) |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Explicit cache boundary mapped to an Amazon Bedrock `cachePoint` (max. 4 per request) |
 | Extra model-specific params              | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Extra model-specific parameters not supported by the OpenAI API |
 | **Streaming & Output**                   |                                          |                                                                 |
 | Text                                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Text messages                                                   |
@@ -260,7 +261,36 @@ curl -X POST "$BASE/v1/chat/completions" \
     - `"in_memory"` → 5 minutes
     - `"24h"` → 1 hour
 
-The OpenAI `prompt_cache_options` object is also accepted: its `ttl` (`"30m"`) is mapped to a 1 hour Amazon Bedrock retention when `prompt_cache_retention` is not set, and its `mode` is ignored (cached sections are selected with `prompt_cache_key`).
+The OpenAI `prompt_cache_options` object is also accepted: its `ttl` (`"30m"`) is mapped to a 1 hour Amazon Bedrock retention on Anthropic models (other models use the default 5 minute TTL) when `prompt_cache_retention` is not set.
+
+**Explicit Cache Breakpoints:**
+
+Instead of relying on the `prompt_cache_key` section heuristics, mark the exact cache boundaries with `prompt_cache_breakpoint` on any content part (`text`, `image_url`, `input_audio`, `file`, `refusal`). Each marked part is followed by an Amazon Bedrock `cachePoint`, so the prompt prefix ending with that part is cached:
+
+```json
+{
+  "model": "anthropic.claude-fable-5",
+  "prompt_cache_options": {"mode": "explicit"},
+  "messages": [
+    {
+      "role": "system",
+      "content": [
+        {
+          "type": "text",
+          "text": "Long reusable instructions...",
+          "prompt_cache_breakpoint": {"mode": "explicit"}
+        }
+      ]
+    },
+    {"role": "user", "content": "What is 2 + 2?"}
+  ]
+}
+```
+
+- `"mode": "explicit"` caches **only** the marked parts: the `prompt_cache_key` heuristics are disabled for that request.
+- `"mode": "implicit"` (default) keeps the `prompt_cache_key` heuristics **and** honors the marked parts.
+- At most 4 cache points are sent per request (Amazon Bedrock limit); the oldest ones are dropped when more are requested.
+- Breakpoints on models without prompt caching support are accepted and ignored, as are breakpoints on tool result messages.
 
 **Usage Tracking:**
 

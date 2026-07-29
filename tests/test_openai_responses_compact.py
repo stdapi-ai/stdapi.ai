@@ -267,6 +267,7 @@ class TestResponsesCompactRoute:
                 "input": "x",
                 "service_tier": "flex",
                 "prompt_cache_key": "cache-key",
+                "prompt_cache_options": {"mode": "explicit", "ttl": "30m"},
                 "prompt_cache_retention": "24h",
             },
         )
@@ -275,6 +276,9 @@ class TestResponsesCompactRoute:
         assert request.service_tier == "flex"
         assert request.prompt_cache_key == "cache-key"
         assert request.prompt_cache_retention == "24h"
+        assert request.prompt_cache_options is not None
+        assert request.prompt_cache_options.mode == "explicit"
+        assert request.prompt_cache_options.ttl == "30m"
 
     def test_missing_usage_falls_back_to_zeros(
         self, client: TestClient, chat_backend: _StubChatModel

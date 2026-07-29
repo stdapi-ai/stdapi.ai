@@ -740,6 +740,7 @@ async def compact_response(
         input=items,
         instructions=request.instructions,
         prompt_cache_key=request.prompt_cache_key,
+        prompt_cache_options=request.prompt_cache_options,
         prompt_cache_retention=request.prompt_cache_retention,
         service_tier=request.service_tier,
         previous_response_id=request.previous_response_id,

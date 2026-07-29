@@ -13,11 +13,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from sse_starlette import EventSourceResponse, JSONServerSentEvent
 
 from stdapi.api_errors import ApiError
-from stdapi.aws_bedrock import (
-    GUARDRAIL_CONFIG_VAR,
-    PROMPT_CACHING_DEFAULT,
-    PromptCaching,
-)
+from stdapi.aws_bedrock import GUARDRAIL_CONFIG_VAR, PromptCaching
 from stdapi.config import SETTINGS
 from stdapi.input_file import prefetch_all_content_types
 from stdapi.models.capabilities import Capability
@@ -65,11 +61,18 @@ if TYPE_CHECKING:
         ServerTools,
     )
     from stdapi.types.openai import ResponseModeration
-    from stdapi.types.openai_chat_completions import ChatCompletion
+    from stdapi.types.openai_chat_completions import (
+        ChatCompletion,
+        PromptCacheOptions,
+        PromptCacheRetention,
+    )
     from stdapi.types.openai_chat_completions import (
         CompletionCreateParams as ChatCompletionCreateParams,
     )
     from stdapi.types.openai_completions import Completion, CompletionCreateParams
+    from stdapi.types.openai_responses import (
+        PromptCacheOptions as ResponsesPromptCacheOptions,
+    )
     from stdapi.types.openai_responses import Response, ResponseCreateParams
 
 
@@ -119,6 +122,9 @@ class ChatModel(ChatModelBase[Any, Any]):
     #: Tool-list prompt caching supported.
     PROMPT_CACHING_TOOL_SUPPORTED: ClassVar[bool] = False
 
+    #: Extended cache TTL supported (Bedrock: "only supported for Anthropic models").
+    PROMPT_CACHING_TTL_SUPPORTED: ClassVar[bool] = False
+
     #: System prompt supported.
     SYSTEM_PROMPT_SUPPORTED: ClassVar[bool] = True
 
@@ -165,8 +171,13 @@ class ChatModel(ChatModelBase[Any, Any]):
             Completed response or streaming ``EventSourceResponse``.
         """
         await prefetch_all_content_types()
+        cache_ttl = self._cache_ttl(
+            request.prompt_cache_retention, request.prompt_cache_options
+        )
         bedrock_messages, system_blocks = await openai_adapter.map_messages(
-            request.messages
+            request.messages,
+            allow_explicit_caching=self.PROMPT_CACHING_SUPPORTED,
+            cache_ttl=cache_ttl,
         )
 
         (
@@ -199,12 +210,11 @@ class ChatModel(ChatModelBase[Any, Any]):
             tool_config=tool_config,
             bedrock_messages=bedrock_messages,
             prompt_caching=_openai_common.parse_prompt_cache_key(
-                request.prompt_cache_key
+                request.prompt_cache_key, request.prompt_cache_options
             ),
-            prompt_caching_ttl=_openai_common.CACHE_TTL.get(
-                request.prompt_cache_retention
-            ),
+            prompt_caching_ttl=cache_ttl,
         )
+        self._req_limit_cache_points(system_blocks, tool_config, bedrock_messages)
 
         bedrock_request = await self._prepare_converse_request(
             bedrock_messages=bedrock_messages,
@@ -275,9 +285,7 @@ class ChatModel(ChatModelBase[Any, Any]):
         ) = text_completion_adapter.translate_request(request, self._model_id)
 
         prompt_caching = _openai_common.parse_prompt_cache_key(request.prompt_cache_key)
-        prompt_caching_ttl = _openai_common.CACHE_TTL.get(
-            request.prompt_cache_retention
-        )
+        prompt_caching_ttl = self._cache_ttl(request.prompt_cache_retention)
 
         bedrock_requests: list[ConverseRequestBaseTypeDef] = []
         for user_message in user_messages:
@@ -389,7 +397,9 @@ class ChatModel(ChatModelBase[Any, Any]):
                 tool_config=tool_config,
                 bedrock_messages=bedrock_messages,
                 prompt_caching=prompt_caching,
-                prompt_caching_ttl=prompt_caching_ttl,
+                prompt_caching_ttl=prompt_caching_ttl
+                if self.PROMPT_CACHING_TTL_SUPPORTED
+                else None,
             )
 
         forced_tool = (
@@ -459,7 +469,12 @@ class ChatModel(ChatModelBase[Any, Any]):
         await prefetch_all_content_types()
 
         bedrock_messages, system_blocks = await responses_adapter.map_input(
-            request.input, request.instructions
+            request.input,
+            request.instructions,
+            allow_explicit_caching=self.PROMPT_CACHING_SUPPORTED,
+            cache_ttl=self._cache_ttl(
+                request.prompt_cache_retention, request.prompt_cache_options
+            ),
         )
 
         (
@@ -497,8 +512,11 @@ class ChatModel(ChatModelBase[Any, Any]):
                 tool_config=tool_config,
                 bedrock_messages=bedrock_messages,
                 prompt_caching=prompt_caching,
-                prompt_caching_ttl=prompt_caching_ttl,
+                prompt_caching_ttl=prompt_caching_ttl
+                if self.PROMPT_CACHING_TTL_SUPPORTED
+                else None,
             )
+        self._req_limit_cache_points(system_blocks, tool_config, bedrock_messages)
 
         bedrock_request = await self._prepare_converse_request(
             bedrock_messages=bedrock_messages,
@@ -833,6 +851,51 @@ class ChatModel(ChatModelBase[Any, Any]):
             An Anthropic content block to emit, or ``None`` to discard the block.
         """
 
+    def _cache_ttl(
+        self,
+        retention: PromptCacheRetention | None,
+        options: PromptCacheOptions | ResponsesPromptCacheOptions | None = None,
+    ) -> CacheTTLType | None:
+        """Resolve the requested Bedrock cache TTL for this model.
+
+        Args:
+            retention: Requested cache retention, which takes precedence.
+            options: Prompt cache options, whose ``ttl`` applies when unset.
+
+        Returns:
+            The requested Bedrock cache TTL, or ``None`` (Bedrock's default TTL)
+            when the model does not support extended TTLs (Bedrock rejects them
+            outside Anthropic models).
+        """
+        if not self.PROMPT_CACHING_TTL_SUPPORTED:
+            return None
+        return _openai_common.resolve_cache_ttl(retention, options)
+
+    def _req_limit_cache_points(
+        self,
+        system_blocks: list[SystemContentBlockTypeDef] | None,
+        tool_config: ToolConfigurationTypeDef | None,
+        bedrock_messages: list[MessageTypeDef],
+    ) -> None:
+        """Enforce the model cache-point limits after explicit breakpoints are placed.
+
+        Client-provided ``prompt_cache_breakpoint`` marks are unbounded, while
+        Bedrock caps cache points per request and rejects them in tool-call turns
+        on models without tool caching.
+
+        Args:
+            system_blocks: System content blocks list.
+            tool_config: Bedrock tool configuration.
+            bedrock_messages: Bedrock message list.
+        """
+        if not self.PROMPT_CACHING_SUPPORTED:
+            return
+        if not self.PROMPT_CACHING_TOOL_SUPPORTED:
+            _openai_common.drop_tool_turn_cache_points(bedrock_messages)
+        _openai_common.cap_cache_points(
+            system_blocks, tool_config, bedrock_messages, self.MAX_CACHE_BLOCKS
+        )
+
     def _req_enable_prompt_caching(
         self,
         system_blocks: list[SystemContentBlockTypeDef] | None,
@@ -857,10 +920,8 @@ class ChatModel(ChatModelBase[Any, Any]):
             prompt_caching_ttl: Cache TTL, or ``None`` for the default.
         """
         if self.PROMPT_CACHING_SUPPORTED:
-            cache_point: ContentBlockTypeDef = (
-                {"cachePoint": {"type": "default", "ttl": prompt_caching_ttl}}
-                if prompt_caching_ttl
-                else PROMPT_CACHING_DEFAULT
+            cache_point: ContentBlockTypeDef = _openai_common.build_cache_point(
+                prompt_caching_ttl
             )
             if self.SIMPLIFIED_CACHE_MANAGEMENT:
                 self._apply_simplified_caching(

@@ -57,6 +57,7 @@ if TYPE_CHECKING:
 
     from pydantic import JsonValue
     from types_aiobotocore_bedrock_runtime.literals import (
+        CacheTTLType,
         ConversationRoleType,
         ServiceTierTypeType,
         StopReasonType,
@@ -425,12 +426,15 @@ def extract_reasoning(request: CompletionCreateParams) -> ReasoningParams | None
 
 def _extract_system_content_blocks(
     content: str | Iterable[ChatCompletionContentPartTextParam],
+    cache_point: ContentBlockTypeDef | None = None,
 ) -> list[SystemContentBlockTypeDef]:
     """Extract Bedrock system content blocks from an OpenAI content field.
 
     Args:
         content: Message content which may be a plain string or a list of
             ChatCompletionContentPartParam entries.
+        cache_point: Cache point block to insert after each part marked with
+            ``prompt_cache_breakpoint``, or ``None`` to ignore breakpoints.
 
     Returns:
         A list of Bedrock SystemContentBlockTypeDef items (text blocks) in order.
@@ -439,7 +443,18 @@ def _extract_system_content_blocks(
         return []
     if isinstance(content, str):
         return build_system_blocks(content)
-    return build_system_blocks(*(part.text for part in content))
+    blocks: list[SystemContentBlockTypeDef] = []
+    for part in content:
+        blocks += build_system_blocks(part.text)
+        # Empty parts yield no block: never lead with nor repeat a cache point
+        if (
+            cache_point is not None
+            and part.prompt_cache_breakpoint
+            and blocks
+            and "cachePoint" not in blocks[-1]
+        ):
+            blocks.append(cache_point)
+    return blocks
 
 
 _SYNC_OPENAI_PARTS = (ChatCompletionContentPartTextParam,)
@@ -487,23 +502,30 @@ async def _extract_content_blocks(
         ]
         | None
     ),
+    cache_point: ContentBlockTypeDef | None = None,
 ) -> list[ContentBlockTypeDef]:
     """Extract Bedrock content blocks from OpenAI message content.
 
     Args:
         content: OpenAI message content (string, list of parts, or None).
+        cache_point: Cache point block to insert after each part marked with
+            ``prompt_cache_breakpoint``, or ``None`` to ignore breakpoints.
 
     Returns:
         List of Bedrock content blocks.
     """
     if isinstance(content, str):
         return [{"text": content}]
-    return [
-        {"text": p.text}
-        if isinstance(p, _SYNC_OPENAI_PARTS)
-        else await _convert_content_part(p)
-        for p in (content or ())
-    ]
+    blocks: list[ContentBlockTypeDef] = []
+    for part in content or ():
+        blocks.append(
+            {"text": part.text}
+            if isinstance(part, _SYNC_OPENAI_PARTS)
+            else await _convert_content_part(part)
+        )
+        if cache_point is not None and part.prompt_cache_breakpoint:
+            blocks.append(cache_point)
+    return blocks
 
 
 def _build_tool_use_block(
@@ -536,12 +558,15 @@ def _build_tool_use_block(
 def _map_assistant_content(
     content_blocks: list[ContentBlockTypeDef],
     message_param: ChatCompletionAssistantMessageParam,
+    cache_point: ContentBlockTypeDef | None = None,
 ) -> None:
     """Append text/refusal content blocks from an assistant message.
 
     Args:
         content_blocks: Mutable list to append blocks to.
         message_param: The assistant message.
+        cache_point: Cache point block to insert after each part marked with
+            ``prompt_cache_breakpoint``, or ``None`` to ignore breakpoints.
 
     Raises:
         ApiError: If a content part has an unsupported type.
@@ -560,6 +585,8 @@ def _map_assistant_content(
             ):
                 if text:
                     content_blocks.append({"text": text})
+                    if cache_point is not None and part.prompt_cache_breakpoint:
+                        content_blocks.append(cache_point)
             case _:  # pragma: no cover
                 msg = f"Unsupported message type: {part}"
                 raise ApiError(msg)
@@ -596,6 +623,7 @@ def _map_assistant_reasoning_content(
 
 def _extract_assistant_blocks(
     message_param: ChatCompletionAssistantMessageParam,
+    cache_point: ContentBlockTypeDef | None = None,
 ) -> list[ContentBlockTypeDef]:
     """Append assistant tool use and content blocks.
 
@@ -607,6 +635,8 @@ def _extract_assistant_blocks(
 
     Args:
         message_param: The assistant message to convert (may include tool calls).
+        cache_point: Cache point block to insert after each content part marked
+            with ``prompt_cache_breakpoint``, or ``None`` to ignore breakpoints.
 
     Returns:
         Content blocks.
@@ -616,7 +646,7 @@ def _extract_assistant_blocks(
     """
     content_blocks: list[ContentBlockTypeDef] = []
 
-    _map_assistant_content(content_blocks, message_param)
+    _map_assistant_content(content_blocks, message_param, cache_point)
     _map_assistant_reasoning_content(content_blocks, message_param)
 
     # Tools and function calls must be at the end
@@ -721,6 +751,9 @@ def _append_or_merge(
 
 async def map_messages(
     messages: list[ChatCompletionMessageParam],
+    *,
+    allow_explicit_caching: bool = False,
+    cache_ttl: CacheTTLType | None = None,
 ) -> tuple[list[MessageTypeDef], list[SystemContentBlockTypeDef]]:
     """Convert OpenAI message params into Bedrock messages and system blocks.
 
@@ -729,12 +762,19 @@ async def map_messages(
 
     Args:
         messages: OpenAI message params to convert.
+        allow_explicit_caching: Whether ``prompt_cache_breakpoint`` marks on
+            content parts emit a Bedrock cache point.  Breakpoints on tool and
+            function result messages are always ignored.
+        cache_ttl: Cache TTL of the emitted cache points, ``None`` for the default.
 
     Returns:
         Tuple of (bedrock_messages, system_blocks).
     """
     bedrock_messages: list[MessageTypeDef] = []
     system_blocks: list[SystemContentBlockTypeDef] = []
+    cache_point = (
+        _openai_common.build_cache_point(cache_ttl) if allow_explicit_caching else None
+    )
 
     for message_param in messages:
         role_name = message_param.role
@@ -752,7 +792,7 @@ async def map_messages(
                     for p in (content_value or [])
                     if isinstance(p, ChatCompletionContentPartTextParam)
                 ]
-            system_blocks += _extract_system_content_blocks(system_input)
+            system_blocks += _extract_system_content_blocks(system_input, cache_point)
             continue
 
         if role_name == "tool":
@@ -763,9 +803,11 @@ async def map_messages(
             content_blocks = _extract_function_blocks(function_msg)
         elif role_name == "assistant":
             assistant_msg: ChatCompletionAssistantMessageParam = message_param  # type: ignore[assignment]
-            content_blocks = _extract_assistant_blocks(assistant_msg)
+            content_blocks = _extract_assistant_blocks(assistant_msg, cache_point)
         else:
-            content_blocks = await _extract_content_blocks(message_param.content)
+            content_blocks = await _extract_content_blocks(
+                message_param.content, cache_point
+            )
 
         _append_or_merge(bedrock_messages, role, content_blocks)
 

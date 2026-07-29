@@ -50,6 +50,9 @@ PromptCacheRetention = Literal[
     "5m",
 ]
 
+#: Prompt cache retention of the `prompt_cache_options.ttl` field.
+PromptCacheOptionsTTL = Literal["30m"]
+
 #: String-only tool-choice options.
 ToolChoiceLiteral = Literal["none", "auto", "required"]
 
@@ -925,12 +928,33 @@ class Reasoning(BaseModelRequest):
 # ---------------------------------------------------------------------------
 
 
+# Ref: openai.types.responses.response_input_text.PromptCacheBreakpoint
+class PromptCacheBreakpoint(BaseModelRequest):
+    """Explicit prompt-cache breakpoint set on an input content part."""
+
+    mode: Literal["explicit"] = Field(
+        default="explicit",
+        description="Breakpoint mode. Always `explicit`: the prompt prefix ending "
+        "with this content part is cached (AWS Bedrock `cachePoint`).",
+    )
+
+
+#: Description shared by every per-content-part `prompt_cache_breakpoint` field.
+_CACHE_BREAKPOINT_DESCRIPTION = (
+    "Cache the prompt prefix ending with this content part. Honored on models "
+    "supporting prompt caching, accepted and ignored on the others."
+)
+
+
 # Ref: openai.types.responses.response_input_text.ResponseInputText
 class ResponseInputText(BaseModelRequest):
     """A text input to the model."""
 
     text: str = Field(description="Text input.")
     type: Literal["input_text"] = Field(description="Input text type.")
+    prompt_cache_breakpoint: PromptCacheBreakpoint | None = Field(
+        default=None, description=_CACHE_BREAKPOINT_DESCRIPTION
+    )
 
 
 # Ref: openai.types.responses.response_input_image.ResponseInputImage
@@ -946,6 +970,9 @@ class ResponseInputImage(BaseModelRequest):
     image_url: str | None = Field(
         default=None, description="Image URL or base64 data URL."
     )
+    prompt_cache_breakpoint: PromptCacheBreakpoint | None = Field(
+        default=None, description=_CACHE_BREAKPOINT_DESCRIPTION
+    )
 
 
 # Ref: openai.types.responses.response_input_file.ResponseInputFile
@@ -957,6 +984,9 @@ class ResponseInputFile(BaseModelRequest):
     file_id: str | None = Field(default=None, description="File ID.")
     file_url: str | None = Field(default=None, description="File URL.")
     filename: str | None = Field(default=None, description="Filename.")
+    prompt_cache_breakpoint: PromptCacheBreakpoint | None = Field(
+        default=None, description=_CACHE_BREAKPOINT_DESCRIPTION
+    )
 
 
 # NOTE: Not in the OpenAI spec's InputContent — this type handles a real-world behaviour
@@ -3166,6 +3196,10 @@ class Response(BaseModelResponse):
     prompt_cache_key: str | None = Field(
         default=None, description="Cache key for similar requests."
     )
+    prompt_cache_options: PromptCacheOptions | None = Field(
+        default=None,
+        description="Explicit prompt-caching configuration, echoed from the request.",
+    )
     prompt_cache_retention: PromptCacheRetention | None = Field(
         default=None, description="Cache retention policy."
     )
@@ -4094,16 +4128,19 @@ ConversationParam = str | ConversationObject | None
 
 # Ref: openai.types.responses.response_create_params.PromptCacheOptions
 class PromptCacheOptions(BaseModelRequest):
-    """Explicit prompt-caching configuration for a request.
-
-    Accepted for compatibility and ignored; caching is instead driven by
-    `prompt_cache_key`/`prompt_cache_retention`.
-    """
+    """Explicit prompt-caching configuration for a request."""
 
     mode: Literal["implicit", "explicit"] | None = Field(
-        default=None, description="Caching mode: `implicit` or `explicit`."
+        default=None,
+        description="Caching mode. `explicit`: only content parts marked with "
+        "`prompt_cache_breakpoint` are cached. `implicit` (default): sections "
+        "selected with `prompt_cache_key` are cached too.",
     )
-    ttl: Literal["30m"] | None = Field(default=None, description="Cache TTL.")
+    ttl: PromptCacheOptionsTTL | None = Field(
+        default=None,
+        description="Cache retention: `30m` -> 1h (AWS Bedrock mapping). "
+        "Ignored when `prompt_cache_retention` is set.",
+    )
 
 
 # Ref: openai.types.responses.response_create_params.ResponseCreateParamsBase

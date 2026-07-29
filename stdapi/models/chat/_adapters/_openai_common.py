@@ -1,8 +1,8 @@
 """Shared helpers for OpenAI-shaped adapters (Chat Completions and Responses)."""
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from stdapi.aws_bedrock import PROMPT_CACHING
+from stdapi.aws_bedrock import PROMPT_CACHING, PROMPT_CACHING_DEFAULT
 from stdapi.types.openai_chat_completions import CompletionUsage, PromptTokensDetails
 from stdapi.utils import try_parse_json
 
@@ -12,12 +12,23 @@ if TYPE_CHECKING:
         ServiceTierTypeType,
     )
     from types_aiobotocore_bedrock_runtime.type_defs import (
+        ContentBlockTypeDef,
         ConverseStreamOutputTypeDef,
+        MessageTypeDef,
+        SystemContentBlockTypeDef,
+        ToolConfigurationTypeDef,
         ToolResultContentBlockUnionTypeDef,
     )
 
     from stdapi.aws_bedrock import PromptCaching
-    from stdapi.types.openai_chat_completions import PromptCacheRetention, ServiceTiers
+    from stdapi.types.openai_chat_completions import (
+        PromptCacheOptions,
+        PromptCacheRetention,
+        ServiceTiers,
+    )
+    from stdapi.types.openai_responses import (
+        PromptCacheOptions as ResponsesPromptCacheOptions,
+    )
 
 
 #: OpenAI service tiers to Bedrock mapping
@@ -28,12 +39,20 @@ _SERVICES_TIERS: dict[ServiceTiers, ServiceTierTypeType] = {
     "reserved": "reserved",
 }
 
+#: `prompt_cache_options.mode` value disabling the `prompt_cache_key` heuristic
+EXPLICIT_CACHE_MODE = "explicit"
+
 #: OpenAI to Bedrock prompt cache retention mapping
 CACHE_TTL: dict[PromptCacheRetention | None, CacheTTLType | None] = {
     "in_memory": None,
     "24h": "1h",  # max current value
     "1h": "1h",
     "5m": "5m",
+}
+
+#: OpenAI `prompt_cache_options.ttl` to Bedrock cache TTL mapping
+_OPTIONS_CACHE_TTL: dict[str, CacheTTLType] = {
+    "30m": "1h"  # closest AWS Bedrock TTL covering 30 minutes
 }
 
 
@@ -72,7 +91,104 @@ def map_service_tier(
     return None, "default"
 
 
-def parse_prompt_cache_key(prompt_cache_key: str | None) -> set[PromptCaching]:
+def resolve_cache_ttl(
+    prompt_cache_retention: PromptCacheRetention | None,
+    prompt_cache_options: PromptCacheOptions
+    | ResponsesPromptCacheOptions
+    | None = None,
+) -> CacheTTLType | None:
+    """Resolve the Bedrock cache TTL requested by a request.
+
+    Args:
+        prompt_cache_retention: Requested cache retention, which takes precedence.
+        prompt_cache_options: Request prompt cache options, whose ``ttl`` applies
+            when no retention is set.
+
+    Returns:
+        The Bedrock cache TTL, or ``None`` for the Bedrock default.
+    """
+    if prompt_cache_retention:
+        return CACHE_TTL.get(prompt_cache_retention)
+    if prompt_cache_options is not None and prompt_cache_options.ttl:
+        return _OPTIONS_CACHE_TTL.get(prompt_cache_options.ttl)
+    return None
+
+
+def build_cache_point(ttl: CacheTTLType | None = None) -> ContentBlockTypeDef:
+    """Build a Bedrock cache point block.
+
+    Args:
+        ttl: Cache TTL, or ``None`` for the Bedrock default.
+
+    Returns:
+        Bedrock cache point block.
+    """
+    if ttl:
+        return {"cachePoint": {"type": "default", "ttl": ttl}}
+    return PROMPT_CACHING_DEFAULT
+
+
+def cap_cache_points(
+    system_blocks: list[SystemContentBlockTypeDef] | None,
+    tool_config: ToolConfigurationTypeDef | None,
+    bedrock_messages: list[MessageTypeDef],
+    max_cache_points: int,
+) -> None:
+    """Drop the oldest cache points exceeding the Bedrock per-request limit.
+
+    Blocks are scanned in the order Bedrock reads them (system, tools, then
+    messages), so the surviving cache points are always the latest ones, which
+    cover the longest prompt prefixes.
+
+    Args:
+        system_blocks: System content blocks list.
+        tool_config: Bedrock tool configuration.
+        bedrock_messages: Bedrock message list.
+        max_cache_points: Maximum number of cache points allowed per request.
+    """
+    block_lists: list[list[Any]] = []
+    if system_blocks:
+        block_lists.append(system_blocks)
+    if tool_config and (tools := tool_config.get("tools")):
+        block_lists.append(tools)  # type: ignore[arg-type]
+    block_lists += [message["content"] for message in bedrock_messages]  # type: ignore[misc]
+
+    excess = (
+        sum(sum("cachePoint" in block for block in blocks) for blocks in block_lists)
+        - max_cache_points
+    )
+    for blocks in block_lists:
+        if excess <= 0:
+            return
+        kept = []
+        for block in blocks:
+            if excess > 0 and "cachePoint" in block:
+                excess -= 1
+            else:
+                kept.append(block)
+        blocks[:] = kept
+
+
+def drop_tool_turn_cache_points(bedrock_messages: list[MessageTypeDef]) -> None:
+    """Remove cache points from messages carrying tool use or tool result blocks.
+
+    Models without tool caching reject a ``cachePoint`` in such turns.
+
+    Args:
+        bedrock_messages: Bedrock message list.
+    """
+    for message in bedrock_messages:
+        content: list[Any] = message["content"]  # type: ignore[assignment]
+        if any("toolUse" in block or "toolResult" in block for block in content):
+            content[:] = [block for block in content if "cachePoint" not in block]
+
+
+def parse_prompt_cache_key(
+    prompt_cache_key: str | None,
+    prompt_cache_options: PromptCacheOptions
+    | ResponsesPromptCacheOptions
+    | None = None,
+) -> set[PromptCaching]:
     """Map a ``prompt_cache_key`` value to the set of cache components to enable.
 
     A dot-separated string like ``"system.tools"`` enables specific components;
@@ -81,10 +197,18 @@ def parse_prompt_cache_key(prompt_cache_key: str | None) -> set[PromptCaching]:
 
     Args:
         prompt_cache_key: Dot-separated cache component selector, or ``None``.
+        prompt_cache_options: Request prompt cache options.  The ``explicit`` mode
+            disables this key-driven placement: only content parts marked with
+            ``prompt_cache_breakpoint`` are then cached.
 
     Returns:
         Set of ``PromptCaching`` values to enable, or an empty set when caching is disabled.
     """
+    if (
+        prompt_cache_options is not None
+        and prompt_cache_options.mode == EXPLICIT_CACHE_MODE
+    ):
+        return set()
     if prompt_cache_key:
         return (
             set(prompt_cache_key.split(".")) & PROMPT_CACHING  # type: ignore[return-value]
