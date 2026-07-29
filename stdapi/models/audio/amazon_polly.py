@@ -61,6 +61,9 @@ _FORMAT_ENCODE = {"wav", "flac", "aac"}
 #: Polly's default sample rate for pcm output when none is requested
 _POLLY_DEFAULT_PCM_SAMPLE_RATE = 16000
 
+#: Polly pcm supported sample rates
+_PCM_SAMPLE_RATES = {8000, 16000}
+
 #: Content type of Polly's speech marks output (a stream of JSON lines)
 _SPEECH_MARKS_CONTENT_TYPE = "application/x-json-stream"
 
@@ -475,6 +478,9 @@ class AudioModel(AudioModelBase[None, None]):
             if extra.SampleRate:
                 sample_rate = extra.SampleRate
                 request["SampleRate"] = str(extra.SampleRate)
+                if encoding and sample_rate not in _PCM_SAMPLE_RATES:
+                    # Polly pcm caps at 16 kHz; encode from Ogg Vorbis above it.
+                    output_format = request["OutputFormat"] = "ogg_vorbis"
 
         def _synthesize(
             polly: PollyClient, _region: RegionName
@@ -496,7 +502,7 @@ class AudioModel(AudioModelBase[None, None]):
             audio_stream = encode_audio_stream(
                 body,
                 resp_format,
-                input_format="s16le",
+                input_format="s16le" if output_format == "pcm" else None,
                 channels=1,
                 sample_rate=sample_rate,
             )

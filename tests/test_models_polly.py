@@ -648,6 +648,40 @@ class TestSynthesizeSpeechEncodedFormats:
         assert request["OutputFormat"] == "pcm"
         assert request["SampleRate"] == "8000"
 
+    async def test_sample_rate_above_pcm_cap_falls_back_to_vorbis(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A SampleRate Polly pcm cannot serve keeps the Ogg Vorbis source."""
+        _patch_voices(monkeypatch, {("neural", "us-east-1"): {"Joanna"}})
+        await initialize_polly_models()
+        amazon_polly._VOICES_BY_NAME_LOWER["joanna"] = "Joanna"  # noqa: SLF001
+
+        client = _StubPollyClient(
+            {
+                "AudioStream": _FakeAudioStream(b"\x00\x00" * 4000),
+                "RequestCharacters": "5",
+            }
+        )
+        monkeypatch.setattr(
+            stdapi.aws, "get_client", lambda _service, _region=None: client
+        )
+        log_token = REQUEST_LOG.set(_start_event())
+        usage_token = usage.init_usage()
+        try:
+            await get_audio_model("amazon.polly-neural").tts(
+                text="Hello",
+                voice="Joanna",
+                resp_format="flac",
+                extra_params={"SampleRate": 24000},
+            )
+        finally:
+            usage.USAGE.reset(usage_token)
+            REQUEST_LOG.reset(log_token)
+
+        (request,) = client.requests
+        assert request["OutputFormat"] == "ogg_vorbis"
+        assert request["SampleRate"] == "24000"
+
 
 class TestSynthesizeSpeechMarks:
     """AudioModel.tts: SpeechMarkTypes switches Polly to its JSON marks output."""
