@@ -484,10 +484,12 @@ class _StubPollyClient:
     def __init__(self, outcome: dict[str, object] | Exception) -> None:
         self._outcome = outcome
         self.calls = 0
+        self.requests: list[dict[str, object]] = []
 
-    async def synthesize_speech(self, **_kwargs: object) -> dict[str, object]:
-        """Return the fixed payload or raise the configured error."""
+    async def synthesize_speech(self, **kwargs: object) -> dict[str, object]:
+        """Record the request and return the fixed payload or raise the error."""
         self.calls += 1
+        self.requests.append(kwargs)
         if isinstance(self._outcome, Exception):
             raise self._outcome
         return self._outcome
@@ -549,3 +551,76 @@ class TestSynthesizeSpeechFailover:
             "polly" in str(detail) and "us-east-1" in str(detail)
             for detail in log["error_detail"]
         )
+
+
+class TestSynthesizeSpeechEncodedFormats:
+    """AudioModel.tts: wav/flac/aac are transcoded from lossless PCM, not Vorbis."""
+
+    async def test_wav_request_synthesizes_from_pcm_by_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A wav request asks Polly for pcm, not ogg_vorbis, with no SampleRate."""
+        _patch_voices(monkeypatch, {("neural", "us-east-1"): {"Joanna"}})
+        await initialize_polly_models()
+        amazon_polly._VOICES_BY_NAME_LOWER["joanna"] = "Joanna"  # noqa: SLF001
+
+        # 0.5s of 16-bit mono silence at Polly's default 16 kHz pcm rate.
+        client = _StubPollyClient(
+            {
+                "AudioStream": _FakeAudioStream(b"\x00\x00" * 8000),
+                "RequestCharacters": "5",
+            }
+        )
+        monkeypatch.setattr(
+            stdapi.aws, "get_client", lambda _service, _region=None: client
+        )
+        log_token = REQUEST_LOG.set(_start_event())
+        usage_token = usage.init_usage()
+        try:
+            response = await get_audio_model("amazon.polly-neural").tts(
+                text="Hello", voice="Joanna", resp_format="wav"
+            )
+            audio = b"".join([chunk async for chunk in response["audio_stream"]])
+        finally:
+            usage.USAGE.reset(usage_token)
+            REQUEST_LOG.reset(log_token)
+
+        (request,) = client.requests
+        assert request["OutputFormat"] == "pcm"
+        assert "SampleRate" not in request
+        # ffmpeg successfully decoded the raw pcm at the assumed 16 kHz rate.
+        assert audio.startswith(b"RIFF")
+
+    async def test_explicit_sample_rate_overrides_the_pcm_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A caller-provided SampleRate is still forwarded for the pcm source."""
+        _patch_voices(monkeypatch, {("neural", "us-east-1"): {"Joanna"}})
+        await initialize_polly_models()
+        amazon_polly._VOICES_BY_NAME_LOWER["joanna"] = "Joanna"  # noqa: SLF001
+
+        client = _StubPollyClient(
+            {
+                "AudioStream": _FakeAudioStream(b"\x00\x00" * 4000),
+                "RequestCharacters": "5",
+            }
+        )
+        monkeypatch.setattr(
+            stdapi.aws, "get_client", lambda _service, _region=None: client
+        )
+        log_token = REQUEST_LOG.set(_start_event())
+        usage_token = usage.init_usage()
+        try:
+            await get_audio_model("amazon.polly-neural").tts(
+                text="Hello",
+                voice="Joanna",
+                resp_format="flac",
+                extra_params={"SampleRate": 8000},
+            )
+        finally:
+            usage.USAGE.reset(usage_token)
+            REQUEST_LOG.reset(log_token)
+
+        (request,) = client.requests
+        assert request["OutputFormat"] == "pcm"
+        assert request["SampleRate"] == "8000"

@@ -58,8 +58,8 @@ _FORMAT: dict[str, OutputFormatType] = {"ogg": "ogg_vorbis", "opus": "ogg_opus"}
 #: Formats to encode from PCM using ffmpeg (Not supported by Polly natively)
 _FORMAT_ENCODE = {"wav", "flac", "aac"}
 
-#: Polly PCM supported sample rates
-_PCM_SAMPLE_RATES = {8000, 16000}
+#: Polly's default sample rate for pcm output when none is requested
+_POLLY_DEFAULT_PCM_SAMPLE_RATE = 16000
 
 #: Sample size for language detection
 _LANG_DETECT_SAMPLE_SIZE = 500
@@ -430,9 +430,10 @@ class AudioModel(AudioModelBase[None, None]):
         log = REQUEST_LOG.get()
         encoding = resp_format in _FORMAT_ENCODE
         output_format: OutputFormatType = (
-            "ogg_vorbis" if encoding else _FORMAT.get(resp_format, resp_format)  # type: ignore[arg-type]
+            "pcm" if encoding else _FORMAT.get(resp_format, resp_format)  # type: ignore[arg-type]
         )
-        sample_rate = None
+        # Polly's own default PCM sample rate, used unless the caller overrides it.
+        sample_rate = _POLLY_DEFAULT_PCM_SAMPLE_RATE if encoding else None
 
         engine = _engine_from_model(self.model.id)
         voice_id, language = await _select_voice(text, voice, engine)
@@ -459,9 +460,6 @@ class AudioModel(AudioModelBase[None, None]):
             if extra.SampleRate:
                 sample_rate = extra.SampleRate
                 request["SampleRate"] = str(extra.SampleRate)
-                if encoding and sample_rate in _PCM_SAMPLE_RATES:
-                    # Use lossless PCM if supported instead of a lossy Vorbis
-                    output_format = request["OutputFormat"] = "pcm"
 
         def _synthesize(
             polly: PollyClient, _region: RegionName
@@ -483,7 +481,7 @@ class AudioModel(AudioModelBase[None, None]):
             audio_stream = encode_audio_stream(
                 body,
                 resp_format,
-                input_format="s16le" if output_format == "pcm" else None,
+                input_format="s16le",
                 channels=1,
                 sample_rate=sample_rate,
             )
