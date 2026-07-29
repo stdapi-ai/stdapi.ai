@@ -109,6 +109,7 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
         timestamp_granularities: list[AudioTimestampGranularities] | None = None,  # noqa: ARG002
         prompt: str | None = None,  # noqa: ARG002
         temperature: float | None = None,  # noqa: ARG002
+        extra_params: JsonMapping | None = None,  # noqa: ARG002
         *,
         logprobs: bool,  # noqa: ARG002
     ) -> str | TranscriptionCreateResponse | TranscriptionDiarized | Response:
@@ -121,6 +122,7 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
             timestamp_granularities: Optional timestamp granularities for verbose_json.
             prompt: Optional prompt for transcription.
             temperature: Optional temperature for transcription.
+            extra_params: Extra model parameters.
             logprobs: If true, return log probabilities.
 
         Returns:
@@ -139,6 +141,7 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
         language: str | None = None,  # noqa: ARG002
         prompt: str | None = None,  # noqa: ARG002
         temperature: float | None = None,  # noqa: ARG002
+        extra_params: JsonMapping | None = None,  # noqa: ARG002
         *,
         logprobs: bool,  # noqa: ARG002
     ) -> AsyncGenerator[TranscriptionTextDeltaEvent | TranscriptionTextDoneEvent]:
@@ -150,6 +153,7 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
             language: Optional language code.
             prompt: Optional prompt for transcription.
             temperature: Optional temperature for transcription.
+            extra_params: Extra model parameters.
             logprobs: If true, return log probabilities.
 
         Yields:
@@ -168,6 +172,7 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
         response_format: AudioResponseFormat,  # noqa: ARG002
         prompt: str | None,  # noqa: ARG002
         temperature: float | None = None,  # noqa: ARG002
+        extra_params: JsonMapping | None = None,  # noqa: ARG002
     ) -> str | TranslationCreateResponse | Response:
         """Transcribe and translate audio to English.
 
@@ -176,6 +181,7 @@ class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):
             response_format: Format for output (json, text, srt, vtt, verbose_json).
             prompt: Optional prompt for translation.
             temperature: Optional temperature for transcription.
+            extra_params: Extra model parameters.
 
         Returns:
             Formatted translation response (str | TranslationCreateResponse | Response).

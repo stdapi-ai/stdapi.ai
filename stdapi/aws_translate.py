@@ -5,7 +5,7 @@ from io import StringIO
 from re import DOTALL, IGNORECASE, search
 from typing import TYPE_CHECKING
 
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, ParamValidationError
 
 from stdapi.api_errors import ApiError
 from stdapi.aws import call_with_region_failover, service_regions
@@ -18,7 +18,12 @@ if TYPE_CHECKING:
 
     from types_aiobotocore_bedrock.literals import RegionName
     from types_aiobotocore_translate import TranslateClient
-    from types_aiobotocore_translate.type_defs import TranslateTextResponseTypeDef
+    from types_aiobotocore_translate.type_defs import (
+        TranslateTextRequestTypeDef,
+        TranslateTextResponseTypeDef,
+    )
+
+    from stdapi.types import JsonMapping
 
 
 class TranslationError(Exception):
@@ -30,7 +35,11 @@ _TRANSLATE_DISTINCT_LANGUAGE_CODES = {"es-MX", "fa-AF", "fr-CA", "pt-PT", "zh-TW
 
 
 async def translate(
-    text: str, source_language_code: str, target_language_code: str = "en"
+    text: str,
+    source_language_code: str,
+    target_language_code: str = "en",
+    settings: JsonMapping | None = None,
+    terminology_names: list[str] | None = None,
 ) -> str:
     """Translate text from source language to English using AWS Translate.
 
@@ -38,12 +47,16 @@ async def translate(
         text: Text to translate
         source_language_code: Source language code (e.g., 'es-US', 'fr-FR')
         target_language_code: Target language code (default: 'en')
+        settings: Optional TranslateText ``Settings`` (``Formality``, ``Profanity``,
+            ``Brevity``)
+        terminology_names: Optional pre-existing custom terminology names
 
     Returns:
         Translated text in English
 
     Raises:
-        ApiError: When translation fails
+        ApiError: When translation fails, or ``settings``/``terminology_names``
+            hold a value AWS Translate rejects
     """
     if source_language_code not in _TRANSLATE_DISTINCT_LANGUAGE_CODES:
         source_language_code = source_language_code.split("-", 1)[0]
@@ -54,11 +67,16 @@ async def translate(
         client: TranslateClient, _region: RegionName
     ) -> Awaitable[TranslateTextResponseTypeDef]:
         """Start the translation call on one region's client."""
-        return client.translate_text(
-            Text=text,
-            SourceLanguageCode=source_language_code,
-            TargetLanguageCode=target_language_code,
-        )
+        request: TranslateTextRequestTypeDef = {
+            "Text": text,
+            "SourceLanguageCode": source_language_code,
+            "TargetLanguageCode": target_language_code,
+        }
+        if settings:
+            request["Settings"] = settings  # type: ignore[typeddict-item]
+        if terminology_names:
+            request["TerminologyNames"] = terminology_names
+        return client.translate_text(**request)
 
     try:
         result, used_region = await call_with_region_failover(
@@ -75,10 +93,18 @@ async def translate(
             )
             raise ApiError(msg) from None
         raise
+    except ParamValidationError as error:
+        # botocore validates Settings/TerminologyNames client-side; surface it
+        # as a caller 400 instead of an unhandled 500.
+        raise ApiError(str(error)) from error
 
 
 async def translate_subtitle(
-    subtitle_content: str, source_language_code: str, target_language_code: str = "en"
+    subtitle_content: str,
+    source_language_code: str,
+    target_language_code: str = "en",
+    settings: JsonMapping | None = None,
+    terminology_names: list[str] | None = None,
 ) -> str:
     """Translate subtitle content while preserving timing and structure.
 
@@ -90,6 +116,9 @@ async def translate_subtitle(
         subtitle_content: Original subtitle content in SRT or VTT format
         source_language_code: ISO language code of the source language (e.g., 'es-US', 'fr-FR')
         target_language_code: ISO language code of the target language (default: 'en')
+        settings: Optional TranslateText ``Settings`` (``Formality``, ``Profanity``,
+            ``Brevity``)
+        terminology_names: Optional pre-existing custom terminology names
 
     Returns:
         Translated subtitle content in the same format as input
@@ -105,6 +134,8 @@ async def translate_subtitle(
         _subtitle_create_html_for_translation(text_segments),
         source_language_code,
         target_language_code,
+        settings,
+        terminology_names,
     )
     return _subtitle_reconstruct_with_translation(
         subtitle_content,

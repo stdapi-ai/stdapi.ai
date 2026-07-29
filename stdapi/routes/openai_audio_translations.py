@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFil
 
 from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
+from stdapi.aws_bedrock import get_extra_model_parameters
 from stdapi.config import SETTINGS
 from stdapi.input_file import InputFile
 from stdapi.models import validate_model
@@ -202,4 +203,5 @@ async def create_translation(
         response_format=request.response_format,
         temperature=request.temperature,
         prompt=request.prompt,
+        extra_params=get_extra_model_parameters(model, request),
     )

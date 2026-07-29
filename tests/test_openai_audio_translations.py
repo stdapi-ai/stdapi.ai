@@ -5,6 +5,7 @@ specification, ensuring compatibility with the official OpenAI API behavior.
 """
 
 import io
+from base64 import b64encode
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -422,6 +423,35 @@ class TestAudioTranslationsJsonBody:
         response = http_client.post(
             f"{openai_client.base_url}audio/translations",
             json={"file": sample_audio_file_base64, "model": transcription_model},
+            headers={"Authorization": f"Bearer {openai_client.api_key}"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert isinstance(body.get("text"), str)
+        assert len(body["text"].strip()) > 0
+
+    @pytest.mark.expensive
+    def test_json_body_translation_with_translate_settings(
+        self,
+        openai_client: OpenAI,
+        sample_audio_fr_file: bytes,
+        transcription_model: str,
+    ) -> None:
+        """AWS Translate ``Settings`` reach the real TranslateText call.
+
+        Non-English audio is required: ``translate()`` skips AWS Translate
+        entirely for English source text, which would never exercise the
+        ``Settings`` plumbing.
+        """
+        http_client = openai_client._client  # noqa: SLF001
+        data_uri = f"data:audio/mpeg;base64,{b64encode(sample_audio_fr_file).decode()}"
+        response = http_client.post(
+            f"{openai_client.base_url}audio/translations",
+            json={
+                "file": data_uri,
+                "model": transcription_model,
+                "Settings": {"Formality": "FORMAL"},
+            },
             headers={"Authorization": f"Bearer {openai_client.api_key}"},
         )
         assert response.status_code == 200

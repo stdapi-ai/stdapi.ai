@@ -4,10 +4,15 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, ParamValidationError
+from pydantic import ValidationError
 
 import stdapi.aws
-from stdapi.api_errors import ApiError, InvalidLanguageFormatError
+from stdapi.api_errors import (
+    ApiError,
+    InvalidLanguageFormatError,
+    UnsupportedParameterError,
+)
 from stdapi.aws_s3 import _bucket_to_region
 from stdapi.config import SETTINGS
 from stdapi.models import EXTRA_MODELS
@@ -15,10 +20,12 @@ from stdapi.models.audio import amazon_transcribe
 from stdapi.models.audio.amazon_transcribe import (
     AWS_TRANSCRIBE_MODEL_ID,
     AudioModel,
+    _build_transcription_job_params,
     _build_transcription_segment,
     _get_audio_duration,
     _start_transcription_with_failover,
     _text_compression_ratio,
+    _TranscribeExtraParams,
     initialize_transcribe_models,
     transcribe_job_candidates,
 )
@@ -290,6 +297,24 @@ class TestStartTranscriptionWithFailover:
         # The input is still copied into the second region's bucket before
         # its (also failing) start attempt.
         assert copies == [("us-bucket", "eu-bucket", "eu-west-1")]
+
+    async def test_botocore_param_validation_error_becomes_a_caller_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A client-side botocore rejection (e.g. MaxAlternatives<2) surfaces as ApiError, not a 500."""
+        clients = {
+            "us-east-1": _StubTranscribeClient(
+                ParamValidationError(
+                    report="Invalid range for parameter Settings.MaxAlternatives"
+                )
+            )
+        }
+        self._patch_infra(monkeypatch, clients)
+
+        with pytest.raises(ApiError):
+            await _start_transcription_with_failover(
+                [("us-east-1", "us-bucket")], "job1", None, "json"
+            )
 
     async def test_failed_region_job_is_deleted(
         self, monkeypatch: pytest.MonkeyPatch
@@ -582,8 +607,16 @@ class TestFormatTranslationResponseVerboseJson:
         }
         translations = {"Bonjour": "Hello", "le monde": "the world"}
 
-        async def _fake_translate(text: str, language: str) -> str:
+        async def _fake_translate(
+            text: str,
+            language: str,
+            target_language_code: str = "en",  # noqa: ARG001
+            settings: dict[str, str] | None = None,
+            terminology_names: list[str] | None = None,
+        ) -> str:
             assert language == "fr-FR"
+            assert settings is None
+            assert terminology_names is None
             return translations[text]
 
         monkeypatch.setattr(amazon_transcribe, "translate", _fake_translate)
@@ -597,6 +630,82 @@ class TestFormatTranslationResponseVerboseJson:
         assert isinstance(response, TranslationVerbose)
         assert response.segments is not None
         assert [segment.text for segment in response.segments] == ["Hello", "the world"]
+
+    async def test_settings_and_terminology_names_reach_each_segment(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Settings/TerminologyNames are forwarded to every per-segment translate call."""
+        transcript_data: dict[str, Any] = {
+            "language_code": "fr-FR",
+            "audio_segments": [
+                {
+                    "id": 0,
+                    "start_time": "0.0",
+                    "end_time": "1.0",
+                    "transcript": "Bonjour",
+                }
+            ],
+        }
+        calls: list[tuple[dict[str, str] | None, list[str] | None]] = []
+
+        async def _fake_translate(
+            text: str,  # noqa: ARG001
+            language: str,  # noqa: ARG001
+            target_language_code: str = "en",  # noqa: ARG001
+            settings: dict[str, str] | None = None,
+            terminology_names: list[str] | None = None,
+        ) -> str:
+            calls.append((settings, terminology_names))
+            return "Hello"
+
+        monkeypatch.setattr(amazon_transcribe, "translate", _fake_translate)
+
+        await AudioModel._format_translation_response(  # noqa: SLF001
+            transcript_data,  # type: ignore[arg-type]
+            "Hello",
+            "verbose_json",
+            settings={"Formality": "FORMAL"},
+            terminology_names=["MyGlossary"],
+        )
+
+        assert calls == [({"Formality": "FORMAL"}, ["MyGlossary"])]
+
+
+class TestPopTranslateExtraParams:
+    """_pop_translate_extra_params: split Translate's Settings/TerminologyNames out."""
+
+    def test_none_input_passes_through(self) -> None:
+        """A missing extra_params dict stays None for all three outputs."""
+        assert amazon_transcribe._pop_translate_extra_params(None) == (  # noqa: SLF001
+            None,
+            None,
+            None,
+        )
+
+    def test_only_translate_keys_leaves_nothing_for_the_job(self) -> None:
+        """A dict with only Settings/TerminologyNames leaves no job extra_params."""
+        remaining, settings, terminology_names = (
+            amazon_transcribe._pop_translate_extra_params(  # noqa: SLF001
+                {
+                    "Settings": {"Formality": "FORMAL"},
+                    "TerminologyNames": ["MyGlossary"],
+                }
+            )
+        )
+        assert remaining is None
+        assert settings == {"Formality": "FORMAL"}
+        assert terminology_names == ["MyGlossary"]
+
+    def test_mixed_keys_keep_the_transcribe_fields_for_the_job(self) -> None:
+        """Transcribe-only keys stay in the remaining dict, untouched."""
+        remaining, settings, terminology_names = (
+            amazon_transcribe._pop_translate_extra_params(  # noqa: SLF001
+                {"Settings": {"Profanity": "MASK"}, "VocabularyName": "MyVocabulary"}
+            )
+        )
+        assert remaining == {"VocabularyName": "MyVocabulary"}
+        assert settings == {"Profanity": "MASK"}
+        assert terminology_names is None
 
 
 class TestTextCompressionRatio:
@@ -641,3 +750,175 @@ class TestBuildTranscriptionSegment:
 
         assert result.no_speech_prob == 1.0
         assert result.avg_logprob < -1.0
+
+
+class TestTranscribeExtraParamsValueConstraints:
+    """_TranscribeExtraParams: values are forwarded to AWS verbatim, not re-validated.
+
+    Amazon Transcribe already rejects an unsupported enum/range value with its
+    own 400 error (surfaced via ``_handle_transcription_error``); duplicating
+    that validation here would only reject clients AWS itself would accept
+    (e.g. a newly added PII entity type).
+    """
+
+    def test_unknown_pii_entity_type_is_accepted(self) -> None:
+        """A PiiEntityTypes value outside the documented set is forwarded as-is."""
+        extra = _TranscribeExtraParams(
+            ContentRedaction={
+                "RedactionType": "PII",
+                "PiiEntityTypes": ["NOT_A_REAL_ENTITY"],
+            }
+        )
+        assert extra.ContentRedaction.PiiEntityTypes == ["NOT_A_REAL_ENTITY"]  # type: ignore[union-attr]
+
+    def test_redacted_and_unredacted_output_is_rejected(self) -> None:
+        """The dual-output redaction mode is rejected (no tracked-cleanup path yet)."""
+        with pytest.raises(ValidationError):
+            _TranscribeExtraParams(
+                ContentRedaction={
+                    "RedactionType": "PII",
+                    "RedactionOutput": "redacted_and_unredacted",
+                }
+            )
+
+    def test_unknown_vocabulary_filter_method_is_accepted(self) -> None:
+        """A VocabularyFilterMethod outside mask/remove/tag is forwarded as-is."""
+        extra = _TranscribeExtraParams(VocabularyFilterMethod="delete")
+        assert extra.VocabularyFilterMethod == "delete"
+
+    def test_max_alternatives_out_of_range_is_accepted(self) -> None:
+        """MaxAlternatives outside AWS's documented 2-10 range is forwarded as-is."""
+        assert _TranscribeExtraParams(MaxAlternatives=1).MaxAlternatives == 1
+
+    def test_max_speaker_labels_out_of_range_is_accepted(self) -> None:
+        """MaxSpeakerLabels outside AWS's documented 2-30 range is forwarded as-is."""
+        assert _TranscribeExtraParams(MaxSpeakerLabels=31).MaxSpeakerLabels == 31
+
+    def test_unknown_top_level_field_is_rejected(self) -> None:
+        """An unsupported field name (extra="forbid") fails validation."""
+        with pytest.raises(ValidationError):
+            _TranscribeExtraParams(NotARealField=True)  # type: ignore[call-arg]
+
+    def test_documented_values_round_trip(self) -> None:
+        """A fully populated, valid extra-params payload validates and dumps back."""
+        extra = _TranscribeExtraParams(
+            ContentRedaction={
+                "RedactionType": "PII",
+                "PiiEntityTypes": ["NAME", "SSN"],
+            },
+            VocabularyFilterName="myfilter",
+            VocabularyFilterMethod="mask",
+            ShowAlternatives=True,
+            MaxAlternatives=3,
+            ToxicityDetection=[{"ToxicityCategories": ["ALL"]}],
+            ModelSettings={"LanguageModelName": "my-clm"},
+            LanguageOptions=["en-US", "es-US"],
+            IdentifyMultipleLanguages=True,
+        )
+        dumped = extra.model_dump(exclude_none=True)
+        assert dumped["VocabularyFilterMethod"] == "mask"
+        assert dumped["ContentRedaction"] == {
+            "RedactionType": "PII",
+            "RedactionOutput": "redacted",
+            "PiiEntityTypes": ["NAME", "SSN"],
+        }
+
+
+class TestBuildTranscriptionJobParamsExtra:
+    """_build_transcription_job_params: extra_params merge into StartTranscriptionJob."""
+
+    @pytest.fixture(autouse=True)
+    def _request_context(self) -> Generator[None]:
+        """Provide the request ID and log the job tags are built from."""
+        id_token = REQUEST_ID.set("job1")
+        log_token = REQUEST_LOG.set(_new_log())
+        yield
+        REQUEST_LOG.reset(log_token)
+        REQUEST_ID.reset(id_token)
+
+    def test_content_redaction_is_forwarded(self) -> None:
+        """ContentRedaction is passed through to the job params unchanged."""
+        extra = _TranscribeExtraParams(
+            ContentRedaction={"RedactionType": "PII", "PiiEntityTypes": ["NAME"]}
+        )
+        params = _build_transcription_job_params("job1", "bucket", "en", "json", extra)
+        assert params["ContentRedaction"] == {  # type: ignore[typeddict-item]
+            "RedactionType": "PII",
+            "RedactionOutput": "redacted",
+            "PiiEntityTypes": ["NAME"],
+        }
+
+    def test_vocabulary_and_alternatives_settings_are_merged(self) -> None:
+        """VocabularyFilterName/Method and ShowAlternatives/MaxAlternatives land under Settings."""
+        extra = _TranscribeExtraParams(
+            VocabularyFilterName="myfilter",
+            VocabularyFilterMethod="mask",
+            ShowAlternatives=True,
+            MaxAlternatives=4,
+        )
+        params = _build_transcription_job_params("job1", "bucket", "en", "json", extra)
+        assert params["Settings"] == {  # type: ignore[typeddict-item]
+            "VocabularyFilterName": "myfilter",
+            "VocabularyFilterMethod": "mask",
+            "ShowAlternatives": True,
+            "MaxAlternatives": 4,
+        }
+
+    def test_max_speaker_labels_overrides_the_diarized_json_default(self) -> None:
+        """extra.MaxSpeakerLabels overrides the hardcoded default of 10."""
+        extra = _TranscribeExtraParams(MaxSpeakerLabels=25)
+        params = _build_transcription_job_params(
+            "job1", "bucket", "en", "diarized_json", extra
+        )
+        assert params["Settings"] == {  # type: ignore[typeddict-item]
+            "ShowSpeakerLabels": True,
+            "MaxSpeakerLabels": 25,
+        }
+
+    def test_toxicity_detection_and_model_settings_are_forwarded(self) -> None:
+        """ToxicityDetection and ModelSettings.LanguageModelName reach the job params."""
+        extra = _TranscribeExtraParams(
+            ToxicityDetection=[{"ToxicityCategories": ["ALL"]}],
+            ModelSettings={"LanguageModelName": "my-clm"},
+        )
+        params = _build_transcription_job_params("job1", "bucket", "en", "json", extra)
+        assert params["ToxicityDetection"] == [{"ToxicityCategories": ["ALL"]}]  # type: ignore[typeddict-item]
+        assert params["ModelSettings"] == {"LanguageModelName": "my-clm"}  # type: ignore[typeddict-item]
+
+    def test_identify_multiple_languages_supersedes_language_code(self) -> None:
+        """IdentifyMultipleLanguages wins over an explicit language, per AWS's mutual exclusion."""
+        extra = _TranscribeExtraParams(
+            IdentifyMultipleLanguages=True, LanguageOptions=["en-US", "fr-FR"]
+        )
+        params = _build_transcription_job_params("job1", "bucket", "en", "json", extra)
+        assert params["IdentifyMultipleLanguages"] is True  # type: ignore[typeddict-item]
+        assert params["LanguageOptions"] == ["en-US", "fr-FR"]  # type: ignore[typeddict-item]
+        assert "LanguageCode" not in params
+        assert "IdentifyLanguage" not in params
+
+    def test_language_options_apply_with_auto_identification(self) -> None:
+        """LanguageOptions without an explicit language narrows auto-identification."""
+        extra = _TranscribeExtraParams(LanguageOptions=["en-US", "fr-FR"])
+        params = _build_transcription_job_params("job1", "bucket", None, "json", extra)
+        assert params["IdentifyLanguage"] is True  # type: ignore[typeddict-item]
+        assert params["LanguageOptions"] == ["en-US", "fr-FR"]  # type: ignore[typeddict-item]
+
+    def test_channel_identification_conflicts_with_diarized_json(self) -> None:
+        """ChannelIdentification with diarized_json is rejected with a clean 400."""
+        extra = _TranscribeExtraParams(ChannelIdentification=True)
+        with pytest.raises(UnsupportedParameterError):
+            _build_transcription_job_params(
+                "job1", "bucket", "en", "diarized_json", extra
+            )
+
+    def test_channel_identification_alone_is_accepted(self) -> None:
+        """ChannelIdentification without diarized_json is accepted normally."""
+        extra = _TranscribeExtraParams(ChannelIdentification=True)
+        params = _build_transcription_job_params("job1", "bucket", "en", "json", extra)
+        assert params["Settings"] == {"ChannelIdentification": True}  # type: ignore[typeddict-item]
+
+    def test_no_extra_params_matches_prior_behavior(self) -> None:
+        """Without extra_params, the job params are unchanged from before #82."""
+        params = _build_transcription_job_params("job1", "bucket", "en", "json")
+        assert "Settings" not in params
+        assert "ContentRedaction" not in params

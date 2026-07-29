@@ -888,6 +888,32 @@ class TestAudioTranscriptionsJsonBody:
         assert isinstance(body.get("text"), str)
         assert len(body["text"].strip()) > 0
 
+    @pytest.mark.expensive
+    def test_json_body_transcription_with_transcribe_extra_params(
+        self,
+        openai_client: OpenAI,
+        sample_audio_file_base64: str,
+        transcription_model: str,
+    ) -> None:
+        """Amazon Transcribe extra params (e.g. ContentRedaction) reach the real job."""
+        http_client = openai_client._client  # noqa: SLF001
+        response = http_client.post(
+            f"{openai_client.base_url}audio/transcriptions",
+            json={
+                "file": sample_audio_file_base64,
+                "model": transcription_model,
+                "ContentRedaction": {
+                    "RedactionType": "PII",
+                    "PiiEntityTypes": ["NAME", "SSN"],
+                },
+            },
+            headers={"Authorization": f"Bearer {openai_client.api_key}"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert isinstance(body.get("text"), str)
+        assert len(body["text"].strip()) > 0
+
 
 @pytest.mark.local
 class TestAudioTranscriptionsResponseFormatBugs:

@@ -3,7 +3,7 @@
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, ParamValidationError
 
 import stdapi.aws
 from stdapi import usage
@@ -149,3 +149,64 @@ class TestTranslateSourceLanguageCode:
 
         (request,) = client.requests
         assert request["SourceLanguageCode"] == expected
+
+
+class TestTranslateExtraParams:
+    """translate(): Settings/TerminologyNames extra parameters (issue #85)."""
+
+    async def test_settings_and_terminology_names_are_forwarded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Settings and TerminologyNames land in the TranslateText request."""
+        client = _StubTranslateClient({"TranslatedText": "hi"})
+        monkeypatch.setattr(
+            stdapi.aws, "get_client", lambda _service, _region=None: client
+        )
+
+        await translate(
+            "bonjour",
+            "fr",
+            settings={"Formality": "FORMAL", "Profanity": "MASK"},
+            terminology_names=["MyGlossary"],
+        )
+
+        (request,) = client.requests
+        assert request["Settings"] == {"Formality": "FORMAL", "Profanity": "MASK"}
+        assert request["TerminologyNames"] == ["MyGlossary"]
+
+    async def test_omitted_extra_params_are_not_sent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Without settings/terminology_names, the request carries neither key."""
+        client = _StubTranslateClient({"TranslatedText": "hi"})
+        monkeypatch.setattr(
+            stdapi.aws, "get_client", lambda _service, _region=None: client
+        )
+
+        await translate("bonjour", "fr")
+
+        (request,) = client.requests
+        assert "Settings" not in request
+        assert "TerminologyNames" not in request
+
+    async def test_param_validation_error_becomes_a_400(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An invalid Settings/TerminologyNames value is a caller 400, not a 500.
+
+        Both candidate regions raise the same client-side validation error
+        (it depends only on the request, not on which region serves it), so
+        it is not masked by cross-region failover.
+        """
+        clients = {
+            "us-east-1": _StubTranslateClient(
+                ParamValidationError(report="Invalid Formality value")
+            ),
+            "eu-west-1": _StubTranslateClient(
+                ParamValidationError(report="Invalid Formality value")
+            ),
+        }
+        _patch_clients(monkeypatch, clients)
+
+        with pytest.raises(ApiError, match="Invalid Formality value"):
+            await translate("bonjour", "fr", settings={"Formality": "BAD"})

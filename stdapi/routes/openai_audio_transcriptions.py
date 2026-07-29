@@ -7,6 +7,7 @@ from sse_starlette import EventSourceResponse, JSONServerSentEvent
 
 from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
+from stdapi.aws_bedrock import get_extra_model_parameters
 from stdapi.config import SETTINGS
 from stdapi.input_file import InputFile
 from stdapi.models import validate_model
@@ -324,6 +325,8 @@ async def create_transcription(
         )
     ).id
 
+    extra_params = get_extra_model_parameters(model, request)
+
     if request.stream:
         return EventSourceResponse(
             await log_request_stream_event(
@@ -334,6 +337,7 @@ async def create_transcription(
                         language=request.language,
                         temperature=request.temperature,
                         prompt=request.prompt,
+                        extra_params=extra_params,
                         logprobs=request.include == "logprobs",
                     )
                 )
@@ -347,5 +351,6 @@ async def create_transcription(
         timestamp_granularities=request.timestamp_granularities,
         temperature=request.temperature,
         prompt=request.prompt,
+        extra_params=extra_params,
         logprobs=request.include == "logprobs",
     )

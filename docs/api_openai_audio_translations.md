@@ -54,6 +54,7 @@ Translate audio from any language to English text with Amazon Transcribe + Trans
 | **Advanced**            |                                         |                               |
 | `prompt`                |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Bedrock models only; rejected by Amazon Transcribe |
 | `temperature`           |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Bedrock models only; rejected by Amazon Transcribe |
+| Extra model-specific params | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" }| Amazon Transcribe + Translate optional settings via JSON body (see below) |
 | **Usage tracking**      |                                         |                               |
 | Input audio duration    |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Seconds (billing unit on Amazon Transcribe) |
 | Output text tokens      |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | On models from Bedrock        |
@@ -118,6 +119,38 @@ Translate audio from any language to English text with Amazon Transcribe + Trans
     This alias enables seamless compatibility with OpenAI-based tools and applications without any configuration changes. You can also [customize or override this alias](operations_configuration.md#model-aliases) to suit your needs.
 
 **Note:** With `amazon.transcribe`, the `prompt` and `temperature` parameters are rejected with an error to ensure consistent translation accuracy. Bedrock audio models accept both.
+
+### Provider-Specific Parameters
+
+`amazon.transcribe` first transcribes the audio, then translates it, and each step has its own provider-specific parameters — both reachable via the same `application/json` request body.
+
+**Transcription step (Amazon Transcribe):** the same [extra parameters documented for `/v1/audio/transcriptions`](api_openai_audio_transcriptions.md#provider-specific-parameters) (`ContentRedaction`, `VocabularyName`, `VocabularyFilterName`/`VocabularyFilterMethod`, `ShowAlternatives`/`MaxAlternatives`, `ChannelIdentification`, `ToxicityDetection`, `IdentifyMultipleLanguages`/`LanguageOptions`, `ModelSettings`) apply here too.
+
+**Translation step (Amazon Translate):** `Settings` and `TerminologyNames` control the English output register and glossary:
+
+```json
+{
+  "model": "amazon.transcribe",
+  "file": "data:audio/mp3;base64,<base64-encoded-audio>",
+  "Settings": {
+    "Formality": "FORMAL",
+    "Profanity": "MASK"
+  },
+  "TerminologyNames": ["MyProductGlossary"]
+}
+```
+
+- `Settings.Formality` (`FORMAL` or `INFORMAL`): Register of the translated text, for languages that support formality
+- `Settings.Profanity` (`MASK`): Mask profane words and phrases in the translation
+- `Settings.Brevity` (`ON`): Reduce silence gaps in subtitle-style output (real-time/streaming use case; harmless here)
+- `TerminologyNames` (list): Apply one or more custom terminologies (domain-specific glossaries) to the translation
+
+Both settings apply consistently to the primary translated text and, for `response_format=verbose_json`, to every per-segment translation.
+
+!!! warning "Terminologies must already exist"
+    `TerminologyNames` references AWS Translate custom terminology resources created ahead of time via the AWS Translate console, CLI, or SDK (`ImportTerminology`) — stdapi.ai does not create or manage them. An unknown name is rejected by AWS Translate with a client error.
+
+Invalid `Settings` values (e.g. an unsupported `Formality`) are rejected with HTTP 400 before any partial translation occurs.
 
 ## Try It Now
 

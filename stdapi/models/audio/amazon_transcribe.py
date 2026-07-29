@@ -3,15 +3,19 @@
 from asyncio import gather, sleep
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, NotRequired
+from typing import TYPE_CHECKING, Literal, NotRequired
 from zlib import compress
 
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, ParamValidationError
 from fastapi import Response
 from pydantic_core import from_json
 from typing_extensions import TypedDict
 
-from stdapi.api_errors import ApiError, InvalidLanguageFormatError
+from stdapi.api_errors import (
+    ApiError,
+    InvalidLanguageFormatError,
+    UnsupportedParameterError,
+)
 from stdapi.aws import call_with_region_failover, get_client
 from stdapi.aws_s3 import copy_s3_object, get_text_from_s3, track_temporary_s3_objects
 from stdapi.aws_translate import translate, translate_subtitle
@@ -30,6 +34,7 @@ from stdapi.monitoring import (
     log_error_details,
     log_response_params,
 )
+from stdapi.types import BaseModelResponse, JsonMapping
 from stdapi.types.openai_audio import (
     SUBTITLE_FORMATS,
     AudioResponseFormat,
@@ -49,7 +54,11 @@ from stdapi.types.openai_audio import (
     UsageDuration,
 )
 from stdapi.usage import record_transcribe_usage
-from stdapi.utils import format_language_code, language_code_to_name
+from stdapi.utils import (
+    format_language_code,
+    language_code_to_name,
+    validation_error_handler,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator
@@ -67,6 +76,56 @@ AWS_TRANSCRIBE_MODEL_ID = "amazon.transcribe"
 
 #: Ordinal value of the "A" letter used as speaker label
 _A_ORDINAL_VALUE = ord("A")
+
+
+class _TranscribeContentRedaction(BaseModelResponse):
+    """PII redaction configuration; only the single-output mode is supported (see #82)."""
+
+    RedactionType: Literal["PII"] = "PII"
+    RedactionOutput: Literal["redacted"] = "redacted"
+    # PII entity type values (e.g. "NAME", "SSN") are not re-validated here;
+    # AWS Transcribe rejects an unknown one with its own 400 error.
+    PiiEntityTypes: list[str] | None = None
+
+
+class _TranscribeToxicityDetectionSetting(BaseModelResponse):
+    """One entry of the ToxicityDetection list."""
+
+    # Only "ALL" is documented today, but the category value is forwarded
+    # as-is: AWS Transcribe rejects an unknown one with its own 400 error.
+    ToxicityCategories: list[str]
+
+
+class _TranscribeModelSettings(BaseModelResponse):
+    """Custom language model selection."""
+
+    LanguageModelName: str
+
+
+class _TranscribeExtraParams(BaseModelResponse):
+    """Supported extra parameters for AWS Transcribe's StartTranscriptionJob.
+
+    ``Settings``' sub-fields are flattened to the top level (mirroring Polly's
+    extra-params convention) so the ``Settings``/``TerminologyNames`` keys stay
+    free for AWS Translate's own extra parameters on the translation route.
+    """
+
+    # MaxAlternatives/MaxSpeakerLabels/VocabularyFilterMethod are forwarded
+    # as-is (not range/enum-checked here): AWS Transcribe rejects an
+    # out-of-range or unknown value with its own 400 error.
+    ChannelIdentification: bool | None = None
+    ContentRedaction: _TranscribeContentRedaction | None = None
+    IdentifyMultipleLanguages: bool | None = None
+    LanguageOptions: list[str] | None = None
+    MaxAlternatives: int | None = None
+    MaxSpeakerLabels: int | None = None
+    ModelSettings: _TranscribeModelSettings | None = None
+    ShowAlternatives: bool | None = None
+    ShowSpeakerLabels: bool | None = None
+    ToxicityDetection: list[_TranscribeToxicityDetectionSetting] | None = None
+    VocabularyFilterMethod: str | None = None
+    VocabularyFilterName: str | None = None
+    VocabularyName: str | None = None
 
 
 # AWS Transcribe-specific data structures
@@ -179,6 +238,7 @@ async def _start_transcription_with_failover(
     job_id: str,
     language: str | None,
     response_format: str,
+    extra: _TranscribeExtraParams | None = None,
 ) -> tuple[RegionName, str]:
     """Start the transcription job, failing over across candidate regions.
 
@@ -193,12 +253,14 @@ async def _start_transcription_with_failover(
         job_id: Transcription job name (also the input key's directory).
         language: Optional language code, for caller-error translation.
         response_format: Requested response format.
+        extra: Optional extra StartTranscriptionJob parameters.
 
     Returns:
         The (region, bucket) pair that accepted the job.
 
     Raises:
-        ApiError: For caller errors (unsupported language, bad file).
+        ApiError: For caller errors (unsupported language, bad file, or
+            incompatible extra parameters).
         BotoCoreError: When every candidate region fails (last error).
         ClientError: Same as above.
     """
@@ -221,7 +283,7 @@ async def _start_transcription_with_failover(
         with _handle_transcription_error(language):
             await transcribe.start_transcription_job(
                 **_build_transcription_job_params(
-                    job_id, bucket, language, response_format
+                    job_id, bucket, language, response_format, extra
                 )
             )
         return bucket
@@ -276,8 +338,96 @@ def _get_audio_duration(transcript_data: TranscribeJobData) -> float:
         return 0.0
 
 
+#: Default speaker cap for diarized_json output, overridable via extra_params.MaxSpeakerLabels
+_DEFAULT_MAX_SPEAKER_LABELS = 10
+
+#: Settings sub-fields flattened onto _TranscribeExtraParams (see its docstring)
+_SETTINGS_FIELDS = frozenset(
+    {
+        "ChannelIdentification",
+        "MaxAlternatives",
+        "MaxSpeakerLabels",
+        "ShowAlternatives",
+        "ShowSpeakerLabels",
+        "VocabularyFilterMethod",
+        "VocabularyFilterName",
+        "VocabularyName",
+    }
+)
+
+
+def _apply_language_params(
+    job_params: StartTranscriptionJobRequestTypeDef,
+    language: str | None,
+    extra: _TranscribeExtraParams | None,
+) -> None:
+    """Set the job's language-identification fields (mutually exclusive per AWS).
+
+    Args:
+        job_params: Job parameters to update in place.
+        language: Optional explicit language code.
+        extra: Optional extra StartTranscriptionJob parameters.
+    """
+    if extra is not None and extra.IdentifyMultipleLanguages:
+        job_params["IdentifyMultipleLanguages"] = True
+        if extra.LanguageOptions:
+            job_params["LanguageOptions"] = extra.LanguageOptions  # type: ignore[typeddict-item]
+    elif language:
+        job_params["LanguageCode"] = format_language_code(language)  # type: ignore[typeddict-item]
+    else:
+        job_params["IdentifyLanguage"] = True
+        if extra is not None and extra.LanguageOptions:
+            job_params["LanguageOptions"] = extra.LanguageOptions  # type: ignore[typeddict-item]
+
+
+#: Parameter name reported when ChannelIdentification conflicts with diarized_json
+_CHANNEL_IDENTIFICATION_PARAM = "ChannelIdentification"
+
+
+def _apply_extra_settings(
+    job_params: StartTranscriptionJobRequestTypeDef,
+    response_format: str,
+    extra: _TranscribeExtraParams | None,
+) -> None:
+    """Merge Settings/ContentRedaction/ModelSettings/ToxicityDetection into the job.
+
+    Args:
+        job_params: Job parameters to update in place.
+        response_format: Response format for transcription.
+        extra: Optional extra StartTranscriptionJob parameters.
+
+    Raises:
+        UnsupportedParameterError: If ``extra.ChannelIdentification`` is combined
+            with ``diarized_json`` output (AWS rejects that combination; Transcribe
+            already forces ``ShowSpeakerLabels`` for diarization).
+    """
+    settings: dict[str, object] = (
+        {"ShowSpeakerLabels": True, "MaxSpeakerLabels": _DEFAULT_MAX_SPEAKER_LABELS}
+        if response_format == "diarized_json"
+        else {}
+    )
+    if extra is not None:
+        if extra.ChannelIdentification and response_format == "diarized_json":
+            raise UnsupportedParameterError(_CHANNEL_IDENTIFICATION_PARAM)
+        settings.update(extra.model_dump(include=_SETTINGS_FIELDS, exclude_none=True))
+        if extra.ContentRedaction is not None:
+            job_params["ContentRedaction"] = extra.ContentRedaction.model_dump()  # type: ignore[typeddict-item]
+        if extra.ModelSettings is not None:
+            job_params["ModelSettings"] = extra.ModelSettings.model_dump()  # type: ignore[typeddict-item]
+        if extra.ToxicityDetection is not None:
+            job_params["ToxicityDetection"] = [  # type: ignore[typeddict-item]
+                setting.model_dump() for setting in extra.ToxicityDetection
+            ]
+    if settings:
+        job_params["Settings"] = settings  # type: ignore[typeddict-item]
+
+
 def _build_transcription_job_params(
-    job_id: str, s3_bucket: str, language: str | None, response_format: str
+    job_id: str,
+    s3_bucket: str,
+    language: str | None,
+    response_format: str,
+    extra: _TranscribeExtraParams | None = None,
 ) -> StartTranscriptionJobRequestTypeDef:
     """Build transcription job parameters.
 
@@ -286,9 +436,15 @@ def _build_transcription_job_params(
         s3_bucket: S3 bucket name
         language: Optional language code
         response_format: Response format for transcription
+        extra: Optional extra StartTranscriptionJob parameters
 
     Returns:
         Job parameters for AWS Transcribe
+
+    Raises:
+        UnsupportedParameterError: If ``extra.ChannelIdentification`` is combined
+            with ``diarized_json`` output (AWS rejects that combination; Transcribe
+            already forces ``ShowSpeakerLabels`` for diarization).
     """
     s3_prefix = SETTINGS.aws_s3_tmp_prefix
     job_params: StartTranscriptionJobRequestTypeDef = {
@@ -299,17 +455,13 @@ def _build_transcription_job_params(
         "Tags": [{"Key": k, "Value": v} for k, v in build_metadata(apn=True).items()],
     }
 
-    if language:
-        job_params["LanguageCode"] = format_language_code(language)  # type: ignore[typeddict-item]
-    else:
-        job_params["IdentifyLanguage"] = True
+    _apply_language_params(job_params, language, extra)
 
     if response_format in SUBTITLE_FORMATS:
         # AWS Transcribe will create subtitle file at: {s3_prefix}{job_id}/output.{format}
         job_params["Subtitles"] = {"Formats": [response_format], "OutputStartIndex": 1}
 
-    elif response_format == "diarized_json":
-        job_params["Settings"] = {"ShowSpeakerLabels": True, "MaxSpeakerLabels": 10}
+    _apply_extra_settings(job_params, response_format, extra)
 
     return job_params
 
@@ -342,6 +494,11 @@ def _handle_transcription_error(language: str | None) -> Generator[None]:
             if "file" in error_message:
                 raise ApiError(error_message) from error
         raise  # pragma: no cover
+    except ParamValidationError as error:
+        # botocore validates some Settings/ContentRedaction/ToxicityDetection
+        # fields client-side (e.g. MaxAlternatives below its minimum); surface
+        # it as a caller 400 instead of an unhandled 500.
+        raise ApiError(str(error)) from error
 
 
 async def _wait_for_transcription_completion(
@@ -575,6 +732,35 @@ def _format_json_response(
     )
 
 
+def _pop_translate_extra_params(
+    extra_params: JsonMapping | None,
+) -> tuple[JsonMapping | None, JsonMapping | None, list[str] | None]:
+    """Split AWS Translate's Settings/TerminologyNames out of the extra params.
+
+    The remainder stays reserved for the underlying StartTranscriptionJob call
+    (see ``_TranscribeExtraParams``); ``Settings``/``TerminologyNames`` never
+    collide with it since Transcribe's own ``Settings`` sub-fields are
+    flattened onto the top level there.
+
+    Args:
+        extra_params: Raw extra parameters from the request.
+
+    Returns:
+        (remaining extra params for the Transcribe job, Translate ``Settings``,
+        Translate ``TerminologyNames``).
+    """
+    if not extra_params:
+        return extra_params, None, None
+    remaining = dict(extra_params)
+    settings = remaining.pop("Settings", None)
+    terminology_names = remaining.pop("TerminologyNames", None)
+    return (
+        remaining or None,
+        settings,  # type: ignore[return-value]
+        terminology_names,  # type: ignore[return-value]
+    )
+
+
 class AudioModel(AudioModelBase[None, None]):
     """Amazon Transcribe audio model implementation (transcription only)."""
 
@@ -610,6 +796,7 @@ class AudioModel(AudioModelBase[None, None]):
         language: str | None = None,
         prompt: str | None = None,
         temperature: float | None = None,
+        extra_params: JsonMapping | None = None,
         *,
         logprobs: bool = False,
     ) -> TranscribeJobData:
@@ -625,6 +812,7 @@ class AudioModel(AudioModelBase[None, None]):
             language: Optional language code for the input audio (ISO-639-1 format)
             prompt: Optional prompt for transcription.
             temperature: Optional temperature for transcription.
+            extra_params: Optional extra StartTranscriptionJob parameters.
             logprobs: If true, return log probabilities.
 
         Returns:
@@ -637,6 +825,11 @@ class AudioModel(AudioModelBase[None, None]):
         self._validate_no_prompt(prompt)
         self._validate_no_temperature(temperature)
         self._validate_no_logprobs(logprobs)
+
+        extra: _TranscribeExtraParams | None = None
+        if extra_params:
+            with validation_error_handler():
+                extra = _TranscribeExtraParams(**extra_params)  # type: ignore[arg-type]
 
         candidates = transcribe_job_candidates()
         if not candidates:
@@ -664,7 +857,7 @@ class AudioModel(AudioModelBase[None, None]):
                 key=f"{s3_prefix}{request_id}/input",
             )
             region, s3_bucket = await _start_transcription_with_failover(
-                candidates, request_id, language, response_format
+                candidates, request_id, language, response_format, extra
             )
             _SERVED_REGION.set(region)
             transcribe: TranscribeServiceClient = get_client("transcribe", region)
@@ -743,6 +936,8 @@ class AudioModel(AudioModelBase[None, None]):
         translated_content: str,
         response_format: AudioResponseFormat,
         filename: str | None = None,
+        settings: JsonMapping | None = None,
+        terminology_names: list[str] | None = None,
     ) -> str | TranslationCreateResponse | Response:
         """Format translation response for the route.
 
@@ -751,6 +946,10 @@ class AudioModel(AudioModelBase[None, None]):
             translated_content: Pre-translated text or subtitle content
             response_format: Requested response format
             filename: Original filename of the audio file
+            settings: Optional AWS Translate ``Settings`` for the per-segment
+                translate calls used by ``verbose_json``.
+            terminology_names: Optional AWS Translate custom terminology names
+                for the per-segment translate calls used by ``verbose_json``.
 
         Returns:
             Formatted response in the requested format
@@ -769,7 +968,12 @@ class AudioModel(AudioModelBase[None, None]):
             audio_segments = transcript_data["audio_segments"]
             translated_segments = await gather(
                 *(
-                    translate(segment["transcript"], transcript_data["language_code"])
+                    translate(
+                        segment["transcript"],
+                        transcript_data["language_code"],
+                        settings=settings,
+                        terminology_names=terminology_names,
+                    )
                     for segment in audio_segments
                 )
             )
@@ -795,6 +999,7 @@ class AudioModel(AudioModelBase[None, None]):
         timestamp_granularities: list[AudioTimestampGranularities] | None = None,
         prompt: str | None = None,
         temperature: float | None = None,
+        extra_params: JsonMapping | None = None,
         *,
         logprobs: bool,
     ) -> str | TranscriptionCreateResponse | TranscriptionDiarized | Response:
@@ -811,6 +1016,7 @@ class AudioModel(AudioModelBase[None, None]):
             timestamp_granularities: Optional timestamp granularities for verbose_json
             prompt: Optional prompt for transcription.
             temperature: Optional temperature for transcription.
+            extra_params: Optional extra StartTranscriptionJob parameters.
             logprobs: If true, return log probabilities.
 
         Returns:
@@ -827,6 +1033,7 @@ class AudioModel(AudioModelBase[None, None]):
             language,
             prompt,
             temperature,
+            extra_params,
             logprobs=logprobs,
         )
         duration = _get_audio_duration(transcript_data)
@@ -846,6 +1053,7 @@ class AudioModel(AudioModelBase[None, None]):
         language: str | None = None,
         prompt: str | None = None,
         temperature: float | None = None,
+        extra_params: JsonMapping | None = None,
         *,
         logprobs: bool,  # noqa: ARG002
     ) -> AsyncGenerator[TranscriptionTextDeltaEvent | TranscriptionTextDoneEvent]:
@@ -857,6 +1065,7 @@ class AudioModel(AudioModelBase[None, None]):
             language: Optional language code
             prompt: Optional prompt for transcription.
             temperature: Optional temperature for transcription.
+            extra_params: Optional extra StartTranscriptionJob parameters.
             logprobs: If true, return log probabilities.
 
         Yields:
@@ -866,7 +1075,7 @@ class AudioModel(AudioModelBase[None, None]):
             ApiError: When transcription fails
         """
         transcript_data = await self._transcribe(
-            audio_content, response_format, language, prompt, temperature
+            audio_content, response_format, language, prompt, temperature, extra_params
         )
         record_transcribe_usage(
             _get_audio_duration(transcript_data), region=_SERVED_REGION.get()
@@ -888,6 +1097,7 @@ class AudioModel(AudioModelBase[None, None]):
         response_format: AudioResponseFormat,
         prompt: str | None,
         temperature: float | None = None,
+        extra_params: JsonMapping | None = None,
     ) -> str | TranslationCreateResponse | Response:
         """Transcribe and translate audio to English.
 
@@ -899,6 +1109,7 @@ class AudioModel(AudioModelBase[None, None]):
             response_format: Format for output (json, text, srt, vtt, verbose_json)
             prompt: Optional prompt for translation.
             temperature: Optional temperature for transcription.
+            extra_params: Optional extra StartTranscriptionJob parameters.
 
         Returns:
             Formatted translation response with translated text in English
@@ -906,8 +1117,15 @@ class AudioModel(AudioModelBase[None, None]):
         Raises:
             ApiError: When transcription or translation fails
         """
+        job_extra_params, settings, terminology_names = _pop_translate_extra_params(
+            extra_params
+        )
         transcript_data = await self._transcribe(
-            audio_content, response_format, prompt=prompt, temperature=temperature
+            audio_content,
+            response_format,
+            prompt=prompt,
+            temperature=temperature,
+            extra_params=job_extra_params,
         )
         record_transcribe_usage(
             _get_audio_duration(transcript_data), region=_SERVED_REGION.get()
@@ -915,11 +1133,17 @@ class AudioModel(AudioModelBase[None, None]):
         language = transcript_data["language_code"]
         if "subtitle_content" in transcript_data:
             translated_content = await translate_subtitle(
-                transcript_data["subtitle_content"], language
+                transcript_data["subtitle_content"],
+                language,
+                settings=settings,
+                terminology_names=terminology_names,
             )
         else:
             translated_content = await translate(
-                _get_transcript_text(transcript_data), language
+                _get_transcript_text(transcript_data),
+                language,
+                settings=settings,
+                terminology_names=terminology_names,
             )
 
         return await self._format_translation_response(
@@ -927,4 +1151,6 @@ class AudioModel(AudioModelBase[None, None]):
             translated_content,
             response_format,
             await audio_content.get_filename(),
+            settings,
+            terminology_names,
         )

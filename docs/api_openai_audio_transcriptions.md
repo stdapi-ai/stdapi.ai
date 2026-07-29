@@ -62,6 +62,7 @@ Transcribe audio to text with Amazon Transcribe or Amazon Bedrock audio-capable 
 | `temperature`              |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Bedrock models only; rejected by Amazon Transcribe               |
 | `prompt`                   |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Bedrock models only; rejected by Amazon Transcribe               |
 | `include` (`logprobs`)     |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Bedrock models only; requires `response_format=json`; rejected by Amazon Transcribe |
+| Extra model-specific params | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Amazon Transcribe optional settings via JSON body (see below)  |
 | **Usage tracking**         |                                          |                                                                  |
 | Input audio duration       |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Seconds (billing unit on Amazon Transcribe)                      |
 | Output text tokens         |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | On models from Bedrock                                           |
@@ -128,6 +129,126 @@ Transcribe audio to text with Amazon Transcribe or Amazon Bedrock audio-capable 
 
 !!! tip "Performance Tips: Optimize Speed & Cost"
     - **Specify the language** if you know it—skips auto-detection for faster processing and lower AWS costs
+
+### Provider-Specific Parameters
+
+Unlock advanced Amazon Transcribe capabilities by passing provider-specific parameters directly in your request body. These parameters are forwarded to Transcribe's `StartTranscriptionJob` API.
+
+!!! warning "JSON body required"
+    Unlike the `multipart/form-data` upload, extra parameters are only reachable through the `application/json` request body (`file` as base64, data URI, HTTPS URL, or `file-id:` reference) — the multipart path only accepts the documented OpenAI fields.
+
+**PII Redaction:**
+
+Redact personally identifiable information from the transcript (only the single-output `redacted` mode is supported):
+
+```json
+{
+  "model": "amazon.transcribe",
+  "file": "data:audio/mp3;base64,<base64-encoded-audio>",
+  "ContentRedaction": {
+    "RedactionType": "PII",
+    "PiiEntityTypes": ["NAME", "SSN", "CREDIT_DEBIT_NUMBER"]
+  }
+}
+```
+
+**Custom Vocabulary and Filtering:**
+
+Improve recognition of domain-specific terms and mask or remove profanity/sensitive words:
+
+```json
+{
+  "model": "amazon.transcribe",
+  "file": "data:audio/mp3;base64,<base64-encoded-audio>",
+  "VocabularyName": "MyCustomVocabulary",
+  "VocabularyFilterName": "MyProfanityFilter",
+  "VocabularyFilterMethod": "mask"
+}
+```
+
+**Alternative Transcriptions and Channel Identification:**
+
+Request multiple candidate transcriptions per segment, or transcribe each audio channel separately (e.g. two-party phone calls recorded in stereo):
+
+```json
+{
+  "model": "amazon.transcribe",
+  "file": "data:audio/mp3;base64,<base64-encoded-audio>",
+  "ShowAlternatives": true,
+  "MaxAlternatives": 3,
+  "ChannelIdentification": true
+}
+```
+
+!!! warning "Incompatible with diarized_json"
+    `ChannelIdentification` cannot be combined with `response_format=diarized_json`, which already forces AWS speaker-label diarization. Requesting both returns HTTP 400.
+
+**Toxicity Detection:**
+
+Flag toxic content (profanity, hate speech, harassment) in the transcript:
+
+```json
+{
+  "model": "amazon.transcribe",
+  "file": "data:audio/mp3;base64,<base64-encoded-audio>",
+  "ToxicityDetection": [{"ToxicityCategories": ["ALL"]}]
+}
+```
+
+**Multi-Language Identification:**
+
+Detect and transcribe multiple languages spoken in the same audio, optionally restricted to a candidate list:
+
+```json
+{
+  "model": "amazon.transcribe",
+  "file": "data:audio/mp3;base64,<base64-encoded-audio>",
+  "IdentifyMultipleLanguages": true,
+  "LanguageOptions": ["en-US", "es-US", "fr-FR"]
+}
+```
+
+**Configuration Options:**
+
+**Option 1: Per-Request**
+
+Add provider-specific parameters directly in your JSON request body (as shown in examples above).
+
+**Option 2: Server-Wide Defaults**
+
+Configure default parameters for `amazon.transcribe` via the `DEFAULT_MODEL_PARAMS` environment variable:
+
+```bash
+export DEFAULT_MODEL_PARAMS='{
+  "amazon.transcribe": {
+    "VocabularyFilterName": "MyProfanityFilter",
+    "VocabularyFilterMethod": "mask"
+  }
+}'
+```
+
+**Note:** Per-request parameters override server-wide defaults.
+
+**Behavior:**
+
+**Compatible parameters** are forwarded to Amazon Transcribe and applied; **unsupported parameters or values** return HTTP 400 with an error message.
+
+**Available Parameters:**
+
+The following parameters from Amazon Transcribe's [StartTranscriptionJob API](https://docs.aws.amazon.com/transcribe/latest/APIReference/API_StartTranscriptionJob.html) can be used:
+
+- `ContentRedaction` (object): PII redaction — `RedactionType` (`PII`), `PiiEntityTypes` (list), `RedactionOutput` (`redacted` only; `redacted_and_unredacted` is rejected — the unredacted copy is not tracked for automatic cleanup)
+- `VocabularyName` (string): Custom vocabulary to improve recognition accuracy
+- `VocabularyFilterName` / `VocabularyFilterMethod` (string / `mask`, `remove`, `tag`): Profanity or sensitive-word filtering
+- `ShowAlternatives` / `MaxAlternatives` (bool / integer `2`-`10`): Return multiple candidate transcriptions per segment
+- `ChannelIdentification` (bool): Transcribe each audio channel separately (incompatible with `diarized_json`)
+- `MaxSpeakerLabels` (integer `2`-`30`): Maximum speakers to identify with `response_format=diarized_json` (default `10`)
+- `ShowSpeakerLabels` (bool): Always on with `response_format=diarized_json`; setting it directly with another format runs AWS speaker labeling without exposing speaker data in the response
+- `ToxicityDetection` (list): Toxic-content flagging — `[{"ToxicityCategories": ["ALL"]}]`
+- `IdentifyMultipleLanguages` / `LanguageOptions` (bool / list): Multi-language identification, optionally restricted to a candidate list (supersedes `language`)
+- `ModelSettings` (object): `LanguageModelName` — custom language model selection
+
+`VocabularyName`, `VocabularyFilterName`, and custom language models must already exist in your AWS account (created via the AWS Transcribe console, CLI, or SDK) before being referenced here.
 
 ## Try It Now
 

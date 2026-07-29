@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from fastapi import Response
 
     from stdapi.input_file import InputFile
+    from stdapi.types import JsonMapping
     from stdapi.types.openai_audio import (
         AudioResponseFormat,
         AudioTimestampGranularities,
@@ -152,6 +153,7 @@ class AudioModel(AudioModelBase[_Request, _Response]):
         timestamp_granularities: list[AudioTimestampGranularities] | None = None,
         prompt: str | None = None,
         temperature: float | None = None,
+        extra_params: JsonMapping | None = None,  # noqa: ARG002
         *,
         logprobs: bool,
     ) -> str | TranscriptionCreateResponse | TranscriptionDiarized | Response:
@@ -167,6 +169,7 @@ class AudioModel(AudioModelBase[_Request, _Response]):
             timestamp_granularities: Optional timestamp granularities (not currently supported)
             prompt: Optional prompt for transcription.
             temperature: Optional temperature for transcription.
+            extra_params: Unused; not supported by this model.
             logprobs: If true, return log probabilities.
 
         Returns:
@@ -212,6 +215,7 @@ class AudioModel(AudioModelBase[_Request, _Response]):
         language: str | None = None,
         prompt: str | None = None,
         temperature: float | None = None,
+        extra_params: JsonMapping | None = None,  # noqa: ARG002
         *,
         logprobs: bool,
     ) -> AsyncGenerator[TranscriptionTextDeltaEvent | TranscriptionTextDoneEvent]:
@@ -223,6 +227,7 @@ class AudioModel(AudioModelBase[_Request, _Response]):
             language: Optional language code
             prompt: Optional prompt for transcription.
             temperature: Optional temperature for transcription.
+            extra_params: Unused; not supported by this model.
             logprobs: If true, return log probabilities.
 
         Yields:
@@ -279,6 +284,7 @@ class AudioModel(AudioModelBase[_Request, _Response]):
         response_format: AudioResponseFormat,
         prompt: str | None,
         temperature: float | None = None,
+        extra_params: JsonMapping | None = None,  # noqa: ARG002
     ) -> str | TranslationCreateResponse | Response:
         """Transcribe and translate audio to English.
 
@@ -290,6 +296,7 @@ class AudioModel(AudioModelBase[_Request, _Response]):
             response_format: Format for output (json, text, srt, vtt, verbose_json)
             prompt: Optional prompt for translation.
             temperature: Optional temperature for transcription.
+            extra_params: Unused; not supported by this model (Voxtral translates natively).
 
         Returns:
             Formatted translation response with translated text in English
