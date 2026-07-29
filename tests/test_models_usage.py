@@ -5,7 +5,9 @@ Covers ``_count_grounding_tool_uses`` (non-streaming Converse responses) and
 ``grounding_requests`` billed dimension (see tests/test_usage.py for its
 pricing/log-entry coverage). Also covers ``_record_converse_usage`` billing
 details (cacheDetails TTL breakdown, effective-tier pricing, concurrent-call
-region attribution) and exactly-once recording across ``converse()`` failover.
+region attribution), exactly-once recording across ``converse()`` failover,
+and ``_converse`` stripping the ConverseStream-only guardrail
+``streamProcessingMode`` field before calling the non-streaming Converse API.
 """
 
 from asyncio import Event, create_task, gather, wait_for
@@ -356,6 +358,53 @@ class TestConcurrentConverseAttribution:
             expected_input, expected_output = tokens[key.region]
             assert record.quantities[Dimension.INPUT_TOKENS] == expected_input
             assert record.quantities[Dimension.OUTPUT_TOKENS] == expected_output
+
+
+class TestConverseGuardrailStreamProcessingMode:
+    """_converse strips streamProcessingMode, which the non-streaming Converse API rejects."""
+
+    async def test_stream_processing_mode_is_stripped_before_the_converse_call(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A guardrailConfig carrying streamProcessingMode must not reach Converse."""
+        captured: dict[str, Any] = {}
+
+        class _CapturingClient:
+            """Fake Bedrock client recording the kwargs passed to converse()."""
+
+            async def converse(self, **kwargs: object) -> dict[str, Any]:
+                """Record kwargs and return a minimal usage-bearing response."""
+                captured.update(kwargs)
+                return {
+                    "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2}
+                }
+
+        monkeypatch.setattr(
+            ModelBase, "_prepare_converse_request_for_region", _noop_prepare
+        )
+        monkeypatch.setattr(
+            stdapi.models,
+            "bedrock_client",
+            lambda _region, **_kwargs: _CapturingClient(),
+        )
+
+        model: ModelBase[Any, Any] = ModelBase("guardrailmodel")
+        await model._converse(  # noqa: SLF001
+            {
+                "modelId": "guardrailmodel",
+                "guardrailConfig": {
+                    "guardrailIdentifier": "gr1",
+                    "guardrailVersion": "1",
+                    "streamProcessingMode": "async",
+                },
+            },
+            "us-east-1",
+            single_region=True,
+        )
+
+        guardrail_config = captured["guardrailConfig"]
+        assert "streamProcessingMode" not in guardrail_config
+        assert guardrail_config["guardrailIdentifier"] == "gr1"
 
 
 class TestRecordConverseUsageCacheDetails:

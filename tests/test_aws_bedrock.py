@@ -3,6 +3,7 @@
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from starlette.datastructures import Headers
 
 from stdapi.api_errors import ApiError
 from stdapi.aws_bedrock import (
@@ -10,6 +11,7 @@ from stdapi.aws_bedrock import (
     get_extra_model_parameters,
     map_guardrail_filters,
     resolve_guardrail_model,
+    set_guardrail_configuration,
     set_inference_configuration,
 )
 from stdapi.config import SETTINGS
@@ -172,6 +174,76 @@ class TestSetInferenceConfiguration:
         config = set_inference_configuration("model-a", {})
 
         assert config["temperature"] == 0.7
+
+
+@pytest.fixture
+def _guardrail_config_var_isolated() -> Iterator[None]:
+    """Restore GUARDRAIL_CONFIG_VAR to its pre-test state, whatever the test sets it to."""
+    token = GUARDRAIL_CONFIG_VAR.set(None)  # type: ignore[arg-type]
+    try:
+        yield
+    finally:
+        GUARDRAIL_CONFIG_VAR.reset(token)
+
+
+@pytest.mark.usefixtures("_guardrail_config_var_isolated")
+class TestSetGuardrailConfiguration:
+    """set_guardrail_configuration: header-based override, incl. stream processing mode."""
+
+    def test_stream_processing_mode_header_is_applied(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A valid streamProcessingMode header is forwarded into the guardrail config."""
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_allow_guardrail_override", True)
+        headers = Headers(
+            {
+                "X-Amzn-Bedrock-GuardrailIdentifier": "gr123",
+                "X-Amzn-Bedrock-GuardrailVersion": "1",
+                "X-Amzn-Bedrock-GuardrailStreamProcessingMode": "async",
+            }
+        )
+
+        set_guardrail_configuration(headers)
+
+        assert GUARDRAIL_CONFIG_VAR.get()["streamProcessingMode"] == "async"
+
+    def test_invalid_stream_processing_mode_header_is_ignored(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An unrecognised streamProcessingMode value is dropped, not forwarded verbatim."""
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_allow_guardrail_override", True)
+        headers = Headers(
+            {
+                "X-Amzn-Bedrock-GuardrailIdentifier": "gr123",
+                "X-Amzn-Bedrock-GuardrailVersion": "1",
+                "X-Amzn-Bedrock-GuardrailStreamProcessingMode": "bogus",
+            }
+        )
+
+        set_guardrail_configuration(headers)
+
+        assert "streamProcessingMode" not in GUARDRAIL_CONFIG_VAR.get()
+
+    def test_stream_processing_mode_header_ignored_without_override_permission(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The header is ignored (falls back to settings) when override is disallowed."""
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_allow_guardrail_override", False)
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_identifier", "gr-default")
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_version", "2")
+        headers = Headers(
+            {
+                "X-Amzn-Bedrock-GuardrailIdentifier": "gr123",
+                "X-Amzn-Bedrock-GuardrailVersion": "1",
+                "X-Amzn-Bedrock-GuardrailStreamProcessingMode": "async",
+            }
+        )
+
+        set_guardrail_configuration(headers)
+
+        config = GUARDRAIL_CONFIG_VAR.get()
+        assert config["guardrailIdentifier"] == "gr-default"
+        assert "streamProcessingMode" not in config
 
 
 class TestMapGuardrailFilters:

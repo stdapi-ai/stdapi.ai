@@ -807,6 +807,14 @@ class ModelBase[RequestT, ResponseT]:
         # concurrent calls: a per-call copy keeps its mutation isolated.
         request = dict(request)  # type: ignore[assignment]
         await self._prepare_converse_request_for_region(request, region)
+        if guardrail_config := request.get("guardrailConfig"):
+            # streamProcessingMode is ConverseStream-only; Converse rejects it as
+            # an unknown parameter.
+            request["guardrailConfig"] = {  # type: ignore[typeddict-item]
+                key: value
+                for key, value in guardrail_config.items()
+                if key != "streamProcessingMode"
+            }
         with handle_bedrock_client_error():
             response = await bedrock_client(
                 region, single_region=single_region

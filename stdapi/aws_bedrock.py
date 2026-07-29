@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from types_aiobotocore_bedrock_runtime.literals import (
         AudioFormatType,
         DocumentFormatType,
+        GuardrailStreamProcessingModeType,
         GuardrailTraceType,
         PerformanceConfigLatencyType,
         ServiceTierTypeType,
@@ -131,6 +132,12 @@ _GUARDRAIL_IDENTIFIER_HEADER = "X-Amzn-Bedrock-GuardrailIdentifier"
 _GUARDRAIL_VERSION_HEADER = "X-Amzn-Bedrock-GuardrailVersion"
 _GUARDRAIL_TRACE_HEADER = "X-Amzn-Bedrock-Trace"
 _GUARDRAIL_TRACE_VALUES = {"disabled", "enabled", "enabled_full"}
+#: Header selecting ConverseStream guardrail assessment timing (stream-only; stripped for Converse).
+_GUARDRAIL_STREAM_PROCESSING_MODE_HEADER = (
+    "X-Amzn-Bedrock-GuardrailStreamProcessingMode"
+)
+#: Valid values for the guardrail stream-processing-mode header/field.
+_GUARDRAIL_STREAM_PROCESSING_MODE_VALUES = {"sync", "async"}
 
 #: Performance configuration for the request
 PERFORMANCE_CONFIG_VAR: ContextVar[
@@ -234,8 +241,9 @@ def set_guardrail_configuration(headers: Headers) -> None:
 
     Falls back to global settings when header override is absent or not allowed.
     Request-level headers (``X-Amzn-Bedrock-GuardrailIdentifier``,
-    ``X-Amzn-Bedrock-GuardrailVersion``, ``X-Amzn-Bedrock-Trace``) are accepted
-    when ``aws_bedrock_allow_guardrail_override`` is enabled.
+    ``X-Amzn-Bedrock-GuardrailVersion``, ``X-Amzn-Bedrock-Trace``,
+    ``X-Amzn-Bedrock-GuardrailStreamProcessingMode``) are accepted when
+    ``aws_bedrock_allow_guardrail_override`` is enabled.
 
     Args:
         headers: Incoming request headers.
@@ -254,6 +262,14 @@ def set_guardrail_configuration(headers: Headers) -> None:
         )
         if trace in _GUARDRAIL_TRACE_VALUES:
             config["trace"] = trace
+        # ConverseStream-only; _converse strips it back out for non-streaming requests.
+        stream_processing_mode: GuardrailStreamProcessingModeType = (
+            headers.get(_GUARDRAIL_STREAM_PROCESSING_MODE_HEADER, "")  # type: ignore[assignment]
+            .strip()
+            .lower()
+        )
+        if stream_processing_mode in _GUARDRAIL_STREAM_PROCESSING_MODE_VALUES:
+            config["streamProcessingMode"] = stream_processing_mode
     elif (
         SETTINGS.aws_bedrock_guardrail_identifier
         and SETTINGS.aws_bedrock_guardrail_version
