@@ -1188,7 +1188,7 @@ def _resolve_start_block(start: ContentBlockStartTypeDef) -> ContentBlock:
             return TextBlock(type="text", text="")
 
 
-def _synthesize_block_from_delta(delta: ContentBlockDeltaTypeDef) -> ContentBlock:
+async def _synthesize_block_from_delta(delta: ContentBlockDeltaTypeDef) -> ContentBlock:
     """Infer a synthetic start block from a delta payload.
 
     Args:
@@ -1198,6 +1198,10 @@ def _synthesize_block_from_delta(delta: ContentBlockDeltaTypeDef) -> ContentBloc
         Anthropic content block matching the delta type.
     """
     match delta:
+        case {"reasoningContent": {"redactedContent": bytes() as data}}:
+            return RedactedThinkingBlock(
+                type="redacted_thinking", data=await b64encode(data)
+            )
         case {"reasoningContent": _}:
             return ThinkingBlock(type="thinking", thinking="", signature="")
         case {"toolUse": _}:
@@ -1433,19 +1437,19 @@ def _process_content_block_start(
     return []
 
 
-def _emit_synthesized_block(
+async def _emit_synthesized_block(
     index: int, delta: ContentBlockDeltaTypeDef
 ) -> list[JSONServerSentEvent]:
     """Synthesize a ``content_block_start`` + optional delta event for *index*."""
     events: list[JSONServerSentEvent] = [
-        _make_block_start_event(index, _synthesize_block_from_delta(delta))
+        _make_block_start_event(index, await _synthesize_block_from_delta(delta))
     ]
     if delta_event := _map_delta(index, delta):
         events.append(delta_event)
     return events
 
 
-def _process_content_block_delta(
+async def _process_content_block_delta(
     delta_block: ContentBlockDeltaEventTypeDef, state: _StreamState
 ) -> list[JSONServerSentEvent]:
     """Handle a ``contentBlockDelta`` event, updating *state* in place.
@@ -1488,7 +1492,7 @@ def _process_content_block_delta(
         state.current_suppressed = False
     state.current_index = state.next_index
     state.next_index += 1
-    events = _emit_synthesized_block(state.current_index, delta)
+    events = await _emit_synthesized_block(state.current_index, delta)
     state.current_tool_use = "toolUse" in delta
     state.current_tool_input_seen = state.current_tool_use and len(events) > 1
     return events
@@ -1649,7 +1653,7 @@ async def _process_stream_events(
                 ):
                     yield sse
             case {"contentBlockDelta": delta_block}:
-                for sse in _process_content_block_delta(delta_block, state):
+                for sse in await _process_content_block_delta(delta_block, state):
                     yield sse
             case {"contentBlockStop": stop_block}:
                 for sse in _process_content_block_stop(

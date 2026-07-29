@@ -140,3 +140,27 @@ async def test_message_delta_always_carries_stop_sequence_key() -> None:
     (delta_data,) = [data for event, data in pairs if event == "message_delta"]
     assert "stop_sequence" in delta_data["delta"]
     assert delta_data["delta"]["stop_sequence"] is None
+
+
+async def test_redacted_thinking_delta_is_not_dropped() -> None:
+    """A ``reasoningContent.redactedContent`` delta yields a real block.
+
+    It must produce a ``redacted_thinking`` block instead of an empty
+    ``thinking`` block.
+    """
+    pairs = await _collect(
+        [
+            {
+                "contentBlockDelta": {
+                    "contentBlockIndex": 0,
+                    "delta": {"reasoningContent": {"redactedContent": b"secret"}},
+                }
+            },
+            {"contentBlockStop": {"contentBlockIndex": 0}},
+            {"messageStop": {"stopReason": "end_turn"}},
+        ]
+    )
+    (start_data,) = [data for event, data in pairs if event == "content_block_start"]
+    block = start_data["content_block"]
+    assert block["type"] == "redacted_thinking"
+    assert block["data"]
