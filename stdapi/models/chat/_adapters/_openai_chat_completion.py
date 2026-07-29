@@ -596,7 +596,9 @@ def _extract_assistant_blocks(
 
     Appends Bedrock toolUse blocks derived from OpenAI assistant message
     `tool_calls` or legacy `function_call`, followed by any textual content
-    (including refusal text when present).
+    (including refusal text when present).  An `audio` reference to a previous
+    audio response has no replayable content and yields no block, so such a turn
+    is dropped instead of producing an empty Bedrock message.
 
     Args:
         message_param: The assistant message to convert (may include tool calls).
@@ -688,10 +690,37 @@ def _extract_function_blocks(
     return [{"toolResult": {"toolUseId": message_param.name, "content": content}}]
 
 
+def _append_or_merge(
+    bedrock_messages: list[MessageTypeDef],
+    role: ConversationRoleType,
+    blocks: list[ContentBlockTypeDef],
+) -> None:
+    """Append ``blocks`` to ``bedrock_messages`` under ``role``, merging with the last.
+
+    Merges into the trailing message when its ``role`` matches; otherwise appends
+    a new message.  Bedrock requires strictly alternating user/assistant turns and
+    rejects empty content, so empty ``blocks`` lists are a no-op.
+
+    Args:
+        bedrock_messages: Mutable Bedrock messages list to append to.
+        role: Bedrock role of the blocks to append.
+        blocks: Content blocks to append.
+    """
+    if not blocks:
+        return
+    if bedrock_messages and bedrock_messages[-1]["role"] == role:
+        bedrock_messages[-1]["content"] += blocks  # type: ignore[operator]
+    else:
+        bedrock_messages.append({"role": role, "content": blocks})
+
+
 async def map_messages(
     messages: list[ChatCompletionMessageParam],
 ) -> tuple[list[MessageTypeDef], list[SystemContentBlockTypeDef]]:
     """Convert OpenAI message params into Bedrock messages and system blocks.
+
+    Consecutive messages mapping to the same Bedrock role are merged into a
+    single message.
 
     Args:
         messages: OpenAI message params to convert.
@@ -702,7 +731,6 @@ async def map_messages(
     bedrock_messages: list[MessageTypeDef] = []
     system_blocks: list[SystemContentBlockTypeDef] = []
 
-    previous_role_name = ""
     for message_param in messages:
         role_name = message_param.role
         role: ConversationRoleType = "assistant" if role_name == "assistant" else "user"
@@ -725,10 +753,6 @@ async def map_messages(
         if role_name == "tool":
             tool_msg: ChatCompletionToolMessageParam = message_param  # type: ignore[assignment]
             content_blocks = await _extract_tool_blocks(tool_msg)
-            if previous_role_name == "tool":
-                # All consecutive tool blocks must be merged
-                bedrock_messages[-1]["content"] += content_blocks  # type: ignore[operator]
-                continue
         elif role_name == "function":
             function_msg: ChatCompletionFunctionMessageParam = message_param  # type: ignore[assignment]
             content_blocks = _extract_function_blocks(function_msg)
@@ -738,8 +762,7 @@ async def map_messages(
         else:
             content_blocks = await _extract_content_blocks(message_param.content)
 
-        bedrock_messages.append({"role": role, "content": content_blocks})
-        previous_role_name = role_name
+        _append_or_merge(bedrock_messages, role, content_blocks)
 
     return bedrock_messages, system_blocks
 

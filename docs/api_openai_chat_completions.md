@@ -50,6 +50,7 @@ Generate conversational AI responses with Amazon Bedrock foundation models—inc
 | Video input                              |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Supported by select models                                      |
 | Audio input                              |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Supported by select models                                      |
 | Document input (`file`)                  |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | PDF and document support varies by model                        |
+| Assistant `audio` reference              |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | An assistant turn carrying only `audio: {"id": …}` is dropped (past audio is not replayable); resend the `transcript` as text to keep it in context |
 | Files API (`file_id`)                    |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Reference uploaded files via `type: "file"` — see [Files API](api_openai_files.md) |
 | System messages                          |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Includes `developer` role                                       |
 | **Tool Calling**                         |                                          |                                                                 |
