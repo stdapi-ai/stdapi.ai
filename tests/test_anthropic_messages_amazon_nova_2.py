@@ -32,9 +32,6 @@ if TYPE_CHECKING:
 #: Nova 2 Lite — smallest Nova 2 model, sufficient for code execution tests.
 _NOVA_2_LITE = "amazon.nova-2-lite-v1:0"
 
-#: Nova Premier — US-region only; no ``global.`` cross-region profile, so it always
-#: routes via a ``us.`` inference profile.  Required for ``nova_grounding`` tests.
-_NOVA_PREMIER = "amazon.nova-premier-v1:0"
 
 #: code_execution tool definition (Anthropic canonical format).
 _CODE_EXECUTION_TOOL: dict[str, object] = {
@@ -412,10 +409,9 @@ class TestCodeExecutionToolStreaming:
 class TestWebSearchTool:
     """Tests for the ``web_search`` tool (nova_grounding) on Amazon Nova.
 
-    Uses Nova Premier because ``nova_grounding`` requires a US-region Bedrock endpoint
-    and Nova Premier has no ``global.`` cross-region profile (US-only), ensuring it
-    always routes via a ``us.`` inference profile.  Nova 2 models with a ``global.``
-    profile would receive a 400 error because nova_grounding is not supported there.
+    Bedrock only accepts ``nova_grounding`` on a geo-scoped (``us.``) inference
+    profile; a ``global.`` profile returns a 400.  ``aws_bedrock_model_region_restrict``
+    pins Nova 2 Lite to us-east-1 in the test settings, which forces the ``us.`` profile.
 
     The gateway must translate the Bedrock ``toolUse`` response to a
     ``ServerToolUseBlock(name="web_search", id="srvtoolu_...")`` and suppress the
@@ -438,7 +434,7 @@ class TestWebSearchTool:
             pytest.skip("nova_grounding is only available on AWS Bedrock")
 
         response = anthropic_client.messages.create(
-            model=_NOVA_PREMIER,
+            model=_NOVA_2_LITE,
             max_tokens=1024,
             messages=[
                 {"role": "user", "content": "What is the current version of Python?"}
@@ -488,7 +484,7 @@ class TestWebSearchTool:
             pytest.skip("nova_grounding is only available on AWS Bedrock")
 
         with anthropic_client.messages.stream(
-            model=_NOVA_PREMIER,
+            model=_NOVA_2_LITE,
             max_tokens=1024,
             messages=[
                 {"role": "user", "content": "What is the current version of Python?"}
@@ -541,7 +537,7 @@ class TestWebSearchTool:
 
         # ── Turn 1 ──────────────────────────────────────────────────────────
         resp1 = anthropic_client.messages.create(
-            model=_NOVA_PREMIER,
+            model=_NOVA_2_LITE,
             max_tokens=1024,
             messages=[
                 {"role": "user", "content": "What is the current Python version?"}
@@ -562,7 +558,7 @@ class TestWebSearchTool:
         # resp1.content contains ServerToolUseBlock objects; the gateway must
         # translate them back to nova_grounding toolUse blocks for Bedrock.
         resp2 = anthropic_client.messages.create(
-            model=_NOVA_PREMIER,
+            model=_NOVA_2_LITE,
             max_tokens=1024,
             messages=[
                 {"role": "user", "content": "What is the current Python version?"},
@@ -595,7 +591,7 @@ class TestWebSearchTool:
 
         with pytest.raises(BadRequestError) as exc_info:
             anthropic_client.messages.create(
-                model=_NOVA_PREMIER,
+                model=_NOVA_2_LITE,
                 max_tokens=16,
                 messages=[{"role": "user", "content": "What is the Python version?"}],
                 tools=[{**_WEB_SEARCH_TOOL, "allowed_domains": ["python.org"]}],  # type: ignore[list-item]

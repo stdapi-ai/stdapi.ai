@@ -18,10 +18,10 @@ if TYPE_CHECKING:
 
 NOVA_ALL = ("amazon.nova-2-lite-v1:0",)
 
-#: Nova Premier model — only available in US regions, where nova_grounding is supported.
-# TODO(EOL 2026-09-14): no other model accepts nova_grounding; re-probe Nova 2
-# Lite with explicit `us.` routing before this model retires.
-_NOVA_PREMIER = "amazon.nova-premier-v1:0"
+#: Model used for ``nova_grounding``: Bedrock only accepts the system tool on a
+#: geo-scoped (``us.``) profile, which conftest forces through
+#: ``aws_bedrock_model_region_restrict``.
+_NOVA_GROUNDING_MODEL = "amazon.nova-2-lite-v1:0"
 
 _GROUNDING_TOOL: list[dict[str, object]] = [
     {"type": "function", "function": {"name": "nova_grounding"}}
@@ -74,16 +74,15 @@ class TestNovaChatCompletions:
     ) -> None:
         """Passing ``nova_grounding`` as a plain function tool name auto-promotes to systemTool.
 
-        Nova Premier declares ``SUPPORTED_SYSTEM_TOOLS = {"nova_grounding"}``.
+        Nova declares ``SUPPORTED_SYSTEM_TOOLS = {"nova_grounding"}``.
         When ``nova_grounding`` appears as a ``toolSpec`` name, ``_req_promote_system_tools``
         promotes it to ``{"systemTool": {"name": "nova_grounding"}}`` automatically —
-        no prefix needed.  Uses Nova Premier because ``nova_grounding`` is only supported
-        in US regions where Nova Premier is available.
+        no prefix needed.
         """
         if use_official_api:
             pytest.skip("Amazon Nova is not supported on the official API")
         resp = openai_client.chat.completions.create(
-            model=_NOVA_PREMIER,
+            model=_NOVA_GROUNDING_MODEL,
             messages=[{"role": "user", "content": "What is today's date? Be concise."}],
             tools=[{"type": "function", "function": {"name": "nova_grounding"}}],
         )
@@ -98,13 +97,13 @@ class TestNovaChatCompletions:
         ``_req_promote_system_tools`` only promotes names that are literally present in
         ``SUPPORTED_SYSTEM_TOOLS`` (Bedrock names such as ``"nova_grounding"``).  A user-defined
         tool named ``"web_search"`` is never pre-translated, so it stays as a regular
-        ``toolSpec`` and Nova Premier receives it as a custom function tool.
+        ``toolSpec`` and Nova receives it as a custom function tool.
         """
         if use_official_api:
             pytest.skip("Amazon Nova is not supported on the official API")
-        # web_search passed as a regular toolSpec: Nova Premier treats it as a custom tool
+        # web_search passed as a regular toolSpec: Nova treats it as a custom tool
         resp = openai_client.chat.completions.create(
-            model=_NOVA_PREMIER,
+            model=_NOVA_GROUNDING_MODEL,
             messages=[{"role": "user", "content": "Reply with OK."}],
             tools=[
                 {
@@ -148,7 +147,7 @@ class TestNovaGrounding:
       - Surface web search citations as ``url_citation`` ``annotations`` on the
         response message.
 
-    Uses Nova Premier (US-region model that supports nova_grounding).
+    Uses Nova 2 Lite pinned to us-east-1, the cheapest model accepting nova_grounding.
     """
 
     def test_tool_calls_suppressed_non_streaming(
@@ -164,7 +163,7 @@ class TestNovaGrounding:
         if use_official_api:
             pytest.skip("Amazon Nova is not supported on the official API")
         resp = openai_client.chat.completions.create(
-            model=_NOVA_PREMIER,
+            model=_NOVA_GROUNDING_MODEL,
             messages=[
                 {"role": "user", "content": "What is the current version of Python?"}
             ],
@@ -192,7 +191,7 @@ class TestNovaGrounding:
         if use_official_api:
             pytest.skip("Amazon Nova is not supported on the official API")
         resp = openai_client.chat.completions.create(
-            model=_NOVA_PREMIER,
+            model=_NOVA_GROUNDING_MODEL,
             messages=[
                 {
                     "role": "user",
@@ -230,7 +229,7 @@ class TestNovaGrounding:
         content_chunks = 0
         finish_reason = None
         response = openai_client.chat.completions.create(
-            model=_NOVA_PREMIER,
+            model=_NOVA_GROUNDING_MODEL,
             messages=[
                 {"role": "user", "content": "What is the latest Python version?"}
             ],
@@ -268,7 +267,7 @@ class TestNovaGrounding:
 
         # ── Turn 1 ──────────────────────────────────────────────────────────
         resp1 = openai_client.chat.completions.create(
-            model=_NOVA_PREMIER,
+            model=_NOVA_GROUNDING_MODEL,
             messages=[
                 {"role": "user", "content": "What is the current Python version?"}
             ],
@@ -282,7 +281,7 @@ class TestNovaGrounding:
 
         # ── Turn 2 ──────────────────────────────────────────────────────────
         resp2 = openai_client.chat.completions.create(
-            model=_NOVA_PREMIER,
+            model=_NOVA_GROUNDING_MODEL,
             messages=[
                 {"role": "user", "content": "What is the current Python version?"},
                 {"role": "assistant", "content": msg1.content},
