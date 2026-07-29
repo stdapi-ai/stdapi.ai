@@ -64,6 +64,9 @@ _POLLY_DEFAULT_PCM_SAMPLE_RATE = 16000
 #: Polly pcm supported sample rates
 _PCM_SAMPLE_RATES = {8000, 16000}
 
+#: OpenAI's documented pcm response_format contract: 24 kHz, 16-bit, mono, little-endian
+_OPENAI_PCM_SAMPLE_RATE = 24000
+
 #: Content type of Polly's speech marks output (a stream of JSON lines)
 _SPEECH_MARKS_CONTENT_TYPE = "application/x-json-stream"
 
@@ -448,7 +451,13 @@ class AudioModel(AudioModelBase[None, None]):
         # "OutputFormat=json" and returns JSON lines instead of an audio
         # stream, so "response_format" is ignored and nothing is re-encoded.
         speech_marks = extra is not None and bool(extra.SpeechMarkTypes)
-        encoding = not speech_marks and resp_format in _FORMAT_ENCODE
+        # pcm without an explicit SampleRate extra param is also routed through
+        # ffmpeg, so it can be resampled to OpenAI's documented 24 kHz contract.
+        explicit_sample_rate = bool(extra and extra.SampleRate)
+        encoding = not speech_marks and (
+            resp_format in _FORMAT_ENCODE
+            or (resp_format == "pcm" and not explicit_sample_rate)
+        )
         output_format: OutputFormatType = (
             "json"
             if speech_marks
@@ -456,6 +465,10 @@ class AudioModel(AudioModelBase[None, None]):
         )
         # Polly's own default PCM sample rate, used unless the caller overrides it.
         sample_rate = _POLLY_DEFAULT_PCM_SAMPLE_RATE if encoding else None
+        # Force OpenAI's 24 kHz pcm contract, unless the caller pinned Polly's rate.
+        output_sample_rate = (
+            _OPENAI_PCM_SAMPLE_RATE if encoding and resp_format == "pcm" else None
+        )
 
         engine = _engine_from_model(self.model.id)
         voice_id, language = await _select_voice(text, voice, engine)
@@ -505,6 +518,7 @@ class AudioModel(AudioModelBase[None, None]):
                 input_format="s16le" if output_format == "pcm" else None,
                 channels=1,
                 sample_rate=sample_rate,
+                output_sample_rate=output_sample_rate,
             )
         else:
             audio_stream = body

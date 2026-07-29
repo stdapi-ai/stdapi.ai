@@ -47,7 +47,7 @@ Generate natural-sounding speech from text with Amazon Polly through an OpenAI-c
 | SSML markup                 | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Fine-grained speech control                                     |
 | **Output Formats**          |                                          |                                                                 |
 | MP3                         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Native Polly format                                             |
-| PCM                         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Native Polly format                                             |
+| PCM                         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | 24 kHz per OpenAI's contract; resampled from Polly's native rate |
 | Opus                        |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Native Polly format                                             |
 | AAC                         |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Encoded from PCM                                                |
 | FLAC                        |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Encoded from PCM                                                |
@@ -108,7 +108,7 @@ Each engine supports a different subset of voices and languages — see the [Pol
 - **Character-Based Billing**: Usage tracks character counts—the native billing unit for Amazon Polly and Amazon Comprehend—rather than OpenAI-style tokens
 
 !!! tip "Performance Tips: Optimize Speed & Cost"
-    - **Use native Polly formats** (mp3, ogg, PCM) to skip server-side conversion
+    - **Use native Polly formats** (mp3, ogg) to skip server-side conversion. `pcm` is resampled server-side by default (see [Sample Rate](#provider-specific-parameters)) unless a Polly-native `SampleRate` is explicitly requested
     - **Specify a Polly voice ID** to bypass language detection—faster responses, no Amazon Comprehend charges
     - **Configure a default language** via `DEFAULT_TTS_LANGUAGE` environment variable to skip language detection for all requests using OpenAI voice names
 
@@ -168,6 +168,9 @@ Specify custom audio sample rate (8000, 16000, 22050, or 24000 Hz; PCM output su
   "SampleRate": "24000"
 }
 ```
+
+!!! info "PCM output defaults to OpenAI's 24 kHz contract"
+    Per OpenAI's TTS API, `response_format: "pcm"` is raw, headerless 24 kHz 16-bit mono little-endian audio. Without an explicit `SampleRate`, `pcm` output is synthesized by Polly at 16 kHz and resampled to 24 kHz server-side. Pass a Polly-native `SampleRate` (`8000` or `16000`) to skip resampling and receive Polly's raw rate instead — since raw PCM carries no embedded rate, only do this when your client knows to play it back at that rate.
 
 **Language Code:**
 
@@ -237,7 +240,7 @@ export DEFAULT_MODEL_PARAMS='{
 The following parameters from the Amazon Polly [SynthesizeSpeech API](https://docs.aws.amazon.com/polly/latest/dg/API_SynthesizeSpeech.html) can be used:
 
 - `LexiconNames` (list): Apply pronunciation lexicons
-- `SampleRate` (string): Audio sample rate in Hz — `8000`, `16000`, `22050`, or `24000` (`pcm` output: `8000` or `16000`)
+- `SampleRate` (string): Audio sample rate in Hz — `8000`, `16000`, `22050`, or `24000` (`pcm` output: `8000` or `16000`; omit it to get OpenAI's 24 kHz `pcm` contract instead)
 - `LanguageCode` (string): Language code for bilingual voices only (e.g., `en-IN`, `hi-IN`)
 - `SpeechMarkTypes` (list): Timing marks to return instead of audio — `sentence`, `ssml`, `viseme`, `word`
 

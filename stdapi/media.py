@@ -47,6 +47,7 @@ async def encode_audio_stream(
     input_format: str | None = None,
     sample_rate: int | None = None,
     channels: int | None = None,
+    output_sample_rate: int | None = None,
 ) -> AsyncGenerator[bytes]:
     """Encode audio stream using ffmpeg with highest quality settings.
 
@@ -64,6 +65,8 @@ async def encode_audio_stream(
         channels: Number of audio channels (1=mono, 2=stereo).
             At least one of sample_rate or channels is required for raw PCM input.
             Optional for encoded formats.
+        output_sample_rate: Resample the output to this rate in Hz.
+            Optional; leaves the source rate untouched when not set.
 
     Yields:
         Encoded audio bytes in the specified output format.
@@ -96,6 +99,13 @@ async def encode_audio_stream(
             "pipe:0",
             "-q:a",  # Audio quality (0=highest)
             "0",
+        )
+    )
+    if output_sample_rate:
+        # -ar: resample the output to a specific sample rate in Hz
+        ffmpeg_args.extend(("-ar", str(output_sample_rate)))
+    ffmpeg_args.extend(
+        (
             "-f",  # Output format
             _FFMPEG_FORMAT_ALIASES.get(output_format, output_format),
             "pipe:1",  # Output to stdout

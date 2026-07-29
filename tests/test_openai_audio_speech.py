@@ -139,6 +139,86 @@ class TestAudioSpeech:
         assert len(audio_data) > 0
         assert response.response.headers.get("content-type") == "audio/flac"
 
+    def test_speech_pcm_default_resamples_to_24khz(
+        self, openai_client: OpenAI, speech_standard_model: str, use_official_api: bool
+    ) -> None:
+        """Test default pcm output follows OpenAI's 24 kHz contract, not Polly's 16 kHz.
+
+        Validates against real Polly that omitting the `SampleRate` extra
+        parameter resamples pcm output server-side: its byte length scales
+        with 24 kHz, roughly 1.5x the length of Polly's native 16 kHz pcm
+        for the same synthesized text.
+
+        Args:
+            openai_client: OpenAI client instance for API calls
+            speech_standard_model: Standard speech model identifier
+            use_official_api: True is using official OpenAI API.
+
+        Validates:
+            - Default pcm output length scales with a 24 kHz sample rate
+            - An explicit Polly-native SampleRate still yields 16 kHz pcm
+        """
+        if use_official_api:
+            pytest.skip("Amazon Polly is not available on the official OpenAI API")
+
+        default_response = openai_client.audio.speech.create(
+            model=speech_standard_model,
+            voice="alloy",
+            input="Testing the default pcm sample rate.",
+            response_format="pcm",
+        )
+        native_response = openai_client.audio.speech.create(
+            model=speech_standard_model,
+            voice="alloy",
+            input="Testing the default pcm sample rate.",
+            response_format="pcm",
+            extra_body={"SampleRate": "16000"},
+        )
+
+        default_len = len(default_response.content)
+        native_len = len(native_response.content)
+        assert default_len > 0
+        assert native_len > 0
+        # 24 kHz output carries ~1.5x the samples of Polly's native 16 kHz output.
+        assert 1.3 < default_len / native_len < 1.7
+
+    def test_speech_marks_returns_json_lines(
+        self, openai_client: OpenAI, speech_standard_model: str, use_official_api: bool
+    ) -> None:
+        """Test SpeechMarkTypes returns timing marks instead of audio.
+
+        Validates against real Polly that the `SpeechMarkTypes` extra
+        parameter switches the response to a JSON lines stream labeled
+        `application/x-json-stream`, bypassing audio synthesis entirely.
+
+        Args:
+            openai_client: OpenAI client instance for API calls
+            speech_standard_model: Standard speech model identifier
+            use_official_api: True is using official OpenAI API.
+
+        Validates:
+            - The response content type is `application/x-json-stream`
+            - Each line is a JSON object describing a word-timing mark
+        """
+        if use_official_api:
+            pytest.skip("Amazon Polly is not available on the official OpenAI API")
+
+        response = openai_client.audio.speech.create(
+            model=speech_standard_model,
+            voice="alloy",
+            input="Hello, how are you?",
+            extra_body={"SpeechMarkTypes": ["word"]},
+        )
+
+        assert (
+            response.response.headers.get("content-type") == "application/x-json-stream"
+        )
+        lines = [line for line in response.content.decode().splitlines() if line]
+        assert lines
+        for line in lines:
+            mark = json.loads(line)
+            assert mark["type"] == "word"
+
     def test_speech_with_extra_invalid_parameter(
         self, openai_client: OpenAI, speech_standard_model: str, use_official_api: bool
     ) -> None:
