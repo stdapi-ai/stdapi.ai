@@ -66,7 +66,7 @@ class RerankModelBase(ModelBase[Any, Any]):
     async def rerank(
         self,
         query: str,
-        documents: list[str],
+        documents: list[str | JsonMapping],
         *,
         top_n: int | None,
         extra_params: JsonMapping,
@@ -75,7 +75,7 @@ class RerankModelBase(ModelBase[Any, Any]):
 
         Args:
             query: The search query.
-            documents: Texts to compare to the query.
+            documents: Texts, or structured JSON objects, to compare to the query.
             top_n: Maximum number of results to return, or None for all.
             extra_params: Extra model parameters.
 

@@ -2,7 +2,7 @@
 
 from pydantic import Field
 
-from stdapi.types import BaseModelRequest, BaseModelRequestWithExtra, BaseModelResponse
+from stdapi.types import BaseModelRequestWithExtra, BaseModelResponse, JsonMapping
 from stdapi.types.cohere import ApiMeta
 
 
@@ -48,12 +48,6 @@ class RerankRequest(BaseModelRequestWithExtra):
     )
 
 
-class RerankV1Document(BaseModelRequest):
-    """A document object for the v1 rerank endpoint."""
-
-    text: str = Field(description="The text of the document to rerank.", min_length=1)
-
-
 class RerankV1Request(BaseModelRequestWithExtra):
     """Request body for reranking documents against a query (Cohere v1 Rerank API)."""
 
@@ -61,10 +55,11 @@ class RerankV1Request(BaseModelRequestWithExtra):
         description="ID of the model to use.", min_length=1, max_length=255
     )
     query: str = Field(description="The search query.", min_length=1)
-    documents: list[str | RerankV1Document] = Field(
+    documents: list[str | JsonMapping] = Field(
         description=(
-            "A list of texts (or objects with a `text` field) that will be "
-            "compared to the query."
+            "A list of texts, or field->value objects, that will be compared "
+            "to the query. `rank_fields` selects which object fields are "
+            "ranked on."
         ),
         min_length=1,
     )
@@ -79,8 +74,8 @@ class RerankV1Request(BaseModelRequestWithExtra):
     rank_fields: list[str] | None = Field(
         default=None,
         description=(
-            'Document fields to rank on. Only the default `["text"]` field is '
-            "supported on this implementation."
+            "Object document fields to rank on. When unset, object documents "
+            "are ranked on all of their fields."
         ),
     )
     return_documents: bool = Field(

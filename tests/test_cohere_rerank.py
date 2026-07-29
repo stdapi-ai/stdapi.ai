@@ -23,7 +23,7 @@ class _StubRerankModel:
     async def rerank(
         self,
         query: str,
-        documents: list[str],
+        documents: list[str | dict[str, Any]],
         *,
         top_n: int | None,
         extra_params: dict[str, Any],
@@ -263,10 +263,10 @@ class TestCohereRerankV1Route:
         assert call["documents"] == ["Carson City", "Washington, D.C."]
         assert call["top_n"] == 1
 
-    def test_document_objects_are_normalized_to_text(
+    def test_single_key_text_object_documents_are_passed_through(
         self, client: TestClient, rerank_backend: _StubRerankModel
     ) -> None:
-        """Document objects are reduced to their `text` field for the backend."""
+        """Single-key {"text": ...} object documents reach the backend unchanged."""
         response = client.post(
             "/cohere/v1/rerank",
             json={
@@ -277,7 +277,86 @@ class TestCohereRerankV1Route:
         )
         assert response.status_code == 200, response.text
         (call,) = rerank_backend.calls
-        assert call["documents"] == ["Carson City", "Washington, D.C."]
+        assert call["documents"] == [
+            {"text": "Carson City"},
+            {"text": "Washington, D.C."},
+        ]
+
+    def test_multi_field_object_documents_are_passed_through(
+        self, client: TestClient, rerank_backend: _StubRerankModel
+    ) -> None:
+        """Multi-field object documents reach the backend as-is when unranked."""
+        document = {"title": "Nevada", "body": "Carson City is its capital."}
+        response = client.post(
+            "/cohere/v1/rerank",
+            json={
+                "model": "cohere.rerank-v3-5:0",
+                "query": "q",
+                "documents": [document],
+            },
+        )
+        assert response.status_code == 200, response.text
+        (call,) = rerank_backend.calls
+        assert call["documents"] == [document]
+
+    def test_rank_fields_projects_object_documents(
+        self, client: TestClient, rerank_backend: _StubRerankModel
+    ) -> None:
+        """rank_fields keeps only the requested keys of object documents."""
+        response = client.post(
+            "/cohere/v1/rerank",
+            json={
+                "model": "cohere.rerank-v3-5:0",
+                "query": "q",
+                "documents": [
+                    {"title": "Nevada", "body": "Carson City.", "other": "ignored"}
+                ],
+                "rank_fields": ["title", "body", "missing"],
+            },
+        )
+        assert response.status_code == 200, response.text
+        (call,) = rerank_backend.calls
+        assert call["documents"] == [{"title": "Nevada", "body": "Carson City."}]
+
+    def test_rank_fields_do_not_affect_string_documents(
+        self, client: TestClient, rerank_backend: _StubRerankModel
+    ) -> None:
+        """rank_fields is only meaningful for object documents; strings pass through."""
+        response = client.post(
+            "/cohere/v1/rerank",
+            json={
+                "model": "cohere.rerank-v3-5:0",
+                "query": "q",
+                "documents": ["a"],
+                "rank_fields": ["title"],
+            },
+        )
+        assert response.status_code == 200, response.text
+        (call,) = rerank_backend.calls
+        assert call["documents"] == ["a"]
+
+    def test_return_documents_echoes_original_multi_field_document(
+        self, client: TestClient, rerank_backend: _StubRerankModel
+    ) -> None:
+        """return_documents echoes the original object, not the rank_fields projection."""
+        response = client.post(
+            "/cohere/v1/rerank",
+            json={
+                "model": "cohere.rerank-v3-5:0",
+                "query": "q",
+                "documents": ["a", {"title": "Nevada", "body": "Carson City."}],
+                "rank_fields": ["title"],
+                "return_documents": True,
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["results"] == [
+            {
+                "document": {"text": "title: Nevada\nbody: Carson City."},
+                "index": 1,
+                "relevance_score": 0.98,
+            }
+        ]
 
     def test_return_documents_echoes_documents(
         self, client: TestClient, rerank_backend: _StubRerankModel
@@ -329,27 +408,24 @@ class TestCohereRerankV1Route:
         assert rerank_backend.calls
 
     @pytest.mark.parametrize("rank_fields", [["title"], ["title", "text"], []])
-    def test_custom_rank_fields_are_rejected(
+    def test_custom_rank_fields_are_accepted(
         self,
         client: TestClient,
         rerank_backend: _StubRerankModel,
         rank_fields: list[str],
     ) -> None:
-        """rank_fields other than ["text"] are rejected with the Cohere envelope."""
+        """rank_fields other than ["text"] are accepted for object documents."""
         response = client.post(
             "/cohere/v1/rerank",
             json={
                 "model": "cohere.rerank-v3-5:0",
                 "query": "q",
-                "documents": ["a"],
+                "documents": [{"title": "a", "text": "b"}],
                 "rank_fields": rank_fields,
             },
         )
-        assert response.status_code == 400
-        body = response.json()
-        assert set(body) == {"message", "id"}
-        assert "rank_fields" in body["message"]
-        assert not rerank_backend.calls
+        assert response.status_code == 200, response.text
+        assert rerank_backend.calls
 
     def test_max_chunks_per_doc_is_rejected(
         self, client: TestClient, rerank_backend: _StubRerankModel
@@ -533,3 +609,28 @@ class TestCohereRerankV1Integration:
         result = response.results[0]
         assert result.document is not None
         assert result.document.text == _LIVE_DOCUMENTS[result.index]
+
+    def test_multi_field_object_documents_with_rank_fields(
+        self, cohere_client_v1: cohere.Client, live_rerank_model: str
+    ) -> None:
+        """Multi-field object documents are sent as jsonDocument and ranked correctly."""
+        documents = [
+            {"title": "Nevada", "text": _LIVE_DOCUMENTS[0]},
+            {"title": "United States", "text": _LIVE_DOCUMENTS[1]},
+            {"title": "United States history", "text": _LIVE_DOCUMENTS[2]},
+        ]
+        response = cohere_client_v1.rerank(
+            model=live_rerank_model,
+            query="What is the capital of the United States?",
+            documents=documents,
+            rank_fields=["title", "text"],
+            top_n=1,
+            return_documents=True,
+        )
+        assert len(response.results) == 1
+        result = response.results[0]
+        assert result.index == 1
+        assert result.document is not None
+        assert (
+            result.document.text == "title: United States\ntext: " + _LIVE_DOCUMENTS[1]
+        )

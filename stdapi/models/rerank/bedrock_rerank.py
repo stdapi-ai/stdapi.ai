@@ -29,6 +29,7 @@ if TYPE_CHECKING:
         BedrockRerankingModelConfigurationTypeDef,
         RerankRequestTypeDef,
         RerankResultTypeDef,
+        RerankSourceTypeDef,
     )
 
     from stdapi.types import JsonMapping
@@ -56,6 +57,40 @@ def agent_runtime_client(
     )
 
 
+def _document_source(document: str | JsonMapping) -> RerankSourceTypeDef:
+    """Build the Bedrock inline document source for one rerank document.
+
+    Plain strings, and single-key ``{"text": ...}`` objects, use the
+    ``textDocument`` fast path (identical wire encoding to before this
+    document type was widened). Any other object uses ``jsonDocument`` so
+    Bedrock can natively rerank on its structured fields.
+
+    Args:
+        document: A document text, or a structured JSON document object.
+
+    Returns:
+        The ``sources`` entry for this document.
+    """
+    if isinstance(document, str):
+        return {
+            "type": "INLINE",
+            "inlineDocumentSource": {
+                "type": "TEXT",
+                "textDocument": {"text": document},
+            },
+        }
+    text = document.get("text")
+    if document.keys() == {"text"} and isinstance(text, str):
+        return {
+            "type": "INLINE",
+            "inlineDocumentSource": {"type": "TEXT", "textDocument": {"text": text}},
+        }
+    return {
+        "type": "INLINE",
+        "inlineDocumentSource": {"type": "JSON", "jsonDocument": document},
+    }
+
+
 class RerankModel(RerankModelBase):
     """Bedrock rerank model served via the Bedrock Rerank API."""
 
@@ -64,7 +99,7 @@ class RerankModel(RerankModelBase):
     async def rerank(
         self,
         query: str,
-        documents: list[str],
+        documents: list[str | JsonMapping],
         *,
         top_n: int | None,
         extra_params: JsonMapping,
@@ -73,7 +108,7 @@ class RerankModel(RerankModelBase):
 
         Args:
             query: The search query.
-            documents: Texts to compare to the query.
+            documents: Texts, or structured JSON objects, to compare to the query.
             top_n: Maximum number of results to return, or None for all.
             extra_params: Extra model parameters, passed as
                 ``additionalModelRequestFields``.
@@ -109,7 +144,7 @@ class RerankModel(RerankModelBase):
     async def _rerank_in_region(
         self,
         query: str,
-        documents: list[str],
+        documents: list[str | JsonMapping],
         top_n: int | None,
         extra_params: JsonMapping,
         region: RegionName,
@@ -120,7 +155,7 @@ class RerankModel(RerankModelBase):
 
         Args:
             query: The search query.
-            documents: Texts to compare to the query.
+            documents: Texts, or structured JSON objects, to compare to the query.
             top_n: Maximum number of results to return, or None for all.
             extra_params: Extra model parameters.
             region: AWS region to target.
@@ -144,16 +179,7 @@ class RerankModel(RerankModelBase):
             model_configuration["additionalModelRequestFields"] = extra_params  # type: ignore[typeddict-item]
         request: RerankRequestTypeDef = {
             "queries": [{"type": "TEXT", "textQuery": {"text": query}}],
-            "sources": [
-                {
-                    "type": "INLINE",
-                    "inlineDocumentSource": {
-                        "type": "TEXT",
-                        "textDocument": {"text": text},
-                    },
-                }
-                for text in documents
-            ],
+            "sources": [_document_source(document) for document in documents],
             "rerankingConfiguration": {
                 "type": "BEDROCK_RERANKING_MODEL",
                 "bedrockRerankingConfiguration": {

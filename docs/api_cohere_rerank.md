@@ -135,13 +135,18 @@ The legacy `/v1/rerank` endpoint is also available for older Cohere SDKs (`coher
 
 | Feature                     |                  Status                  | Notes                                                             |
 |-----------------------------|:----------------------------------------:|-------------------------------------------------------------------|
-| `documents` as objects      |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Each document is a string or an object with a `text` field        |
+| `documents` as objects      |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Each document is a string, or a field->value object                |
 | `return_documents`          |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | When `true`, each result echoes back the document text            |
-| `rank_fields`               |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Only the default `["text"]` is accepted; other values return 400  |
+| `rank_fields`               |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Ranks object documents on the selected fields only                |
 | `max_chunks_per_doc`        | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Rejected with 400 — no Bedrock equivalent                         |
 | `meta.api_version.version`  |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Reported as `"1"`                                                 |
 
 </div>
+
+Object documents with a single `text` field use the same plain-text encoding as a string document. Multi-field objects (or object documents combined with a non-default `rank_fields`) are sent to Bedrock as structured JSON documents, natively reranked on their fields. When `rank_fields` is set, object documents are first reduced to the listed fields (missing fields are skipped) before being sent; `return_documents` always echoes back the *original*, unreduced document.
+
+!!! note "Echoed text for multi-field documents"
+    The Cohere v1 response type only carries a single `text` string per echoed document. For multi-field object documents, this implementation joins the original fields as `key: value` lines (one per field) — an approximation, since Cohere's own algorithm for this case is not publicly documented.
 
 **Example request:**
 
@@ -153,9 +158,10 @@ curl -X POST "$BASE/v1/rerank" \
     "model": "cohere.rerank-v3-5:0",
     "query": "What is the capital of the United States?",
     "documents": [
-      {"text": "Carson City is the capital city of Nevada."},
-      {"text": "Washington, D.C. is the capital of the United States."}
+      {"title": "Nevada", "text": "Carson City is the capital city of Nevada."},
+      {"title": "United States", "text": "Washington, D.C. is the capital of the United States."}
     ],
+    "rank_fields": ["title", "text"],
     "top_n": 1,
     "return_documents": true
   }'
@@ -168,7 +174,7 @@ curl -X POST "$BASE/v1/rerank" \
   "id": "0f1b3c6e8d9a4b5c8e7f6a5b4c3d2e1f",
   "results": [
     {
-      "document": {"text": "Washington, D.C. is the capital of the United States."},
+      "document": {"text": "title: United States\ntext: Washington, D.C. is the capital of the United States."},
       "index": 1,
       "relevance_score": 0.9871
     }

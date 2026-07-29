@@ -330,6 +330,77 @@ class TestRerankCall:
             "max_tokens_per_doc": 512
         }
 
+    async def test_single_key_text_object_uses_text_document_fast_path(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A {"text": ...} object document keeps the plain textDocument wire shape."""
+        client = _StubAgentRuntimeClient([{"results": []}])
+        self._patch_infra(monkeypatch, client)
+
+        await RerankModel(RERANK_MODELS[1]).rerank(
+            "q", [{"text": "a"}], top_n=None, extra_params={}
+        )
+
+        (source,) = client.requests[0]["sources"]
+        assert source["inlineDocumentSource"] == {
+            "type": "TEXT",
+            "textDocument": {"text": "a"},
+        }
+
+    async def test_multi_field_object_uses_json_document_source(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A multi-field object document is sent as a Bedrock jsonDocument source."""
+        client = _StubAgentRuntimeClient([{"results": []}])
+        self._patch_infra(monkeypatch, client)
+        document = {"title": "Nevada", "body": "Carson City is its capital."}
+
+        await RerankModel(RERANK_MODELS[1]).rerank(
+            "q", [document], top_n=None, extra_params={}
+        )
+
+        (source,) = client.requests[0]["sources"]
+        assert source["inlineDocumentSource"] == {
+            "type": "JSON",
+            "jsonDocument": document,
+        }
+
+    async def test_object_without_text_key_uses_json_document_source(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An object document without a `text` key is sent as a jsonDocument source."""
+        client = _StubAgentRuntimeClient([{"results": []}])
+        self._patch_infra(monkeypatch, client)
+
+        await RerankModel(RERANK_MODELS[1]).rerank(
+            "q", [{"title": "Nevada"}], top_n=None, extra_params={}
+        )
+
+        (source,) = client.requests[0]["sources"]
+        assert source["inlineDocumentSource"] == {
+            "type": "JSON",
+            "jsonDocument": {"title": "Nevada"},
+        }
+
+    async def test_mixed_string_and_object_documents(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """String and object documents in the same request build distinct sources."""
+        client = _StubAgentRuntimeClient([{"results": []}])
+        self._patch_infra(monkeypatch, client)
+
+        await RerankModel(RERANK_MODELS[1]).rerank(
+            "q", ["a", {"title": "b"}], top_n=None, extra_params={}
+        )
+
+        sources = [
+            source["inlineDocumentSource"] for source in client.requests[0]["sources"]
+        ]
+        assert sources == [
+            {"type": "TEXT", "textDocument": {"text": "a"}},
+            {"type": "JSON", "jsonDocument": {"title": "b"}},
+        ]
+
     async def test_model_arn_uses_region_partition(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

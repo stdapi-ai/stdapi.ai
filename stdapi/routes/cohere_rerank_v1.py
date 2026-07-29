@@ -5,7 +5,7 @@ specification shape, calling AWS Bedrock rerank models (e.g., Amazon Rerank,
 Cohere Rerank) through the Bedrock Rerank API.
 """
 
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, Depends
 
@@ -26,6 +26,9 @@ from stdapi.types.cohere_rerank import (
     RerankV1ResultDocument,
 )
 
+if TYPE_CHECKING:
+    from stdapi.types import JsonMapping
+
 register_route_capability(
     "cohere_rerank_v1",
     f"{SETTINGS.cohere_routes_prefix}/v1/rerank",
@@ -39,6 +42,45 @@ router = APIRouter(
 )
 
 
+def _project_document(
+    document: str | JsonMapping, rank_fields: list[str] | None
+) -> str | JsonMapping:
+    """Reduce an object document to its requested `rank_fields`.
+
+    Args:
+        document: A document, either free text or a field->value object.
+        rank_fields: Object fields to rank on, or None to rank on every field.
+
+    Returns:
+        `document` unchanged (strings, or objects when `rank_fields` is unset),
+        or an object containing only the requested fields.
+    """
+    if isinstance(document, str) or rank_fields is None:
+        return document
+    return {field: document[field] for field in rank_fields if field in document}
+
+
+def _echo_document_text(document: str | JsonMapping) -> str:
+    """Render the `text` Cohere echoes back for a `return_documents` result.
+
+    A single-key `{"text": ...}` object echoes its text value verbatim;
+    any other object is rendered as one `key: value` line per field (Cohere's
+    own join algorithm for object documents is not publicly documented).
+
+    Args:
+        document: A document, either free text or a field->value object.
+
+    Returns:
+        The text to echo back for this document.
+    """
+    if isinstance(document, str):
+        return document
+    text = document.get("text")
+    if document.keys() == {"text"} and isinstance(text, str):
+        return text
+    return "\n".join(f"{key}: {value}" for key, value in document.items())
+
+
 @router.post(
     "/rerank",
     summary="Rank documents by relevance to a query (Cohere v1 format)",
@@ -48,8 +90,9 @@ router = APIRouter(
         "(legacy Cohere v1 Rerank API).\n\n"
         "Provided for compatibility with older Cohere SDKs and integrations; "
         "new clients should prefer the v2 `cohere_rerank` endpoint. Documents "
-        "may be plain strings or objects with a `text` field, and "
-        "`return_documents` echoes the documents back in the results.\n\n"
+        "may be plain strings or field->value objects; `rank_fields` selects "
+        "which object fields are ranked on, and `return_documents` echoes the "
+        "documents back in the results.\n\n"
         "**Find compatible models:** Call `search_models` with "
         "`mcp_tool=cohere_rerank_v1` to discover model IDs that support "
         "reranking."
@@ -100,17 +143,12 @@ async def rerank_v1(
             options or invalid values.
     """
     log_request_params(request)
-    if request.rank_fields is not None and request.rank_fields != ["text"]:
-        msg = (
-            "Only the default ['text'] rank_fields is supported on this implementation."
-        )
-        raise ApiError(msg)
     if request.max_chunks_per_doc is not None:
         msg = "'max_chunks_per_doc' is not supported on this implementation."
         raise ApiError(msg)
     model_id = (await validate_model(request.model, RERANKING_MODALITY)).id
     documents = [
-        document if isinstance(document, str) else document.text
+        _project_document(document, request.rank_fields)
         for document in request.documents
     ]
     response = await get_rerank_model(model_id).rerank(
@@ -125,7 +163,9 @@ async def rerank_v1(
             results=[
                 RerankV1Result(
                     document=(
-                        RerankV1ResultDocument(text=documents[result.index])
+                        RerankV1ResultDocument(
+                            text=_echo_document_text(request.documents[result.index])
+                        )
                         if request.return_documents
                         else None
                     ),
