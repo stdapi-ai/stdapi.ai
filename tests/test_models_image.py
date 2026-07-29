@@ -18,7 +18,13 @@ from stdapi.models.image._stability import (
     StabilityImageGenerationJobBase,
     StabilityImageModelBase,
 )
-from stdapi.models.image.amazon_titan_image_generator import image_spec
+from stdapi.models.image.amazon_titan_image_generator import (
+    _ImageGenerationConfig,
+    _ImageGenerationJob,
+    _Request,
+    _TextToImageParams,
+    image_spec,
+)
 from stdapi.monitoring import REQUEST_ID, REQUEST_LOG
 from stdapi.pricing import Dimension, Price, PriceKey, Service, _state
 from stdapi.usage import IMAGE_SPEC, compute_costs
@@ -106,6 +112,40 @@ class TestImageSpecQuality:
     def test_missing_quality_defaults_to_standard(self) -> None:
         """A None quality falls back to the "standard" pricing label."""
         assert image_spec(512, 512, None) == "512:standard"
+
+
+class TestTitanResponseQualityEcho:
+    """_set_extra_config: response quality mirrors the requested tier, not the AWS bucket."""
+
+    @pytest.mark.parametrize(
+        ("requested", "expected"),
+        [("low", "low"), ("medium", "medium"), ("high", "high")],
+    )
+    def test_response_quality_matches_request(
+        self, requested: str, expected: str
+    ) -> None:
+        """Both `low` and `medium` map to AWS `standard`, but must echo distinctly."""
+        job = _ImageGenerationJob(
+            model=cast("Any", None),
+            prompt="a cat",
+            count=1,
+            width=512,
+            height=512,
+            quality=requested,
+            style=None,
+            output_format=None,
+            output_compression=0,
+            extra_params={},
+        )
+        request = _Request(
+            taskType="TEXT_IMAGE",
+            textToImageParams=_TextToImageParams(text="a cat"),
+            imageGenerationConfig=_ImageGenerationConfig(
+                width=512, height=512, numberOfImages=1
+            ),
+        )
+        job._set_extra_config(request, "textToImageParams")  # noqa: SLF001
+        assert job.quality == expected
 
 
 class _FakeBody:
