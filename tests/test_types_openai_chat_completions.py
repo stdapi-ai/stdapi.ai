@@ -32,6 +32,26 @@ class TestReasoningEffort:
         assert request.reasoning_effort == effort
 
 
+class TestPromptCacheOptions:
+    """``prompt_cache_options`` is modeled, not forwarded to the model as an extra."""
+
+    def test_ttl_sets_prompt_cache_retention(self) -> None:
+        """`ttl: 30m` maps to the closest Bedrock retention and stays out of the extras."""
+        request = CompletionCreateParams.model_validate(
+            _BASE_REQUEST | {"prompt_cache_options": {"mode": "explicit", "ttl": "30m"}}
+        )
+        assert request.prompt_cache_retention == "1h"
+        assert request.model_extra == {}
+
+    def test_explicit_prompt_cache_retention_wins(self) -> None:
+        """An explicit `prompt_cache_retention` is not overridden by `ttl`."""
+        request = CompletionCreateParams.model_validate(
+            _BASE_REQUEST
+            | {"prompt_cache_options": {"ttl": "30m"}, "prompt_cache_retention": "5m"}
+        )
+        assert request.prompt_cache_retention == "5m"
+
+
 class TestUnsupportedParameters:
     """Unsupported parameters are rejected only when actually requested."""
 

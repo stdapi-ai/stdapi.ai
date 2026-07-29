@@ -80,6 +80,7 @@ Generate conversational AI responses with Amazon Bedrock foundation models—inc
 | `verbosity`                              | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Model verbosity                                                 |
 | `web_search_options`                     | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Web search tool                                                 |
 | `prompt_cache_key`                       |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Cache prompts to reduce costs and latency                       |
+| `prompt_cache_options`                   |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | `ttl: "30m"` mapped to a 1 hour Amazon Bedrock retention when `prompt_cache_retention` is unset; `mode` is ignored |
 | Extra model-specific params              | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Extra model-specific parameters not supported by the OpenAI API |
 | **Streaming & Output**                   |                                          |                                                                 |
 | Text                                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }    | Text messages                                                   |
@@ -258,6 +259,8 @@ curl -X POST "$BASE/v1/chat/completions" \
 
     - `"in_memory"` → 5 minutes
     - `"24h"` → 1 hour
+
+The OpenAI `prompt_cache_options` object is also accepted: its `ttl` (`"30m"`) is mapped to a 1 hour Amazon Bedrock retention when `prompt_cache_retention` is not set, and its `mode` is ignored (cached sections are selected with `prompt_cache_key`).
 
 **Usage Tracking:**
 

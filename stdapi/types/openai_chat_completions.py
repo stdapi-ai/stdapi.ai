@@ -1,6 +1,6 @@
 """Local OpenAI-compatible chat completions types."""
 
-from typing import Annotated, ClassVar, Literal, Self
+from typing import Annotated, Any, ClassVar, Literal, Self
 
 from pydantic import AliasChoices, Field, model_validator
 
@@ -56,6 +56,14 @@ PromptCacheRetention = Literal[
     "1h",
     "5m",
 ]
+
+#: Prompt cache retention of the `prompt_cache_options.ttl` field
+PromptCacheOptionsTTL = Literal["30m"]
+
+#: `prompt_cache_options.ttl` to `prompt_cache_retention` mapping
+_PROMPT_CACHE_OPTIONS_RETENTION: dict[PromptCacheOptionsTTL, PromptCacheRetention] = {
+    "30m": "1h"  # closest AWS Bedrock TTL covering 30 minutes
+}
 
 #: Tool choice literal values used in multiple request fields (OpenAI-compatible).
 ToolChoiceLiteral = Literal["none", "auto", "required"]
@@ -610,6 +618,20 @@ class ChatCompletionStreamOptionsParam(BaseModelRequest):
     )
 
 
+# Ref: openai.types.chat.completion_create_params.PromptCacheOptions
+class PromptCacheOptions(BaseModelRequest):
+    """Prompt caching options."""
+
+    mode: Literal["implicit", "explicit"] | None = Field(
+        default=None,
+        description="Caching mode. Accepted but ignored: cached sections are selected with `prompt_cache_key`.",
+    )
+    ttl: PromptCacheOptionsTTL | None = Field(
+        default=None,
+        description="Cache retention: `30m` -> 1h (AWS Bedrock mapping). Ignored when `prompt_cache_retention` is set.",
+    )
+
+
 # Ref: openai.types.chat.completion_create_params.ResponseFormat
 ResponseFormat = Annotated[
     ResponseFormatText | ResponseFormatJSONSchema | ResponseFormatJSONObject,
@@ -1120,6 +1142,10 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
         description="Cache key for similar requests. Use dot-separated 'system', 'messages', 'tools' for section-specific caching. "
         "Custom hash keys are UNSUPPORTED.",
     )
+    prompt_cache_options: PromptCacheOptions | None = Field(
+        default=None,
+        description="Prompt caching options. `ttl` sets `prompt_cache_retention` when the latter is unset.",
+    )
     prompt_cache_retention: PromptCacheRetention | None = Field(
         default=None,
         description="Cache retention: `in_memory` -> 5m, `24h` -> 1h (AWS Bedrock mapping).",
@@ -1258,6 +1284,25 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
         description="Apply an AWS Bedrock guardrail to this request; results "
         "are reported in the response `moderation` field (non-streaming only).",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _map_prompt_cache_options(cls, data: Any) -> Any:  # noqa: ANN401
+        """Map `prompt_cache_options.ttl` onto `prompt_cache_retention` when unset.
+
+        Args:
+            data: Raw request payload.
+
+        Returns:
+            The payload, with `prompt_cache_retention` filled in when applicable.
+        """
+        if not isinstance(data, dict) or data.get("prompt_cache_retention") is not None:
+            return data
+        options = data.get("prompt_cache_options")
+        ttl = options.get("ttl") if isinstance(options, dict) else None
+        if retention := _PROMPT_CACHE_OPTIONS_RETENTION.get(ttl):
+            data = data | {"prompt_cache_retention": retention}
+        return data
 
     # Extra validations
     _UNSUPPORTED: ClassVar[set[str]] = {
