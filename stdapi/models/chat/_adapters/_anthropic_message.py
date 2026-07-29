@@ -207,13 +207,11 @@ def _map_system_blocks(
     if isinstance(content, str):
         return build_system_blocks(content)
     blocks: list[SystemContentBlockTypeDef] = []
-    cache_control: CacheControlEphemeralParam | None = None
     for part in content:
         if part.text:
             blocks.append({"text": part.text})
-            cache_control = part.cache_control or cache_control
-    if allow_explicit_caching and cache_control:
-        blocks.append(_build_cache_point(cache_control))
+            if allow_explicit_caching and part.cache_control:
+                blocks.append(_build_cache_point(part.cache_control))
     return blocks
 
 
@@ -717,8 +715,8 @@ def _build_tool_config(
     Args:
         tools: Anthropic tool params, or ``None``.
         tool_choice: Anthropic tool choice, or ``None``.
-        allow_explicit_caching: Append a cache-point after the last tool when a
-            tool carries ``cache_control``.
+        allow_explicit_caching: Append a cache-point right after each tool that
+            carries ``cache_control``.
         tool_name_map: Anthropic server tool name → Bedrock name translation map.
 
     Returns:
@@ -731,17 +729,14 @@ def _build_tool_config(
         return None
 
     tool_list: list[ToolTypeDef] = []
-    cache_control: CacheControlEphemeralParam | None = None
     for tool in tools:
         tool_bedrock = _map_tool_spec(tool)
         if tool_bedrock is None:
             _handle_system_tool(tool, tool_list, tool_name_map=tool_name_map)
             continue
-        if hasattr(tool, "cache_control") and tool.cache_control:
-            cache_control = tool.cache_control or cache_control
         tool_list.append(tool_bedrock)
-    if cache_control and allow_explicit_caching:
-        tool_list.append(_build_cache_point(cache_control))  # type: ignore[arg-type]
+        if allow_explicit_caching and getattr(tool, "cache_control", None):
+            tool_list.append(_build_cache_point(tool.cache_control))  # type: ignore[arg-type]
 
     tool_config: ToolConfigurationTypeDef | None = None
     if tool_list:
