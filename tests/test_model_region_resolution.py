@@ -1,8 +1,11 @@
 """Unit tests for region-safe model identifier resolution and failover.
 
 Covers :meth:`ModelDetails.get_id` (never emit a geo-mismatched inference
-profile) and :func:`route_and_execute` (skip a region that cannot serve the
-model instead of surfacing the error), both fast and AWS-free.
+profile), :func:`route_and_execute` (skip a region that cannot serve the
+model instead of surfacing the error), and :func:`_get_prompt_router_models`
+/ :func:`_get_application_inference_profile_models` (reject an ARN region
+that isn't configured, instead of crashing later with an unhandled
+``KeyError``), all fast and AWS-free.
 """
 
 from typing import TYPE_CHECKING, cast
@@ -19,6 +22,8 @@ from stdapi.models import (
     ModelDetails,
     ModelRegionUnavailableError,
     _collect_region_candidates,
+    _get_application_inference_profile_models,
+    _get_prompt_router_models,
     _is_invalid_model_identifier,
     _region_restriction_for,
     route_and_execute,
@@ -280,3 +285,31 @@ class TestRegionRestrictOrder:
         assert [
             candidate.regions[0] for candidate in candidates["vendor.model-v1"]
         ] == ["us-west-2", "us-east-1"]
+
+
+class TestArnRegionValidation:
+    """ARN-derived regions must be rejected before reaching get_client()."""
+
+    async def test_prompt_router_arn_unconfigured_region_raises_api_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression: an unconfigured ARN region must not crash get_client() with KeyError."""
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_allow_prompt_router_arn", True)
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", ["us-east-1"])
+        arn = "arn:aws:bedrock:ap-south-1:123456789012:prompt-router/r1"
+
+        with pytest.raises(ApiError):
+            await _get_prompt_router_models(arn)
+
+    async def test_inference_profile_arn_unconfigured_region_raises_api_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression: an unconfigured ARN region must not crash get_client() with KeyError."""
+        monkeypatch.setattr(
+            SETTINGS, "aws_bedrock_allow_application_inference_profile_arn", True
+        )
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", ["us-east-1"])
+        arn = "arn:aws:bedrock:ap-south-1:123456789012:application-inference-profile/p1"
+
+        with pytest.raises(ApiError):
+            await _get_application_inference_profile_models(arn)

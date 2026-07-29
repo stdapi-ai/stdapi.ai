@@ -9,6 +9,7 @@ from stdapi.api_errors import ApiError
 from stdapi.aws_bedrock import (
     GUARDRAIL_CONFIG_VAR,
     get_extra_model_parameters,
+    guardrail_region,
     map_guardrail_filters,
     resolve_guardrail_model,
     set_guardrail_configuration,
@@ -244,6 +245,34 @@ class TestSetGuardrailConfiguration:
         config = GUARDRAIL_CONFIG_VAR.get()
         assert config["guardrailIdentifier"] == "gr-default"
         assert "streamProcessingMode" not in config
+
+
+class TestGuardrailRegion:
+    """guardrail_region: region validation against configured Bedrock regions."""
+
+    def test_arn_region_is_returned_when_configured(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An ARN naming a configured region resolves to that region."""
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", ["us-east-1", "eu-west-1"])
+        arn = "arn:aws:bedrock:eu-west-1:123456789012:guardrail/gr123"
+        assert guardrail_region(arn) == "eu-west-1"
+
+    def test_arn_region_not_configured_raises_api_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression: an ARN naming an unconfigured region must not crash with KeyError."""
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", ["us-east-1"])
+        arn = "arn:aws:bedrock:ap-south-1:123456789012:guardrail/gr123"
+        with pytest.raises(ApiError):
+            guardrail_region(arn)
+
+    def test_bare_identifier_uses_primary_region(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A bare (non-ARN) identifier resolves to the first configured region."""
+        monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", ["us-east-1", "eu-west-1"])
+        assert guardrail_region("gr123") == "us-east-1"
 
 
 class TestMapGuardrailFilters:

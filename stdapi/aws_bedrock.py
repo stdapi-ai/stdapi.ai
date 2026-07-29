@@ -447,9 +447,16 @@ def guardrail_region(identifier: str) -> RegionName:
 
     Returns:
         The region embedded in the ARN, or the primary Bedrock region.
+
+    Raises:
+        ApiError: If the ARN's region is not a configured Bedrock region.
     """
     if identifier.startswith("arn:"):
-        return identifier.split(":")[3]  # type: ignore[return-value]
+        region = identifier.split(":")[3]
+        if region not in SETTINGS.aws_bedrock_regions:
+            msg = f"Guardrail ARN region '{region}' is not a configured Bedrock region."
+            raise ApiError(msg)
+        return region
     return SETTINGS.aws_bedrock_regions[0]
 
 
