@@ -13,6 +13,7 @@ from botocore.exceptions import ClientError
 import stdapi.models as models_module
 from stdapi import region_routing
 from stdapi.api_errors import ApiError
+from stdapi.aws_bedrock import handle_bedrock_client_error
 from stdapi.config import SETTINGS
 from stdapi.models import (
     ModelDetails,
@@ -183,6 +184,48 @@ class TestRouteAndExecuteFailover:
             )
 
         with pytest.raises(ClientError):
+            await route_and_execute("vendor.model-v1", _CANDIDATES, fn)
+
+    async def test_skips_region_on_model_not_ready(self, routed: RegionRouter) -> None:
+        """Regression: ModelNotReadyException (wrapped as ApiError) fails over."""
+
+        async def fn(region: RegionName) -> str:
+            if region == "us-east-1":
+                with handle_bedrock_client_error():
+                    raise ClientError(
+                        {
+                            "Error": {
+                                "Code": "ModelNotReadyException",
+                                "Message": "The model is not ready.",
+                            }
+                        },
+                        "Converse",
+                    )
+            return f"ok:{region}"
+
+        result = await route_and_execute("vendor.model-v1", _CANDIDATES, fn)
+
+        assert result == "ok:eu-west-1"
+        assert not routed._index.get(  # noqa: SLF001
+            "vendor.model-v1", "us-east-1"
+        ).is_usable
+
+    async def test_reraises_unrelated_api_error(self, routed: RegionRouter) -> None:
+        """A non-retryable ApiError (e.g. invalid S3 credentials) is not retried."""
+
+        async def fn(region: RegionName) -> str:  # noqa: ARG001
+            with handle_bedrock_client_error():
+                raise ClientError(
+                    {
+                        "Error": {
+                            "Code": "ValidationException",
+                            "Message": "Invalid S3 credentials received.",
+                        }
+                    },
+                    "Converse",
+                )
+
+        with pytest.raises(ApiError):
             await route_and_execute("vendor.model-v1", _CANDIDATES, fn)
 
     async def test_single_region_unavailable_becomes_api_error(self) -> None:

@@ -2186,7 +2186,9 @@ async def route_and_execute[T](
         Result of the first successful ``fn`` call.
 
     Raises:
-        ApiError: When the only candidate region cannot serve the model.
+        ApiError: When the only candidate region cannot serve the model, or (wrapping
+            a retryable AWS error code such as ``ModelNotReadyException``) as the last
+            error when all attempts exhausted.
         ClientError: Last non-retryable error, or last retryable error when all attempts exhausted.
         BotocoreConnectionError: Last connection error when all attempts exhausted.
         HTTPClientError: Last HTTP client error (e.g. timeout) when all attempts exhausted.
@@ -2199,6 +2201,7 @@ async def route_and_execute[T](
 
     last_exc: (
         ClientError
+        | ApiError
         | BotocoreConnectionError
         | HTTPClientError
         | ModelRegionUnavailableError
@@ -2221,14 +2224,17 @@ async def route_and_execute[T](
                 if exc.status == 429
                 else "ServiceUnavailableException",
             )
-        except ClientError as exc:
-            code = exc.response["Error"]["Code"]
-            if code not in ROUTING_RETRYABLE_CODES and not _is_invalid_model_identifier(
-                exc
+        except (ClientError, ApiError) as exc:
+            # handle_bedrock_client_error() converts some ClientErrors (e.g.
+            # ModelNotReadyException) to ApiError before we get to see them; recover
+            # the original AWS error code either way to classify retryability.
+            code = _client_error_code(exc)
+            if code not in ROUTING_RETRYABLE_CODES and not (
+                isinstance(exc, ClientError) and _is_invalid_model_identifier(exc)
             ):
                 raise
             last_exc = exc
-            REGION_ROUTER.mark_error(model_id, region, code)
+            REGION_ROUTER.mark_error(model_id, region, code or exc.__class__.__name__)
         except (
             ModelRegionUnavailableError,
             BotocoreConnectionError,
@@ -2241,6 +2247,25 @@ async def route_and_execute[T](
             return result
 
     raise last_exc
+
+
+def _client_error_code(exc: ClientError | ApiError) -> str | None:
+    """Return the AWS error code carried by *exc*, directly or via its wrapped cause.
+
+    ``handle_bedrock_client_error`` converts some ``ClientError`` instances (e.g.
+    ``ModelNotReadyException``) to ``ApiError`` via ``raise ... from client_error``,
+    so the original code must be recovered from ``__cause__`` in that case.
+
+    Args:
+        exc: Error raised by a Bedrock invocation.
+
+    Returns:
+        The AWS error code, or None if unavailable.
+    """
+    if isinstance(exc, ClientError):
+        return exc.response["Error"]["Code"]
+    cause = exc.__cause__
+    return cause.response["Error"]["Code"] if isinstance(cause, ClientError) else None
 
 
 def _is_invalid_model_identifier(exc: ClientError) -> bool:
