@@ -29,6 +29,7 @@ from stdapi.aws_bedrock_mantle import (
     cached_response_surface,
     decode_mantle_response_id,
     encode_mantle_response_id,
+    mantle_request_headers,
     request_json,
     validate_pruning_extras,
 )
@@ -808,7 +809,9 @@ async def _mantle_stored_response(
     Stored responses live on the surface that served the model (``/v1`` or
     ``/openai/v1``); a 404 on the first surface falls through to the second.
     The working surface per response ID is seeded at creation and cached, so
-    the 404 probe only runs on unknown IDs (e.g. after a restart).
+    the 404 probe only runs on unknown IDs (e.g. after a restart). Requests
+    carry the caller's ``OpenAI-Project`` scoping so the response is
+    addressed in the same project it was created under.
 
     Args:
         region: Region storing the response.
@@ -826,9 +829,10 @@ async def _mantle_stored_response(
         MantleError: On other upstream errors.
     """
     prefix: Surface = cached_response_surface(native_id) or "/openai/v1"
+    headers = mantle_request_headers("responses")
     try:
         payload = await request_json(
-            region, method, f"{prefix}/responses/{native_id}{suffix}"
+            region, method, f"{prefix}/responses/{native_id}{suffix}", headers=headers
         )
     except MantleError as error:
         if error.status != 404:
@@ -836,7 +840,10 @@ async def _mantle_stored_response(
         prefix = "/openai/v1" if prefix == "/v1" else "/v1"
         try:
             payload = await request_json(
-                region, method, f"{prefix}/responses/{native_id}{suffix}"
+                region,
+                method,
+                f"{prefix}/responses/{native_id}{suffix}",
+                headers=headers,
             )
         except MantleError as retry_error:
             if retry_error.status != 404:
