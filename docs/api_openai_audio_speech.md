@@ -104,6 +104,7 @@ Each engine supports a different subset of voices and languages — see the [Pol
 - **Flexible Formats**: mp3, ogg, wav, flac, aac, opus, pcm — non-native formats are transcoded server-side
 - **Streaming Options**: Raw bytes (default) or SSE events with `stream_format: "sse"`
 - **Speed Control**: Adjust playback from 0.2x to 2.0x
+- **Speech Marks**: Word, sentence, viseme, and SSML timing metadata with `SpeechMarkTypes` (returned as JSON instead of audio)
 - **Character-Based Billing**: Usage tracks character counts—the native billing unit for Amazon Polly and Amazon Comprehend—rather than OpenAI-style tokens
 
 !!! tip "Performance Tips: Optimize Speed & Cost"
@@ -182,6 +183,31 @@ Specify the language for bilingual voices (only useful for voices that support m
 }
 ```
 
+**Speech Marks:**
+
+Request word, sentence, viseme, or SSML timing marks instead of audio (useful for lip-sync, karaoke-style highlighting, or subtitle alignment):
+
+```json
+{
+  "model": "amazon.polly-neural",
+  "voice": "Joanna",
+  "input": "Hello, how are you?",
+  "SpeechMarkTypes": ["word", "sentence"]
+}
+```
+
+!!! warning "Speech marks return JSON, not audio"
+    When `SpeechMarkTypes` is set, Polly returns timing metadata only. The response is a stream of JSON objects (one per line) with the `application/x-json-stream` content type:
+
+    - `response_format` is ignored — no audio is generated or transcoded.
+    - `stream_format: "sse"` is rejected with HTTP 400, since the payload is not audio events.
+    - The `ssml` mark type requires SSML input (`<speak>…</speak>`); requesting it with plain text returns HTTP 400.
+
+    ```json
+    {"time":0,"type":"word","start":0,"end":5,"value":"Hello"}
+    {"time":576,"type":"word","start":7,"end":10,"value":"how"}
+    ```
+
 **Configuration Options:**
 
 **Option 1: Per-Request**
@@ -213,6 +239,7 @@ The following parameters from the Amazon Polly [SynthesizeSpeech API](https://do
 - `LexiconNames` (list): Apply pronunciation lexicons
 - `SampleRate` (string): Audio sample rate in Hz — `8000`, `16000`, `22050`, or `24000` (`pcm` output: `8000` or `16000`)
 - `LanguageCode` (string): Language code for bilingual voices only (e.g., `en-IN`, `hi-IN`)
+- `SpeechMarkTypes` (list): Timing marks to return instead of audio — `sentence`, `ssml`, `viseme`, `word`
 
 ## Try It Now
 

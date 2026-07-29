@@ -4,15 +4,25 @@ Comprehensive test suite that validates all features of the OpenAI Audio Speech 
 specification, ensuring compatibility with the official OpenAI API behavior.
 """
 
+import json
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import magic
 import pytest
 from openai import BadRequestError, NotFoundError, OpenAI
+from starlette.requests import Request
 
+from stdapi.api_errors import ApiError
+from stdapi.models.audio import TTSResponse
+from stdapi.monitoring import REQUEST, REQUEST_ID, REQUEST_LOG, EventLog
+from stdapi.routes import openai_audio_speech
+from stdapi.types.openai_audio import SpeechCreateParams
 from tests.conftest import SAMPLES_DIR, logged_usage_entries
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, Generator
+
     from starlette.testclient import TestClient
 
 
@@ -724,3 +734,152 @@ class TestAudioSpeechMCP:
         # For MCP calls without explicit stream_format, should return SSE
         response_text = response.text
         assert "speech.audio.delta" in response_text
+
+
+async def _byte_stream(*chunks: bytes) -> AsyncGenerator[bytes]:
+    """Yield the given chunks as a TTS-like audio stream."""
+    for chunk in chunks:
+        yield chunk
+
+
+class _StubSpeechModel:
+    """Audio model stub returning a fixed TTS response."""
+
+    def __init__(self, response: TTSResponse) -> None:
+        self._response = response
+
+    async def tts(self, **_kwargs: object) -> TTSResponse:
+        """Return the fixed TTS response, ignoring the request parameters."""
+        return self._response
+
+
+@pytest.mark.local
+class TestAudioSpeechContentType:
+    """create_speech: the model's content type override wins over response_format."""
+
+    @pytest.fixture(autouse=True)
+    def _request_context(self) -> Generator[None]:
+        """Provide the request-scoped context vars the route logs into."""
+        log_token = REQUEST_LOG.set(
+            EventLog(
+                type="start",
+                level="info",
+                date=datetime.now(UTC),
+                server_id="test",
+                server_version="0.0.0",
+            )
+        )
+        id_token = REQUEST_ID.set("test-request")
+        request_token = REQUEST.set(
+            Request(
+                {
+                    "type": "http",
+                    "method": "POST",
+                    "path": "/v1/audio/speech",
+                    "headers": [],
+                }
+            )
+        )
+        try:
+            yield
+        finally:
+            REQUEST.reset(request_token)
+            REQUEST_ID.reset(id_token)
+            REQUEST_LOG.reset(log_token)
+
+    @staticmethod
+    def _patch_model(
+        monkeypatch: pytest.MonkeyPatch, tts_response: TTSResponse
+    ) -> None:
+        """Route model resolution to a stub returning ``tts_response``."""
+
+        async def _validate_model(model: str, **_kwargs: object) -> object:
+            """Accept any model ID without calling AWS."""
+            return type("_Model", (), {"id": model})
+
+        monkeypatch.setattr(openai_audio_speech, "validate_model", _validate_model)
+        monkeypatch.setattr(
+            openai_audio_speech,
+            "get_audio_model",
+            lambda _model_id: _StubSpeechModel(tts_response),
+        )
+
+    async def test_content_type_override_labels_the_stream(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A JSON speech marks payload is served as-is with its own content type."""
+        marks = b'{"time":0,"type":"word","value":"Hello"}\n'
+        self._patch_model(
+            monkeypatch,
+            TTSResponse(
+                audio_stream=_byte_stream(marks),
+                input_tokens=5,
+                output_tokens=0,
+                content_type="application/x-json-stream",
+            ),
+        )
+
+        response = await openai_audio_speech.create_speech(
+            SpeechCreateParams(
+                model="amazon.polly-neural",
+                voice="Joanna",
+                input="Hello",
+                response_format="mp3",
+            )
+        )
+        body = b"".join([chunk async for chunk in response.body_iterator])  # type: ignore[attr-defined]
+
+        assert response.media_type == "application/x-json-stream"
+        assert "content-disposition" not in response.headers
+        assert body == marks
+
+    async def test_content_type_override_rejects_sse(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """SSE audio events cannot carry a non-audio payload, so it is rejected."""
+        self._patch_model(
+            monkeypatch,
+            TTSResponse(
+                audio_stream=_byte_stream(b"{}\n"),
+                input_tokens=5,
+                output_tokens=0,
+                content_type="application/x-json-stream",
+            ),
+        )
+
+        with pytest.raises(ApiError, match="sse"):
+            await openai_audio_speech.create_speech(
+                SpeechCreateParams(
+                    model="amazon.polly-neural",
+                    voice="Joanna",
+                    input="Hello",
+                    stream_format="sse",
+                )
+            )
+
+    async def test_without_override_the_response_format_still_wins(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An audio response keeps its response_format derived content type."""
+        self._patch_model(
+            monkeypatch,
+            TTSResponse(
+                audio_stream=_byte_stream(b"audio"), input_tokens=5, output_tokens=0
+            ),
+        )
+
+        response = await openai_audio_speech.create_speech(
+            SpeechCreateParams(
+                model="amazon.polly-neural",
+                voice="Joanna",
+                input="Hello",
+                response_format="mp3",
+            )
+        )
+        body = b"".join([chunk async for chunk in response.body_iterator])  # type: ignore[attr-defined]
+
+        assert response.media_type == "audio/mpeg"
+        assert response.headers["content-disposition"] == (
+            "attachment; filename=speech.mp3"
+        )
+        assert body == b"audio"

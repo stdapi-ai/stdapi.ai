@@ -12,7 +12,7 @@ Design:
 """
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
 
 from fastapi import Response
 
@@ -47,11 +47,15 @@ class TTSResponse(TypedDict):
         audio_stream: Async generator yielding audio bytes.
         input_tokens: Billed characters reported as tokens for OpenAI parity.
         output_tokens: 0 when the backend reports no output metric.
+        content_type: Content type of the stream when it is not the audio
+            format requested by the caller (e.g. a JSON speech marks stream).
+            None or absent to use the requested audio format.
     """
 
     audio_stream: AsyncGenerator[bytes]
     input_tokens: int
     output_tokens: int
+    content_type: NotRequired[str | None]
 
 
 class AudioModelBase[RequestT, ResponseT](ModelBase[RequestT, ResponseT]):

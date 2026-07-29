@@ -413,6 +413,29 @@ class TestPollyExtraParamsLexiconNames:
         }
 
 
+class TestPollyExtraParamsSpeechMarkTypes:
+    """_PollyExtraParams.SpeechMarkTypes: forwarded to Polly verbatim, not value-constrained."""
+
+    def test_documented_mark_types_are_accepted_and_dump_as_a_list(self) -> None:
+        """The four Polly mark types validate and round-trip unchanged."""
+        extra = _PollyExtraParams(
+            SpeechMarkTypes=["sentence", "ssml", "viseme", "word"]
+        )
+        assert extra.model_dump(exclude_none=True) == {
+            "SpeechMarkTypes": ["sentence", "ssml", "viseme", "word"]
+        }
+
+    def test_unknown_mark_type_is_forwarded_verbatim(self) -> None:
+        """A mark type Polly does not define is not rejected here.
+
+        Polly's own MarksNotSupportedForFormatException already maps an
+        unsupported value to a 400 error; duplicating that check here would
+        only reject values a future Polly release might add.
+        """
+        extra = _PollyExtraParams(SpeechMarkTypes=["phoneme"])
+        assert extra.SpeechMarkTypes == ["phoneme"]
+
+
 class _StubComprehendClient:
     """Stub Comprehend client with a fixed per-region behavior."""
 
@@ -624,3 +647,72 @@ class TestSynthesizeSpeechEncodedFormats:
         (request,) = client.requests
         assert request["OutputFormat"] == "pcm"
         assert request["SampleRate"] == "8000"
+
+
+class TestSynthesizeSpeechMarks:
+    """AudioModel.tts: SpeechMarkTypes switches Polly to its JSON marks output."""
+
+    async def test_speech_marks_request_json_output_and_content_type(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Marks force OutputFormat=json, bypass transcoding, and label the stream."""
+        _patch_voices(monkeypatch, {("neural", "us-east-1"): {"Joanna"}})
+        await initialize_polly_models()
+        amazon_polly._VOICES_BY_NAME_LOWER["joanna"] = "Joanna"  # noqa: SLF001
+
+        marks = b'{"time":0,"type":"word","start":0,"end":5,"value":"Hello"}\n'
+        client = _StubPollyClient(
+            {"AudioStream": _FakeAudioStream(marks), "RequestCharacters": "5"}
+        )
+        monkeypatch.setattr(
+            stdapi.aws, "get_client", lambda _service, _region=None: client
+        )
+        log_token = REQUEST_LOG.set(_start_event())
+        usage_token = usage.init_usage()
+        try:
+            response = await get_audio_model("amazon.polly-neural").tts(
+                text="Hello",
+                voice="Joanna",
+                # "wav" would normally be transcoded from pcm by ffmpeg.
+                resp_format="wav",
+                extra_params={"SpeechMarkTypes": ["word"]},
+            )
+            payload = b"".join([chunk async for chunk in response["audio_stream"]])
+        finally:
+            usage.USAGE.reset(usage_token)
+            REQUEST_LOG.reset(log_token)
+
+        (request,) = client.requests
+        assert request["OutputFormat"] == "json"
+        assert request["SpeechMarkTypes"] == ["word"]
+        assert payload == marks
+        assert response["content_type"] == "application/x-json-stream"
+
+    async def test_audio_request_has_no_content_type_override(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Without marks, the response keeps deriving its type from the format."""
+        _patch_voices(monkeypatch, {("neural", "us-east-1"): {"Joanna"}})
+        await initialize_polly_models()
+        amazon_polly._VOICES_BY_NAME_LOWER["joanna"] = "Joanna"  # noqa: SLF001
+
+        client = _StubPollyClient(
+            {"AudioStream": _FakeAudioStream(b"audio"), "RequestCharacters": "5"}
+        )
+        monkeypatch.setattr(
+            stdapi.aws, "get_client", lambda _service, _region=None: client
+        )
+        log_token = REQUEST_LOG.set(_start_event())
+        usage_token = usage.init_usage()
+        try:
+            response = await get_audio_model("amazon.polly-neural").tts(
+                text="Hello", voice="Joanna", resp_format="mp3"
+            )
+            await response["audio_stream"].aclose()
+        finally:
+            usage.USAGE.reset(usage_token)
+            REQUEST_LOG.reset(log_token)
+
+        (request,) = client.requests
+        assert request["OutputFormat"] == "mp3"
+        assert response["content_type"] is None

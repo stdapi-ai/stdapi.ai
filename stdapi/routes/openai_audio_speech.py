@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Response
 from fastapi.responses import StreamingResponse
 from sse_starlette import EventSourceResponse, JSONServerSentEvent
 
+from stdapi.api_errors import ApiError
 from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
 from stdapi.aws_bedrock import get_extra_model_parameters
@@ -107,6 +108,10 @@ async def _speech_audio_sse(
         "Generates audio from the input text (OpenAI Audio Speech API).\n\n"
         "Returns the audio file as a streaming download in the requested format, "
         "or a stream of SSE audio events when `stream_format=sse`.\n\n"
+        "Provider-specific parameters may return a non-audio payload instead: "
+        "Amazon Polly `SpeechMarkTypes` returns timing marks as an "
+        "`application/x-json-stream` JSON lines stream, which ignores "
+        "`response_format` and does not support `stream_format=sse`.\n\n"
         "**Find compatible models:** Call `search_models` with `mcp_tool=openai_audio_speech` "
         "to discover model IDs that support text-to-speech."
     ),
@@ -185,6 +190,20 @@ async def create_speech(
         speed=request.speed,
         extra_params=get_extra_model_parameters(model_id, request),
     )
+
+    if content_type := tts_response.get("content_type"):
+        # Non-audio payloads (Polly speech marks) cannot be framed as OpenAI
+        # audio SSE deltas: stream them as-is with the backend content type.
+        if request.stream_format == "sse":
+            await tts_response["audio_stream"].aclose()
+            msg = "'stream_format' 'sse' is not supported with a non-audio output such as speech marks."
+            raise ApiError(msg)
+        return StreamingResponse(
+            content=_speech_audio_bytestream(
+                await log_request_stream_event(tts_response["audio_stream"])
+            ),
+            media_type=content_type,
+        )
 
     audio_stream = await log_request_stream_event(tts_response["audio_stream"])
     if request.stream_format == "sse" or (

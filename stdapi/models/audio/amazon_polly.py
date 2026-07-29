@@ -61,6 +61,9 @@ _FORMAT_ENCODE = {"wav", "flac", "aac"}
 #: Polly's default sample rate for pcm output when none is requested
 _POLLY_DEFAULT_PCM_SAMPLE_RATE = 16000
 
+#: Content type of Polly's speech marks output (a stream of JSON lines)
+_SPEECH_MARKS_CONTENT_TYPE = "application/x-json-stream"
+
 #: Sample size for language detection
 _LANG_DETECT_SAMPLE_SIZE = 500
 
@@ -100,6 +103,9 @@ class _PollyExtraParams(BaseModelResponse):
     LanguageCode: str | None = None
     LexiconNames: list[str] | None = None
     SampleRate: int | None = None
+    # Not value-constrained: Polly's own MarksNotSupportedForFormatException
+    # already maps an unknown/unsupported mark type to a 400 error.
+    SpeechMarkTypes: list[str] | None = None
 
 
 def _engine_from_model(model: str) -> EngineType:
@@ -425,12 +431,25 @@ class AudioModel(AudioModelBase[None, None]):
             extra_params: Extra model parameters.
 
         Returns:
-            TTS response with audio stream.
+            TTS response with audio stream, or with a JSON speech marks stream
+            when the "SpeechMarkTypes" extra parameter is used.
         """
         log = REQUEST_LOG.get()
-        encoding = resp_format in _FORMAT_ENCODE
+        extra: _PollyExtraParams | None = None
+        if extra_params:
+            with validation_error_handler():
+                extra = _PollyExtraParams(
+                    **extra_params  # type: ignore[arg-type]
+                )
+        # Speech marks are timing metadata, not audio: Polly requires
+        # "OutputFormat=json" and returns JSON lines instead of an audio
+        # stream, so "response_format" is ignored and nothing is re-encoded.
+        speech_marks = extra is not None and bool(extra.SpeechMarkTypes)
+        encoding = not speech_marks and resp_format in _FORMAT_ENCODE
         output_format: OutputFormatType = (
-            "pcm" if encoding else _FORMAT.get(resp_format, resp_format)  # type: ignore[arg-type]
+            "json"
+            if speech_marks
+            else ("pcm" if encoding else _FORMAT.get(resp_format, resp_format))  # type: ignore[arg-type]
         )
         # Polly's own default PCM sample rate, used unless the caller overrides it.
         sample_rate = _POLLY_DEFAULT_PCM_SAMPLE_RATE if encoding else None
@@ -449,11 +468,7 @@ class AudioModel(AudioModelBase[None, None]):
         }
         if language:
             request["LanguageCode"] = language
-        if extra_params:
-            with validation_error_handler():
-                extra = _PollyExtraParams(
-                    **extra_params  # type: ignore[arg-type]
-                )
+        if extra is not None:
             request.update(  # type: ignore[call-arg]
                 **extra.model_dump(exclude_none=True)
             )
@@ -489,5 +504,8 @@ class AudioModel(AudioModelBase[None, None]):
             audio_stream = body
 
         return TTSResponse(
-            audio_stream=audio_stream, input_tokens=input_tokens, output_tokens=0
+            audio_stream=audio_stream,
+            input_tokens=input_tokens,
+            output_tokens=0,
+            content_type=_SPEECH_MARKS_CONTENT_TYPE if speech_marks else None,
         )
