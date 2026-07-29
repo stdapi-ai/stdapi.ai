@@ -260,7 +260,8 @@ async def _select_voice(
         gender: GenderType = "Female" if OPENAI_VOICES_FEMALE[voice] else "Male"
     except KeyError:
         return voice, None  # type: ignore[return-value]
-    for language in {await _detect_language(text), "en-US"}:
+    # Ordered, deduplicated: try the detected language before the en-US fallback.
+    for language in dict.fromkeys((await _detect_language(text), "en-US")):
         candidates = (
             _VOICES_BY_GENDERS[gender]
             & _VOICES_BY_LANGUAGE[language]

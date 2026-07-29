@@ -13,6 +13,7 @@ from stdapi.models import EXTRA_MODELS
 from stdapi.models.audio import amazon_polly, get_audio_model
 from stdapi.models.audio.amazon_polly import (
     _engine_voice_regions,
+    _select_voice,
     initialize_polly_models,
 )
 from stdapi.monitoring import REQUEST_LOG, EventLog
@@ -358,6 +359,46 @@ class TestEngineVoiceRegions:
     def test_unknown_engine_falls_back_to_all_candidate_regions(self) -> None:
         """An engine with no discovered region uses the full candidate list."""
         assert _engine_voice_regions("standard", "Joanna") == ["us-east-1", "eu-west-1"]
+
+
+class TestSelectVoiceDeterminism:
+    """_select_voice: the detected language always outranks the en-US fallback."""
+
+    @pytest.fixture(autouse=True)
+    def _seed_voice_tables(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Populate matching female neural voices for both fr-FR and en-US."""
+        female_voices = amazon_polly._VOICES_BY_GENDERS  # noqa: SLF001
+        by_language = amazon_polly._VOICES_BY_LANGUAGE  # noqa: SLF001
+        by_engine = amazon_polly._VOICES_BY_ENGINE  # noqa: SLF001
+        monkeypatch.setitem(female_voices, "Female", {"Lea", "Joanna"})
+        monkeypatch.setitem(by_language, "fr-FR", {"Lea"})
+        monkeypatch.setitem(by_language, "en-US", {"Joanna"})
+        monkeypatch.setitem(by_engine, "neural", {"Lea", "Joanna"})
+
+    async def test_detected_language_wins_over_en_us_fallback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A detected non-English language is never overridden by en-US, every run."""
+
+        async def _detect(_text: str) -> str:
+            return "fr-FR"
+
+        monkeypatch.setattr(amazon_polly, "_detect_language", _detect)
+
+        for _ in range(20):
+            assert await _select_voice("Bonjour", "alloy", "neural") == ("Lea", "fr-FR")
+
+    async def test_english_detection_still_selects_en_us(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A detected en-US language (matching the fallback) still selects it."""
+
+        async def _detect(_text: str) -> str:
+            return "en-US"
+
+        monkeypatch.setattr(amazon_polly, "_detect_language", _detect)
+
+        assert await _select_voice("Hello", "alloy", "neural") == ("Joanna", "en-US")
 
 
 class _StubComprehendClient:
