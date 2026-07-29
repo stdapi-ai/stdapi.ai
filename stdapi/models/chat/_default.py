@@ -466,6 +466,10 @@ class ChatModel(ChatModelBase[Any, Any]):
         Returns:
             Completed response or streaming ``EventSourceResponse``.
         """
+        if request.prompt is not None:
+            return await self._create_prompt_response(
+                request, response_id, created_at, moderation_builder
+            )
         await prefetch_all_content_types()
 
         bedrock_messages, system_blocks = await responses_adapter.map_input(
@@ -591,6 +595,74 @@ class ChatModel(ChatModelBase[Any, Any]):
                 response_id,
                 SETTINGS.image_generation_model,
             )
+        if moderation_builder is not None:
+            response.moderation = moderation_builder()
+        return response
+
+    async def _create_prompt_response(
+        self,
+        request: ResponseCreateParams,
+        response_id: str,
+        created_at: float,
+        moderation_builder: Callable[[], ResponseModeration | None] | None = None,
+    ) -> Response | EventSourceResponse:
+        """Handle a Responses request referencing a Bedrock Prompt Management prompt.
+
+        The prompt ARN resolved by the route is the Converse ``modelId``, and
+        the whole request body is the rendered prompt's variables: Amazon
+        Bedrock materializes the messages, system prompt and inference
+        parameters from the stored prompt version. Only a guardrail
+        configuration is sent alongside, which Bedrock applies to the
+        included prompt resource as well.
+
+        Args:
+            request: Responses API creation request, with ``prompt`` set.
+            response_id: Unique identifier for the response.
+            created_at: Unix timestamp of request creation.
+            moderation_builder: Optional callable building the response
+                ``moderation`` field.
+
+        Returns:
+            Completed response or streaming ``EventSourceResponse``.
+        """
+        bedrock_request: ConverseRequestBaseTypeDef = {
+            # placeholder — overwritten with the prompt ARN by converse()/converse_stream()
+            "modelId": ""
+        }
+        if variables := responses_adapter.map_prompt_variables(
+            request.prompt.variables  # type: ignore[union-attr]
+        ):
+            bedrock_request["promptVariables"] = variables
+        with suppress(LookupError):
+            bedrock_request["guardrailConfig"] = GUARDRAIL_CONFIG_VAR.get()
+
+        suppress_names = self.SUPPORTED_SYSTEM_TOOLS or None
+        if request.stream:
+            return EventSourceResponse(
+                log_request_sse_stream_event(
+                    responses_adapter.format_stream(
+                        response_id,
+                        created_at,
+                        self._model_id,
+                        (await self.converse_stream(bedrock_request))["stream"],
+                        request,
+                        suppress_names,
+                        None,
+                        None,
+                        moderation_builder,
+                    )
+                )
+            )
+
+        response = await responses_adapter.format_response(
+            response_id,
+            created_at,
+            self._model_id,
+            await self.converse(bedrock_request),
+            request,
+            suppress_names,
+            None,
+        )
         if moderation_builder is not None:
             response.moderation = moderation_builder()
         return response

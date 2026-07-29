@@ -569,6 +569,20 @@ class _Settings(BaseSettings):
         ),
     )
 
+    aws_bedrock_allow_prompt_arn: bool = Field(
+        default=False,
+        description=(
+            "If True, allow users to reference an Amazon Bedrock Prompt Management prompt ARN "
+            "in the OpenAI Responses API `prompt.id` parameter. "
+            "The prompt template is rendered by Amazon Bedrock and its variables are filled from "
+            "`prompt.variables`. When disabled, any `prompt` parameter is rejected with a 400 error.\n\n"
+            "Required IAM permissions when set to true:\n"
+            "- bedrock:GetPrompt\n"
+            "- bedrock:RenderPrompt\n\n"
+            "Example ARN: arn:aws:bedrock:us-east-1:123456789012:prompt/ABCDE12345:1"
+        ),
+    )
+
     aws_bedrock_model_arn_mapping: dict[str, str] = Field(
         default={},
         description=(

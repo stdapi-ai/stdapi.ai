@@ -213,6 +213,7 @@ This section provides a quick reference of all available configuration options. 
 | [`AWS_BEDROCK_ALLOW_CROSS_REGION_INFERENCE_PROFILE_ARN`](#bedrock-allow-cross-region-profile-arn) | `false` | Allow users to pass cross-region inference profile ARNs directly as model IDs                       |
 | [`AWS_BEDROCK_ALLOW_APPLICATION_INFERENCE_PROFILE_ARN`](#bedrock-allow-application-profile-arn)   | `false` | Allow users to pass application inference profile ARNs directly as model IDs                        |
 | [`AWS_BEDROCK_ALLOW_PROMPT_ROUTER_ARN`](#bedrock-allow-prompt-router-arn)                         | `false` | Allow users to pass prompt router ARNs directly as model IDs                                        |
+| [`AWS_BEDROCK_ALLOW_PROMPT_ARN`](#bedrock-allow-prompt-arn)                                       | `false` | Allow users to reference Prompt Management prompt ARNs in the Responses API `prompt` parameter      |
 | [`AWS_BEDROCK_MODEL_ARN_MAPPING`](#bedrock-model-arn-mapping)                                     | `{}`    | Map model IDs to custom inference profile or prompt router ARNs (server-controlled routing)         |
 | [`AWS_BEDROCK_GUARDRAIL_IDENTIFIER`](#aws-bedrock-guardrail-identifier)                           | None    | Bedrock Guardrails ID for content filtering and safety controls                                     |
 | [`AWS_BEDROCK_GUARDRAIL_VERSION`](#aws-bedrock-guardrail-version)                                 | None    | Bedrock Guardrails version number (required with identifier)                                        |
@@ -1455,6 +1456,46 @@ export AWS_BEDROCK_ALLOW_PROMPT_ROUTER_ARN=true
     - :material-robot: You have prompt routers configured in your AWS account
     - :material-cash: You want intelligent cost optimization through dynamic model selection
     - :material-speedometer: You need automatic model selection based on prompt complexity
+
+#### `AWS_BEDROCK_ALLOW_PROMPT_ARN` { #bedrock-allow-prompt-arn }
+
+:octicons-package-24: **Purpose**
+:   Allow users to reference an Amazon Bedrock Prompt Management prompt ARN in the OpenAI Responses API `prompt` parameter
+
+:octicons-database-24: **Type**
+:   Boolean
+
+:octicons-gear-24: **Default**
+:   `false`
+
+:octicons-workflow-24: **Behavior**
+:   When enabled, `prompt.id` accepts a prompt ARN (with an optional `prompt.version`) and `prompt.variables` fill in the template. Amazon Bedrock renders the stored prompt, and the model it is bound to serves the request. When disabled, any `prompt` parameter is rejected with a `400` error
+
+:octicons-lock-24: **IAM Permissions Required**
+:   `bedrock:GetPrompt` (resolve the prompt's model) and `bedrock:RenderPrompt` (invoke it)
+
+```bash
+# Disabled (default) - the Responses API `prompt` parameter returns 400
+# No environment variable needed
+
+# Enable Prompt Management prompt ARN support
+export AWS_BEDROCK_ALLOW_PROMPT_ARN=true
+```
+
+!!! warning "Additional IAM Permissions Required"
+    Enabling this setting requires adding the `bedrock:GetPrompt` and `bedrock:RenderPrompt` IAM permissions, scoped to the prompt resources you want to expose. Without them, requests using a prompt ARN fail with authorization errors.
+
+!!! example "Example ARN"
+    ```text
+    arn:aws:bedrock:us-east-1:123456789012:prompt/ABCDE12345:1
+    ```
+
+!!! info "Scope and Limitations"
+    - Only **TEXT** prompts are supported, and the request's `model` must be the model the prompt is bound to.
+    - Prompt variable values must be plain strings.
+    - `input`, `instructions`, `tools`, `text`, `previous_response_id` and inference parameters cannot be combined with `prompt`.
+
+    See [Managed Prompt Templates](api_openai_responses.md#managed-prompt-templates) for the full request contract.
 
 #### `AWS_BEDROCK_MODEL_ARN_MAPPING` { #bedrock-model-arn-mapping }
 

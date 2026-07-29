@@ -146,6 +146,27 @@ PERFORMANCE_CONFIG_VAR: ContextVar[
 _PERFORMANCE_CONFIG_LATENCY_HEADER = "X-Amzn-Bedrock-PerformanceConfig-Latency"
 _SERVICE_TIER_HEADER = "X-Amzn-Bedrock-Service-Tier"
 
+
+@dataclass(frozen=True, slots=True)
+class BedrockPrompt:
+    """Resolved Amazon Bedrock Prompt Management prompt used as a Converse ``modelId``.
+
+    Attributes:
+        arn: Prompt ARN, including the ``:<version>`` suffix when a version is selected.
+        region: AWS region owning the prompt; the Converse call is pinned to it.
+        model_id: Catalog model ID configured on the prompt variant, used for
+            dispatch, response formatting and cost attribution.
+    """
+
+    arn: str
+    region: RegionName
+    model_id: str
+
+
+#: Prompt Management prompt serving the request, set only on Responses `prompt` requests
+BEDROCK_PROMPT_VAR: ContextVar[BedrockPrompt] = ContextVar("bedrock_prompt")
+
+
 #: Prompt caching type
 PromptCaching = Literal["system", "messages", "tools"]
 

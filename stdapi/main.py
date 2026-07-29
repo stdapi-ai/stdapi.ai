@@ -115,6 +115,16 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
                     ("bedrock-agent-runtime", region)
                     for region in SETTINGS.aws_bedrock_regions
                 ),
+                # Only warmed when prompt ARNs are allowed: its sole consumer
+                # is the Prompt Management GetPrompt lookup.
+                *(
+                    (
+                        ("bedrock-agent", region)
+                        for region in SETTINGS.aws_bedrock_regions
+                    )
+                    if SETTINGS.aws_bedrock_allow_prompt_arn
+                    else ()
+                ),
                 *(("transcribe", region) for region in transcribe_regions),
                 *(
                     ("translate", region)

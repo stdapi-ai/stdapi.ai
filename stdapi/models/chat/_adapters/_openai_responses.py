@@ -55,6 +55,7 @@ from stdapi.types.openai_responses import (
     InputTokenCountParams,
     InputTokensDetails,
     OutputTokensDetails,
+    PromptVariables,
     ReasoningItemContent,
     Response,
     ResponseCompletedEvent,
@@ -135,6 +136,7 @@ if TYPE_CHECKING:
         InferenceConfigurationTypeDef,
         JsonSchemaDefinitionTypeDef,
         MessageTypeDef,
+        PromptVariableValuesTypeDef,
         ReasoningContentBlockDeltaTypeDef,
         ReasoningContentBlockOutputTypeDef,
         ReasoningTextBlockTypeDef,
@@ -214,6 +216,31 @@ _IMAGE_MAGIC_FORMATS: tuple[tuple[bytes, ImageFormatType], ...] = (
 )
 
 
+def map_prompt_variables(
+    variables: Mapping[str, PromptVariables] | None,
+) -> dict[str, PromptVariableValuesTypeDef]:
+    """Convert Responses ``prompt.variables`` to Bedrock Converse ``promptVariables``.
+
+    Args:
+        variables: Variable values from the request's ``prompt`` reference.
+
+    Returns:
+        Bedrock prompt variables, each wrapping its value in a ``text`` block.
+
+    Raises:
+        ApiError: If a variable value is not a plain string; Bedrock prompt
+            variables only carry text.
+    """
+    mapped: dict[str, PromptVariableValuesTypeDef] = {}
+    for name, value in (variables or {}).items():
+        if not isinstance(value, str):
+            msg = (
+                f"Prompt variable '{name}' must be a string: Amazon Bedrock prompt "
+                "variables cannot hold image, file or structured content parts."
+            )
+            raise ApiError(msg)
+        mapped[name] = {"text": value}
+    return mapped
 
 
 def _map_tool_choice(tool_choice: ToolChoice | None) -> ToolChoiceTypeDef | None:
@@ -1787,6 +1814,7 @@ def _build_response_object(
         metadata=request.metadata,
         max_output_tokens=request.max_output_tokens,
         previous_response_id=request.previous_response_id,
+        prompt=request.prompt,
         prompt_cache_key=request.prompt_cache_key,
         prompt_cache_options=request.prompt_cache_options,
         prompt_cache_retention=request.prompt_cache_retention,

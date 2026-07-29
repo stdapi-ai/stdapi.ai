@@ -4,7 +4,7 @@ from typing import Annotated, ClassVar, Literal, Self
 
 from pydantic import ConfigDict, Field, model_validator
 
-from stdapi.api_errors import UnsupportedParameterError
+from stdapi.api_errors import ApiError, UnsupportedParameterError
 from stdapi.types import (
     BaseModelRequest,
     BaseModelRequestWithExtra,
@@ -4211,7 +4211,9 @@ class ResponseCreateParams(BaseModelRequest):
     )
     prompt: ResponsePrompt | None = Field(
         default=None,
-        description="Reference to a prompt template and its variables.\nUNSUPPORTED on this implementation.",
+        description="Reference to a prompt template and its variables. `id` must "
+        "be an Amazon Bedrock Prompt Management prompt ARN, and the server must "
+        "allow prompt ARNs. Variable values must be plain strings.",
     )
     prompt_cache_key: str | None = Field(
         default=None, description="Cache key for similar requests."
@@ -4277,8 +4279,21 @@ class ResponseCreateParams(BaseModelRequest):
         "context_management",
         "conversation",
         "max_tool_calls",
-        "prompt",
         "truncation",
+    }
+
+    #: Parameters a managed prompt template carries itself, so a request cannot also set them
+    _PROMPT_INCOMPATIBLE: ClassVar[set[str]] = {
+        "input",
+        "instructions",
+        "max_output_tokens",
+        "previous_response_id",
+        "reasoning",
+        "temperature",
+        "text",
+        "tool_choice",
+        "tools",
+        "top_p",
     }
 
     @model_validator(mode="after")
@@ -4289,11 +4304,25 @@ class ResponseCreateParams(BaseModelRequest):
         MCP, shells, custom/namespace tools, ...) are accepted for
         compatibility and dropped from the Bedrock tool configuration.
 
+        A ``prompt`` request body carries only the prompt variables: Amazon
+        Bedrock renders the messages, system prompt, tools and inference
+        parameters from the stored prompt version, so any request-level
+        equivalent is rejected instead of being silently dropped.
+
         Raises:
             UnsupportedParameterError: If a parameter marked as unsupported is used.
+            ApiError: If a parameter is incompatible with ``prompt``.
         """
         for key in self._UNSUPPORTED & self.model_fields_set:
             raise UnsupportedParameterError(key)
+        if self.prompt is not None and (
+            incompatible := sorted(self._PROMPT_INCOMPATIBLE & self.model_fields_set)
+        ):
+            msg = (
+                f"Parameter(s) {', '.join(f"'{key}'" for key in incompatible)} cannot "
+                "be used with 'prompt': the prompt template provides them."
+            )
+            raise ApiError(msg)
         return self
 
 

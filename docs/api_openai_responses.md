@@ -96,7 +96,7 @@ Generate model responses with Amazon Bedrock foundation models through an OpenAI
 | `store`                                                               |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Persists the response — Amazon Bedrock session storage (non-streaming) or Mantle native storage for Mantle models (streaming supported) |
 | `stream_options`                                                      |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Accepted but ignored on Converse-served models; forwarded upstream on Bedrock Mantle native models |
 | `conversation`                                                        | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Returns `400`; use `previous_response_id` or `input`                         |
-| `prompt` (template reference)                                         | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Returns `400`; not supported                                                 |
+| `prompt` (template reference)                                         |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }   | Amazon Bedrock Prompt Management prompt ARN only, when enabled server-side — see [Managed Prompt Templates](#managed-prompt-templates) |
 | `safety_identifier`                                                   | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Accepted but ignored by generation; recorded in request logs                 |
 | `client_metadata`                                                     |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Accepted but ignored on Converse-served models (sent by newer OpenAI clients such as Codex); forwarded upstream on Bedrock Mantle native models |
 | `moderation`                                                          |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Applies an Amazon Bedrock guardrail; results in the response `moderation` field (on the terminal event when streaming) — rejected (`400`) on Mantle-served models |
@@ -482,6 +482,42 @@ Cached token usage is reported in the response:
 ```
 
 Following OpenAI semantics, `input_tokens` covers the **full** prompt: tokens read from and written to the cache are included, and `cached_tokens` (the tokens read from cache) is a subset of `input_tokens`. In this example, 1,200 of the 1,500 input tokens were retrieved from cache.
+
+### Managed Prompt Templates { #managed-prompt-templates }
+
+The `prompt` parameter references a prompt template stored in [Amazon Bedrock Prompt Management](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-management.html). Amazon Bedrock renders the template server-side, so the request body carries only the variable values.
+
+!!! warning "Disabled by Default"
+    `prompt` returns `400` unless the server operator sets [`AWS_BEDROCK_ALLOW_PROMPT_ARN`](operations_configuration.md#bedrock-allow-prompt-arn) to `true`.
+
+```bash
+curl -X POST "$BASE/v1/responses" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "anthropic.claude-sonnet-5",
+    "prompt": {
+      "id": "arn:aws:bedrock:us-east-1:123456789012:prompt/ABCDE12345",
+      "version": "1",
+      "variables": {"genre": "pop", "number": "3"}
+    }
+  }'
+```
+
+:octicons-key-24: **Requirements**
+
+- `prompt.id` must be an Amazon Bedrock prompt ARN. OpenAI-hosted prompt template IDs (`pmpt_…`) do not exist on this gateway and return `400`.
+- `prompt.version` is an Amazon Bedrock version number. It is appended to the ARN, and must not disagree with a version already present in `prompt.id`. Omit it to run the working draft.
+- The prompt must be a **TEXT** prompt bound to a model that this server can serve, and `model` must be that exact model: it is the model used for response formatting and cost attribution. The error message names the model the prompt uses.
+- `prompt.variables` values must be plain strings — Amazon Bedrock prompt variables only carry text, so image, file and structured content parts return `400`.
+- The prompt's region is derived from its ARN and must be a configured Amazon Bedrock region; cross-region failover is disabled for the request.
+- The model must be served by the Converse API: [Mantle](features.md#bedrock-mantle-models) native models return `400`, as they have no Prompt Management equivalent.
+
+:octicons-x-circle-24: **Rejected Alongside `prompt`**
+
+The stored prompt version already provides the conversation, the system prompt, the tools and the inference parameters, so combining `prompt` with `input`, `instructions`, `tools`, `tool_choice`, `text`, `temperature`, `top_p`, `max_output_tokens`, `reasoning` or `previous_response_id` returns `400` instead of silently dropping them.
+
+Streaming, `store`, `moderation` and guardrail headers remain available. The remaining request-level parameters (`metadata`, `service_tier`, `prompt_cache_*`, …) are accepted and echoed on the response, but not applied: the Bedrock call carries only the prompt resource and its variables.
 
 ### OpenAI Integrated Tools
 

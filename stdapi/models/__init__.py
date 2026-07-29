@@ -25,9 +25,11 @@ import stdapi.region_routing as _region_routing
 from stdapi.api_errors import ApiError, UnsupportedModelError
 from stdapi.aws import get_client
 from stdapi.aws_bedrock import (
+    BEDROCK_PROMPT_VAR,
     GUARDRAIL_CONFIG_VAR,
     GUARDRAIL_TRACE_VAR,
     PERFORMANCE_CONFIG_VAR,
+    BedrockPrompt,
     bedrock_client,
     check_stream_event,
     handle_bedrock_client_error,
@@ -65,7 +67,11 @@ from stdapi.pricing import (
 )
 from stdapi.region_routing import REGION_ROUTER, ROUTING_RETRYABLE_CODES
 from stdapi.usage import get_model_state, record_bedrock_usage
-from stdapi.utils import match_bedrock_app_profile_arn, match_bedrock_prompt_router_arn
+from stdapi.utils import (
+    match_bedrock_app_profile_arn,
+    match_bedrock_prompt_arn,
+    match_bedrock_prompt_router_arn,
+)
 
 if TYPE_CHECKING:
     from collections.abc import (
@@ -106,6 +112,7 @@ if TYPE_CHECKING:
         update_lock: Lock
         access_lock: Lock
         user_profiles_access_lock: Lock
+        prompts_access_lock: Lock
 
 else:
     type RegionName = str
@@ -277,6 +284,7 @@ _CACHE: _ModelCache = {
     "update_interval": timedelta(seconds=SETTINGS.model_cache_seconds),
     "access_lock": Lock(),
     "user_profiles_access_lock": Lock(),
+    "prompts_access_lock": Lock(),
 }
 
 #: Always-allowed inference types
@@ -284,6 +292,9 @@ _INFERENCE_TYPES = {"INFERENCE_PROFILE", "ON_DEMAND"}
 
 #: TTL cache for application inference profiles and prompt routers
 _USER_PROFILES: dict[str, tuple[ModelDetails, AwareDatetime]] = {}
+
+#: TTL cache for Prompt Management prompts, keyed by versioned ARN
+_PROMPTS: dict[str, tuple[str, AwareDatetime]] = {}
 
 #: Model aliases (populated on import, merged with user settings at startup)
 MODEL_ALIASES: dict[str, str] = {}
@@ -809,6 +820,8 @@ class ModelBase[RequestT, ResponseT]:
 
         Folds in performance/service-tier context-var values when present,
         mirroring :func:`_build_invoke_kwargs` for the ``InvokeModel`` path.
+        A Prompt Management request keeps the prompt ARN as ``modelId``: Bedrock
+        materializes the conversation from the stored prompt.
 
         Args:
             request: Converse request payload to mutate.
@@ -818,9 +831,16 @@ class ModelBase[RequestT, ResponseT]:
             region, document_s3_location=self.S3_LOCATION_DOCUMENT_SUPPORTED
         )
         latency, perf_service_tier = PERFORMANCE_CONFIG_VAR.get((None, None))
-        request["modelId"] = await resolve_routed_model_id(
-            self._model_id, region, inference_profile=True, latency=latency
-        )
+        if prompt := BEDROCK_PROMPT_VAR.get(None):
+            set_effective_region(self._model_id, region)
+            get_model_state(self._model_id).routing = _request_routing(
+                prompt.arn, latency
+            )
+            request["modelId"] = prompt.arn
+        else:
+            request["modelId"] = await resolve_routed_model_id(
+                self._model_id, region, inference_profile=True, latency=latency
+            )
         request["requestMetadata"] = build_metadata(request.get("requestMetadata"))
 
         if latency:
@@ -1023,6 +1043,18 @@ class ModelBase[RequestT, ResponseT]:
                     break
             raise
 
+    async def _converse_candidate_regions(self) -> list[RegionName]:
+        """Return the candidate regions of a Converse call.
+
+        Returns:
+            The model's candidate regions, or only the prompt's region when the
+            request is served by a Prompt Management prompt (its ARN is
+            region-bound, so failover elsewhere cannot work).
+        """
+        if prompt := BEDROCK_PROMPT_VAR.get(None):
+            return [prompt.region]
+        return await compute_candidate_regions(self._model_id)
+
     async def converse(
         self, request: ConverseRequestBaseTypeDef
     ) -> ConverseResponseTypeDef:
@@ -1034,7 +1066,7 @@ class ModelBase[RequestT, ResponseT]:
         Returns:
             Bedrock Converse response.
         """
-        candidates = await compute_candidate_regions(self._model_id)
+        candidates = await self._converse_candidate_regions()
         response = await route_and_execute(
             self._model_id,
             candidates,
@@ -1060,7 +1092,7 @@ class ModelBase[RequestT, ResponseT]:
         Returns:
             Bedrock ConverseStream response containing the event stream.
         """
-        candidates = await compute_candidate_regions(self._model_id)
+        candidates = await self._converse_candidate_regions()
         return await route_and_execute(
             self._model_id,
             candidates,
@@ -2865,6 +2897,103 @@ async def _get_application_inference_profile_models(
             )
         ).get("models") or (), region
     return None
+
+
+async def _get_prompt_model_id(
+    arn: str, version: str | None, region: RegionName
+) -> str:
+    """Return the model ID configured on a Prompt Management prompt, using a TTL cache.
+
+    Args:
+        arn: Prompt ARN without version suffix.
+        version: Prompt version to read, or ``None`` for the working draft.
+        region: AWS region owning the prompt.
+
+    Returns:
+        Bedrock model ID configured on the prompt variant.
+
+    Raises:
+        ApiError: If the prompt has no TEXT variant bound to a model.
+    """
+    cache_key = f"{arn}:{version}" if version else arn
+    async with _CACHE["prompts_access_lock"]:
+        if cached := _PROMPTS.get(cache_key):
+            model_id, expiration = cached
+            if expiration > SETTINGS.now():
+                return model_id
+            del _PROMPTS[cache_key]
+
+        kwargs = {"promptVersion": version} if version else {}
+        with handle_bedrock_client_error():
+            prompt = await get_client("bedrock-agent", region).get_prompt(
+                promptIdentifier=arn, **kwargs
+            )
+        # PromptVariantList is capped at one entry, so defaultVariant is redundant.
+        variant = (prompt.get("variants") or (None,))[0]
+        if variant is None or variant.get("templateType") != "TEXT":
+            msg = f"Prompt '{cache_key}' is not a TEXT prompt: only TEXT prompts are supported."
+            raise ApiError(msg)
+        variant_model_id: str = variant.get("modelId") or ""
+        if not variant_model_id:
+            msg = f"Prompt '{cache_key}' is not bound to a model."
+            raise ApiError(msg)
+        # A prompt may name an inference profile instead of the model itself.
+        variant_model_id = _catalog_model_id(variant_model_id) or variant_model_id
+        _PROMPTS[cache_key] = (
+            variant_model_id,
+            SETTINGS.now() + _CACHE["update_interval"],
+        )
+        return variant_model_id
+
+
+async def resolve_bedrock_prompt(prompt_id: str, version: str | None) -> BedrockPrompt:
+    """Resolve an OpenAI Responses ``prompt`` reference to a Bedrock prompt resource.
+
+    Args:
+        prompt_id: Value of the request's ``prompt.id`` field.
+        version: Value of the request's ``prompt.version`` field, if any.
+
+    Returns:
+        The resolved prompt, with the model ID that serves it.
+
+    Raises:
+        ApiError: If prompts are disabled by server configuration, *prompt_id* is
+            not a Bedrock prompt ARN, *version* is invalid or conflicts with the
+            ARN suffix, or the prompt's model cannot be served.
+    """
+    if not SETTINGS.aws_bedrock_allow_prompt_arn:
+        msg = "Prompt templates are not allowed by server configuration."
+        raise ApiError(msg)
+    result = match_bedrock_prompt_arn(prompt_id)
+    if result is None:
+        msg = (
+            f"'{prompt_id}' is not an Amazon Bedrock Prompt Management prompt ARN: "
+            "hosted prompt templates do not exist on this server."
+        )
+        raise ApiError(msg)
+    arn_version = result.group("version")
+    if version is not None:
+        if not (version.isascii() and version.isdigit()) or len(version) > 5:
+            msg = f"Invalid prompt version '{version}': Amazon Bedrock prompt versions are numbers."
+            raise ApiError(msg)
+        if arn_version is not None and arn_version != version:
+            msg = f"Prompt version '{version}' conflicts with the version in the prompt ARN ('{arn_version}')."
+            raise ApiError(msg)
+    else:
+        version = arn_version
+    base_arn: str = result.group("base")
+    region: RegionName = result.group("region")  # type: ignore[assignment]
+    _validate_bedrock_region(region)
+    model = await validate_model(
+        await _get_prompt_model_id(base_arn, version, region),
+        input_modality="TEXT",
+        output_modality="TEXT",
+    )
+    return BedrockPrompt(
+        arn=f"{base_arn}:{version}" if version else base_arn,
+        region=region,
+        model_id=model.id,
+    )
 
 
 async def _wait_for_async_invocation_completion(

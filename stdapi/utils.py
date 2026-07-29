@@ -62,6 +62,11 @@ match_bedrock_prompt_router_arn = compile_regex(
     "arn:aws(?:-[^:]+)?:bedrock:(?P<region>[a-z0-9-]{1,20}):[0-9]{12}:(?:prompt-router|default-prompt-router)/[a-zA-Z0-9_.:-]+\\Z"
 ).match
 
+#: Prompt Management prompt ARN matcher, with the optional version suffix Bedrock accepts as a model ID
+match_bedrock_prompt_arn = compile_regex(
+    "(?P<base>arn:aws(?:-[^:]+)?:bedrock:(?P<region>[a-z0-9-]{1,20}):[0-9]{12}:prompt/[0-9a-zA-Z]{10})(?::(?P<version>[0-9]{1,5}))?\\Z"
+).match
+
 
 def json_sse(event: LiteralString | None, payload: BaseModel) -> JSONServerSentEvent:
     """Build a ``JSONServerSentEvent`` from a pydantic payload.

@@ -23,6 +23,7 @@ from pydantic import TypeAdapter, ValidationError
 from stdapi.api_errors import ApiError
 from stdapi.api_providers.openai import TAG_OPENAI
 from stdapi.auth import authenticate
+from stdapi.aws_bedrock import BEDROCK_PROMPT_VAR
 from stdapi.aws_bedrock_mantle import (
     MantleError,
     cache_response_surface,
@@ -34,7 +35,7 @@ from stdapi.aws_bedrock_mantle import (
     validate_pruning_extras,
 )
 from stdapi.config import SETTINGS
-from stdapi.models import validate_model
+from stdapi.models import resolve_bedrock_prompt, validate_model
 from stdapi.models.capabilities import Capability, register_route_capability
 from stdapi.models.chat import get_chat_model, serves_via_mantle
 from stdapi.models.chat._adapters._openai_responses import (
@@ -79,6 +80,7 @@ from stdapi.types.openai_responses import (
     ResponseItemList,
     ResponseOutputMessage,
     ResponseOutputText,
+    ResponsePrompt,
     ResponseUsage,
 )
 from stdapi.utils import hide_security_details, validation_error_handler
@@ -90,6 +92,7 @@ if TYPE_CHECKING:
     from types_aiobotocore_bedrock.literals import RegionName
 
     from stdapi.aws_bedrock_mantle import Surface
+    from stdapi.models.chat import ChatModelBase
 
 register_route_capability(
     "openai_response", f"{SETTINGS.openai_routes_prefix}/v1/responses", "TEXT", "TEXT"
@@ -481,6 +484,35 @@ def _compaction_user_messages(items: Sequence[Any]) -> list[CompactionUserMessag
     return messages
 
 
+async def _apply_prompt_template(
+    prompt: ResponsePrompt | None, chat_model: ChatModelBase[Any, Any], model_id: str
+) -> None:
+    """Resolve a ``prompt`` reference and pin the request to the Bedrock prompt resource.
+
+    Args:
+        prompt: The request's ``prompt`` template reference, if any.
+        chat_model: Chat model selected for the request.
+        model_id: Model ID resolved from the request's ``model`` field.
+
+    Raises:
+        ApiError: If the model cannot serve managed prompts, or if the request's
+            ``model`` is not the model configured on the prompt.
+    """
+    if prompt is None:
+        return
+    if chat_model.IS_MANTLE:
+        msg = f"Model '{model_id}' does not support the 'prompt' parameter."
+        raise ApiError(msg)
+    resolved = await resolve_bedrock_prompt(prompt.id, prompt.version)
+    if resolved.model_id != model_id:
+        msg = (
+            f"Prompt '{prompt.id}' runs on model '{resolved.model_id}', which does "
+            f"not match the requested model '{model_id}'."
+        )
+        raise ApiError(msg)
+    BEDROCK_PROMPT_VAR.set(resolved)
+
+
 @router.post(
     "",
     summary="Generate a model response using the Responses API (OpenAI format)",
@@ -548,6 +580,7 @@ async def create_response(
         )
     ).id
     chat_model = get_chat_model(model_id)
+    await _apply_prompt_template(request.prompt, chat_model, model_id)
     previous_response_id = request.previous_response_id
     native_supported = chat_model.native_store_supported()
     request = await _apply_previous_response(request, native_supported=native_supported)
@@ -592,12 +625,13 @@ async def create_response(
                 await save_stored_response(
                     response_id,
                     {
+                        # Absent for a `prompt` request: Bedrock renders the input.
                         "input": request.model_dump(
                             mode="json",
                             by_alias=True,
                             include={"input"},
                             exclude_none=True,
-                        )["input"],
+                        ).get("input", []),
                         "response": result.model_dump(
                             mode="json", by_alias=True, exclude_none=True
                         ),
