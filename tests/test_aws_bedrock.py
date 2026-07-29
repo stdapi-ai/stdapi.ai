@@ -10,6 +10,7 @@ from stdapi.aws_bedrock import (
     get_extra_model_parameters,
     map_guardrail_filters,
     resolve_guardrail_model,
+    set_inference_configuration,
 )
 from stdapi.config import SETTINGS
 from stdapi.types import BaseModelRequestWithExtra
@@ -131,6 +132,46 @@ def _content_filter_assessment(
             ]
         }
     }
+
+
+class TestSetInferenceConfiguration:
+    """set_inference_configuration: explicit falsy values must not be dropped."""
+
+    def test_zero_temperature_and_top_p_are_forwarded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression: temperature=0 and top_p=0 are valid values, not "unset"."""
+        monkeypatch.setattr(SETTINGS, "default_model_params", {})
+
+        config = set_inference_configuration(
+            "model-a", {}, temperature=0.0, top_p=0.0, max_tokens=100
+        )
+
+        assert config == {"temperature": 0.0, "topP": 0.0, "maxTokens": 100}
+
+    def test_zero_temperature_overrides_configured_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An explicit request temperature of 0 must take precedence over the default."""
+        monkeypatch.setattr(
+            SETTINGS, "default_model_params", {"model-a": {"temperature": 0.7}}
+        )
+
+        config = set_inference_configuration("model-a", {}, temperature=0.0)
+
+        assert config["temperature"] == 0.0
+
+    def test_unset_temperature_falls_back_to_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Omitting temperature still falls back to the configured default."""
+        monkeypatch.setattr(
+            SETTINGS, "default_model_params", {"model-a": {"temperature": 0.7}}
+        )
+
+        config = set_inference_configuration("model-a", {})
+
+        assert config["temperature"] == 0.7
 
 
 class TestMapGuardrailFilters:

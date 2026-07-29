@@ -535,19 +535,21 @@ def set_inference_configuration(
             **SETTINGS.default_model_params.get(model_id, {})  # type: ignore[arg-type]
         )
 
-    temperature = temperature or default.temperature
+    temperature = temperature if temperature is not None else default.temperature
     if temperature is not None:
         config["temperature"] = temperature
 
-    top_p = top_p or default.top_p
+    top_p = top_p if top_p is not None else default.top_p
     if top_p is not None:
         config["topP"] = top_p
 
-    max_tokens = max_tokens or default.max_tokens
+    max_tokens = max_tokens if max_tokens is not None else default.max_tokens
     if max_tokens is not None:
         config["maxTokens"] = max_tokens
 
-    stop_sequences = stop_sequences or default.stop_sequences
+    stop_sequences = (
+        stop_sequences if stop_sequences is not None else default.stop_sequences
+    )
     if stop_sequences is not None:
         config["stopSequences"] = (
             [stop_sequences] if isinstance(stop_sequences, str) else stop_sequences
