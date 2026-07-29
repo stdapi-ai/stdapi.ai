@@ -1044,6 +1044,24 @@ class TestNonStreamResponseConversions:
             "total_tokens": 15,
         }
 
+    def test_reasoning_tokens_survive_both_usage_directions(self) -> None:
+        """Reasoning tokens are carried over in both usage conversions."""
+        chat_usage = {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+            "completion_tokens_details": {"reasoning_tokens": 4},
+        }
+        responses_usage = mantle_convert._responses_usage_from_chat(chat_usage)  # noqa: SLF001
+        assert responses_usage["output_tokens_details"] == {"reasoning_tokens": 4}
+        assert mantle_convert._chat_usage_from_responses(responses_usage) == {  # noqa: SLF001
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+            "prompt_tokens_details": {"cached_tokens": 0},
+            "completion_tokens_details": {"reasoning_tokens": 4},
+        }
+
     def test_chat_to_messages_response(self) -> None:
         """Chat text, tool calls and usage convert to Anthropic content blocks."""
         raw = {
@@ -1829,6 +1847,7 @@ class TestResponsesToChatStreamExtension:
             "completion_tokens": 1,
             "total_tokens": 2,
             "prompt_tokens_details": {"cached_tokens": 0},
+            "completion_tokens_details": {"reasoning_tokens": 0},
         }
 
     async def test_response_incomplete_event_emits_finish_and_usage(self) -> None:

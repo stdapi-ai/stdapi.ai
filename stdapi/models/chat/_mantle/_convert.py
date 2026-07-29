@@ -332,11 +332,13 @@ def _chat_usage_from_responses(usage: dict[str, Any]) -> dict[str, Any]:
     input_tokens = usage.get("input_tokens") or 0
     output_tokens = usage.get("output_tokens") or 0
     cached = (usage.get("input_tokens_details") or {}).get("cached_tokens") or 0
+    reasoning = (usage.get("output_tokens_details") or {}).get("reasoning_tokens") or 0
     return {
         "prompt_tokens": input_tokens,
         "completion_tokens": output_tokens,
         "total_tokens": usage.get("total_tokens") or input_tokens + output_tokens,
         "prompt_tokens_details": {"cached_tokens": cached},
+        "completion_tokens_details": {"reasoning_tokens": reasoning},
     }
 
 
@@ -376,11 +378,14 @@ def _responses_usage_from_chat(usage: dict[str, Any]) -> dict[str, Any]:
     prompt = usage.get("prompt_tokens") or 0
     completion = usage.get("completion_tokens") or 0
     cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0
+    reasoning = (usage.get("completion_tokens_details") or {}).get(
+        "reasoning_tokens"
+    ) or 0
     return {
         "input_tokens": prompt,
         "input_tokens_details": {"cached_tokens": cached},
         "output_tokens": completion,
-        "output_tokens_details": {"reasoning_tokens": 0},
+        "output_tokens_details": {"reasoning_tokens": reasoning},
         "total_tokens": usage.get("total_tokens") or prompt + completion,
     }
 
