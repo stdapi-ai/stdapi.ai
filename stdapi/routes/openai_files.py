@@ -41,6 +41,23 @@ def _strip(fid: str) -> str:
     return fid[5:]
 
 
+def _resolve_expires_after_seconds(
+    purpose: str, expires_after_seconds: int | None
+) -> int | None:
+    """Apply the default 30-day expiry for ``purpose=batch`` when none was given.
+
+    Args:
+        purpose: Requested file purpose.
+        expires_after_seconds: Caller-supplied TTL, if any.
+
+    Returns:
+        The TTL to use, or ``None`` if the file should not expire.
+    """
+    if expires_after_seconds is not None:
+        return expires_after_seconds
+    return _EXPIRES_AFTER_SECONDS_MAX if purpose == "batch" else None
+
+
 if TYPE_CHECKING:
     from enum import Enum
 
@@ -219,7 +236,13 @@ async def upload(
         log_request_params({"purpose": body.purpose})
         return log_response_params(
             _to_file_object(
-                await upload_file(body.file, body.purpose, body.expires_after_seconds)
+                await upload_file(
+                    body.file,
+                    body.purpose,
+                    _resolve_expires_after_seconds(
+                        body.purpose, body.expires_after_seconds
+                    ),
+                )
             )
         )
     if file is None:
@@ -245,7 +268,11 @@ async def upload(
     log_request_params({"purpose": purpose, "filename": file.filename})
     return log_response_params(
         _to_file_object(
-            await upload_file(InputFile(file), purpose, expires_after_seconds)
+            await upload_file(
+                InputFile(file),
+                purpose,
+                _resolve_expires_after_seconds(purpose, expires_after_seconds),
+            )
         )
     )
 

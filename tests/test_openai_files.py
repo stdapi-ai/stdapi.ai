@@ -120,6 +120,26 @@ class TestOpenAIFiles:
         finally:
             openai_client.files.delete(result.id)
 
+    def test_upload_batch_purpose_defaults_to_thirty_day_expiry(
+        self, openai_client: OpenAI, use_official_api: bool
+    ) -> None:
+        """Upload with purpose=batch and no expires_after defaults to a 30-day TTL.
+
+        Validates:
+            - expires_at is set without an explicit expires_after
+            - expires_at is close to 30 days (2 592 000 seconds) from now
+        """
+        if use_official_api:
+            pytest.skip("batch default-expiry behavior may differ on official API")
+        result = openai_client.files.create(
+            file=("batch.jsonl", io.BytesIO(_TEXT_FILE), "text/plain"), purpose="batch"
+        )
+        try:
+            assert result.expires_at is not None
+            assert abs(result.expires_at - (int(time.time()) + 2_592_000)) < 60
+        finally:
+            openai_client.files.delete(result.id)
+
     # --- Get metadata ---
 
     def test_get_metadata(self, openai_client: OpenAI) -> None:
@@ -747,6 +767,116 @@ class TestOpenAIFilesExpiresAfterBracketNotation:
         assert response.status_code == 200, response.text
         assert captured["expires_after"] == 7200
         assert response.json()["expires_at"] is not None
+
+
+class TestResolveExpiresAfterSecondsUnit:
+    """Unit tests for the ``purpose=batch`` default-expiry resolution helper."""
+
+    def test_batch_purpose_defaults_to_thirty_days(self) -> None:
+        """purpose=batch with no explicit TTL defaults to the 30-day maximum."""
+        resolved = openai_files_routes._resolve_expires_after_seconds(  # noqa: SLF001
+            "batch", None
+        )
+        assert resolved == openai_files_routes._EXPIRES_AFTER_SECONDS_MAX  # noqa: SLF001
+
+    def test_batch_purpose_explicit_ttl_not_overridden(self) -> None:
+        """An explicit TTL for purpose=batch is preserved, not replaced by the default."""
+        resolved = openai_files_routes._resolve_expires_after_seconds(  # noqa: SLF001
+            "batch", 3600
+        )
+        assert resolved == 3600
+
+    def test_non_batch_purpose_has_no_default(self) -> None:
+        """Purposes other than batch persist forever unless a TTL is explicitly given."""
+        resolved = openai_files_routes._resolve_expires_after_seconds(  # noqa: SLF001
+            "assistants", None
+        )
+        assert resolved is None
+
+
+class TestOpenAIFilesBatchDefaultExpiry:
+    """POST /v1/files applies the documented 30-day default expiry for purpose=batch."""
+
+    @pytest.fixture
+    def client(self, api_key: str) -> TestClient:
+        """Test client without lifespan (no AWS startup), pre-authenticated."""
+        from stdapi.main import app  # noqa: PLC0415
+
+        return TestClient(app, headers={"Authorization": f"Bearer {api_key}"})
+
+    @staticmethod
+    def _fake_upload_file(captured: dict[str, Any]) -> Any:  # noqa: ANN401
+        """Build a fake ``upload_file`` that records the ``expires_after`` it receives."""
+
+        async def fake_upload_file(
+            _file: object, purpose: str | None, expires_after: int | None = None
+        ) -> FileRecord:
+            captured["expires_after"] = expires_after
+            now = int(datetime.now(UTC).timestamp())
+            return FileRecord(
+                file_id="a" * 32,
+                filename="t.txt",
+                content_type="text/plain",
+                purpose=purpose or "",
+                size=5,
+                created_at=datetime.now(UTC),
+                expires_at=now + expires_after if expires_after is not None else None,
+            )
+
+        return fake_upload_file
+
+    def test_multipart_batch_purpose_gets_default_expiry(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A multipart upload with purpose=batch and no expires_after gets a 30-day TTL."""
+        captured: dict[str, Any] = {}
+        monkeypatch.setattr(
+            openai_files_routes, "upload_file", self._fake_upload_file(captured)
+        )
+        response = client.post(
+            "/v1/files",
+            files={"file": ("t.txt", b"hello", "text/plain")},
+            data={"purpose": "batch"},
+        )
+        assert response.status_code == 200, response.text
+        assert (
+            captured["expires_after"] == openai_files_routes._EXPIRES_AFTER_SECONDS_MAX  # noqa: SLF001
+        )
+        assert response.json()["expires_at"] is not None
+
+    def test_multipart_non_batch_purpose_has_no_default_expiry(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A multipart upload with purpose=assistants and no expires_after never expires."""
+        captured: dict[str, Any] = {}
+        monkeypatch.setattr(
+            openai_files_routes, "upload_file", self._fake_upload_file(captured)
+        )
+        response = client.post(
+            "/v1/files",
+            files={"file": ("t.txt", b"hello", "text/plain")},
+            data={"purpose": "assistants"},
+        )
+        assert response.status_code == 200, response.text
+        assert captured["expires_after"] is None
+        assert "expires_at" not in response.json()
+
+    def test_json_body_batch_purpose_gets_default_expiry(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A JSON-body upload with purpose=batch and no expires_after gets a 30-day TTL."""
+        captured: dict[str, Any] = {}
+        monkeypatch.setattr(
+            openai_files_routes, "upload_file", self._fake_upload_file(captured)
+        )
+        response = client.post(
+            "/v1/files",
+            json={"file": "data:text/plain;base64,aGVsbG8=", "purpose": "batch"},
+        )
+        assert response.status_code == 200, response.text
+        assert (
+            captured["expires_after"] == openai_files_routes._EXPIRES_AFTER_SECONDS_MAX  # noqa: SLF001
+        )
 
 
 class TestOpenAIUploads:
