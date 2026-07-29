@@ -11,7 +11,12 @@ from re import Pattern
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Never, TypedDict, TypeVar
 
-from botocore.exceptions import BotoCoreError, ClientError, HTTPClientError
+from botocore.exceptions import (
+    BotoCoreError,
+    ClientError,
+    HTTPClientError,
+    ReadTimeoutError,
+)
 from botocore.exceptions import ConnectionError as BotocoreConnectionError
 from pydantic import AwareDatetime, BaseModel, JsonValue
 from pydantic_core import from_json, to_json
@@ -2185,6 +2190,10 @@ async def route_and_execute[T](
     transiently incomplete discovery snapshot self-heals across regions instead of
     surfacing to the caller.
 
+    ``ReadTimeoutError`` is never retried across regions: the request already
+    reached Bedrock and is billed regardless, so failing over would double-bill
+    the invocation instead of recovering it.
+
     Args:
         model_id: Used for router health bookkeeping.
         candidates: From ``compute_candidate_regions``. Single-element means region-locked.
@@ -2199,7 +2208,8 @@ async def route_and_execute[T](
             error when all attempts exhausted.
         ClientError: Last non-retryable error, or last retryable error when all attempts exhausted.
         BotocoreConnectionError: Last connection error when all attempts exhausted.
-        HTTPClientError: Last HTTP client error (e.g. timeout) when all attempts exhausted.
+        HTTPClientError: Last HTTP client error when all attempts exhausted, or immediately
+            for a ``ReadTimeoutError`` (never retried).
     """
     if not REGION_ROUTER or len(candidates) == 1:
         try:
@@ -2249,12 +2259,34 @@ async def route_and_execute[T](
             HTTPClientError,
         ) as exc:
             last_exc = exc
-            REGION_ROUTER.mark_error(model_id, region, exc.__class__.__name__)
+            REGION_ROUTER.mark_error(model_id, region, _region_failover_label(exc))
         else:
             REGION_ROUTER.mark_success(model_id, region)
             return result
 
     raise last_exc
+
+
+def _region_failover_label(
+    exc: ModelRegionUnavailableError | BotocoreConnectionError | HTTPClientError,
+) -> str:
+    """Return the router health-bookkeeping label for *exc*.
+
+    Args:
+        exc: Error raised while invoking a Bedrock region.
+
+    Returns:
+        *exc*'s class name, to record via ``REGION_ROUTER.mark_error``.
+
+    Raises:
+        ReadTimeoutError: Re-raises *exc* unchanged instead of returning a label. The
+            request already reached Bedrock and is billed regardless of this
+            client-side timeout, so retrying in another region would double-bill the
+            invocation instead of recovering it.
+    """
+    if isinstance(exc, ReadTimeoutError):
+        raise exc
+    return exc.__class__.__name__
 
 
 def _client_error_code(exc: ClientError | ApiError) -> str | None:

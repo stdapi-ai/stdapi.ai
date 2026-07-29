@@ -2,16 +2,17 @@
 
 Covers :meth:`ModelDetails.get_id` (never emit a geo-mismatched inference
 profile), :func:`route_and_execute` (skip a region that cannot serve the
-model instead of surfacing the error), and :func:`_get_prompt_router_models`
-/ :func:`_get_application_inference_profile_models` (reject an ARN region
-that isn't configured, instead of crashing later with an unhandled
-``KeyError``), all fast and AWS-free.
+model instead of surfacing the error, and never retry a ``ReadTimeoutError``
+which would double-bill an already-invoked model), and
+:func:`_get_prompt_router_models` / :func:`_get_application_inference_profile_models`
+(reject an ARN region that isn't configured, instead of crashing later with
+an unhandled ``KeyError``), all fast and AWS-free.
 """
 
 from typing import TYPE_CHECKING, cast
 
 import pytest
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, ReadTimeoutError
 
 import stdapi.models as models_module
 from stdapi import region_routing
@@ -232,6 +233,20 @@ class TestRouteAndExecuteFailover:
 
         with pytest.raises(ApiError):
             await route_and_execute("vendor.model-v1", _CANDIDATES, fn)
+
+    async def test_read_timeout_is_not_retried_in_another_region(
+        self, routed: RegionRouter
+    ) -> None:
+        """Regression: a ReadTimeoutError must not fail over and double-bill the model."""
+        seen: list[str] = []
+
+        async def fn(region: RegionName) -> str:
+            seen.append(region)
+            raise ReadTimeoutError(endpoint_url="https://bedrock.example")
+
+        with pytest.raises(ReadTimeoutError):
+            await route_and_execute("vendor.model-v1", _CANDIDATES, fn)
+        assert seen == ["us-east-1"]
 
     async def test_single_region_unavailable_becomes_api_error(self) -> None:
         """With one candidate, an unavailable region surfaces as a clean ApiError."""

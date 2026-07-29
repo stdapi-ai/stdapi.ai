@@ -155,7 +155,7 @@ Common issues when deploying stdapi.ai for the first time. If your error isn't l
 ??? failure "`408`/`504` — request times out mid-stream on long generations"
     A slow or hung generation exceeded a timeout somewhere between the model and the client.
 
-    - Check [`AI_RESPONSE_TIMEOUT`](operations_configuration.md#ai-response-timeout) — it closes stalled upstream model connections; raise it for workloads with long-running generations.
+    - Check [`AI_RESPONSE_TIMEOUT`](operations_configuration.md#ai-response-timeout) — it closes stalled upstream model connections; raise it for workloads with long-running generations. When it fires, the request fails with a `503` and is **not** retried in another region: the model already ran and AWS bills it either way, so a failover would pay twice for the same generation.
     - Check the Terraform module's `alb_idle_timeout` (default: 3600 s) — if you lowered it, or front the deployment with your own load balancer at a shorter idle timeout, streaming responses can be cut off mid-flight. See [ALB Resilience](operations_resilience.md#alb-resilience).
 
 ### AWS error → HTTP status mapping
