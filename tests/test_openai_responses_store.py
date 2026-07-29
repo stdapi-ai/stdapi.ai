@@ -728,6 +728,14 @@ class TestStoredResponseRoutes:
         response = client.get("/v1/responses/resp-sess-1/input_items")
         assert response.status_code == 404
 
+    def test_input_items_non_mapping_entry_is_not_found(
+        self, client: TestClient, store: _StubStore
+    ) -> None:
+        """A stored input list with a non-mapping entry 404s instead of 500ing."""
+        store.documents["resp-sess-1"] = {"input": ["not-a-dict"], "response": {}}
+        response = client.get("/v1/responses/resp-sess-1/input_items")
+        assert response.status_code == 404
+
     def test_retrieve_rejects_stream_query_param(
         self, client: TestClient, store: _StubStore
     ) -> None:

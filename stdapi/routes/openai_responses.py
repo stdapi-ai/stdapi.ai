@@ -1112,7 +1112,7 @@ async def list_response_input_items(
         _malformed_stored_document(response_id, "'response' is not a JSON object")
     try:
         items = _listable_input_items(_normalized_input_items(stored.get("input")))
-    except (KeyError, TypeError) as error:
+    except (KeyError, TypeError, ValueError) as error:
         _malformed_stored_document(response_id, str(error))
     if order == "desc":
         items.reverse()
