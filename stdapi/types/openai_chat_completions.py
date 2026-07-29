@@ -1294,7 +1294,10 @@ class CompletionCreateParams(BaseModelRequestWithExtra):
         self._validate_no_custom_tools()
         self._validate_stop_sequences()
         for key in self._UNSUPPORTED & self.model_fields_set:
-            raise UnsupportedParameterError(key)
+            # `null`/`false` request the supported default behavior, like omission
+            value = getattr(self, key)
+            if value is not None and value is not False:
+                raise UnsupportedParameterError(key)
         return self
 
     def _validate_audio_modalities(self) -> None:

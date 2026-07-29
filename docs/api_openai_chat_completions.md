@@ -74,7 +74,7 @@ Generate conversational AI responses with Amazon Bedrock foundation models—inc
 | `thinking_budget` (Qwen API-compatible)  |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Thinking token budget (accepted for all reasoning models)      |
 | `thinking` (Moonshot API-compatible)     |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Thinking config: {"type": "enabled"/"disabled"} (accepted for all models) |
 | `n` (multiple choices)                   |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Generate multiple responses, not supported with streaming       |
-| `logprobs`                               | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Rejected with `400`; `top_logprobs` (above) remains usable      |
+| `logprobs`                               | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Rejected with `400` when enabled (`false`/`null` accepted, as they request the default behavior); `top_logprobs` (above) remains usable |
 | `prediction`                             | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Static predicted output content                                 |
 | `response_format`                        |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | JSON object or JSON schema output                               |
 | `verbosity`                              | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Model verbosity                                                 |
