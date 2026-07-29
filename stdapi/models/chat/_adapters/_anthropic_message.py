@@ -1310,23 +1310,23 @@ def _make_message_start_event(message_id: str, model_id: str) -> JSONServerSentE
     Returns:
         JSON server-sent event.
     """
-    return JSONServerSentEvent(
-        data=log_response_params(
-            RawMessageStartEvent(
-                type="message_start",
-                message=Message(
-                    id=message_id,
-                    type="message",
-                    role="assistant",
-                    content=[],
-                    model=model_id,
-                    stop_reason=None,
-                    usage=Usage(input_tokens=0, output_tokens=0),
-                ),
-            ).model_dump(mode="json", exclude_none=True)
+    data = RawMessageStartEvent(
+        type="message_start",
+        message=Message(
+            id=message_id,
+            type="message",
+            role="assistant",
+            content=[],
+            model=model_id,
+            stop_reason=None,
+            usage=Usage(input_tokens=0, output_tokens=0),
         ),
-        event="message_start",
-    )
+    ).model_dump(mode="json", exclude_none=True)
+    # Anthropic always includes `stop_reason`/`stop_sequence` (null in message_start);
+    # exclude_none drops them.
+    data["message"].setdefault("stop_reason", None)
+    data["message"].setdefault("stop_sequence", None)
+    return JSONServerSentEvent(data=log_response_params(data), event="message_start")
 
 
 def _make_block_stop_event(index: int) -> JSONServerSentEvent:

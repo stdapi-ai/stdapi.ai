@@ -142,6 +142,27 @@ async def test_message_delta_always_carries_stop_sequence_key() -> None:
     assert delta_data["delta"]["stop_sequence"] is None
 
 
+async def test_message_start_always_carries_stop_reason_and_sequence_keys() -> None:
+    """``message_start.message`` always includes ``stop_reason``/``stop_sequence``.
+
+    Anthropic's wire format serializes both as explicit ``null`` in
+    ``message_start``, but exclude_none drops them by default.
+    """
+    pairs = await _collect(
+        [
+            {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "hi"}}},
+            {"contentBlockStop": {"contentBlockIndex": 0}},
+            {"messageStop": {"stopReason": "end_turn"}},
+        ]
+    )
+    (start_data,) = [data for event, data in pairs if event == "message_start"]
+    message = start_data["message"]
+    assert "stop_reason" in message
+    assert message["stop_reason"] is None
+    assert "stop_sequence" in message
+    assert message["stop_sequence"] is None
+
+
 async def test_redacted_thinking_delta_is_not_dropped() -> None:
     """A ``reasoningContent.redactedContent`` delta yields a real block.
 
