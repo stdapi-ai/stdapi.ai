@@ -98,7 +98,7 @@ class _PollyExtraParams(BaseModelResponse):
     """Supported extra parameters for Polly."""
 
     LanguageCode: str | None = None
-    LexiconNames: str | None = None
+    LexiconNames: list[str] | None = None
     SampleRate: int | None = None
 
 

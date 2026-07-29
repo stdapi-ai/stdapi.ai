@@ -13,6 +13,7 @@ from stdapi.models import EXTRA_MODELS
 from stdapi.models.audio import amazon_polly, get_audio_model
 from stdapi.models.audio.amazon_polly import (
     _engine_voice_regions,
+    _PollyExtraParams,
     _select_voice,
     initialize_polly_models,
 )
@@ -399,6 +400,17 @@ class TestSelectVoiceDeterminism:
         monkeypatch.setattr(amazon_polly, "_detect_language", _detect)
 
         assert await _select_voice("Hello", "alloy", "neural") == ("Joanna", "en-US")
+
+
+class TestPollyExtraParamsLexiconNames:
+    """_PollyExtraParams.LexiconNames: accepts and forwards the documented list form."""
+
+    def test_list_value_is_accepted_and_dumps_as_a_list(self) -> None:
+        """The documented ``["MyLexicon"]`` list form validates and round-trips."""
+        extra = _PollyExtraParams(LexiconNames=["MyCustomLexicon"])
+        assert extra.model_dump(exclude_none=True) == {
+            "LexiconNames": ["MyCustomLexicon"]
+        }
 
 
 class _StubComprehendClient:
