@@ -8,6 +8,7 @@ from stdapi.api_providers import (
     SET_LOG_FIELDS_BY_TAG,
     SET_RESPONSE_HEADERS_BY_TAG,
 )
+from stdapi.monitoring import REQUEST_ID
 
 if TYPE_CHECKING:
     from stdapi.types import JsonMapping
@@ -51,6 +52,7 @@ def _format_error(
             "type": _STATUS.get(status, "invalid_request_error"),
             "message": message,
         },
+        "request_id": REQUEST_ID.get(""),
     }, 529 if status == 503 else status
 
 

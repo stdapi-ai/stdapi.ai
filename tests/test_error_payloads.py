@@ -88,7 +88,8 @@ def _assert_anthropic_error_shape(body: dict[str, Any]) -> dict[str, Any]:
             "error": {
                 "type": <str>,
                 "message": <str>,
-            }
+            },
+            "request_id": <str>,
         }
 
     Args:
@@ -97,10 +98,11 @@ def _assert_anthropic_error_shape(body: dict[str, Any]) -> dict[str, Any]:
     Returns:
         The inner ``error`` dict for further assertions.
     """
-    assert set(body.keys()) == {"type", "error"}, (
+    assert set(body.keys()) == {"type", "error", "request_id"}, (
         f"Unexpected top-level keys: {body.keys()}"
     )
     assert body["type"] == "error"
+    assert isinstance(body["request_id"], str)
     err = body["error"]
     assert set(err.keys()) == {"type", "message"}, (
         f"Unexpected error keys: {err.keys()}"
@@ -179,6 +181,17 @@ class TestFormatErrorFunctions:
         body, returned_status = cohere_format_error(status, "boom")
         assert _assert_cohere_error_shape(body) == "boom"
         assert returned_status == status
+
+    def test_anthropic_format_error_includes_body_request_id(self) -> None:
+        """`_format_error` echoes the current request ID as a top-level ``request_id`` field."""
+        from stdapi.monitoring import REQUEST_ID  # noqa: PLC0415
+
+        token = REQUEST_ID.set("req_test123")
+        try:
+            body, _ = anthropic_format_error(404, "boom")
+        finally:
+            REQUEST_ID.reset(token)
+        assert body["request_id"] == "req_test123"
 
 
 class TestOpenaiErrorPayloads:
