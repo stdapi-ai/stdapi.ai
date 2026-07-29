@@ -756,6 +756,19 @@ class ApplyPatchTool(BaseModelRequest):
     )
 
 
+# Ref: openai.types.responses.tool.ProgrammaticToolCalling
+class ProgrammaticToolCalling(BaseModelRequest):
+    """Lets the model call other tools from generated code.
+
+    Accepted and dropped on Bedrock Converse models (the model calls tools
+    directly); forwarded as-is to Bedrock Mantle models.
+    """
+
+    type: Literal["programmatic_tool_calling"] = Field(
+        description="Programmatic tool calling type."
+    )
+
+
 # Ref: openai.types.responses.tool.Tool
 Tool = Annotated[
     FunctionTool
@@ -772,7 +785,8 @@ Tool = Annotated[
     | NamespaceTool
     | ToolSearchTool
     | WebSearchPreviewTool
-    | ApplyPatchTool,
+    | ApplyPatchTool
+    | ProgrammaticToolCalling,
     Field(discriminator="type"),
 ]
 
@@ -848,6 +862,19 @@ class ToolChoiceShell(BaseModelRequest):
     type: Literal["shell"] = Field(description="Shell tool.")
 
 
+# Ref: openai.types.responses.response_create_params.ToolChoiceSpecificProgrammaticToolCallingParam
+class ToolChoiceProgrammaticToolCalling(BaseModelRequest):
+    """Forces the model to use programmatic tool calling.
+
+    Accepted and dropped on Bedrock Converse models (the default tool choice
+    applies); forwarded as-is to Bedrock Mantle models.
+    """
+
+    type: Literal["programmatic_tool_calling"] = Field(
+        description="Programmatic tool calling."
+    )
+
+
 #: Full tool choice union: literal string or structured object.
 ToolChoice = (
     ToolChoiceLiteral
@@ -858,6 +885,7 @@ ToolChoice = (
     | ToolChoiceCustom
     | ToolChoiceApplyPatch
     | ToolChoiceShell
+    | ToolChoiceProgrammaticToolCalling
 )
 
 
@@ -1710,6 +1738,38 @@ class AdditionalToolsInput(BaseModelRequest):
     id: str | None = Field(default=None, description="The unique ID of the item.")
 
 
+# Ref: openai.types.responses.response_input_item.Program
+class ProgramInput(BaseModelRequest):
+    """A program emitted by programmatic tool calling (as input item)."""
+
+    id: str = Field(description="The unique ID of the program.")
+    call_id: str = Field(
+        description="An identifier used to map this program to its output."
+    )
+    code: str = Field(description="The code executed by the program.")
+    fingerprint: str = Field(description="The fingerprint of the program.")
+    type: Literal["program"] = Field(
+        description="The type of the item. Always `program`."
+    )
+
+
+# Ref: openai.types.responses.response_input_item.ProgramOutput
+class ProgramOutputInput(BaseModelRequest):
+    """The result of a program execution (as input item)."""
+
+    id: str = Field(description="The unique ID of the program output.")
+    call_id: str = Field(
+        description="The call ID, used to map this output to its program."
+    )
+    result: str = Field(description="The result of the program execution.")
+    status: Literal["completed", "incomplete"] = Field(
+        description="The status of the program execution."
+    )
+    type: Literal["program_output"] = Field(
+        description="The type of the item. Always `program_output`."
+    )
+
+
 # Ref: openai.types.responses.response_input_param.CompactionTrigger
 class CompactionTrigger(BaseModelRequest):
     """Compacts the current context. Must be the final input item."""
@@ -1749,6 +1809,8 @@ ResponseInputItem = (
     | CustomToolCallInput
     | CustomToolCallOutput
     | AdditionalToolsInput
+    | ProgramInput
+    | ProgramOutputInput
     | CompactionTrigger
     | CompactionItemParam
     | ItemReference
@@ -2820,6 +2882,32 @@ class AdditionalTools(BaseModelResponse):
     )
 
 
+# Ref: openai.types.responses.response_output_item.Program
+class Program(BaseModelResponse):
+    """A program emitted by programmatic tool calling."""
+
+    id: str = Field(description="Program ID.")
+    call_id: str = Field(description="Identifier mapping this program to its output.")
+    code: str = Field(description="Code executed by the program.")
+    fingerprint: str = Field(description="Program fingerprint.")
+    type: Literal["program"] = Field(description="Item type. Always `program`.")
+
+
+# Ref: openai.types.responses.response_output_item.ProgramOutput
+class ProgramOutput(BaseModelResponse):
+    """The result of a program execution."""
+
+    id: str = Field(description="Program output ID.")
+    call_id: str = Field(description="Identifier mapping this output to its program.")
+    result: str = Field(description="Result of the program execution.")
+    status: Literal["completed", "incomplete"] = Field(
+        description="Status of the program execution."
+    )
+    type: Literal["program_output"] = Field(
+        description="Item type. Always `program_output`."
+    )
+
+
 # Ref: openai.types.responses.response_output_item.ResponseOutputItem
 ResponseOutputItem = Annotated[
     ResponseOutputMessage
@@ -2847,7 +2935,9 @@ ResponseOutputItem = Annotated[
     | McpApprovalResponseOutput
     | ResponseCustomToolCall
     | ResponseCustomToolCallOutputItem
-    | AdditionalTools,
+    | AdditionalTools
+    | Program
+    | ProgramOutput,
     Field(discriminator="type"),
 ]
 
@@ -3933,6 +4023,8 @@ ResponseItem = (
     | McpCall
     | ResponseCustomToolCallItem
     | ResponseCustomToolCallOutputItem
+    | Program
+    | ProgramOutput
 )
 
 

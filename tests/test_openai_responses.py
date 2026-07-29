@@ -1764,6 +1764,41 @@ class TestUnsupportedFeatures:
         assert response.status == "completed"
         assert response.output_text
 
+    @pytest.mark.parametrize(
+        "extra",
+        [
+            {"tools": [{"type": "programmatic_tool_calling"}]},
+            {"tool_choice": {"type": "programmatic_tool_calling"}},
+        ],
+        ids=["tool", "tool_choice"],
+    )
+    def test_programmatic_tool_calling_accepted_and_dropped(
+        self,
+        openai_client: OpenAI,
+        responses_model: str,
+        use_official_api: bool,
+        extra: dict[str, object],
+    ) -> None:
+        """Programmatic tool calling is accepted and dropped on Converse models.
+
+        Validates:
+            - The request succeeds and the model answers directly
+            - No program/program_output items are emitted
+        """
+        if use_official_api:
+            pytest.skip(
+                "official API serves programmatic tool calling on capable models"
+            )
+        response = openai_client.responses.create(  # type: ignore[call-overload]
+            model=responses_model, input="Reply with OK.", **extra
+        )
+        assert response.status == "completed"
+        assert not [
+            item
+            for item in response.output
+            if item.type in ("program", "program_output")
+        ]
+
     @pytest.mark.parametrize(("param", "value"), [("truncation", "auto")])
     def test_unsupported_param_returns_400(
         self,

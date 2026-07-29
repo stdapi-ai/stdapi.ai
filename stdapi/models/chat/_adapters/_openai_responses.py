@@ -214,6 +214,8 @@ _IMAGE_MAGIC_FORMATS: tuple[tuple[bytes, ImageFormatType], ...] = (
 )
 
 
+
+
 def _map_tool_choice(tool_choice: ToolChoice | None) -> ToolChoiceTypeDef | None:
     """Convert a Responses API tool_choice to a Bedrock ToolChoiceTypeDef.
 
@@ -222,9 +224,10 @@ def _map_tool_choice(tool_choice: ToolChoice | None) -> ToolChoiceTypeDef | None
 
     Returns:
         Bedrock toolChoice, or ``None`` when no constraint applies (``"none"`` is
-        handled upstream by omitting the tool configuration altogether; built-in
-        ``ToolChoiceTypes`` variants like ``file_search`` are not natively
-        supported by Bedrock and are therefore ignored).  ``allowed_tools`` is
+        handled upstream by omitting the tool configuration altogether; object
+        choices without a Bedrock equivalent, such as ``ToolChoiceTypes``
+        variants like ``file_search`` or ``programmatic_tool_calling``, are
+        ignored and leave the model with its default choice).  ``allowed_tools`` is
         approximated: ``required`` with exactly one allowed function tool forces
         that tool, ``required`` with several forces any tool, ``auto`` maps to
         Bedrock auto.
@@ -252,7 +255,7 @@ def _map_tool_choice(tool_choice: ToolChoice | None) -> ToolChoiceTypeDef | None
         case str():  # pragma: no cover — Pydantic filters unknown literals
             msg = f"Unsupported tool_choice literal: {tool_choice!r}"
             raise ApiError(msg)
-        case _:  # pragma: no cover — ToolChoiceTypes variants unsupported by Bedrock
+        case _:  # Object choices unsupported by Bedrock (built-in types, shell, apply_patch, programmatic tool calling)
             return None
 
 
@@ -310,8 +313,9 @@ def _build_tool_config(
 
     Maps ``FunctionTool`` entries to Bedrock toolSpec and OpenAI integrated
     tool types (code_interpreter, web_search, image_generation) to their
-    Bedrock equivalents.  Tool types without a backend equivalent are
-    accepted for compatibility and dropped.
+    Bedrock equivalents.  Tool types without a backend equivalent, such as
+    ``programmatic_tool_calling``, are accepted for compatibility and dropped;
+    the model then calls the declared function tools directly.
 
     When ``tool_choice="none"``, no tool config is returned so that the model
     cannot call any tools.

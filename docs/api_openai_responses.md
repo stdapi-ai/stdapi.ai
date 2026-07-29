@@ -55,6 +55,7 @@ Generate model responses with Amazon Bedrock foundation models through an OpenAI
 | Echoed output items (message, reasoning, refusal)                     |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Replayed to the model; refusal parts preserved; unknown upstream fields tolerated |
 | Echoed `custom_tool_call` / `image_generation_call`                   |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Replayed as tool calls (freeform input wrapped as `{"input": ...}`; image results attached) |
 | Hosted-tool call items (`web_search_call`, `file_search_call`, `code_interpreter_call`, `computer_call`, `tool_search_call`, shell/apply-patch/MCP items, `compaction_trigger`) | :material-check-circle:{ .success role="img" aria-label="Supported" } | Input-history tolerance only: echoed items are accepted and dropped on replay (no Bedrock equivalent). Whether each *tool* can actually be used is listed under Tool Calling below |
+| Echoed `program` / `program_output` items                             |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Input-history tolerance only: accepted and dropped on replay (no Bedrock equivalent) |
 | `item_reference`                                                      |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Accepted and dropped on replay                                               |
 | **Tool Calling**                                                      |                                         |                                                                              |
 | Function tools (`type: "function"`)                                   |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Full schema mapping to Bedrock toolSpec                                      |
@@ -70,6 +71,7 @@ Generate model responses with Amazon Bedrock foundation models through an OpenAI
 | `mcp` tool                                                            |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | No Converse equivalent — accepted and dropped; forwarded upstream on Bedrock Mantle native models |
 | `local_shell` / `shell` tools                                         | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Accepted and dropped; no Bedrock equivalent                                  |
 | `custom` / `namespace` / `tool_search` / `apply_patch` tools          | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } | Accepted and dropped; no Bedrock equivalent                                  |
+| `programmatic_tool_calling` tool / `tool_choice`                      |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | No Converse equivalent — accepted and dropped, the model calls the declared tools directly (the `tool_choice` degrades to the model's default choice); forwarded upstream on Bedrock Mantle native models |
 | **Generation Control**                                                |                                         |                                                                              |
 | `max_output_tokens`                                                   |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Maps to Bedrock `maxTokens`                                                  |
 | `temperature`                                                         |      :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | 0–2 range; mapped to Bedrock inference config                                |
@@ -172,6 +174,22 @@ Define function tools and submit results in a round-trip conversation.
     `custom`, `namespace`, `tool_search`, and `apply_patch` tools have no backend
     equivalent: they are **accepted for compatibility and dropped** from the tool
     configuration, so the model cannot call them.
+
+!!! warning "Programmatic Tool Calling"
+    The `programmatic_tool_calling` tool — and `tool_choice: {"type": "programmatic_tool_calling"}` —
+    has no Bedrock Converse equivalent: the tool is **accepted and dropped** from
+    the tool configuration, and the `tool_choice` degrades to the model's default
+    choice. The request still succeeds and the model calls the declared tools
+    **directly**, one round trip at a time, instead of orchestrating them from
+    generated code, so no `program` or `program_output` items are returned.
+    Tools restricted to `allowed_callers: ["programmatic"]` remain exposed as
+    regular directly-callable tools. Bedrock Mantle native models receive the
+    parameters unchanged and serve programmatic tool calling themselves when the
+    model supports it.
+
+    Echoed `program` and `program_output` history items are also accepted (and
+    dropped on replay) so conversations recorded against the real API can be
+    replayed; the paired `function_call` items carry the actual tool traffic.
 
 **Step 1 — Request a tool call:**
 
