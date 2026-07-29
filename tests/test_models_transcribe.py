@@ -159,8 +159,18 @@ class _StubTranscribeClient:
 
     async def get_transcription_job(self, **params: Any) -> dict[str, Any]:  # noqa: ANN401
         """Record the poll and report the job as completed."""
-        self.polled.append(params["TranscriptionJobName"])
-        return {"TranscriptionJob": {"TranscriptionJobStatus": "COMPLETED"}}
+        job_name = params["TranscriptionJobName"]
+        self.polled.append(job_name)
+        return {
+            "TranscriptionJob": {
+                "TranscriptionJobStatus": "COMPLETED",
+                "Transcript": {
+                    "TranscriptFileUri": (
+                        f"https://s3.eu-west-1.amazonaws.com/eu-bucket/{job_name}/output.json"
+                    )
+                },
+            }
+        }
 
 
 def _client_error(code: str, message: str = "x") -> ClientError:
@@ -445,7 +455,7 @@ class TestServedRegionStickiness:
         )
 
         async def _fake_results(
-            s3_bucket: str, _job_id: str, _response_format: str
+            s3_bucket: str, _output_key: str, _subtitle_key: str | None
         ) -> dict[str, Any]:
             assert s3_bucket == "eu-bucket"
             return {
@@ -480,6 +490,75 @@ class TestServedRegionStickiness:
         assert client_regions == ["eu-west-1"]
         assert client.polled == ["job2"]
         assert usage_regions == ["eu-west-1"]
+
+
+class TestTranscriptOutputKeys:
+    """_wait_for_transcription_completion: output keys come from the job description."""
+
+    @staticmethod
+    def _client(transcript: dict[str, str], **extra: Any) -> Any:  # noqa: ANN401
+        """Return a stub client reporting a completed job with *transcript*."""
+
+        class _Client:
+            @staticmethod
+            async def get_transcription_job(**_params: Any) -> dict[str, Any]:  # noqa: ANN401
+                return {
+                    "TranscriptionJob": {
+                        "TranscriptionJobStatus": "COMPLETED",
+                        "Transcript": transcript,
+                        **extra,
+                    }
+                }
+
+        return _Client()
+
+    async def test_redacted_uri_wins_over_plain_transcript(self) -> None:
+        """Content redaction renames the output; the redacted key must be read.
+
+        Transcribe prepends ``redacted-`` to the requested ``OutputKey`` file name and
+        reports it as ``RedactedTranscriptFileUri``, so rebuilding the key from the job
+        ID would read a non-existent object.
+        """
+        client = self._client(
+            {
+                "RedactedTranscriptFileUri": (
+                    "https://s3.us-east-1.amazonaws.com/b/tmp/job/redacted-output.json"
+                )
+            }
+        )
+
+        (
+            output_key,
+            subtitle_key,
+        ) = await amazon_transcribe._wait_for_transcription_completion(  # noqa: SLF001
+            client, "job", "b"
+        )
+
+        assert output_key == "tmp/job/redacted-output.json"
+        assert subtitle_key is None
+
+    async def test_subtitle_uri_is_returned(self) -> None:
+        """A requested subtitle file is located from ``Subtitles.SubtitleFileUris``."""
+        client = self._client(
+            {
+                "TranscriptFileUri": "https://s3.eu-west-1.amazonaws.com/b/tmp/job/out.json"
+            },
+            Subtitles={
+                "SubtitleFileUris": [
+                    "https://s3.eu-west-1.amazonaws.com/b/tmp/job/out.srt"
+                ]
+            },
+        )
+
+        (
+            output_key,
+            subtitle_key,
+        ) = await amazon_transcribe._wait_for_transcription_completion(  # noqa: SLF001
+            client, "job", "b"
+        )
+
+        assert output_key == "tmp/job/out.json"
+        assert subtitle_key == "tmp/job/out.srt"
 
 
 class TestNoCandidateRegions:

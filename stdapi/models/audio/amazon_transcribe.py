@@ -501,14 +501,36 @@ def _handle_transcription_error(language: str | None) -> Generator[None]:
         raise ApiError(str(error)) from error
 
 
+def _s3_key_from_uri(uri: str, s3_bucket: str) -> str:
+    """Return the S3 object key from a Transcribe output URI.
+
+    Args:
+        uri: ``https://s3.<region>.amazonaws.com/<bucket>/<key>`` output URI.
+        s3_bucket: Bucket the job wrote to.
+
+    Returns:
+        The object key.
+    """
+    return uri.split(f"/{s3_bucket}/", 1)[-1]
+
+
 async def _wait_for_transcription_completion(
-    transcribe: TranscribeServiceClient, job_id: str
-) -> None:
-    """Wait for transcription job to complete.
+    transcribe: TranscribeServiceClient, job_id: str, s3_bucket: str
+) -> tuple[str, str | None]:
+    """Wait for transcription job to complete and return its output keys.
+
+    Content redaction renames the output: Transcribe prepends ``redacted-`` to the
+    requested ``OutputKey`` file name and reports it as ``RedactedTranscriptFileUri``
+    instead of ``TranscriptFileUri``. Reading the keys back from the job description
+    keeps this independent of the naming convention.
 
     Args:
         transcribe: Transcribe service client
         job_id: Transcription job ID
+        s3_bucket: Bucket the job writes its output to
+
+    Returns:
+        The transcript object key, and the subtitle object key when one was requested.
 
     Raises:
         ApiError: If transcription fails
@@ -523,29 +545,35 @@ async def _wait_for_transcription_completion(
             raise ApiError(job["FailureReason"])
         await sleep(0.5)
 
+    transcript = job["Transcript"]
+    subtitle_uris = job.get("Subtitles", {}).get("SubtitleFileUris")
+    return (
+        _s3_key_from_uri(
+            transcript.get("RedactedTranscriptFileUri")
+            or transcript["TranscriptFileUri"],
+            s3_bucket,
+        ),
+        _s3_key_from_uri(subtitle_uris[0], s3_bucket) if subtitle_uris else None,
+    )
+
 
 async def _get_transcription_results(
-    s3_bucket: str, job_id: str, response_format: str
+    s3_bucket: str, s3_output_key: str, subtitle_key: str | None
 ) -> TranscribeJobData:
     """Get transcription results from S3.
 
     Args:
         s3_bucket: S3 bucket name
-        job_id: Job identifier
-        response_format: Response format
+        s3_output_key: Transcript object key
+        subtitle_key: Subtitle object key, when a subtitle format was requested
 
     Returns:
         Transcription data
     """
-    s3_prefix = SETTINGS.aws_s3_tmp_prefix
-    s3_output_key = f"{s3_prefix}{job_id}/output.json"
-
-    if response_format in SUBTITLE_FORMATS:
+    if subtitle_key:
         data, subtitle = await gather(
             get_text_from_s3(s3_bucket, s3_output_key),
-            get_text_from_s3(
-                s3_bucket, f"{s3_prefix}{job_id}/output.{response_format}"
-            ),
+            get_text_from_s3(s3_bucket, subtitle_key),
         )
         transcription_data: TranscribeJobData = from_json(data)["results"]
         transcription_data["subtitle_content"] = subtitle
@@ -865,19 +893,18 @@ class AudioModel(AudioModelBase[None, None]):
             # Track resources for cleanup
             to_cleanup = (transcribe, request_id)
             track_temporary_s3_objects(
-                s3_bucket,
-                f"{s3_prefix}{request_id}/output.json",
-                f"{s3_prefix}{request_id}/.write_access_check_file.temp",
+                s3_bucket, f"{s3_prefix}{request_id}/.write_access_check_file.temp"
             )
-            if response_format in SUBTITLE_FORMATS:
-                track_temporary_s3_objects(
-                    s3_bucket, f"{s3_prefix}{request_id}/output.{response_format}"
-                )
 
             # Wait for completion and get results
-            await _wait_for_transcription_completion(transcribe, request_id)
+            s3_output_key, subtitle_key = await _wait_for_transcription_completion(
+                transcribe, request_id, s3_bucket
+            )
+            track_temporary_s3_objects(
+                s3_bucket, s3_output_key, *filter(None, (subtitle_key,))
+            )
             return await _get_transcription_results(
-                s3_bucket, request_id, response_format
+                s3_bucket, s3_output_key, subtitle_key
             )
 
         finally:
