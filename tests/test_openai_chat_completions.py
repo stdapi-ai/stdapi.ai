@@ -2987,6 +2987,25 @@ class TestPromptTokensDetailsGate:
         assert usage.prompt_tokens_details is not None
         assert usage.prompt_tokens_details.cached_tokens == 4
 
+    def test_extract_stream_usage_reports_cache_write_tokens(self) -> None:
+        """Streaming reports cache writes like the non-streaming response does."""
+        event: dict[str, Any] = {
+            "metadata": {
+                "usage": {
+                    "inputTokens": 10,
+                    "outputTokens": 5,
+                    "cacheReadInputTokens": 0,
+                    "cacheWriteInputTokens": 7,
+                }
+            }
+        }
+        usage = extract_stream_usage(event)  # type: ignore[arg-type]
+        assert usage is not None
+        assert usage.prompt_tokens == 17
+        assert usage.prompt_tokens_details is not None
+        assert usage.prompt_tokens_details.cached_tokens == 0
+        assert usage.prompt_tokens_details.cache_write_tokens == 7
+
 
 #: Stubbed Bedrock Converse stream for one text turn: a delta, the stop, then usage metadata.
 _STUB_STREAM_EVENTS: list[dict[str, Any]] = [

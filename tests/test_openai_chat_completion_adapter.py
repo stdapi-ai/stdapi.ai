@@ -11,6 +11,7 @@ from stdapi.config import SETTINGS
 from stdapi.models.chat._adapters._openai_chat_completion import (
     _LEGACY_FUNCTION,
     extract_output_text,
+    format_response,
     format_stream,
     map_messages,
     translate_request,
@@ -22,6 +23,7 @@ from stdapi.types.openai_chat_completions import (
     ChatCompletionToolMessageParam,
     ChatCompletionUserMessageParam,
     CompletionCreateParams,
+    CompletionUsage,
 )
 
 if TYPE_CHECKING:
@@ -153,6 +155,86 @@ class TestMapMessagesRoleAlternation:
         )
         assert system_blocks == [{"text": "rules"}]
         assert messages == [{"role": "user", "content": [{"text": "a"}, {"text": "b"}]}]
+
+
+class TestFormatResponseCacheWriteTokens:
+    """Cache-write tokens are reported in ``prompt_tokens_details``."""
+
+    @staticmethod
+    def _converse_response(cache_read: int, cache_write: int) -> dict[str, Any]:
+        """Build a minimal Converse response with the given cache token counts.
+
+        Args:
+            cache_read: ``cacheReadInputTokens`` value.
+            cache_write: ``cacheWriteInputTokens`` value.
+
+        Returns:
+            A Converse response payload.
+        """
+        return {
+            "output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}},
+            "stopReason": "end_turn",
+            "usage": {
+                "inputTokens": 10,
+                "outputTokens": 5,
+                "cacheReadInputTokens": cache_read,
+                "cacheWriteInputTokens": cache_write,
+            },
+        }
+
+    async def _usage(
+        self, monkeypatch: pytest.MonkeyPatch, cache_read: int, cache_write: int
+    ) -> CompletionUsage:
+        """Format a response with the given cache token counts and return its usage.
+
+        Args:
+            monkeypatch: Pytest monkeypatch fixture.
+            cache_read: ``cacheReadInputTokens`` value.
+            cache_write: ``cacheWriteInputTokens`` value.
+
+        Returns:
+            The usage of the formatted completion.
+        """
+        monkeypatch.setattr(SETTINGS, "log_request_params", False)
+        token = _LEGACY_FUNCTION.set(False)
+        try:
+            completion = await format_response(
+                completion_id="chatcmpl-1",
+                created=0,
+                model_id="model",
+                responses=[self._converse_response(cache_read, cache_write)],  # type: ignore[list-item]
+                service_tier=None,
+                audio_params=None,
+                modalities=["text"],
+            )
+        finally:
+            _LEGACY_FUNCTION.reset(token)
+        assert completion.usage is not None
+        return completion.usage
+
+    async def test_cache_write_tokens_are_reported(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A positive cacheWriteInputTokens is exposed as cache_write_tokens."""
+        usage = await self._usage(monkeypatch, cache_read=0, cache_write=7)
+        assert usage.prompt_tokens_details is not None
+        assert usage.prompt_tokens_details.cache_write_tokens == 7
+
+    async def test_cache_read_and_write_tokens_are_reported(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Both cache buckets are reported together."""
+        usage = await self._usage(monkeypatch, cache_read=3, cache_write=7)
+        assert usage.prompt_tokens_details is not None
+        assert usage.prompt_tokens_details.cached_tokens == 3
+        assert usage.prompt_tokens_details.cache_write_tokens == 7
+
+    async def test_details_omitted_without_cache_usage(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No cache usage leaves prompt_tokens_details unset."""
+        usage = await self._usage(monkeypatch, cache_read=0, cache_write=0)
+        assert usage.prompt_tokens_details is None
 
 
 class TestLegacyFunctionDetection:

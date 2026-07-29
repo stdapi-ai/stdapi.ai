@@ -273,13 +273,14 @@ Cached token usage is reported in the response:
     "completion_tokens": 100,
     "total_tokens": 1600,
     "prompt_tokens_details": {
-      "cached_tokens": 1200
+      "cached_tokens": 1200,
+      "cache_write_tokens": 300
     }
   }
 }
 ```
 
-In this example, 1,200 tokens were retrieved from cache, with only 300 tokens requiring processing.
+In this example, 1,200 tokens were retrieved from cache and the remaining 300 tokens were processed and written to the cache. `cache_write_tokens` (an extra field beyond the OpenAI API) reports the tokens written to the cache when the model reports them, on both non-streaming responses and the trailing `stream_options.include_usage` chunk; it is omitted when no cache write occurred.
 
 ### System Prompt
 

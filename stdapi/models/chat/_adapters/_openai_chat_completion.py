@@ -954,6 +954,7 @@ async def format_response(
     usage = CompletionUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
     tts_tasks: dict[int, Task[Any]] = {}
     cached_tokens = 0
+    cache_write_tokens = 0
     legacy_function = _LEGACY_FUNCTION.get()
     for index, response in enumerate(responses):
         # OpenAI semantics: prompt_tokens covers the full prompt, cache buckets included.
@@ -964,6 +965,7 @@ async def format_response(
         )
         usage.completion_tokens += response["usage"]["outputTokens"]
         cached_tokens += cache_read
+        cache_write_tokens += cache_write
         message = response["output"]["message"]["content"]
         tool_calls, function_call = extract_tool_calls(
             message,
@@ -995,8 +997,10 @@ async def format_response(
             )
         )
     usage.total_tokens = usage.prompt_tokens + usage.completion_tokens
-    if cached_tokens:
-        usage.prompt_tokens_details = PromptTokensDetails(cached_tokens=cached_tokens)
+    if cached_tokens or cache_write_tokens:
+        usage.prompt_tokens_details = PromptTokensDetails(
+            cached_tokens=cached_tokens, cache_write_tokens=cache_write_tokens or None
+        )
 
     for index, tts_task in tts_tasks.items():
         choices[index].message.audio = await tts_task
