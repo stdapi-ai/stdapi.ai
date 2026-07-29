@@ -12,7 +12,7 @@ import pytest
 
 from stdapi import pricing
 from stdapi.config import SETTINGS
-from stdapi.models import ModelDetails
+from stdapi.models import MANTLE_SERVICE, ModelDetails
 from stdapi.pricing import Dimension, Price, PriceKey, Service
 from stdapi.routes import core_models
 
@@ -683,6 +683,38 @@ class TestModelPricingEndpoint:
         ]
         assert cards[0]["prices"] == []
         assert len(cards[1]["prices"]) == 3
+
+    def test_unpriced_mantle_model_reports_mantle_service(
+        self,
+        client: TestClient,
+        priced_catalog: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A Mantle-only model with zero priced rows still reports bedrock-mantle."""
+
+        async def _models() -> dict[str, ModelDetails]:
+            return {
+                "openai.gpt-oss-mantle": ModelDetails(
+                    id="openai.gpt-oss-mantle",
+                    name="GPT OSS",
+                    provider="OpenAI",
+                    service=MANTLE_SERVICE,
+                    input_modalities=["TEXT"],
+                    output_modalities=["TEXT"],
+                    regions=["us-east-1"],
+                )
+            }
+
+        monkeypatch.setattr(core_models, "get_all_models_details", _models)
+        response = client.get(
+            "/model_pricing",
+            params={"model": "openai.gpt-oss-mantle"},
+            headers=priced_catalog,
+        )
+        assert response.status_code == 200
+        (card,) = response.json()
+        assert card["prices"] == []
+        assert card["service"] == "bedrock-mantle"
 
     def test_default_tier_from_settings_with_fallback(
         self,

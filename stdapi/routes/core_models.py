@@ -584,6 +584,11 @@ async def model_pricing(
         default_tier, default_routings = _pricing_defaults(
             resolve_model_alias(model_id), details
         )
+        preferred_service = (
+            Service.BEDROCK_MANTLE
+            if details is not None and details.service == MANTLE_SERVICE
+            else Service.BEDROCK
+        )
         rows = model_prices(
             model_id,
             region=region,
@@ -593,11 +598,7 @@ async def model_pricing(
             routing=routing,  # type: ignore[arg-type]
             context=context,  # type: ignore[arg-type]
             variants=variants,
-            preferred_service=(
-                Service.BEDROCK_MANTLE
-                if details is not None and details.service == MANTLE_SERVICE
-                else Service.BEDROCK
-            ),
+            preferred_service=preferred_service,
         )
         if not all_prices:
             rows = select_effective_rows(
@@ -611,7 +612,7 @@ async def model_pricing(
         results.append(
             ModelPricing(
                 id=model_id,
-                service=rows[0][0].service.value if rows else Service.BEDROCK.value,
+                service=rows[0][0].service.value if rows else preferred_service.value,
                 default_tier=default_tier,
                 default_routings=default_routings,
                 prices=[
