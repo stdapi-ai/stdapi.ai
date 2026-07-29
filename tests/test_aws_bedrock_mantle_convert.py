@@ -779,6 +779,40 @@ class TestResponsesToChatRequestBranches:
             }
         ]
 
+    def test_parallel_function_calls_share_one_assistant_message(self) -> None:
+        """Consecutive ``function_call`` items merge into one assistant message."""
+        payload = {
+            "model": "m",
+            "input": [
+                {"role": "user", "content": "Hi"},
+                {
+                    "type": "function_call",
+                    "call_id": "call_a",
+                    "name": "f",
+                    "arguments": "{}",
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_b",
+                    "name": "g",
+                    "arguments": "{}",
+                },
+                {"type": "function_call_output", "call_id": "call_a", "output": "a"},
+                {"type": "function_call_output", "call_id": "call_b", "output": "b"},
+            ],
+        }
+        out = mantle_convert._responses_to_chat_request(payload)  # noqa: SLF001
+        assert [message["role"] for message in out["messages"]] == [
+            "user",
+            "assistant",
+            "tool",
+            "tool",
+        ]
+        assert [call["id"] for call in out["messages"][1]["tool_calls"]] == [
+            "call_a",
+            "call_b",
+        ]
+
     def test_function_call_output_item_becomes_tool_message(self) -> None:
         """A ``function_call_output`` input item becomes a ``tool`` message."""
         payload = {

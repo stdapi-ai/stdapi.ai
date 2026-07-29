@@ -1049,7 +1049,8 @@ def _responses_to_chat_request(payload: dict[str, Any]) -> dict[str, Any]:
         messages.append({"role": "user", "content": input_value})
     else:
         for item in input_value or []:
-            messages += _chat_messages_from_input_item(item)
+            for message in _chat_messages_from_input_item(item):
+                _append_chat_message(messages, message)
     out: dict[str, Any] = {"model": payload.get("model"), "messages": messages}
     out.update(_optional_fields(payload, _OPENAI_COMMON_FIELDS))
     if tokens := payload.get("max_output_tokens"):
@@ -1065,6 +1066,30 @@ def _responses_to_chat_request(payload: dict[str, Any]) -> dict[str, Any]:
     ) is not None:
         out["tool_choice"] = choice
     return out
+
+
+def _append_chat_message(
+    messages: list[dict[str, Any]], message: dict[str, Any]
+) -> None:
+    """Append a Chat Completions message, merging parallel tool calls.
+
+    Chat Completions requires an assistant ``tool_calls`` message to be
+    followed by one tool message per call, so the ``function_call`` items of
+    a same turn must share a single assistant message.
+
+    Args:
+        messages: Chat Completions messages, updated in place.
+        message: Message to append.
+    """
+    previous = messages[-1] if messages else {}
+    if (
+        message.get("tool_calls")
+        and previous.get("role") == "assistant"
+        and previous.get("tool_calls")
+    ):
+        previous["tool_calls"] += message["tool_calls"]
+    else:
+        messages.append(message)
 
 
 def _chat_messages_from_input_item(item: object) -> list[dict[str, Any]]:
