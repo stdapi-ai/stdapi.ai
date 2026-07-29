@@ -2490,9 +2490,12 @@ def _responses_chunk_events(
             "tool_choice": "auto",
             "tools": [],
         }
-        events.append(
-            _responses_event(state, "response.created", {"response": state.response})
-        )
+        events += [
+            _responses_event(state, "response.created", {"response": state.response}),
+            _responses_event(
+                state, "response.in_progress", {"response": state.response}
+            ),
+        ]
     if usage := chunk.get("usage"):
         state.usage = usage
     for choice in chunk.get("choices") or []:

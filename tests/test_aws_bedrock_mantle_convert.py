@@ -1328,6 +1328,7 @@ class TestChatToResponsesStream:
         )
         assert _names(events) == [
             "response.created",
+            "response.in_progress",
             "response.output_item.added",
             "response.content_part.added",
             "response.output_text.delta",
@@ -1346,6 +1347,18 @@ class TestChatToResponsesStream:
         assert seqs == list(range(len(events)))
         completed = _payloads(events)[-1]
         assert completed["response"]["usage"]["output_tokens"] == 5
+
+    async def test_in_progress_follows_created_with_same_response(self) -> None:
+        """``response.in_progress`` follows ``response.created`` as upstream does."""
+        events = await _collect(
+            mantle_convert.convert_stream(
+                "chat_completions", "responses", _agen(self._cc_chunks())
+            )
+        )
+        payloads = _payloads(events)
+        assert _names(events)[:2] == ["response.created", "response.in_progress"]
+        assert payloads[1]["response"]["id"] == payloads[0]["response"]["id"]
+        assert payloads[1]["response"]["status"] == "in_progress"
 
     async def test_stream_ending_without_usage_chunk_still_emits_completed(
         self,
