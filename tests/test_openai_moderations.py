@@ -657,6 +657,9 @@ def _stub_toxicity(
     batches: list[list[str]] = []
 
     class _StubComprehendClient:
+        async def detect_dominant_language(self, *, Text: str) -> dict[str, Any]:  # noqa: N803
+            return {"Languages": [{"LanguageCode": "en", "Score": 0.99}]}
+
         async def detect_toxic_content(
             self,
             *,
@@ -723,6 +726,9 @@ class TestComprehendModerationsRoute:
         toxic_indices = {2, 7, count - 1}
 
         class _StubComprehendClient:
+            async def detect_dominant_language(self, *, Text: str) -> dict[str, Any]:  # noqa: N803
+                return {"Languages": [{"LanguageCode": "en", "Score": 0.99}]}
+
             async def detect_toxic_content(
                 self,
                 *,
@@ -768,12 +774,16 @@ class TestComprehendModerationsRoute:
 
         assert response.status_code == 200, response.text
         (request_log,) = [w for w in written if w.get("type") == "request"]
-        (entry,) = request_log["usage"]
+        # One entry for the language-detection call, one for the toxicity call.
+        entries = {e["model"]: e for e in request_log["usage"]}
+        entry = entries["amazon.comprehend-toxicity"]
         assert entry["service"] == "comprehend"
-        assert entry["model"] == "amazon.comprehend-toxicity"
         assert entry["region"] == service_regions(SETTINGS.aws_comprehend_region)[0]
         # ceil(len("hi") / 100) = 1, below the 3-unit per-call minimum.
         assert entry["comprehend_units"] == 3
+        assert (
+            entries["amazon.comprehend-language-detection"]["service"] == "comprehend"
+        )
 
     def test_mixed_text_and_image_input_rejected_as_a_whole(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
@@ -893,6 +903,9 @@ class TestComprehendModerationsRoute:
         canned = {"bad": _TOXIC_RESULT, "ok": _CLEAN_RESULT}
 
         class _StubComprehendClient:
+            async def detect_dominant_language(self, *, Text: str) -> dict[str, Any]:  # noqa: N803
+                return {"Languages": [{"LanguageCode": "en", "Score": 0.99}]}
+
             async def detect_toxic_content(
                 self,
                 *,
@@ -1032,6 +1045,77 @@ class TestComprehendModerationsRoute:
         assert response.status_code == 200, response.text
         assert response.json()["results"][0]["flagged"] is False
         assert batches == []
+
+    def test_detected_language_is_used_for_toxicity_detection(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A non-English dominant language is forwarded to DetectToxicContent."""
+        language_codes: list[str] = []
+
+        class _StubComprehendClient:
+            async def detect_dominant_language(self, *, Text: str) -> dict[str, Any]:  # noqa: N803
+                return {"Languages": [{"LanguageCode": "fr", "Score": 0.98}]}
+
+            async def detect_toxic_content(
+                self,
+                *,
+                TextSegments: list[dict[str, str]],  # noqa: N803
+                LanguageCode: str,  # noqa: N803
+            ) -> dict[str, Any]:
+                language_codes.append(LanguageCode)
+                return {"ResultList": [_CLEAN_RESULT]}
+
+        async def _call(
+            service: str,
+            regions: list[str],
+            call: Any,  # noqa: ANN401
+        ) -> tuple[dict[str, Any], str]:
+            assert service == "comprehend"
+            return await call(_StubComprehendClient(), regions[0]), regions[0]
+
+        monkeypatch.setattr(amazon_comprehend, "call_with_region_failover", _call)
+
+        response = client.post(
+            "/v1/moderations", json={"input": "un texte en français"}
+        )
+
+        assert response.status_code == 200, response.text
+        assert language_codes == ["fr"]
+
+    def test_unsupported_detected_language_falls_back_to_english(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A dominant language DetectToxicContent doesn't support falls back to `en`."""
+        language_codes: list[str] = []
+
+        class _StubComprehendClient:
+            async def detect_dominant_language(self, *, Text: str) -> dict[str, Any]:  # noqa: N803
+                # Dutch ("nl") isn't in DetectToxicContent's supported language set.
+                return {"Languages": [{"LanguageCode": "nl", "Score": 0.95}]}
+
+            async def detect_toxic_content(
+                self,
+                *,
+                TextSegments: list[dict[str, str]],  # noqa: N803
+                LanguageCode: str,  # noqa: N803
+            ) -> dict[str, Any]:
+                language_codes.append(LanguageCode)
+                return {"ResultList": [_CLEAN_RESULT]}
+
+        async def _call(
+            service: str,
+            regions: list[str],
+            call: Any,  # noqa: ANN401
+        ) -> tuple[dict[str, Any], str]:
+            assert service == "comprehend"
+            return await call(_StubComprehendClient(), regions[0]), regions[0]
+
+        monkeypatch.setattr(amazon_comprehend, "call_with_region_failover", _call)
+
+        response = client.post("/v1/moderations", json={"input": "een tekst"})
+
+        assert response.status_code == 200, response.text
+        assert language_codes == ["en"]
 
     def test_image_input_requires_guardrail(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch

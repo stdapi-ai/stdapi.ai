@@ -112,14 +112,14 @@ Both moderation models appear in the [`/v1/models`](api_openai_models.md) and [`
 
 | Model                        | OpenAI aliases                                      | Notes                                        |
 |------------------------------|-----------------------------------------------------|------------------------------------------------|
-| `amazon.comprehend-toxicity` | `text-moderation-latest`, `text-moderation-stable`  | Toxicity detection. English text only, no images |
+| `amazon.comprehend-toxicity` | `text-moderation-latest`, `text-moderation-stable`  | Toxicity detection. Auto-detected language (12 supported, falls back to English), no images |
 
 ### Comparison
 
 | Capability                | Amazon Bedrock Guardrails                                                  | Amazon Comprehend                                     |
 |---------------------------|-----------------------------------------------------------------------------|--------------------------------------------------------|
 | Setup                     | Create and configure a guardrail in Amazon Bedrock                         | None — works out of the box                            |
-| Text inputs               | :material-check-circle:{ .success role="img" aria-label="Supported" } Any language supported by the guardrail | :material-check-circle:{ .success role="img" aria-label="Supported" } English only       |
+| Text inputs               | :material-check-circle:{ .success role="img" aria-label="Supported" } Any language supported by the guardrail | :material-check-circle:{ .success role="img" aria-label="Supported" } Auto-detected among 12 languages (falls back to English) |
 | Image inputs              | :material-check-circle:{ .success role="img" aria-label="Supported" } PNG and JPEG                           | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" } Not supported  |
 | Mapped categories         | `hate`, `harassment`, `sexual`, `violence`, `illicit`                       | `hate`, `harassment`, `sexual`, `violence`, `violence/graphic` |
 | Category scores           | Quantized confidence levels (`0.0` / `0.25` / `0.5` / `0.75`)               | Continuous scores (`0.0` – `1.0`)                       |
