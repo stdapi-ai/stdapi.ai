@@ -1040,6 +1040,8 @@ _UNAVAILABLE_MODEL_MARKERS = (
     "model identifier is invalid",  # absent from the cross-region inference catalog
     "is not allowed from unsupported countries",  # geo-restricted provider (Meta Llama)
 )
+#: ``wasxfail`` reason marking a report masked because the model was unavailable.
+_UNAVAILABLE_XFAIL_REASON = "model not available on this backend"
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -1070,5 +1072,30 @@ def pytest_runtest_makereport(
     if not any(marker in haystack for marker in _UNAVAILABLE_MODEL_MARKERS):
         return
     report.outcome = "xfailed"  # type: ignore[assignment]
-    report.wasxfail = "model not available on this backend"
+    report.wasxfail = _UNAVAILABLE_XFAIL_REASON
     report.longrepr = None
+
+
+def pytest_terminal_summary(terminalreporter: pytest.TerminalReporter) -> None:
+    """List the tests masked as xfail by an unavailable model.
+
+    Without this, a test pinned to a single retired model looks green forever: the
+    mask is only visible under ``-rx``. Surfacing it every run keeps a silent
+    no-op from passing for coverage. Reads the collected reports rather than a
+    module-level list so it also works under ``xdist``, where the mask is applied
+    on a worker and only the serialized report reaches this hook.
+    """
+    masked = [
+        report.nodeid
+        for report in terminalreporter.stats.get("xfailed", ())
+        if getattr(report, "wasxfail", None) == _UNAVAILABLE_XFAIL_REASON
+    ]
+    if not masked:
+        return
+    terminalreporter.section("Tests masked by an unavailable model", yellow=True)
+    for nodeid in masked:
+        terminalreporter.line(f"  {nodeid}")
+    terminalreporter.line(
+        f"{len(masked)} test(s) did not exercise their model. "
+        "Re-pin them to a live model, or drop them if the capability is gone."
+    )
