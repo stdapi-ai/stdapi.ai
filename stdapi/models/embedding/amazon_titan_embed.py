@@ -86,15 +86,25 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         input_tokens = 0
         output_tokens = 0
         embeddings = []
+        embeddings_by_type: dict[str, list[list[float | int]]] | None = (
+            {} if "embeddingTypes" in request else None
+        )
         for result in await gather(*(self._invoke(request, v) for v in inputs)):
             embeddings.append(result.response["embedding"])
             input_tokens += (
                 result.response.get("inputTextTokenCount") or result.input_tokens or 0
             )
             output_tokens += result.output_tokens or 0
+            if embeddings_by_type is not None:
+                # Titan invokes once per input; aggregate each call's by-type
+                # vectors into the combined per-type lists.
+                by_type = result.response.get("embeddingsByType") or {}
+                for embedding_type, vector in by_type.items():
+                    embeddings_by_type.setdefault(embedding_type, []).append(vector)
 
         return EmbeddingResponse(
             embeddings=embeddings,
+            embeddings_by_type=embeddings_by_type,
             prompt_tokens=input_tokens,
             total_tokens=input_tokens + output_tokens,
         )

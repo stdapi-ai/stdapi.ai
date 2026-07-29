@@ -1,6 +1,8 @@
 """Tests for the Cohere-compatible /v1/embed and /v2/embed routes (unit and live)."""
 
+from base64 import b64decode
 from os import getenv
+from struct import unpack
 from typing import TYPE_CHECKING, Any
 
 import cohere
@@ -31,6 +33,8 @@ class _StubEmbeddingModel:
         self.calls: list[dict[str, Any]] = []
         #: Image metadata to return from the next `embed_text` call, if set.
         self.images: list[EmbeddingImageDescription] | None = None
+        #: By-type embeddings to return from the next `embed_text` call, if set.
+        self.embeddings_by_type: dict[str, list[list[float | int]]] | None = None
 
     async def embed_text(
         self, inputs: list[Any], dimensions: int | None, extra_params: dict[str, Any]
@@ -41,6 +45,7 @@ class _StubEmbeddingModel:
         )
         return EmbeddingResponse(
             embeddings=[[0.1, 0.2]] * len(inputs),
+            embeddings_by_type=self.embeddings_by_type,
             prompt_tokens=7,
             total_tokens=7,
             images=self.images,
@@ -204,10 +209,27 @@ class TestCohereEmbedRoute:
         assert "message" in response.json()
         assert not embed_backend.calls
 
-    def test_non_float_embedding_types_are_rejected(
+    def test_non_float_embedding_types_are_rejected_for_unsupported_backends(
         self, client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
-        """embedding_types other than float are rejected."""
+        """embedding_types other than float/base64 are rejected for non-Cohere/Titan models."""
+        response = client.post(
+            "/cohere/v2/embed",
+            json={
+                "model": "some-vendor.embed-v1",
+                "input_type": "search_document",
+                "texts": ["a"],
+                "embedding_types": ["int8"],
+            },
+        )
+        assert response.status_code == 400
+        assert not embed_backend.calls
+
+    def test_int8_embedding_type_is_forwarded_and_returned_for_cohere_model(
+        self, client: TestClient, embed_backend: _StubEmbeddingModel
+    ) -> None:
+        """embedding_types=["int8"] is forwarded to Bedrock Cohere Embed and returned as-is."""
+        embed_backend.embeddings_by_type = {"int8": [[1, 2]]}
         response = client.post(
             "/cohere/v2/embed",
             json={
@@ -217,8 +239,121 @@ class TestCohereEmbedRoute:
                 "embedding_types": ["int8"],
             },
         )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["embeddings"] == {"int8": [[1, 2]]}
+        (call,) = embed_backend.calls
+        # `float` is always requested alongside other types (model-layer safety net).
+        assert call["extra_params"]["embedding_types"] == ["float", "int8"]
+
+    def test_binary_embedding_type_is_forwarded_for_titan_model(
+        self, client: TestClient, embed_backend: _StubEmbeddingModel
+    ) -> None:
+        """embedding_types=["binary"] is forwarded to Titan Embed v2 as `embeddingTypes`."""
+        embed_backend.embeddings_by_type = {"binary": [[1, 0]]}
+        response = client.post(
+            "/cohere/v2/embed",
+            json={
+                "model": "amazon.titan-embed-text-v2:0",
+                "input_type": "search_document",
+                "texts": ["a"],
+                "embedding_types": ["binary"],
+            },
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["embeddings"] == {"binary": [[1, 0]]}
+        (call,) = embed_backend.calls
+        assert call["extra_params"]["embeddingTypes"] == ["binary", "float"]
+
+    def test_int8_embedding_type_is_rejected_for_titan_model(
+        self, client: TestClient, embed_backend: _StubEmbeddingModel
+    ) -> None:
+        """Titan Embed v2 only supports float/binary; int8 returns 400."""
+        response = client.post(
+            "/cohere/v2/embed",
+            json={
+                "model": "amazon.titan-embed-text-v2:0",
+                "input_type": "search_document",
+                "texts": ["a"],
+                "embedding_types": ["int8"],
+            },
+        )
         assert response.status_code == 400
         assert not embed_backend.calls
+
+    def test_binary_embedding_type_is_rejected_for_titan_v1_model(
+        self, client: TestClient, embed_backend: _StubEmbeddingModel
+    ) -> None:
+        """Titan Embed G1 (v1) has no `embeddingTypes` support; binary returns 400."""
+        response = client.post(
+            "/cohere/v2/embed",
+            json={
+                "model": "amazon.titan-embed-text-v1",
+                "input_type": "search_document",
+                "texts": ["a"],
+                "embedding_types": ["binary"],
+            },
+        )
+        assert response.status_code == 400
+        assert not embed_backend.calls
+
+    def test_embedding_types_are_not_forwarded_to_titan_multimodal_model(
+        self, client: TestClient, embed_backend: _StubEmbeddingModel
+    ) -> None:
+        """Titan Multimodal Embeddings G1 has no `embeddingTypes` field at all."""
+        response = client.post(
+            "/cohere/v2/embed",
+            json={
+                "model": "amazon.titan-embed-image-v1",
+                "input_type": "search_document",
+                "texts": ["a"],
+                "embedding_types": ["float"],
+            },
+        )
+        assert response.status_code == 200, response.text
+        (call,) = embed_backend.calls
+        assert "embeddingTypes" not in call["extra_params"]
+
+    def test_base64_embedding_type_is_computed_client_side(
+        self, client: TestClient, embed_backend: _StubEmbeddingModel
+    ) -> None:
+        """embedding_types=["base64"] is computed from `float`, not forwarded to Bedrock."""
+        response = client.post(
+            "/cohere/v2/embed",
+            json={
+                "model": "cohere.embed-v4:0",
+                "input_type": "search_document",
+                "texts": ["a"],
+                "embedding_types": ["base64"],
+            },
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert set(body["embeddings"]) == {"base64"}
+        (encoded,) = body["embeddings"]["base64"]
+        assert unpack("<2f", b64decode(encoded)) == pytest.approx((0.1, 0.2))
+        (call,) = embed_backend.calls
+        # `float` is requested from the backend to compute `base64` locally.
+        assert call["extra_params"]["embedding_types"] == ["float"]
+
+    def test_base64_and_float_embedding_types_both_returned(
+        self, client: TestClient, embed_backend: _StubEmbeddingModel
+    ) -> None:
+        """Requesting both `float` and `base64` returns both keys."""
+        response = client.post(
+            "/cohere/v2/embed",
+            json={
+                "model": "cohere.embed-v4:0",
+                "input_type": "search_document",
+                "texts": ["a"],
+                "embedding_types": ["float", "base64"],
+            },
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert set(body["embeddings"]) == {"float", "base64"}
+        assert body["embeddings"]["float"] == [[0.1, 0.2]]
 
     def test_fused_inputs_are_rejected(
         self, client: TestClient, embed_backend: _StubEmbeddingModel
@@ -424,10 +559,27 @@ class TestCohereEmbedV1Route:
             "billed_units": {"input_tokens": 7},
         }
 
-    def test_non_float_embedding_types_are_rejected(
+    def test_non_float_embedding_types_are_rejected_for_unsupported_backends(
         self, client: TestClient, embed_backend: _StubEmbeddingModel
     ) -> None:
-        """embedding_types other than float are rejected."""
+        """embedding_types other than float/base64 are rejected for non-Cohere/Titan models."""
+        response = client.post(
+            "/cohere/v1/embed",
+            json={
+                "model": "some-vendor.embed-v1",
+                "texts": ["a"],
+                "embedding_types": ["int8"],
+            },
+        )
+        assert response.status_code == 400
+        assert "message" in response.json()
+        assert not embed_backend.calls
+
+    def test_int8_embedding_type_is_forwarded_for_cohere_model(
+        self, client: TestClient, embed_backend: _StubEmbeddingModel
+    ) -> None:
+        """embedding_types=["int8"] is forwarded to Bedrock Cohere Embed and returned as-is."""
+        embed_backend.embeddings_by_type = {"int8": [[1, 2]]}
         response = client.post(
             "/cohere/v1/embed",
             json={
@@ -436,9 +588,32 @@ class TestCohereEmbedV1Route:
                 "embedding_types": ["int8"],
             },
         )
-        assert response.status_code == 400
-        assert "message" in response.json()
-        assert not embed_backend.calls
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["embeddings"] == {"int8": [[1, 2]]}
+        (call,) = embed_backend.calls
+        # `float` is always requested alongside other types (model-layer safety net).
+        assert call["extra_params"]["embedding_types"] == ["float", "int8"]
+
+    def test_base64_embedding_type_is_computed_client_side(
+        self, client: TestClient, embed_backend: _StubEmbeddingModel
+    ) -> None:
+        """embedding_types=["base64"] is computed from `float`, not forwarded to Bedrock."""
+        response = client.post(
+            "/cohere/v1/embed",
+            json={
+                "model": "cohere.embed-multilingual-v3",
+                "texts": ["a"],
+                "embedding_types": ["base64"],
+            },
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert set(body["embeddings"]) == {"base64"}
+        (encoded,) = body["embeddings"]["base64"]
+        assert unpack("<2f", b64decode(encoded)) == pytest.approx((0.1, 0.2))
+        (call,) = embed_backend.calls
+        assert call["extra_params"]["embedding_types"] == ["float"]
 
     def test_input_type_and_truncate_forwarded_for_cohere_models(
         self, client: TestClient, embed_backend: _StubEmbeddingModel
@@ -647,6 +822,42 @@ class TestCohereEmbedIntegration:
         (vector,) = response.embeddings.float_
         assert len(vector) == 512
 
+    def test_quantized_and_base64_embedding_types(
+        self, cohere_client: cohere.ClientV2, cohere_embed_v4_model: str
+    ) -> None:
+        """int8/base64 embedding_types are returned, and float is omitted when unrequested."""
+        response = cohere_client.embed(
+            model=cohere_embed_v4_model,
+            input_type="search_document",
+            texts=["The quick brown fox jumps over the lazy dog."],
+            embedding_types=["int8", "base64"],
+        )
+        assert response.embeddings.float_ is None
+        assert response.embeddings.int8 is not None
+        (int8_vector,) = response.embeddings.int8
+        assert len(int8_vector) > 0
+        assert response.embeddings.base64 is not None
+        assert len(response.embeddings.base64) == 1
+
+    def test_binary_embedding_type_for_titan_model(
+        self,
+        cohere_client: cohere.ClientV2,
+        embedding_model: str,
+        use_official_api: bool,
+    ) -> None:
+        """embedding_types=["binary"] is served by Titan Embed v2 as `binary`."""
+        if use_official_api:
+            pytest.skip("Bedrock-specific model")
+        response = cohere_client.embed(
+            model=embedding_model,
+            input_type="search_document",
+            texts=["The quick brown fox jumps over the lazy dog."],
+            embedding_types=["binary"],
+        )
+        assert response.embeddings.binary is not None
+        (vector,) = response.embeddings.binary
+        assert len(vector) > 0
+
     @pytest.mark.expensive
     def test_embed_image(
         self,
@@ -654,7 +865,7 @@ class TestCohereEmbedIntegration:
         cohere_embed_v4_model: str,
         sample_image_file_base64: str,
     ) -> None:
-        """An image data URI is embedded and billed as one image."""
+        """An image data URI is embedded, billed as one image, and its metadata echoed."""
         response = cohere_client.embed(
             model=cohere_embed_v4_model,
             input_type="image",
@@ -667,6 +878,11 @@ class TestCohereEmbedIntegration:
         assert response.meta is not None
         assert response.meta.billed_units is not None
         assert response.meta.billed_units.images == 1
+        assert response.images is not None
+        (image,) = response.images
+        assert image.width > 0
+        assert image.height > 0
+        assert image.format
 
     @pytest.mark.expensive
     def test_every_advertised_model_embeds(

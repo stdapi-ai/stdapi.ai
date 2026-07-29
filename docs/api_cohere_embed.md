@@ -88,7 +88,7 @@ curl -X POST "$BASE/v2/embed" \
 | `input_type`                  |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Applied to Cohere models; no equivalent on other providers         |
 | `output_dimension`            |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Some models support dimension reduction                            |
 | `truncate`, `max_tokens`      |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Cohere models only                                                 |
-| `embedding_types`             |   :material-minus-circle:{ .partial role="img" aria-label="Partial" }    | Only `["float"]` is accepted; other types return 400               |
+| `embedding_types`             |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | `int8`/`uint8`/`binary`/`ubinary` on Cohere models, `binary` also on Titan Embed v2; `base64` always computed client-side; other combinations return 400 |
 | `priority`                    | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Accepted but ignored — request scheduling priority is not applicable on Bedrock |
 | Extra model-specific params   | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Extra fields are forwarded as additional model request parameters  |
 | **Output**                    |                                          |                                                                    |
@@ -110,6 +110,38 @@ curl -X POST "$BASE/v2/embed" \
 
 </div>
 
+## Quantized and Base64 Embedding Types
+
+Set `embedding_types` to request quantized vectors alongside, or instead of, the default `float` vectors. Bedrock Cohere Embed models natively support `int8`, `uint8`, `binary`, and `ubinary`; Titan Embed v2 natively supports `binary`. `base64` is always available: it is computed client-side (little-endian float32 bytes, base64-encoded) from the `float` embedding, matching the Cohere API encoding. Requesting a type not supported by the resolved model returns 400. Only the requested types are populated in the response.
+
+```bash
+curl -X POST "$BASE/v2/embed" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "cohere.embed-v4:0",
+    "input_type": "search_document",
+    "texts": ["Hello world"],
+    "embedding_types": ["int8", "base64"]
+  }'
+```
+
+```json
+{
+  "response_type": "embeddings_by_type",
+  "id": "0f1b3c6e8d9a4b5c8e7f6a5b4c3d2e1f",
+  "embeddings": {
+    "int8": [[12, -34, ...]],
+    "base64": ["rBgKPw..."]
+  },
+  "texts": ["Hello world"],
+  "meta": {
+    "api_version": {"version": "2"},
+    "billed_units": {"input_tokens": 4}
+  }
+}
+```
+
 ## Cohere v1 Embed API (Legacy)
 
 The legacy `/v1/embed` endpoint is also available for older Cohere SDKs (`cohere.Client`) and third-party integrations that predate the v2 API. It shares the same Bedrock backend and model support as `/v2/embed`; new clients should prefer the v2 endpoint.
@@ -121,7 +153,7 @@ The legacy `/v1/embed` endpoint is also available for older Cohere SDKs (`cohere
 | Feature                    |                 Status                  | Notes                                                                          |
 |----------------------------|:---------------------------------------:|---------------------------------------------------------------------------------|
 | Default response shape     |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Legacy `embeddings_floats`: a plain list of float vectors                      |
-| `embedding_types`          |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | `["float"]` switches to the `embeddings_by_type` shape; other types return 400 |
+| `embedding_types`          |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Any value switches to the `embeddings_by_type` shape; same type support as the v2 endpoint |
 | `input_type`               |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Optional — forwarded to Cohere models when provided; the backend defaults to `search_document` otherwise |
 | `meta.api_version.version` |   :material-check-circle:{ .success role="img" aria-label="Supported" }   | Reported as `"1"`                                                              |
 

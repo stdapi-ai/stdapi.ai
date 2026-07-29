@@ -63,7 +63,7 @@ class _Request(TypedDict):
     texts: NotRequired[list[str]]
     images: NotRequired[list[str]]  # Base64 image URI
     truncate: NotRequired[Literal["NONE", "START", "END", "LEFT", "RIGHT"]]
-    embedding_types: NotRequired[_EmbeddingType]
+    embedding_types: NotRequired[list[_EmbeddingType]]
 
     # New in Cohere V4
     inputs: NotRequired[list[_InputContent]]
@@ -144,12 +144,15 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
         result = await self.invoke(request)
         resp = result.response["embeddings"]
         if isinstance(resp, dict) and "float" not in resp:
+            # Cohere routes always request `float` alongside other types, so a
+            # missing key means an unsupported type reached the backend directly.
             msg = "Only `float` embeddings are supported on this backend."
             raise ApiError(msg)
         input_tokens = result.input_tokens or 0
         images = result.response.get("images")
         return EmbeddingResponse(
             embeddings=resp["float"] if isinstance(resp, dict) else resp,
+            embeddings_by_type=resp if isinstance(resp, dict) else None,
             prompt_tokens=input_tokens,
             total_tokens=input_tokens + (result.output_tokens or 0),
             images=(

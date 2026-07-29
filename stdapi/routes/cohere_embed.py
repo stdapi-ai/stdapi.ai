@@ -19,10 +19,12 @@ from stdapi.models.embedding import get_embedding_model
 from stdapi.monitoring import REQUEST_ID, log_request_params, log_response_params
 from stdapi.types.cohere import ApiMeta, BilledUnits
 from stdapi.types.cohere_embed import (
-    EmbeddingsByType,
+    TITAN_EMBED_V2_PREFIX,
     EmbedRequest,
     EmbedResponse,
     ImageDescription,
+    build_embeddings_by_type,
+    resolve_embedding_types,
 )
 
 register_route_capability(
@@ -93,6 +95,7 @@ async def embed(
     log_request_params(request)
     model_id = (await validate_model(request.model, "EMBEDDING")).id
     extra_params = get_extra_model_parameters(model_id, request)
+    native_embedding_types = resolve_embedding_types(model_id, request.embedding_types)
     if model_id.startswith("cohere."):
         # Cohere-specific body fields; other providers have no equivalent.
         extra_params["input_type"] = request.input_type
@@ -100,6 +103,13 @@ async def embed(
             extra_params["truncate"] = request.truncate
         if request.max_tokens is not None:
             extra_params["max_tokens"] = request.max_tokens
+        if native_embedding_types is not None:
+            extra_params["embedding_types"] = native_embedding_types
+    elif (
+        model_id.startswith(TITAN_EMBED_V2_PREFIX)
+        and native_embedding_types is not None
+    ):
+        extra_params["embeddingTypes"] = native_embedding_types
     response = await get_embedding_model(model_id).embed_text(
         [*(request.texts or ()), *(request.images or ())],
         dimensions=request.output_dimension,
@@ -108,7 +118,7 @@ async def embed(
     return log_response_params(
         EmbedResponse(
             id=REQUEST_ID.get(),
-            embeddings=EmbeddingsByType(float_=response.embeddings),
+            embeddings=build_embeddings_by_type(response, request.embedding_types),
             texts=request.texts,
             images=(
                 [ImageDescription(**image.model_dump()) for image in response.images]

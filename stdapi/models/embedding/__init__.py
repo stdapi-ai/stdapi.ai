@@ -50,12 +50,16 @@ class EmbeddingResponse(BaseModel):
         total_tokens: Total token count reported by the provider (if available).
         prompt_tokens: Prompt tokens count reported by the provider.
         images: Metadata of the embedded images, when echoed by the provider.
+        embeddings_by_type: Embedding vectors keyed by quantization type (e.g.
+            "float", "int8", "binary"), when the provider returns more than
+            the default float vectors.
     """
 
     embeddings: list[list[float]] = []
     total_tokens: int = 0
     prompt_tokens: int = 0
     images: list[EmbeddingImageDescription] | None = None
+    embeddings_by_type: dict[str, list[list[float | int]]] | None = None
 
 
 class EmbeddingModelBase(ModelBase[RequestT, ResponseT]):

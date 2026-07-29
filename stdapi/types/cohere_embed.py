@@ -1,17 +1,35 @@
 """Local Cohere-compatible embed types (Cohere v1 and v2 Embed APIs)."""
 
-from typing import Literal, Self
+from base64 import b64encode
+from struct import pack
+from typing import TYPE_CHECKING, Literal, Self
 
 from pydantic import Field, model_validator
 
+from stdapi.api_errors import ApiError
 from stdapi.input_file import InputFileUrl
 from stdapi.types import BaseModelRequestWithExtra, BaseModelResponse
 from stdapi.types.cohere import ApiMeta
+
+if TYPE_CHECKING:
+    from stdapi.models.embedding import EmbeddingResponse
 
 #: Cohere embed `input_type` values.
 _InputType = Literal[
     "search_document", "search_query", "classification", "clustering", "image"
 ]
+
+#: Embedding types natively supported by Bedrock Cohere Embed models.
+_COHERE_NATIVE_EMBEDDING_TYPES = frozenset(
+    {"float", "int8", "uint8", "binary", "ubinary"}
+)
+#: Model ID prefix of the only Titan Embed model accepting `embeddingTypes`
+#: (Titan Embed Text G1 and Titan Multimodal Embeddings G1 do not).
+TITAN_EMBED_V2_PREFIX = "amazon.titan-embed-text-v2"
+#: Embedding types natively supported by Bedrock Titan Embed v2 models.
+_TITAN_NATIVE_EMBEDDING_TYPES = frozenset({"float", "binary"})
+#: Embedding types natively supported by every other Bedrock embedding model.
+_DEFAULT_NATIVE_EMBEDDING_TYPES = frozenset({"float"})
 
 
 class _EmbedRequestBase(BaseModelRequestWithExtra):
@@ -37,7 +55,13 @@ class _EmbedRequestBase(BaseModelRequestWithExtra):
         list[Literal["float", "int8", "uint8", "binary", "ubinary", "base64"]] | None
     ) = Field(
         default=None,
-        description="Embedding types to return. Only `float` is supported.",
+        description=(
+            "Embedding types to return. `int8`/`uint8`/`binary`/`ubinary` are "
+            "supported by Bedrock Cohere Embed models, `binary` also by Titan "
+            "Embed v2; other combinations return 400. `base64` is always "
+            "accepted and computed client-side (little-endian float32 bytes) "
+            "from the `float` embedding."
+        ),
     )
     truncate: Literal["NONE", "START", "END"] | None = Field(
         default=None,
@@ -62,9 +86,6 @@ class _EmbedRequestBase(BaseModelRequestWithExtra):
             self.model_extra.pop("inputs")  # type: ignore[union-attr]
         if not self.texts and not self.images:
             msg = "Provide at least one of `texts` or `images`."
-            raise ValueError(msg)
-        if self.embedding_types and set(self.embedding_types) != {"float"}:
-            msg = "Only `float` embeddings are supported on this backend."
             raise ValueError(msg)
         return self
 
@@ -122,11 +143,43 @@ class EmbedV1Request(_EmbedRequestBase):
 
 
 class EmbeddingsByType(BaseModelResponse):
-    """Embeddings keyed by embedding type."""
+    """Embeddings keyed by embedding type.
 
-    float_: list[list[float]] = Field(
+    Only the requested embedding types are populated, matching the Cohere API.
+    """
+
+    float_: list[list[float]] | None = Field(
+        default=None,
         serialization_alias="float",
         description="Float embedding vectors, one per input.",
+    )
+    int8: list[list[int]] | None = Field(
+        default=None,
+        description="Int8-quantized embedding vectors, one per input. Cohere models only.",
+    )
+    uint8: list[list[int]] | None = Field(
+        default=None,
+        description="Uint8-quantized embedding vectors, one per input. Cohere models only.",
+    )
+    binary: list[list[int]] | None = Field(
+        default=None,
+        description=(
+            "Bit-packed signed-binary embedding vectors, one per input. "
+            "Cohere and Titan Embed v2 models."
+        ),
+    )
+    ubinary: list[list[int]] | None = Field(
+        default=None,
+        description=(
+            "Bit-packed unsigned-binary embedding vectors, one per input. Cohere models only."
+        ),
+    )
+    base64: list[str] | None = Field(
+        default=None,
+        description=(
+            "Base64-encoded float32 embedding vectors (little-endian byte order), "
+            "one per input, computed client-side from the `float` embedding."
+        ),
     )
 
 
@@ -158,6 +211,88 @@ class EmbedResponse(BaseModelResponse):
         description="Metadata of the image entries for which embeddings were returned.",
     )
     meta: ApiMeta = Field(description="Response metadata.")
+
+
+def resolve_embedding_types(
+    model_id: str, embedding_types: list[str] | None
+) -> list[str] | None:
+    """Resolve the native Bedrock embedding types to request for a model.
+
+    Args:
+        model_id: Resolved Bedrock model identifier.
+        embedding_types: Client-requested Cohere embedding types, if any.
+
+    Returns:
+        The embedding types to forward to the backend, or `None` to keep the
+        default float-only backend behavior. `base64` is never forwarded: it
+        is computed client-side from the `float` embedding. `float` is always
+        added to a non-empty result, so the backend keeps returning it
+        alongside the requested types.
+
+    Raises:
+        ApiError: If a requested type is not supported by the resolved model.
+    """
+    if not embedding_types:
+        return None
+    if model_id.startswith("cohere."):
+        native_types = _COHERE_NATIVE_EMBEDDING_TYPES
+    elif model_id.startswith(TITAN_EMBED_V2_PREFIX):
+        native_types = _TITAN_NATIVE_EMBEDDING_TYPES
+    else:
+        native_types = _DEFAULT_NATIVE_EMBEDDING_TYPES
+    requested = set(embedding_types)
+    unsupported = requested - native_types - {"base64"}
+    if unsupported:
+        msg = (
+            f"Embedding types {sorted(unsupported)} are not supported on this backend."
+        )
+        raise ApiError(msg)
+    forwarded = requested & native_types
+    if forwarded or "base64" in requested:
+        forwarded.add("float")
+    return sorted(forwarded) or None
+
+
+def build_embeddings_by_type(
+    response: EmbeddingResponse, embedding_types: list[str] | None
+) -> EmbeddingsByType:
+    """Build the Cohere `embeddings_by_type` response from a model response.
+
+    Args:
+        response: Embedding model response (float vectors and/or a
+            provider-native `embeddings_by_type` dict).
+        embedding_types: Client-requested Cohere embedding types, if any
+            (defaults to `["float"]` when unset).
+
+    Returns:
+        The embeddings grouped by the requested types, base64-encoding the
+        float embedding client-side when `base64` was requested.
+    """
+    by_type = response.embeddings_by_type or {}
+    float_vectors = by_type.get("float", response.embeddings)
+    requested = set(embedding_types) if embedding_types else {"float"}
+    fields: dict[str, list[list[float]] | list[list[int]] | list[str]] = {}
+    if "float" in requested:
+        fields["float_"] = float_vectors
+    for embedding_type in ("int8", "uint8", "binary", "ubinary"):
+        if embedding_type in requested and embedding_type in by_type:
+            fields[embedding_type] = by_type[embedding_type]
+    if "base64" in requested:
+        fields["base64"] = [_encode_base64(vector) for vector in float_vectors]
+    return EmbeddingsByType(**fields)
+
+
+def _encode_base64(vector: list[float]) -> str:
+    """Encode a float embedding vector as base64 little-endian float32 bytes.
+
+    Args:
+        vector: Float embedding vector.
+
+    Returns:
+        Base64-encoded little-endian float32 bytes, matching the Cohere API
+        `base64` embedding encoding.
+    """
+    return b64encode(pack(f"<{len(vector)}f", *vector)).decode("ascii")
 
 
 class EmbedV1FloatsResponse(BaseModelResponse):
