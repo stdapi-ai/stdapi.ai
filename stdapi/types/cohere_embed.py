@@ -130,6 +130,15 @@ class EmbeddingsByType(BaseModelResponse):
     )
 
 
+class ImageDescription(BaseModelResponse):
+    """Metadata of an embedded image, echoed back for image inputs."""
+
+    width: int = Field(description="Image width in pixels.")
+    height: int = Field(description="Image height in pixels.")
+    format: str = Field(description="Image format (e.g. `png`, `jpeg`).")
+    bit_depth: int = Field(description="Image bit depth.")
+
+
 class EmbedResponse(BaseModelResponse):
     """Embed response model."""
 
@@ -143,6 +152,10 @@ class EmbedResponse(BaseModelResponse):
     )
     texts: list[str] | None = Field(
         default=None, description="The text entries for which embeddings were returned."
+    )
+    images: list[ImageDescription] | None = Field(
+        default=None,
+        description="Metadata of the image entries for which embeddings were returned.",
     )
     meta: ApiMeta = Field(description="Response metadata.")
 
@@ -160,5 +173,9 @@ class EmbedV1FloatsResponse(BaseModelResponse):
     )
     texts: list[str] | None = Field(
         default=None, description="The text entries for which embeddings were returned."
+    )
+    images: list[ImageDescription] | None = Field(
+        default=None,
+        description="Metadata of the image entries for which embeddings were returned.",
     )
     meta: ApiMeta = Field(description="Response metadata.")

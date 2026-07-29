@@ -12,7 +12,7 @@ from stdapi.api_errors import UnsupportedModelError
 from stdapi.config import SETTINGS
 from stdapi.input_file import InputFile
 from stdapi.models import ModelDetails
-from stdapi.models.embedding import EmbeddingResponse
+from stdapi.models.embedding import EmbeddingImageDescription, EmbeddingResponse
 from stdapi.routes import cohere_embed, cohere_embed_v1
 
 if TYPE_CHECKING:
@@ -29,6 +29,8 @@ class _StubEmbeddingModel:
 
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
+        #: Image metadata to return from the next `embed_text` call, if set.
+        self.images: list[EmbeddingImageDescription] | None = None
 
     async def embed_text(
         self, inputs: list[Any], dimensions: int | None, extra_params: dict[str, Any]
@@ -38,7 +40,10 @@ class _StubEmbeddingModel:
             {"inputs": inputs, "dimensions": dimensions, "extra_params": extra_params}
         )
         return EmbeddingResponse(
-            embeddings=[[0.1, 0.2]] * len(inputs), prompt_tokens=7, total_tokens=7
+            embeddings=[[0.1, 0.2]] * len(inputs),
+            prompt_tokens=7,
+            total_tokens=7,
+            images=self.images,
         )
 
 
@@ -329,6 +334,42 @@ class TestCohereEmbedRoute:
         assert "unknown-model" in body["message"]
         assert not embed_backend.calls
 
+    def test_images_metadata_is_echoed_in_wire_shape(
+        self, client: TestClient, embed_backend: _StubEmbeddingModel
+    ) -> None:
+        """Image metadata parsed by the model is echoed with the Cohere `images` shape."""
+        embed_backend.images = [
+            EmbeddingImageDescription(format="png", width=10, height=20, bit_depth=8)
+        ]
+        response = client.post(
+            "/cohere/v2/embed",
+            json={
+                "model": "cohere.embed-v4:0",
+                "input_type": "image",
+                "images": ["data:image/png;base64,aGVsbG8="],
+            },
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["images"] == [
+            {"width": 10, "height": 20, "format": "png", "bit_depth": 8}
+        ]
+
+    def test_images_metadata_absent_when_not_reported(
+        self, client: TestClient, embed_backend: _StubEmbeddingModel
+    ) -> None:
+        """No `images` key is emitted when the model does not report image metadata."""
+        response = client.post(
+            "/cohere/v2/embed",
+            json={
+                "model": "cohere.embed-multilingual-v3",
+                "input_type": "search_document",
+                "texts": ["hello"],
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert "images" not in response.json()
+
 
 @pytest.mark.local
 class TestCohereEmbedV1Route:
@@ -502,6 +543,27 @@ class TestCohereEmbedV1Route:
         assert set(body) == {"message", "id"}
         assert "unknown-model" in body["message"]
         assert not embed_backend.calls
+
+    def test_images_metadata_is_echoed_in_wire_shape(
+        self, client: TestClient, embed_backend: _StubEmbeddingModel
+    ) -> None:
+        """Image metadata parsed by the model is echoed with the Cohere `images` shape."""
+        embed_backend.images = [
+            EmbeddingImageDescription(format="png", width=10, height=20, bit_depth=8)
+        ]
+        response = client.post(
+            "/cohere/v1/embed",
+            json={
+                "model": "cohere.embed-v4:0",
+                "images": ["data:image/png;base64,aGVsbG8="],
+            },
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["response_type"] == "embeddings_floats"
+        assert body["images"] == [
+            {"width": 10, "height": 20, "format": "png", "bit_depth": 8}
+        ]
 
 
 @pytest.fixture

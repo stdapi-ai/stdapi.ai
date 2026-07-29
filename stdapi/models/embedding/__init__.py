@@ -26,6 +26,22 @@ if TYPE_CHECKING:
     from stdapi.types import JsonMapping
 
 
+class EmbeddingImageDescription(BaseModel):
+    """Metadata describing an image input echoed back by some embedding providers.
+
+    Attributes:
+        format: Image format (e.g. "png", "jpeg").
+        width: Image width in pixels.
+        height: Image height in pixels.
+        bit_depth: Image bit depth.
+    """
+
+    format: str
+    width: int
+    height: int
+    bit_depth: int
+
+
 class EmbeddingResponse(BaseModel):
     """Embedding response.
 
@@ -33,11 +49,13 @@ class EmbeddingResponse(BaseModel):
         embeddings: List of embedding vectors (one per input).
         total_tokens: Total token count reported by the provider (if available).
         prompt_tokens: Prompt tokens count reported by the provider.
+        images: Metadata of the embedded images, when echoed by the provider.
     """
 
     embeddings: list[list[float]] = []
     total_tokens: int = 0
     prompt_tokens: int = 0
+    images: list[EmbeddingImageDescription] | None = None
 
 
 class EmbeddingModelBase(ModelBase[RequestT, ResponseT]):

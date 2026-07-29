@@ -92,7 +92,7 @@ curl -X POST "$BASE/v2/embed" \
 | `priority`                    | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Accepted but ignored — request scheduling priority is not applicable on Bedrock |
 | Extra model-specific params   | :material-plus-circle:{ .extra-feature role="img" aria-label="Extra feature" } | Extra fields are forwarded as additional model request parameters  |
 | **Output**                    |                                          |                                                                    |
-| `images` metadata array       | :material-close-circle:{ .unsupported role="img" aria-label="Unsupported" }  | Image dimensions are not echoed in the response                    |
+| `images` metadata array       |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Echoed by models that report image dimensions (e.g. Cohere Embed)  |
 | **Usage tracking**            |                                          |                                                                    |
 | `billed_units.input_tokens`   |       :material-cog:{ .model-dep role="img" aria-label="Model-dependent" }       | Estimated on some models                                           |
 

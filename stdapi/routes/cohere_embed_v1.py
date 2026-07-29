@@ -23,6 +23,7 @@ from stdapi.types.cohere_embed import (
     EmbedResponse,
     EmbedV1FloatsResponse,
     EmbedV1Request,
+    ImageDescription,
 )
 
 register_route_capability(
@@ -116,12 +117,18 @@ async def embed_v1(
             images=len(request.images) if request.images else None,
         ),
     )
+    images = (
+        [ImageDescription(**image.model_dump()) for image in response.images]
+        if response.images
+        else None
+    )
     if request.embedding_types is None:
         return log_response_params(
             EmbedV1FloatsResponse(
                 id=REQUEST_ID.get(),
                 embeddings=response.embeddings,
                 texts=request.texts,
+                images=images,
                 meta=meta,
             ),
             exclude={"embeddings"},
@@ -131,6 +138,7 @@ async def embed_v1(
             id=REQUEST_ID.get(),
             embeddings=EmbeddingsByType(float_=response.embeddings),
             texts=request.texts,
+            images=images,
             meta=meta,
         ),
         exclude={"embeddings"},

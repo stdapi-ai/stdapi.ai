@@ -18,7 +18,12 @@ from stdapi.models.capabilities import register_route_capability
 from stdapi.models.embedding import get_embedding_model
 from stdapi.monitoring import REQUEST_ID, log_request_params, log_response_params
 from stdapi.types.cohere import ApiMeta, BilledUnits
-from stdapi.types.cohere_embed import EmbeddingsByType, EmbedRequest, EmbedResponse
+from stdapi.types.cohere_embed import (
+    EmbeddingsByType,
+    EmbedRequest,
+    EmbedResponse,
+    ImageDescription,
+)
 
 register_route_capability(
     "cohere_embed", f"{SETTINGS.cohere_routes_prefix}/v2/embed", "TEXT", "EMBEDDING"
@@ -105,6 +110,11 @@ async def embed(
             id=REQUEST_ID.get(),
             embeddings=EmbeddingsByType(float_=response.embeddings),
             texts=request.texts,
+            images=(
+                [ImageDescription(**image.model_dump()) for image in response.images]
+                if response.images
+                else None
+            ),
             meta=ApiMeta(
                 billed_units=BilledUnits(
                     input_tokens=response.prompt_tokens,

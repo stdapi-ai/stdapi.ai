@@ -10,7 +10,11 @@ from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
 
 from stdapi.api_errors import ApiError
 from stdapi.input_file import InputFile, InputFileUrl
-from stdapi.models.embedding import EmbeddingModelBase, EmbeddingResponse
+from stdapi.models.embedding import (
+    EmbeddingImageDescription,
+    EmbeddingModelBase,
+    EmbeddingResponse,
+)
 
 if TYPE_CHECKING:
     from stdapi.types import JsonMapping
@@ -143,10 +147,16 @@ class EmbeddingModel(EmbeddingModelBase[_Request, _Response]):
             msg = "Only `float` embeddings are supported on this backend."
             raise ApiError(msg)
         input_tokens = result.input_tokens or 0
+        images = result.response.get("images")
         return EmbeddingResponse(
             embeddings=resp["float"] if isinstance(resp, dict) else resp,
             prompt_tokens=input_tokens,
             total_tokens=input_tokens + (result.output_tokens or 0),
+            images=(
+                [EmbeddingImageDescription(**image) for image in images]
+                if images
+                else None
+            ),
         )
 
     @staticmethod
