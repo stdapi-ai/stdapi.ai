@@ -404,9 +404,9 @@ class TranscriptionCreateParams(BaseModelRequestWithExtra, str_strip_whitespace=
         description="Audio chunking: `auto` (VAD) or `server_vad` for manual tuning. "
         "server_vad is UNSUPPORTED.",
     )
-    include: TranscriptionInclude | None = Field(
+    include: list[TranscriptionInclude] | None = Field(
         default=None,
-        description="Additional response info. "
+        description="Additional response info to include. "
         "`logprobs` returns token confidence; requires `response_format=json`.",
     )
     known_speaker_names: list[str] | None = Field(

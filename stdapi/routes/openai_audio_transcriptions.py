@@ -44,6 +44,25 @@ router = APIRouter(
 )
 
 
+def _merge_form_list[T: str](
+    bare: list[T] | None, bracketed: list[T] | None
+) -> list[T] | None:
+    """Merge a bare-named multipart form list with its ``[]``-suffixed counterpart.
+
+    The official OpenAI SDKs send list-valued form fields under a ``name[]``
+    key; this gateway also accepts the bare ``name`` key for non-SDK clients.
+
+    Args:
+        bare: Values collected under the plain field name.
+        bracketed: Values collected under the ``name[]`` alias.
+
+    Returns:
+        The combined list in bare-then-bracketed order, or None if both are empty.
+    """
+    merged = [*(bare or []), *(bracketed or [])]
+    return merged or None
+
+
 async def _transcript_audio_sse(
     event_stream: AsyncGenerator[
         TranscriptionTextDeltaEvent | TranscriptionTextDoneEvent
@@ -196,18 +215,38 @@ async def create_transcription(
             description=(
                 "Comma-separated timestamp granularities to populate (e.g. "
                 "`word,segment`): `word` and/or `segment`. Requires "
-                "`response_format=verbose_json`."
+                "`response_format=verbose_json`.\n"
+                "Repeated `timestamp_granularities[]` form fields (the official SDKs' "
+                "wire format) are also accepted and merged with this field."
             )
         ),
     ] = "",
+    timestamp_granularities_bracket: Annotated[
+        list[str] | None,
+        Form(
+            alias="timestamp_granularities[]",
+            description="Same as `timestamp_granularities`, as repeated form fields "
+            "(official SDKs' wire format).",
+        ),
+    ] = None,
     include: Annotated[
-        TranscriptionInclude | None,
+        list[TranscriptionInclude] | None,
         Form(
             description=(
                 "Additional information to include in the transcription response.\n"
                 "`logprobs` returns token log probabilities (confidence) and only works "
-                "with `response_format=json`."
+                "with `response_format=json`.\n"
+                "Repeated `include[]` form fields (the official SDKs' wire format) are "
+                "also accepted and merged with this field."
             )
+        ),
+    ] = None,
+    include_bracket: Annotated[
+        list[TranscriptionInclude] | None,
+        Form(
+            alias="include[]",
+            description="Same as `include`, as repeated form fields (official SDKs' "
+            "wire format).",
         ),
     ] = None,
     temperature: Annotated[
@@ -238,6 +277,14 @@ async def create_transcription(
             )
         ),
     ] = None,
+    known_speaker_names_bracket: Annotated[
+        list[str] | None,
+        Form(
+            alias="known_speaker_names[]",
+            description="Same as `known_speaker_names`, as repeated form fields "
+            "(official SDKs' wire format). UNSUPPORTED on this implementation.",
+        ),
+    ] = None,
     known_speaker_references: Annotated[
         list[str] | None,
         Form(
@@ -246,6 +293,14 @@ async def create_transcription(
                 "for known-speaker diarization, matching `known_speaker_names[]`.\n"
                 "UNSUPPORTED on this implementation."
             )
+        ),
+    ] = None,
+    known_speaker_references_bracket: Annotated[
+        list[str] | None,
+        Form(
+            alias="known_speaker_references[]",
+            description="Same as `known_speaker_references`, as repeated form fields "
+            "(official SDKs' wire format). UNSUPPORTED on this implementation.",
         ),
     ] = None,
     _: Annotated[None, Depends(authenticate)] = None,
@@ -272,12 +327,16 @@ async def create_transcription(
         chunking_strategy: Controls how the audio is cut into chunks. `auto` only is supported on this implementation.
         response_format: Output format: `json`, `text`, `srt`, `verbose_json`, `vtt`, or `diarized_json`.
         timestamp_granularities: For `verbose_json` only; comma-separated values among `word` and `segment` (e.g. `word,segment`).
+        timestamp_granularities_bracket: Same values as `timestamp_granularities`, as repeated `timestamp_granularities[]` form fields.
         include: Additional information to include in the transcription response. `logprobs` only works with response_format set to `json`.
+        include_bracket: Same values as `include`, as repeated `include[]` form fields.
         temperature: Sampling temperature. Supported by Bedrock models
             (e.g. Mistral Voxtral); rejected by ``amazon.transcribe``.
         stream: Whether to stream partial results via Server-Sent Events.
         known_speaker_names: Optional list of known speaker names. UNSUPPORTED on this implementation.
+        known_speaker_names_bracket: Same values as `known_speaker_names`, as repeated `known_speaker_names[]` form fields.
         known_speaker_references: Optional list of audio references for known speakers. UNSUPPORTED on this implementation.
+        known_speaker_references_bracket: Same values as `known_speaker_references`, as repeated `known_speaker_references[]` form fields.
 
     Returns:
         The transcribed text in the requested format.
@@ -296,6 +355,10 @@ async def create_transcription(
         missing_file_error()
     else:
         audio_content = InputFile(file)
+        granularities: list[str] = [
+            *(timestamp_granularities.split(",") if timestamp_granularities else []),
+            *(timestamp_granularities_bracket or []),
+        ]
         with validation_error_handler():
             request = TranscriptionCreateParams(
                 model=model,
@@ -303,16 +366,16 @@ async def create_transcription(
                 prompt=prompt,
                 chunking_strategy=chunking_strategy,
                 response_format=response_format,
-                timestamp_granularities=(
-                    timestamp_granularities.split(",")
-                    if timestamp_granularities
-                    else []  # type: ignore[arg-type]
-                ),
-                include=include,
+                timestamp_granularities=granularities,  # type: ignore[arg-type]
+                include=_merge_form_list(include, include_bracket),
                 temperature=temperature,
                 stream=stream,
-                known_speaker_names=known_speaker_names,
-                known_speaker_references=known_speaker_references,
+                known_speaker_names=_merge_form_list(
+                    known_speaker_names, known_speaker_names_bracket
+                ),
+                known_speaker_references=_merge_form_list(
+                    known_speaker_references, known_speaker_references_bracket
+                ),
             )
     log_request_params(request)
 
@@ -338,7 +401,7 @@ async def create_transcription(
                         temperature=request.temperature,
                         prompt=request.prompt,
                         extra_params=extra_params,
-                        logprobs=request.include == "logprobs",
+                        logprobs="logprobs" in (request.include or []),
                     )
                 )
             )
@@ -352,5 +415,5 @@ async def create_transcription(
         temperature=request.temperature,
         prompt=request.prompt,
         extra_params=extra_params,
-        logprobs=request.include == "logprobs",
+        logprobs="logprobs" in (request.include or []),
     )

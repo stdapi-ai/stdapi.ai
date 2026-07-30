@@ -1125,6 +1125,106 @@ class TestTranscriptionMultipartFormParsing:
         assert response.status_code == 400
         assert response.json()["error"]["code"] == "model_not_found"
 
+    def test_bracket_suffixed_fields_reach_the_request_model(
+        self, app_client: TestClientType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Repeated ``name[]`` fields — the official SDKs' actual wire format — bind.
+
+        The official ``openai`` Python SDK posts list-valued multipart fields under
+        a ``name[]`` suffix (verified on the wire for ``timestamp_granularities[]``,
+        ``include[]``, ``known_speaker_names[]`` and ``known_speaker_references[]``),
+        never the bare name alone. ``log_request_params`` is patched to capture the
+        constructed ``TranscriptionCreateParams`` before model resolution, proving the
+        values reached the request model instead of being silently dropped.
+        """
+        captured: dict[str, TranscriptionCreateParams] = {}
+
+        def _capture_log_request_params(
+            request: TranscriptionCreateParams, *_args: object, **_kwargs: object
+        ) -> TranscriptionCreateParams:
+            captured["request"] = request
+            return request
+
+        async def _validate_model(
+            model_id: str, *_args: object, **_kwargs: object
+        ) -> None:
+            raise UnsupportedModelError(model_id, status=400)
+
+        monkeypatch.setattr(
+            openai_audio_transcriptions,
+            "log_request_params",
+            _capture_log_request_params,
+        )
+        monkeypatch.setattr(
+            openai_audio_transcriptions, "validate_model", _validate_model
+        )
+
+        response = app_client.post(
+            "/v1/audio/transcriptions",
+            files={"file": ("test.wav", io.BytesIO(b"fake"), "audio/wav")},
+            data={
+                "model": "probe-model-id",
+                "response_format": "verbose_json",
+                "timestamp_granularities[]": ["word", "segment"],
+                "include[]": ["logprobs"],
+                "known_speaker_names[]": ["agent", "customer"],
+                "known_speaker_references[]": ["data:audio/wav;base64,AAA"],
+            },
+        )
+
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "model_not_found"
+
+        request = captured["request"]
+        assert request.timestamp_granularities == ["word", "segment"]
+        assert request.include == ["logprobs"]
+        assert request.known_speaker_names == ["agent", "customer"]
+        assert request.known_speaker_references == ["data:audio/wav;base64,AAA"]
+
+    def test_bare_include_still_binds_as_a_list(
+        self, app_client: TestClientType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The bare ``include`` field keeps binding for non-SDK multipart clients.
+
+        ``include`` moved from a scalar to a list to match upstream; this checks
+        the bare field name (this gateway's own convenience path, not the SDK's
+        wire format) still reaches the request model as a single-item list.
+        """
+        captured: dict[str, TranscriptionCreateParams] = {}
+
+        def _capture_log_request_params(
+            request: TranscriptionCreateParams, *_args: object, **_kwargs: object
+        ) -> TranscriptionCreateParams:
+            captured["request"] = request
+            return request
+
+        async def _validate_model(
+            model_id: str, *_args: object, **_kwargs: object
+        ) -> None:
+            raise UnsupportedModelError(model_id, status=400)
+
+        monkeypatch.setattr(
+            openai_audio_transcriptions,
+            "log_request_params",
+            _capture_log_request_params,
+        )
+        monkeypatch.setattr(
+            openai_audio_transcriptions, "validate_model", _validate_model
+        )
+
+        response = app_client.post(
+            "/v1/audio/transcriptions",
+            files={"file": ("test.wav", io.BytesIO(b"fake"), "audio/wav")},
+            data={
+                "model": "probe-model-id",
+                "response_format": "json",
+                "include": "logprobs",
+            },
+        )
+
+        assert response.status_code == 400
+        assert captured["request"].include == ["logprobs"]
+
 
 @pytest.mark.local
 class TestTranscribeUnsupportedParameters:
