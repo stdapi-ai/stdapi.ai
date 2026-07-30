@@ -1,0 +1,54 @@
+---
+name: Test
+
+on:
+  push:
+    branches: ["**"]
+    tags-ignore: ["**"]
+  pull_request:
+    branches: ["**"]
+permissions:
+  contents: read
+
+jobs:
+  offline:
+    name: Offline test suite
+    runs-on: ubuntu-latest
+    env:
+      FORCE_COLOR: "1"
+      # The suite must reach neither AWS nor a vendor API: no credentials are
+      # configured, and blocking the IMDS endpoint turns a stray call into an
+      # immediate failure instead of a job that hangs until it times out.
+      AWS_EC2_METADATA_DISABLED: "true"
+      AWS_CONFIG_FILE: /dev/null
+      AWS_SHARED_CREDENTIALS_FILE: /dev/null
+      AWS_REGION: us-east-1
+      AWS_DEFAULT_REGION: us-east-1
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+          activate-environment: true
+
+      - name: Install dependencies
+        run: uv sync --frozen --group test
+
+      - name: Run the offline tests
+        run: >
+          pytest --offline
+          --cov=stdapi --cov-report=term --cov-report=xml
+          --cov-fail-under=80
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-offline
+          path: coverage.xml
+          if-no-files-found: error
+          retention-days: 14

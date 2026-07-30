@@ -1,6 +1,7 @@
 # Tests generated files
 **/.cache
 .coverage
+coverage.xml
 .pytest_cache/
 .venv/
 **/.env

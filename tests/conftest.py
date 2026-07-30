@@ -38,7 +38,7 @@ from pybase64 import b64encode
 from starlette.testclient import TestClient
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Callable, Generator
     from typing import Any
 
     from pluggy import Result as _PluggyResult
@@ -427,6 +427,16 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 _OPENAI_ORGANIZATION = "tests_stdapi.ai"
 #: Markers whose tests are collected only when the matching ``--<marker>`` flag is passed.
 _OPT_IN_MARKERS = ("expensive", "agentic", "slow", "video")
+#: Root fixtures reaching a live service; a test whose closure holds one cannot run offline.
+_LIVE_FIXTURES = frozenset(
+    {
+        "anthropic_client",
+        "aws_session_info",
+        "cohere_client",
+        "openai_client",
+        "test_client",
+    }
+)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -473,6 +483,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption(
         "--video", action="store_true", default=False, help="Run video generation tests"
     )
+    parser.addoption(
+        "--offline",
+        action="store_true",
+        default=False,
+        help="Run only tests needing no AWS credentials and no vendor API key, for CI",
+    )
 
 
 def pytest_report_header() -> str | None:
@@ -492,30 +508,41 @@ def pytest_collection_modifyitems(
     skipped only for ``--use-official-api``, since a deployed gateway can serve
     them but the upstream vendors cannot; the ``_OPT_IN_MARKERS`` tests are
     skipped unless their matching flag is passed.
+
+    ``--offline`` keeps only the tests that need neither AWS credentials nor a
+    vendor API key, by skipping every test whose fixture closure contains one of
+    ``_LIVE_FIXTURES``. Deriving the set from the closure rather than a marker
+    means a new test is classified by the fixtures it requests, with nothing to
+    remember to annotate.
     """
+
+    def skip(reason: str, matches: Callable[[pytest.Item], bool]) -> None:
+        """Add a skip marker carrying *reason* to every item *matches* selects."""
+        marker = pytest.mark.skip(reason=reason)
+        for item in items:
+            if matches(item):
+                item.add_marker(marker)
+
+    def marked(name: str) -> Callable[[pytest.Item], bool]:
+        """Return a predicate selecting the items carrying the *name* marker."""
+        return lambda item: item.get_closest_marker(name) is not None
+
+    def needs_live_service(item: pytest.Item) -> bool:
+        """Whether *item* pulls a live AWS/vendor/gateway fixture into its closure."""
+        return bool(_LIVE_FIXTURES.intersection(getattr(item, "fixturenames", ())))
+
     if config.getoption("--server-url") or config.getoption("--use-official-api"):
-        skip_marker = pytest.mark.skip(
-            reason="Tests the local implementation (remote target selected)"
-        )
-        for item in items:
-            if item.get_closest_marker("local"):
-                item.add_marker(skip_marker)
+        skip("Tests the local implementation (remote target selected)", marked("local"))
     if config.getoption("--use-official-api"):
-        skip_gateway = pytest.mark.skip(
-            reason="Exercises a gateway-only capability (official API selected)"
+        skip(
+            "Exercises a gateway-only capability (official API selected)",
+            marked("gateway"),
         )
-        for item in items:
-            if item.get_closest_marker("gateway"):
-                item.add_marker(skip_gateway)
-    for marker in _OPT_IN_MARKERS:
-        if config.getoption(f"--{marker}"):
-            continue
-        skip_marker = pytest.mark.skip(
-            reason=f"Need --{marker} option to run this test"
-        )
-        for item in items:
-            if item.get_closest_marker(marker):
-                item.add_marker(skip_marker)
+    if config.getoption("--offline"):
+        skip("Needs a live service (--offline selected)", needs_live_service)
+    for opt_in in _OPT_IN_MARKERS:
+        if not config.getoption(f"--{opt_in}"):
+            skip(f"Need --{opt_in} option to run this test", marked(opt_in))
 
 
 @pytest.fixture(scope="session")

@@ -262,13 +262,17 @@ async def routing_single_region(
 
 @pytest.fixture(autouse=True)
 def _reset_router_state(request: pytest.FixtureRequest) -> Generator[None]:
-    """Reset router error/counter state for MODEL after each test."""
+    """Reset router error/counter state for MODEL after each test.
+
+    Only a strategy fixture the test actually requested is reset: calling
+    ``getfixturevalue`` unconditionally would *build* one for the unit tests in
+    this module that never ask for a router, dragging in the live AWS clients.
+    """
     yield
     for name in ("routing_ordered", "routing_round_robin", "routing_lowest_latency"):
-        try:
-            fx: RoutingFixture = request.getfixturevalue(name)
-        except pytest.FixtureLookupError:
+        if name not in request.fixturenames:
             continue
+        fx: RoutingFixture = request.getfixturevalue(name)
         fx.reset(MODEL)
         break
 
