@@ -2,6 +2,8 @@
 
 from typing import TYPE_CHECKING, TypedDict
 
+from fastapi import Response
+
 from stdapi.aws_bedrock import MIME_TYPES_TO_AUDIO_TYPE
 from stdapi.models.audio import AudioModelBase
 from stdapi.types.openai_audio import (
@@ -16,8 +18,6 @@ from stdapi.types.openai_audio import (
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
-
-    from fastapi import Response
 
     from stdapi.input_file import InputFile
     from stdapi.types import JsonMapping
@@ -189,7 +189,7 @@ class AudioModel(AudioModelBase[_Request, _Response]):
         content = choice["message"]["content"]
 
         if response_format == "text":
-            return content
+            return Response(content=content, media_type="text/plain; charset=utf-8")
 
         usage = response["usage"]
         return Transcription(
@@ -313,7 +313,7 @@ class AudioModel(AudioModelBase[_Request, _Response]):
         content = result.response["choices"][0]["message"]["content"]
 
         if response_format == "text":
-            return content
+            return Response(content=content, media_type="text/plain; charset=utf-8")
         return Translation(text=content)
 
     async def _build_request(
