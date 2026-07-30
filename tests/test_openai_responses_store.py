@@ -1,4 +1,9 @@
-"""Tests for stored responses routes and previous_response_id (unit)."""
+"""Stored-response routes and ``previous_response_id`` chaining on /v1/responses.
+
+Ref: https://developers.openai.com/api/reference/resources/responses
+     https://developers.openai.com/api/docs/guides/conversation-state#passing-context-from-the-previous-response
+     stdapi/routes/openai_responses.py
+"""
 
 import contextlib
 from json import loads
@@ -213,12 +218,30 @@ def store(monkeypatch: pytest.MonkeyPatch) -> _StubStore:
 
 @pytest.mark.local
 class TestStoreOnCreate:
-    """store=true on POST /v1/responses."""
+    """``store`` handling on POST /v1/responses.
+
+    Unlike upstream OpenAI and Bedrock Mantle, which default ``store`` to
+    true, this implementation defaults it to false and silently ignores it
+    when streaming or when Bedrock session storage is unavailable.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+         https://docs.aws.amazon.com/bedrock/latest/userguide/sessions.html
+         stdapi/routes/openai_responses.py:create_response
+    """
 
     def test_store_persists_response(
         self, client: TestClient, backend: _StubChatBackend, store: _StubStore
     ) -> None:
-        """The response is generated under the session ID and persisted."""
+        """A stored response is generated under its session ID and persisted with its input.
+
+        The public ID is ``resp-<session ID>``, so the backend must generate
+        under that ID for the stored document and the returned object to agree.
+        ``instructions`` is deliberately not persisted: it is not carried over
+        to a ``previous_response_id`` continuation.
+
+        Ref: https://developers.openai.com/api/docs/guides/migrate-to-responses
+             stdapi/responses_store.py:save_stored_response
+        """
         response = client.post(
             "/v1/responses",
             json={
@@ -242,7 +265,14 @@ class TestStoreOnCreate:
     def test_store_with_stream_is_ignored(
         self, client: TestClient, backend: _StubChatBackend, store: _StubStore
     ) -> None:
-        """store=true with streaming is ignored: no session is involved."""
+        """``store`` is downgraded on a streaming request: the stream is served, unstored.
+
+        Storage is not supported alongside streaming on this backend, so the
+        request succeeds as a normal SSE stream with a request-scoped ID and no
+        session is created — the response is simply not retrievable later.
+
+        Ref: stdapi/routes/openai_responses.py:create_response
+        """
         response = client.post(
             "/v1/responses",
             json={
@@ -253,8 +283,14 @@ class TestStoreOnCreate:
             },
         )
         assert response.status_code == 200, response.text
+        assert response.headers["content-type"].startswith("text/event-stream")
         assert not store.created_kinds
         assert not store.saved
+        (created_event,) = _sse_events(response.text)
+        assert created_event["id"].startswith("resp-")
+        assert created_event["id"] != "resp-sess-1", (
+            "streamed response used a session ID"
+        )
 
     def test_store_without_session_storage_is_ignored(
         self,
@@ -263,7 +299,14 @@ class TestStoreOnCreate:
         store: _StubStore,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """store=true is ignored when session storage is unavailable."""
+        """``store`` is ignored when session storage is unavailable on the server.
+
+        ``try_create_stored_response_session`` returns None when the server
+        lacks the Bedrock session permissions; the response must then fall back
+        to a request-scoped ID instead of the literal ``resp-None``.
+
+        Ref: stdapi/responses_store.py:try_create_stored_response_session
+        """
 
         async def _unavailable(_kind: str) -> None:
             return None
@@ -284,19 +327,34 @@ class TestStoreOnCreate:
     def test_without_store_nothing_is_persisted(
         self, client: TestClient, backend: _StubChatBackend, store: _StubStore
     ) -> None:
-        """Without store=true no session is involved."""
+        """Omitting ``store`` persists nothing: ``store`` defaults to false here.
+
+        Upstream OpenAI defaults ``store`` to true; this implementation
+        defaults it to false, so a plain create is not retrievable afterwards.
+
+        Ref: https://developers.openai.com/api/docs/guides/conversation-state#passing-context-from-the-previous-response
+             stdapi/types/openai_responses.py:ResponseCreateParams
+        """
         response = client.post(
             "/v1/responses", json={"model": "amazon.nova-micro-v1:0", "input": "hello"}
         )
         assert response.status_code == 200, response.text
         assert response.json()["id"].startswith("resp-")
         assert response.json()["id"] != "resp-sess-1"
+        assert not store.created_kinds
         assert not store.saved
 
     def test_store_and_list_input_items_with_message_object_input(
         self, client: TestClient, backend: _StubChatBackend, store: _StubStore
     ) -> None:
-        """A message-object input round-trips through store and input_items listing."""
+        """A message-object input round-trips through store and input_items listing.
+
+        A string message ``content`` is stored verbatim and normalized into an
+        ``input_text`` content part only when listed.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/subresources/input_items/methods/list
+             stdapi/routes/openai_responses.py:_normalized_input_items
+        """
         response = client.post(
             "/v1/responses",
             json={
@@ -310,17 +368,25 @@ class TestStoreOnCreate:
         ((_, document),) = store.saved
         store.documents[response_id] = document
 
+        assert document["input"] == [{"role": "user", "content": "question"}]
+
         items_response = client.get(f"/v1/responses/{response_id}/input_items")
         assert items_response.status_code == 200, items_response.text
-        assert items_response.json()["data"][0]["content"][0] == {
-            "type": "input_text",
-            "text": "question",
-        }
+        items = items_response.json()["data"]
+        assert len(items) == 1
+        assert items[0]["role"] == "user"
+        assert items[0]["content"][0] == {"type": "input_text", "text": "question"}
 
     def test_generation_failure_discards_pending_session(
         self, client: TestClient, backend: _StubChatBackend, store: _StubStore
     ) -> None:
-        """A failed generation discards the pending stored session."""
+        """A failed generation discards the pending session and stores nothing.
+
+        The backing session is created before generation, so a generation
+        failure must not leave an empty session behind.
+
+        Ref: stdapi/responses_store.py:discard_stored_response_session
+        """
 
         async def _raise(
             _request: ResponseCreateParams,
@@ -337,7 +403,10 @@ class TestStoreOnCreate:
             json={"model": "amazon.nova-micro-v1:0", "input": "hello", "store": True},
         )
         assert response.status_code == 502
+        assert response.json()["error"]["type"] == "server_error"
+        assert store.created_kinds == ["response"]
         assert store.discarded == ["resp-sess-1"]
+        assert not store.saved
 
     def test_save_failure_discards_pending_session(
         self,
@@ -346,7 +415,13 @@ class TestStoreOnCreate:
         store: _StubStore,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A failed save after a successful generation discards the pending session."""
+        """A save failure after a successful generation discards the pending session.
+
+        Storage failures are not hidden behind a 200: the client must not
+        receive an ID it can never retrieve.
+
+        Ref: stdapi/routes/openai_responses.py:create_response
+        """
 
         async def _raise(_response_id: str, _document: dict[str, Any]) -> None:
             msg = "save failure"
@@ -363,12 +438,28 @@ class TestStoreOnCreate:
 
 @pytest.mark.local
 class TestPreviousResponseId:
-    """previous_response_id continuation on POST /v1/responses."""
+    """``previous_response_id`` chaining on POST /v1/responses.
+
+    Local-store chaining is done gateway-side: the stored conversation is
+    merged into the new request's input, since Bedrock Converse is stateless.
+
+    Ref: https://developers.openai.com/api/docs/guides/conversation-state#passing-context-from-the-previous-response
+         stdapi/routes/openai_responses.py:_apply_previous_response
+    """
 
     def test_previous_conversation_is_prepended(
         self, client: TestClient, backend: _StubChatBackend, store: _StubStore
     ) -> None:
-        """The stored input and output precede the new input."""
+        """The stored input and output precede the new input, and instructions are dropped.
+
+        Upstream specifies that instructions from a previous response are not
+        carried over, so the stored ``instructions`` must not reappear on the
+        continuation; ``previous_response_id`` is restored on the merged
+        request so the response object still echoes it.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+             stdapi/routes/openai_responses.py:_merge_previous_response
+        """
         store.documents["resp-sess-1"] = {
             "input": [{"role": "user", "content": "first"}],
             "instructions": "old sys",
@@ -400,7 +491,10 @@ class TestPreviousResponseId:
     def test_unknown_previous_response_is_not_found(
         self, client: TestClient, backend: _StubChatBackend, store: _StubStore
     ) -> None:
-        """An unknown previous_response_id surfaces as 404 with the upstream wording."""
+        """An unknown ``previous_response_id`` 404s with the upstream wording, before generation.
+
+        Ref: stdapi/routes/openai_responses.py:_previous_response_not_found
+        """
         response = client.post(
             "/v1/responses",
             json={
@@ -414,6 +508,7 @@ class TestPreviousResponseId:
         err = response.json()["error"]
         assert err["message"] == "Previous response with id 'resp-zzz' not found."
         assert err["param"] == "previous_response_id"
+        assert err["type"] == "invalid_request_error"
 
     def test_arn_injection_previous_response_id_is_not_found(
         self,
@@ -422,7 +517,15 @@ class TestPreviousResponseId:
         store: _StubStore,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A session-ARN smuggled as previous_response_id is rejected before any store lookup."""
+        """A session ARN smuggled as ``previous_response_id`` never reaches the store.
+
+        The route's ``resp[-_]`` path pattern does not constrain a body field,
+        so the ID is re-matched against the stored-response pattern; otherwise
+        the ARN would be passed to AWS as a session identifier.
+
+        Ref: stdapi/responses_store.py:RESPONSE_ID_PATTERN
+             stdapi/routes/openai_responses.py:_apply_previous_response
+        """
         calls = 0
 
         async def _counting_load(_response_id: str, _kind: str) -> dict[str, Any]:
@@ -453,7 +556,14 @@ class TestPreviousResponseId:
     def test_store_with_previous_response_id_saves_merged_history(
         self, client: TestClient, backend: _StubChatBackend, store: _StubStore
     ) -> None:
-        """store=true with previous_response_id saves the merged history and echoes the ID."""
+        """A stored continuation persists the merged history, in conversation order.
+
+        The stored document of the new response holds the previous input, the
+        previous output and the new input, so the next continuation only needs
+        the newest response ID.
+
+        Ref: stdapi/routes/openai_responses.py:_merge_previous_response
+        """
         store.documents["resp-old"] = {
             "input": [{"role": "user", "content": "first"}],
             "response": _canned_response("resp-old", "m").model_dump(
@@ -473,13 +583,23 @@ class TestPreviousResponseId:
         assert response.json()["previous_response_id"] == "resp-old"
         ((_, document),) = store.saved
         contents = [item.get("content") for item in document["input"]]
-        assert "first" in contents
-        assert "second" in contents
+        assert contents[0] == "first"
+        assert contents[-1] == "second"
+        # The previous response's assistant output sits between the two turns.
+        assert contents[1][0]["text"] == "answer"
 
     def test_streaming_continuation_echoes_previous_response_id(
         self, client: TestClient, backend: _StubChatBackend, store: _StubStore
     ) -> None:
-        """A streamed continuation's response.created event carries previous_response_id."""
+        """A streamed continuation echoes ``previous_response_id`` on its first event.
+
+        Chaining strips ``previous_response_id`` while merging the stored
+        conversation into the input; it is restored on the request afterwards
+        so the SSE events built from it still report the chained ID.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+             stdapi/routes/openai_responses.py:_apply_previous_response
+        """
         store.documents["resp-old"] = {
             "input": [{"role": "user", "content": "first"}],
             "response": _canned_response("resp-old", "m").model_dump(
@@ -498,16 +618,33 @@ class TestPreviousResponseId:
         assert response.status_code == 200, response.text
         (created_event,) = _sse_events(response.text)
         assert created_event["previous_response_id"] == "resp-old"
+        ((request, _),) = backend.requests
+        assert isinstance(request.input, list)
+        assert isinstance(request.input[0], EasyInputMessage)
+        assert request.input[0].content == "first"
 
 
 @pytest.mark.local
 class TestStoredResponseRoutes:
-    """GET/DELETE /v1/responses/{id} and input items listing."""
+    """GET/DELETE /v1/responses/{id} and GET /v1/responses/{id}/input_items.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/methods/retrieve
+         https://developers.openai.com/api/reference/resources/responses/methods/delete
+         https://developers.openai.com/api/reference/resources/responses/subresources/input_items/methods/list
+         stdapi/routes/openai_responses.py
+    """
 
     def test_retrieve_stored_response(
         self, client: TestClient, store: _StubStore
     ) -> None:
-        """A stored response is returned as-is."""
+        """Retrieval replays the stored response document unchanged.
+
+        The stored document holds the whole serialized Response, so output
+        items and usage counters come back exactly as persisted rather than
+        being rebuilt.
+
+        Ref: stdapi/routes/openai_responses.py:retrieve_response
+        """
         store.documents["resp-sess-1"] = {
             "input": "hello",
             "response": _canned_response("resp-sess-1", "m").model_dump(
@@ -516,21 +653,36 @@ class TestStoredResponseRoutes:
         }
         response = client.get("/v1/responses/resp-sess-1")
         assert response.status_code == 200, response.text
-        assert response.json()["id"] == "resp-sess-1"
-        assert response.json()["output"][0]["content"][0]["text"] == "answer"
+        body = response.json()
+        assert body["id"] == "resp-sess-1"
+        assert body["object"] == "response"
+        assert body["output"][0]["content"][0]["text"] == "answer"
+        assert body["usage"]["total_tokens"] == 2
 
     def test_retrieve_unknown_is_not_found(
         self, client: TestClient, store: _StubStore
     ) -> None:
-        """An unknown stored response surfaces as 404."""
+        """An unknown stored response surfaces as a 404 naming the requested ID.
+
+        Ref: stdapi/responses_store.py:load_stored_response
+        """
         response = client.get("/v1/responses/resp-zzz")
         assert response.status_code == 404
-        assert "resp-zzz" in response.json()["error"]["message"]
+        err = response.json()["error"]
+        assert err["message"] == "Response with id 'resp-zzz' not found."
+        assert err["type"] == "invalid_request_error"
 
     def test_delete_stored_response(
         self, client: TestClient, store: _StubStore
     ) -> None:
-        """Deletion returns a confirmation object."""
+        """Deletion returns a confirmation object and discards the backing session.
+
+        The envelope's ``object`` is ``response.deleted`` on this
+        implementation, where the upstream reference documents ``response``.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/delete
+             stdapi/types/openai_responses.py:ResponseDeleted
+        """
         store.documents["resp-sess-1"] = {"input": "x", "response": {}}
         response = client.delete("/v1/responses/resp-sess-1")
         assert response.status_code == 200, response.text
@@ -544,28 +696,46 @@ class TestStoredResponseRoutes:
     def test_retrieve_chat_completion_kind_session_is_not_found(
         self, client: TestClient, store: _StubStore
     ) -> None:
-        """Retrieving a chat-completion-kind session as a response 404s."""
+        """Retrieving a chat-completion document through the Responses route 404s.
+
+        Both routes share the same Bedrock session store, so the stored kind is
+        what keeps a chat completion from being read as a response.
+
+        Ref: stdapi/responses_store.py:_kind_mismatches
+        """
         store.documents["resp-sess-1"] = {
             "messages": [],
             "response": {"object": "chat.completion"},
         }
         response = client.get("/v1/responses/resp-sess-1")
         assert response.status_code == 404
+        assert "resp-sess-1" in response.json()["error"]["message"]
 
     def test_delete_chat_completion_kind_session_is_not_found_and_not_deleted(
         self, client: TestClient, store: _StubStore
     ) -> None:
-        """Deleting a chat-completion-kind session as a response 404s without deleting."""
+        """Deleting a chat-completion document through the Responses route 404s, undeleted.
+
+        Ref: stdapi/responses_store.py:delete_stored_response
+        """
         store.documents["resp-sess-1"] = {
             "messages": [],
             "response": {"object": "chat.completion"},
         }
         response = client.delete("/v1/responses/resp-sess-1")
         assert response.status_code == 404
+        assert "resp-sess-1" in response.json()["error"]["message"]
         assert not store.deleted
 
     def test_input_items_listing(self, client: TestClient, store: _StubStore) -> None:
-        """Input items are normalized, ordered, and paginated."""
+        """Listed items carry generated IDs and role-appropriate content parts.
+
+        A stored string ``content`` becomes an ``input_text`` part for user
+        messages and an ``output_text`` part for assistant ones; every item gets
+        a positional ``msg-N`` ID so it can be used as an ``after`` cursor.
+
+        Ref: stdapi/routes/openai_responses.py:_normalized_input_items
+        """
         store.documents["resp-sess-1"] = {
             "input": [
                 {"role": "user", "content": "question"},
@@ -590,7 +760,14 @@ class TestStoredResponseRoutes:
     def test_input_items_cursor_and_default_order(
         self, client: TestClient, store: _StubStore
     ) -> None:
-        """Default order is descending, order=asc restores it, and after pages it."""
+        """``order`` defaults to desc, ``asc`` restores conversation order, ``after`` pages.
+
+        The default order matches the upstream list contract (``desc``), and
+        ``after`` returns only the items strictly following the cursor.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/subresources/input_items/methods/list
+             stdapi/routes/openai_responses.py:list_response_input_items
+        """
         store.documents["resp-sess-1"] = {
             "input": [
                 {"role": "user", "content": "question"},
@@ -602,6 +779,8 @@ class TestStoredResponseRoutes:
         assert response.status_code == 200, response.text
         body = response.json()
         assert [item["id"] for item in body["data"]] == ["msg-1", "msg-0"]
+        assert body["first_id"] == "msg-1"
+        assert body["last_id"] == "msg-0"
 
         response = client.get("/v1/responses/resp-sess-1/input_items?order=asc")
         assert response.status_code == 200, response.text
@@ -619,7 +798,13 @@ class TestStoredResponseRoutes:
     def test_input_items_after_accepts_non_msg_prefixed_ids(
         self, client: TestClient, store: _StubStore
     ) -> None:
-        """The `after` cursor accepts non-`msg-N` IDs the listing itself emits."""
+        """The ``after`` cursor matches a stored item's own ID, not just generated ``msg-N``.
+
+        A positional ID is only generated for items that lack one, so the
+        cursor must be compared against the emitted IDs rather than parsed.
+
+        Ref: stdapi/routes/openai_responses.py:list_response_input_items
+        """
         store.documents["resp-sess-1"] = {
             "input": [
                 {"role": "user", "content": "question", "id": "resp-sess-1-msg-0"},
@@ -636,7 +821,10 @@ class TestStoredResponseRoutes:
     def test_input_items_unknown_after_cursor_is_not_found(
         self, client: TestClient, store: _StubStore
     ) -> None:
-        """An `after` cursor matching no item 404s instead of returning an empty page."""
+        """An ``after`` cursor matching no item 404s instead of returning an empty page.
+
+        Ref: stdapi/routes/openai_responses.py:list_response_input_items
+        """
         store.documents["resp-sess-1"] = {
             "input": [{"role": "user", "content": "question"}],
             "response": {},
@@ -645,12 +833,22 @@ class TestStoredResponseRoutes:
             "/v1/responses/resp-sess-1/input_items?after=msg-does-not-exist"
         )
         assert response.status_code == 404
-        assert "msg-does-not-exist" in response.json()["error"]["message"]
+        err = response.json()["error"]
+        assert err["message"] == "No input item with id 'msg-does-not-exist'."
+        assert err["type"] == "invalid_request_error"
 
     def test_input_items_listing_coerces_missing_required_fields(
         self, client: TestClient, store: _StubStore
     ) -> None:
-        """Canonical stored items missing an optional-in-practice field still list."""
+        """A stored item missing a required field is backfilled instead of dropped.
+
+        Clients legitimately store canonical shapes such as a
+        ``function_call_output`` without ``status`` or a ``reasoning`` item
+        without ``summary``; those fields are required by the listable item
+        union, so a known safe default is backfilled before validation.
+
+        Ref: stdapi/routes/openai_responses.py:_listable_input_items
+        """
         store.documents["resp-sess-1"] = {
             "input": [
                 {
@@ -676,7 +874,15 @@ class TestStoredResponseRoutes:
     def test_input_items_listing_drops_unlistable_item_types(
         self, client: TestClient, store: _StubStore
     ) -> None:
-        """A stored `item_reference` entry is dropped instead of 500ing the listing."""
+        """A stored ``item_reference`` entry is dropped instead of failing the listing.
+
+        ``item_reference`` is accepted on create but never becomes conversation
+        history, so it is absent from the listing exactly as upstream, and the
+        remaining items still list.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+             stdapi/routes/openai_responses.py:_listable_input_items
+        """
         store.documents["resp-sess-1"] = {
             "input": [
                 {"role": "user", "content": "question"},
@@ -693,7 +899,14 @@ class TestStoredResponseRoutes:
     def test_input_items_listing_tolerates_legacy_none_fields(
         self, client: TestClient, store: _StubStore
     ) -> None:
-        """Stored items with leftover null `type`/`phase` fields still list correctly."""
+        """Null ``type`` / ``phase`` fields from older documents are dropped, not replayed.
+
+        Documents written before storage excluded null fields still hold them;
+        a null ``type`` must not defeat the ``message`` default, and a null
+        ``phase`` must not reappear in the listed item.
+
+        Ref: stdapi/routes/openai_responses.py:_normalized_input_items
+        """
         store.documents["resp-sess-1"] = {
             "input": [
                 {"role": "user", "content": "question", "type": None, "phase": None}
@@ -704,6 +917,10 @@ class TestStoredResponseRoutes:
         assert response.status_code == 200, response.text
         body = response.json()
         assert body["data"][0]["type"] == "message"
+        assert body["data"][0]["content"][0] == {
+            "type": "input_text",
+            "text": "question",
+        }
         assert "phase" not in body["data"][0]
 
     @pytest.mark.parametrize(
@@ -712,10 +929,18 @@ class TestStoredResponseRoutes:
     def test_retrieve_malformed_document_is_not_found(
         self, client: TestClient, store: _StubStore, document: dict[str, Any]
     ) -> None:
-        """A foreign or corrupt stored document 404s instead of 500ing."""
+        """A foreign or corrupt stored document 404s instead of failing with a 500.
+
+        A session holding a document without a usable ``response`` object (a
+        schema drift or a session written by another tool) is reported as not
+        found rather than crashing route handling.
+
+        Ref: stdapi/routes/openai_responses.py:_malformed_stored_document
+        """
         store.documents["resp-sess-1"] = document
         response = client.get("/v1/responses/resp-sess-1")
         assert response.status_code == 404
+        assert "resp-sess-1" in response.json()["error"]["message"]
 
     @pytest.mark.parametrize(
         "document", [{"response": None}, {}], ids=["null-response", "no-response-key"]
@@ -723,23 +948,39 @@ class TestStoredResponseRoutes:
     def test_input_items_malformed_document_is_not_found(
         self, client: TestClient, store: _StubStore, document: dict[str, Any]
     ) -> None:
-        """A foreign or corrupt stored document 404s the input items listing too."""
+        """A foreign or corrupt stored document 404s the input-items listing too.
+
+        Ref: stdapi/routes/openai_responses.py:_malformed_stored_document
+        """
         store.documents["resp-sess-1"] = document
         response = client.get("/v1/responses/resp-sess-1/input_items")
         assert response.status_code == 404
+        assert "resp-sess-1" in response.json()["error"]["message"]
 
     def test_input_items_non_mapping_entry_is_not_found(
         self, client: TestClient, store: _StubStore
     ) -> None:
-        """A stored input list with a non-mapping entry 404s instead of 500ing."""
+        """A stored input list with a non-mapping entry 404s instead of failing with a 500.
+
+        Ref: stdapi/routes/openai_responses.py:_normalized_input_items
+        """
         store.documents["resp-sess-1"] = {"input": ["not-a-dict"], "response": {}}
         response = client.get("/v1/responses/resp-sess-1/input_items")
         assert response.status_code == 404
+        assert "resp-sess-1" in response.json()["error"]["message"]
 
     def test_retrieve_rejects_stream_query_param(
         self, client: TestClient, store: _StubStore
     ) -> None:
-        """stream=true is rejected: retrieval is never served as an SSE stream."""
+        """``stream=true`` on retrieval is rejected with a 400, not silently ignored.
+
+        Upstream documents streaming a stored response back (with
+        ``starting_after`` resumption); this implementation does not support it
+        and says so instead of returning a non-streamed body.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/retrieve
+             stdapi/routes/openai_responses.py:retrieve_response
+        """
         store.documents["resp-sess-1"] = {
             "input": "hello",
             "response": _canned_response("resp-sess-1", "m").model_dump(
@@ -748,12 +989,21 @@ class TestStoredResponseRoutes:
         }
         response = client.get("/v1/responses/resp-sess-1?stream=true")
         assert response.status_code == 400
-        assert "stream" in response.json()["error"]["message"]
+        err = response.json()["error"]
+        assert "stream" in err["message"]
+        assert "not supported" in err["message"]
+        assert err["type"] == "invalid_request_error"
 
     def test_retrieve_accepts_and_ignores_include_param(
         self, client: TestClient, store: _StubStore
     ) -> None:
-        """Include is accepted for compatibility and does not change the response."""
+        """``include`` is accepted for compatibility and changes nothing in the body.
+
+        The stored document is replayed as-is, so no ``include`` value can add
+        data to it; the parameter is accepted only so SDK calls do not fail.
+
+        Ref: stdapi/routes/openai_responses.py:retrieve_response
+        """
         store.documents["resp-sess-1"] = {
             "input": "hello",
             "response": _canned_response("resp-sess-1", "m").model_dump(
@@ -765,11 +1015,20 @@ class TestStoredResponseRoutes:
         )
         assert response.status_code == 200, response.text
         assert response.json()["id"] == "resp-sess-1"
+        plain = client.get("/v1/responses/resp-sess-1")
+        assert plain.status_code == 200, plain.text
+        assert response.json() == plain.json()
 
 
 @pytest.mark.local
 class TestInvalidResponseIdPattern:
-    """Malformed response IDs are rejected across every {response_id} route."""
+    """Malformed response IDs are rejected on every ``{response_id}`` route.
+
+    The path parameter is constrained to ``resp-`` (local store) and ``resp_``
+    (region-tagged Mantle) IDs, so anything else never reaches the store.
+
+    Ref: stdapi/routes/openai_responses.py:_RESPONSE_ID_PATTERN
+    """
 
     @pytest.mark.parametrize(
         ("method", "path"),
@@ -783,45 +1042,87 @@ class TestInvalidResponseIdPattern:
     def test_invalid_id_pattern_is_rejected(
         self, method: str, path: str, client: TestClient, store: _StubStore
     ) -> None:
-        """An ID not matching the stored response pattern is rejected with 400."""
+        """An ID not matching the response ID pattern is a 400 validation error, not a 404.
+
+        Ref: stdapi/main.py:handle_validation_exception
+        """
         response = getattr(client, method)(path)
         assert response.status_code == 400
+        err = response.json()["error"]
+        assert err["type"] == "invalid_request_error"
+        assert "response_id" in err["message"]
+        assert not store.deleted
 
 
 @pytest.mark.local
 class TestCancelResponse:
-    """POST /v1/responses/{id}/cancel."""
+    """POST /v1/responses/{id}/cancel on locally stored responses.
+
+    Upstream only allows cancelling ``background=true`` responses; locally
+    stored responses are always generated synchronously, so cancel exists only
+    to return the upstream synchronous-response error.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/methods/cancel
+         https://developers.openai.com/api/docs/guides/background
+         stdapi/routes/openai_responses.py:cancel_response
+    """
 
     def test_stored_response_cannot_be_cancelled(
         self, client: TestClient, store: _StubStore
     ) -> None:
-        """Cancelling any stored (synchronous) response fails with 400."""
+        """Cancelling an existing stored response fails with the synchronous-response 400.
+
+        The response must be resolved first: an existing ID gives 400, an
+        unknown one still gives 404.
+
+        Ref: stdapi/routes/openai_responses.py:cancel_response
+        """
         store.documents["resp-sess-1"] = {"input": "x", "response": {}}
         response = client.post("/v1/responses/resp-sess-1/cancel")
         assert response.status_code == 400
-        assert (
-            response.json()["error"]["message"]
-            == "Cannot cancel a synchronous response."
-        )
+        err = response.json()["error"]
+        assert err["message"] == "Cannot cancel a synchronous response."
+        assert err["type"] == "invalid_request_error"
 
     def test_unknown_id_is_not_found(
         self, client: TestClient, store: _StubStore
     ) -> None:
-        """Cancelling an unknown stored response surfaces as 404."""
+        """Cancelling an unknown stored response is a 404, not the synchronous-response 400.
+
+        Ref: stdapi/routes/openai_responses.py:cancel_response
+        """
         response = client.post("/v1/responses/resp-zzz/cancel")
         assert response.status_code == 404
+        assert response.json()["error"]["message"] == (
+            "Response with id 'resp-zzz' not found."
+        )
 
     def test_invalid_id_pattern_is_rejected(
         self, client: TestClient, store: _StubStore
     ) -> None:
-        """An ID not matching the stored response pattern is rejected."""
+        """An ID not matching the response ID pattern is rejected before any lookup.
+
+        Ref: stdapi/routes/openai_responses.py:_RESPONSE_ID_PATTERN
+        """
         response = client.post("/v1/responses/not-a-response-id/cancel")
         assert response.status_code == 400
+        err = response.json()["error"]
+        assert err["type"] == "invalid_request_error"
+        assert "response_id" in err["message"]
+        assert "synchronous" not in err["message"]
 
 
 @pytest.mark.local
 class TestUndecodableMantleResponseId:
-    """An undecodable Mantle-form ID (``resp_...``) 404s before touching the local store."""
+    """An undecodable Mantle-form ID (``resp_...``) 404s before touching the local store.
+
+    ID prefixes are load-bearing: ``resp-`` is a local store ID, ``resp_`` is a
+    region-tagged Mantle ID. A ``resp_`` ID that fails region decoding cannot
+    exist locally and would be mangled into an invalid Bedrock session ID.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html
+         stdapi/routes/openai_responses.py:_require_local_response_id
+    """
 
     @pytest.mark.parametrize(
         ("method", "path"),
@@ -840,7 +1141,10 @@ class TestUndecodableMantleResponseId:
         store: _StubStore,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A `resp_` ID that fails Mantle decoding 404s before any store lookup."""
+        """A ``resp_`` ID that fails Mantle decoding 404s before any store lookup.
+
+        Ref: stdapi/aws_bedrock_mantle.py:decode_mantle_response_id
+        """
         calls = 0
 
         async def _counting_load(_response_id: str, _kind: str) -> dict[str, Any]:
@@ -859,12 +1163,16 @@ class TestUndecodableMantleResponseId:
 
         response = getattr(client, method)(path)
         assert response.status_code == 404
-        assert calls == 0
+        assert calls == 0, "the local store was queried with a Mantle-form ID"
+        assert "resp_notdecodable0" in response.json()["error"]["message"]
 
     def test_create_with_undecodable_previous_response_id_returns_404(
         self, client: TestClient, backend: _StubChatBackend, store: _StubStore
     ) -> None:
-        """A `resp_` `previous_response_id` that fails Mantle decoding 404s before generation."""
+        """A ``resp_`` ``previous_response_id`` failing Mantle decoding 404s before generation.
+
+        Ref: stdapi/routes/openai_responses.py:_apply_previous_response
+        """
         response = client.post(
             "/v1/responses",
             json={
@@ -874,7 +1182,8 @@ class TestUndecodableMantleResponseId:
             },
         )
         assert response.status_code == 404
-        assert not backend.requests
+        assert "resp_notdecodable0" in response.json()["error"]["message"]
+        assert not backend.requests, "generation ran despite an unresolvable chain"
         assert not store.saved
 
 
@@ -885,6 +1194,9 @@ class TestStoredResponseRoutesAuthRejection:
     Uses the session-wide ``test_client`` (lifespan-started, unlike the
     lifespan-free ``client`` fixture) so the auth handler is actually
     initialized and able to reject a missing token.
+
+    Ref: https://developers.openai.com/api/docs/guides/error-codes
+         stdapi/auth.py:authenticate
     """
 
     @pytest.fixture(autouse=True)
@@ -910,7 +1222,15 @@ class TestStoredResponseRoutesAuthRejection:
         test_client: TestClient,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """No Authorization header yields 401 without reaching the store layer."""
+        """No Authorization header yields the 401 ``authentication_error`` envelope.
+
+        Authentication is a route dependency, so it must reject before the
+        handler resolves the ID: an unauthenticated caller learns nothing about
+        which response IDs exist.
+
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/auth.py:authenticate
+        """
         calls: list[str] = []
 
         async def _counting_load(response_id: str, _kind: str) -> dict[str, Any]:
@@ -926,16 +1246,31 @@ class TestStoredResponseRoutesAuthRejection:
         err = body["error"]
         assert set(err.keys()) == {"message", "type", "param", "code"}
         assert err["type"] == "authentication_error"
-        assert not calls
+        assert err["message"] == "Unauthorized", "the 401 message leaks internal detail"
+        assert not calls, "the store was queried by an unauthenticated caller"
 
 
 class TestStoredResponsesLive:
-    """Live stored-responses lifecycle (AWS Bedrock sessions or official API)."""
+    """Live stored-response lifecycle against AWS Bedrock sessions or the official API.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses
+         https://docs.aws.amazon.com/bedrock/latest/userguide/sessions.html
+         stdapi/routes/openai_responses.py
+    """
 
     def test_store_lifecycle_and_continuation(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """store=true persists; retrieve, input_items, cancel, continuation, delete work."""
+        """A stored response is retrievable, listable, chainable and finally deleted.
+
+        Walks the whole documented lifecycle in one billed conversation:
+        ``store=true`` create, retrieve, the synchronous-response 400 from
+        cancel, input-items listing, a ``previous_response_id`` continuation
+        that must recall the secret word, then delete and the resulting 404.
+
+        Ref: https://developers.openai.com/api/docs/guides/conversation-state#passing-context-from-the-previous-response
+             https://developers.openai.com/api/reference/resources/responses/methods/delete
+        """
         from openai import BadRequestError  # noqa: PLC0415
 
         created = openai_client.responses.create(
@@ -948,16 +1283,24 @@ class TestStoredResponsesLive:
             assert created.id.startswith("resp")
             retrieved = openai_client.responses.retrieve(created.id)
             assert retrieved.id == created.id
+            assert retrieved.object == "response"
             assert retrieved.output_text == created.output_text
+            assert retrieved.usage is not None
+            assert (
+                retrieved.usage.total_tokens
+                == retrieved.usage.input_tokens + retrieved.usage.output_tokens
+            )
 
-            with pytest.raises(BadRequestError, match="synchronous response"):
+            with pytest.raises(BadRequestError, match="synchronous response") as cancel:
                 openai_client.responses.cancel(created.id)
+            assert cancel.value.status_code == 400
 
             items = list(
                 openai_client.responses.input_items.list(created.id, order="asc")
             )
             assert items
             assert isinstance(items[0], ResponseInputMessageItem)
+            assert items[0].role == "user"
             assert isinstance(items[0].content[0], ResponseInputText)
             assert "xylophone" in items[0].content[0].text
 
@@ -975,5 +1318,6 @@ class TestStoredResponsesLive:
             if follow is not None:
                 with contextlib.suppress(Exception):
                     openai_client.responses.delete(follow.id)
-        with pytest.raises(NotFoundError):
+        with pytest.raises(NotFoundError) as deleted:
             openai_client.responses.retrieve(created.id)
+        assert deleted.value.status_code == 404

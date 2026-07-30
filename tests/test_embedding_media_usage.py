@@ -1,11 +1,16 @@
 """Unit tests for input-media usage recording in the Nova and Marengo embedding models.
 
 Covers the ``record_bedrock_usage(input_images=..., input_seconds=..., media_spec=...)``
-call sites added to ``amazon_nova_embed.EmbeddingModel`` and
+call sites in ``amazon_nova_embed.EmbeddingModel`` and
 ``twelvelabs_marengo_embed.EmbeddingModel`` -- exercised either through the real
 embed methods with a stubbed ``invoke``/``invoke_async``, or directly against the
 extracted usage-recording helpers when the surrounding method also touches
 S3/region plumbing unrelated to billing.
+
+Ref: https://docs.aws.amazon.com/nova/latest/userguide/embeddings-schema.html
+     https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-marengo-3.html
+     stdapi/usage.py:record_bedrock_usage
+     stdapi/pricing.py:Dimension
 """
 
 from typing import TYPE_CHECKING
@@ -63,10 +68,17 @@ def _only_record() -> UsageRecord:
 
 
 class TestNovaSingleEmbeddingImageUsage:
-    """``_embed_single``: image inputs record ``INPUT_IMAGES`` usage."""
+    """``_embed_single``: image inputs record ``INPUT_IMAGES`` usage.
+
+    Ref: https://docs.aws.amazon.com/nova/latest/userguide/embeddings-schema.html
+         stdapi/models/embedding/amazon_nova_embed.py:EmbeddingModel._record_media_usage
+    """
 
     async def test_standard_image_records_one_input_image_with_no_spec(self) -> None:
-        """A plain image (no detailLevel) bills as a flat input image."""
+        """A plain image (no detailLevel) bills as a flat input image.
+
+        Ref: stdapi/usage.py:record_bedrock_usage
+        """
         model = NovaEmbeddingModel(_NOVA_MODEL_ID)
         model.invoke = AsyncMock(  # type: ignore[method-assign]
             return_value=InvokeResult(response={"embeddings": [{"embedding": [0.1]}]})
@@ -80,11 +92,20 @@ class TestNovaSingleEmbeddingImageUsage:
             region=None,
         )
         record = _only_record()
+        assert record.model == _NOVA_MODEL_ID
         assert record.quantities[Dimension.INPUT_IMAGES] == 1
+        assert Dimension.INPUT_SECONDS not in record.quantities
         assert record.input_images_by_spec == {}
 
     async def test_document_image_records_document_spec(self) -> None:
-        """``detailLevel=DOCUMENT_IMAGE`` bills under the "document" spec bucket."""
+        """``detailLevel=DOCUMENT_IMAGE`` bills under the "document" spec bucket.
+
+        Document images are priced separately from ordinary images, so the extra
+        per-media parameter has to reach the usage record as a spec bucket.
+
+        Ref: https://docs.aws.amazon.com/nova/latest/userguide/embeddings-schema.html
+             stdapi/models/embedding/amazon_nova_embed.py:EmbeddingModel._add_extra_params
+        """
         model = NovaEmbeddingModel(_NOVA_MODEL_ID)
         model.invoke = AsyncMock(  # type: ignore[method-assign]
             return_value=InvokeResult(response={"embeddings": [{"embedding": [0.1]}]})
@@ -102,7 +123,13 @@ class TestNovaSingleEmbeddingImageUsage:
         assert record.input_images_by_spec == {"document": 1}
 
     async def test_text_input_records_no_input_images(self) -> None:
-        """Non-image media types never record ``INPUT_IMAGES``."""
+        """Non-image media types never record ``INPUT_IMAGES``.
+
+        Text embedding is billed on tokens reported by Bedrock, so the media
+        accounting must stay empty even though the invocation happened.
+
+        Ref: stdapi/models/embedding/amazon_nova_embed.py:EmbeddingModel._record_media_usage
+        """
         model = NovaEmbeddingModel(_NOVA_MODEL_ID)
         model.invoke = AsyncMock(  # type: ignore[method-assign]
             return_value=InvokeResult(response={"embeddings": [{"embedding": [0.1]}]})
@@ -115,14 +142,22 @@ class TestNovaSingleEmbeddingImageUsage:
             extra_params={},
             region=None,
         )
+        model.invoke.assert_awaited_once()
         assert not usage.USAGE.get()
 
 
 class TestNovaSegmentedEmbeddingUsage:
-    """``_record_media_usage``: billed input-media quantities for SEGMENTED_EMBEDDING jobs."""
+    """``_record_media_usage``: billed input-media quantities for SEGMENTED_EMBEDDING jobs.
+
+    Ref: https://docs.aws.amazon.com/nova/latest/nova2-userguide/embeddings.html
+         stdapi/models/embedding/amazon_nova_embed.py:EmbeddingModel._embed_segmented
+    """
 
     def test_image_records_one_input_image_with_no_spec(self) -> None:
-        """A segmented image without detailLevel bills as a flat input image."""
+        """A segmented image without detailLevel bills as a flat input image.
+
+        Ref: stdapi/usage.py:record_bedrock_usage
+        """
         model = NovaEmbeddingModel(_NOVA_MODEL_ID)
         params = _SegmentedEmbeddingParams(
             embeddingPurpose="GENERIC_INDEX",
@@ -130,11 +165,19 @@ class TestNovaSegmentedEmbeddingUsage:
         )
         model._record_media_usage("image", params, [])  # noqa: SLF001
         record = _only_record()
+        assert record.model == _NOVA_MODEL_ID
         assert record.quantities[Dimension.INPUT_IMAGES] == 1
+        assert Dimension.INPUT_SECONDS not in record.quantities
         assert record.input_images_by_spec == {}
 
     def test_explicit_region_wins_over_shared_model_state(self) -> None:
-        """The media record carries its own call's region, not a sibling's overwrite."""
+        """The media record carries its own call's region, not a sibling's overwrite.
+
+        Concurrent calls to the same model share one model-state entry, so the
+        serving Region has to be passed per call rather than read back from it.
+
+        Ref: stdapi/usage.py:record_bedrock_usage
+        """
         model = NovaEmbeddingModel(_NOVA_MODEL_ID)
         usage.get_model_state(_NOVA_MODEL_ID).region = "eu-west-3"
         params = _SegmentedEmbeddingParams(
@@ -146,9 +189,13 @@ class TestNovaSegmentedEmbeddingUsage:
         )
         (key,) = usage.USAGE.get()
         assert key.region == "us-east-1"
+        assert _only_record().quantities[Dimension.INPUT_IMAGES] == 1
 
     def test_document_image_records_document_spec(self) -> None:
-        """A segmented image with ``detailLevel=DOCUMENT_IMAGE`` bills under "document"."""
+        """A segmented image with ``detailLevel=DOCUMENT_IMAGE`` bills under "document".
+
+        Ref: https://docs.aws.amazon.com/nova/latest/userguide/embeddings-schema.html
+        """
         model = NovaEmbeddingModel(_NOVA_MODEL_ID)
         params = _SegmentedEmbeddingParams(
             embeddingPurpose="GENERIC_INDEX",
@@ -160,11 +207,20 @@ class TestNovaSegmentedEmbeddingUsage:
         )
         model._record_media_usage("image", params, [])  # noqa: SLF001
         record = _only_record()
+        assert record.quantities[Dimension.INPUT_IMAGES] == 1
         assert record.input_images_by_spec == {"document": 1}
 
     @pytest.mark.parametrize("media_type", ["audio", "video"])
     def test_media_bills_ceil_of_max_segment_end_seconds(self, media_type: str) -> None:
-        """Billed seconds are the ceiling of the latest segment's end time."""
+        """Billed seconds are the ceiling of the latest segment's end time.
+
+        A segmented job returns one JSONL entry per segment with its own
+        ``segmentEndSeconds``; the media duration is the last segment's end time,
+        not the sum of the segments, and partial seconds are rounded up.
+
+        Ref: https://docs.aws.amazon.com/nova/latest/nova2-userguide/embeddings.html
+             stdapi/models/embedding/amazon_nova_embed.py:EmbeddingModel._record_media_usage
+        """
         model = NovaEmbeddingModel(_NOVA_MODEL_ID)
         entries = [
             _SegmentedEmbeddingData(
@@ -185,10 +241,19 @@ class TestNovaSegmentedEmbeddingUsage:
         )
         record = _only_record()
         assert record.quantities[Dimension.INPUT_SECONDS] == 10  # ceil(9.1)
+        assert Dimension.INPUT_IMAGES not in record.quantities
         assert record.input_seconds_by_spec == {media_type: 10}
 
     def test_media_without_segment_end_seconds_records_nothing(self) -> None:
-        """No ``segmentEndSeconds`` in any entry means no usage is recorded."""
+        """No ``segmentEndSeconds`` in any entry means no usage is recorded.
+
+        Text segments carry character positions instead of timings, and a failed
+        segment may carry no metadata at all, so an unknown duration must not be
+        billed as zero seconds.
+
+        Ref: https://docs.aws.amazon.com/nova/latest/userguide/embeddings-schema.html
+             stdapi/models/embedding/amazon_nova_embed.py:EmbeddingModel._record_media_usage
+        """
         model = NovaEmbeddingModel(_NOVA_MODEL_ID)
         entries = [
             _SegmentedEmbeddingData(
@@ -206,10 +271,20 @@ class TestNovaSegmentedEmbeddingUsage:
 
 
 class TestMarengoTextImageUsage:
-    """``_embed_text_image``: the text_image combined mode records one input image."""
+    """``_embed_text_image``: the text_image combined mode records one input image.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-marengo-3.html
+         stdapi/models/embedding/twelvelabs_marengo_embed.py:EmbeddingModel._embed_text_image
+    """
 
     async def test_text_image_records_one_input_image(self) -> None:
-        """The image half of a text_image pair bills as a flat input image."""
+        """The image half of a text_image pair bills as a flat input image.
+
+        The fused ``text_image`` call embeds one image and one caption, so it is
+        billed exactly like a plain image call despite the different input type.
+
+        Ref: stdapi/usage.py:record_bedrock_usage
+        """
         model = MarengoEmbeddingModel(_MARENGO_MODEL_ID)
         model.invoke = AsyncMock(  # type: ignore[method-assign]
             return_value=InvokeResult(response={"data": [{"embedding": [0.1]}]})
@@ -220,26 +295,45 @@ class TestMarengoTextImageUsage:
             extra_params={},
         )
         record = _only_record()
+        assert record.model == _MARENGO_MODEL_ID
         assert record.quantities[Dimension.INPUT_IMAGES] == 1
+        assert Dimension.INPUT_SECONDS not in record.quantities
         assert record.input_images_by_spec == {}
 
 
 class TestMarengoRecordMediaUsage:
-    """``_record_media_usage``: billed input-media quantities per response shape."""
+    """``_record_media_usage``: billed input-media quantities per response shape.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-marengo.html
+         stdapi/models/embedding/twelvelabs_marengo_embed.py:EmbeddingModel._record_media_usage
+    """
 
     def test_image_records_one_input_image(self) -> None:
-        """An image response records one flat input image."""
+        """An image response records one flat input image.
+
+        Ref: stdapi/usage.py:record_bedrock_usage
+        """
         model = MarengoEmbeddingModel(_MARENGO_MODEL_ID)
         model._record_media_usage(  # noqa: SLF001
             "image", {"data": [{"embedding": [0.1]}]}
         )
         record = _only_record()
+        assert record.model == _MARENGO_MODEL_ID
         assert record.quantities[Dimension.INPUT_IMAGES] == 1
+        assert Dimension.INPUT_SECONDS not in record.quantities
         assert record.input_images_by_spec == {}
 
     @pytest.mark.parametrize("media_type", ["audio", "video"])
     def test_media_bills_ceil_of_max_end_sec(self, media_type: str) -> None:
-        """Billed seconds are the ceiling of the latest entry's ``endSec``."""
+        """Billed seconds are the ceiling of the latest entry's ``endSec``.
+
+        Marengo returns one entry per clip with ``startSec``/``endSec``, so the
+        billable duration is the last clip's end time rounded up -- not the sum of
+        the clip lengths, which would double-count overlapping scopes.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-marengo-3.html
+             stdapi/models/embedding/twelvelabs_marengo_embed.py:EmbeddingModel._record_media_usage
+        """
         model = MarengoEmbeddingModel(_MARENGO_MODEL_ID)
         response = {
             "data": [
@@ -250,17 +344,30 @@ class TestMarengoRecordMediaUsage:
         model._record_media_usage(media_type, response)  # type: ignore[arg-type] # noqa: SLF001
         record = _only_record()
         assert record.quantities[Dimension.INPUT_SECONDS] == 13  # ceil(12.3)
+        assert Dimension.INPUT_IMAGES not in record.quantities
         assert record.input_seconds_by_spec == {media_type: 13}
 
     def test_media_without_end_sec_records_nothing(self) -> None:
-        """A response with no ``endSec`` on any entry records no usage."""
+        """A response with no ``endSec`` on any entry records no usage.
+
+        Asset-scoped embeddings can come back without clip timings, and an unknown
+        duration must not be billed as zero seconds.
+
+        Ref: stdapi/models/embedding/twelvelabs_marengo_embed.py:EmbeddingModel._record_media_usage
+        """
         model = MarengoEmbeddingModel(_MARENGO_MODEL_ID)
         response = {"data": [{"embedding": [0.1]}]}
         model._record_media_usage("audio", response)  # type: ignore[arg-type] # noqa: SLF001
         assert not usage.USAGE.get()
 
     def test_explicit_region_wins_over_shared_model_state(self) -> None:
-        """The media record carries its own call's region, not a sibling's overwrite."""
+        """The media record carries its own call's region, not a sibling's overwrite.
+
+        Concurrent calls to the same model share one model-state entry, so the
+        serving Region has to be passed per call rather than read back from it.
+
+        Ref: stdapi/usage.py:record_bedrock_usage
+        """
         model = MarengoEmbeddingModel(_MARENGO_MODEL_ID)
         usage.get_model_state(_MARENGO_MODEL_ID).region = "eu-west-3"
         model._record_media_usage(  # noqa: SLF001
@@ -268,3 +375,4 @@ class TestMarengoRecordMediaUsage:
         )
         (key,) = usage.USAGE.get()
         assert key.region == "us-east-1"
+        assert _only_record().quantities[Dimension.INPUT_IMAGES] == 1

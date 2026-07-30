@@ -1,4 +1,8 @@
-"""Unit tests for OpenAI Responses API input-side parsing and Bedrock mapping."""
+"""Responses API ``input`` items and their mapping onto Bedrock Converse messages.
+
+Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+     stdapi/models/chat/_adapters/_openai_responses.py:map_input
+"""
 
 from base64 import b64encode
 from typing import Any, cast
@@ -74,7 +78,17 @@ def _parse(payload: dict[str, object]) -> object:
 
 
 class TestHostedToolItemsParseAndDrop:
-    """Hosted-tool call items parse without error and are dropped on mapping."""
+    """Items with no Bedrock equivalent validate and contribute no request content.
+
+    Upstream accepts a broad item union in ``input`` (hosted-tool calls, shell,
+    MCP, apply_patch).  Bedrock Converse can represent none of them, so
+    ``_map_input_item`` has no branch for these types and drops them silently
+    rather than rejecting a client that replays a whole previous response.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+         https://developers.openai.com/api/docs/guides/tools
+         stdapi/models/chat/_adapters/_openai_responses.py:_map_input_item
+    """
 
     @pytest.mark.parametrize(
         ("payload", "expected_cls"),
@@ -242,9 +256,12 @@ class TestHostedToolItemsParseAndDrop:
     async def test_parses_and_is_dropped(
         self, payload: dict[str, object], expected_cls: type
     ) -> None:
-        """Each hosted item validates to its model and maps to no message."""
+        """Each item resolves to its own union member and yields no Bedrock content."""
         item = _parse(payload)
         assert isinstance(item, expected_cls)
+        assert getattr(item, "type", None) == payload["type"], (
+            "the discriminated union must resolve on the item's own type literal"
+        )
         messages, system = await map_input(
             cast("list[ResponseInputItem]", [item]), None
         )
@@ -253,10 +270,19 @@ class TestHostedToolItemsParseAndDrop:
 
 
 class TestCustomToolCallItems:
-    """custom_tool_call and custom_tool_call_output map to toolUse/toolResult."""
+    """``custom_tool_call``/``custom_tool_call_output`` map to toolUse/toolResult.
+
+    Bedrock has no free-form tool payload, so a custom tool call is replayed as
+    a regular ``toolUse`` whose ``input`` is always a JSON object, and its
+    output as a ``toolResult`` carried by a user turn.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+         stdapi/models/chat/_adapters/_openai_responses.py:_map_custom_tool_call
+         stdapi/models/chat/_adapters/_openai_responses.py:_map_custom_tool_call_output
+    """
 
     async def test_call_with_json_object_input(self) -> None:
-        """JSON object input is parsed into the Bedrock toolUse input."""
+        """A JSON object ``input`` becomes the Bedrock toolUse input verbatim."""
         item = _parse(
             {
                 "type": "custom_tool_call",
@@ -283,7 +309,11 @@ class TestCustomToolCallItems:
         ]
 
     async def test_call_with_freeform_input_is_wrapped(self) -> None:
-        """Non-JSON freeform input is wrapped as {"input": <raw>}."""
+        """Non-JSON freeform ``input`` is wrapped as ``{"input": <raw>}``.
+
+        Bedrock's ``toolUse.input`` must be a JSON object, so a free-form custom
+        tool payload cannot be forwarded as a bare string.
+        """
         item = CustomToolCallInput(
             type="custom_tool_call",
             call_id="call_1",
@@ -291,11 +321,14 @@ class TestCustomToolCallItems:
             input="SELECT * FROM cats",
         )
         messages, _ = await map_input([item], None)
+        assert messages[0]["role"] == "assistant"
         tool_use = messages[0]["content"][0]["toolUse"]
         assert tool_use["input"] == {"input": "SELECT * FROM cats"}
+        assert tool_use["toolUseId"] == "call_1"
+        assert tool_use["name"] == "sql"
 
     async def test_output_string_form(self) -> None:
-        """String output becomes a user toolResult with a text block."""
+        """A string ``output`` becomes a user toolResult with a single text block."""
         item = _parse(
             {"type": "custom_tool_call_output", "call_id": "call_1", "output": "done"}
         )
@@ -316,7 +349,7 @@ class TestCustomToolCallItems:
         ]
 
     async def test_output_list_form_keeps_text_parts(self) -> None:
-        """Content-part list output keeps text parts as text blocks."""
+        """A content-part list ``output`` keeps one text block per text part."""
         item = CustomToolCallOutput(
             type="custom_tool_call_output",
             call_id="call_1",
@@ -326,15 +359,27 @@ class TestCustomToolCallItems:
             ],
         )
         messages, _ = await map_input([item], None)
+        assert messages[0]["role"] == "user"
         tool_result = messages[0]["content"][0]["toolResult"]
         assert tool_result["content"] == [{"text": "a"}, {"text": "b"}]
+        assert tool_result["toolUseId"] == "call_1"
 
 
 class TestEchoedItemsTolerateUnknownFields:
-    """Echoed output items parse even when carrying unknown upstream fields."""
+    """Echoed output items parse even when carrying unknown upstream fields.
+
+    OpenAI reserves the right to add response fields, and clients replay whole
+    output items back into ``input``.  The ``*Input`` item models therefore set
+    ``extra="ignore"`` so an unknown field is dropped instead of failing
+    validation, even though the suite runs with ``strict_input_validation``.
+
+    Ref: https://developers.openai.com/api/reference/overview
+         stdapi/types/openai_responses.py:ResponseOutputMessageInput
+         stdapi/types/openai_responses.py:ResponseReasoningItemInput
+    """
 
     async def test_output_message_with_unknown_field(self) -> None:
-        """An echoed assistant message with a new field parses and maps."""
+        """An echoed assistant message with an unknown field parses and still maps."""
         item = _parse(
             {
                 "type": "message",
@@ -346,11 +391,18 @@ class TestEchoedItemsTolerateUnknownFields:
             }
         )
         assert isinstance(item, ResponseOutputMessageInput)
+        assert "brand_new_upstream_field" not in item.model_dump(), (
+            "unknown fields must be dropped, not echoed back into the model"
+        )
         messages, _ = await map_input(cast("list[ResponseInputItem]", [item]), None)
         assert messages == [{"role": "assistant", "content": [{"text": "hi"}]}]
 
     async def test_reasoning_item_with_unknown_field(self) -> None:
-        """An echoed reasoning item with a new field parses without error."""
+        """An unknown field on a reasoning item parses and leaves it empty.
+
+        The item carries neither ``content`` nor ``summary``, so it maps to no
+        Bedrock block at all.
+        """
         item = _parse(
             {
                 "type": "reasoning",
@@ -360,6 +412,7 @@ class TestEchoedItemsTolerateUnknownFields:
             }
         )
         assert isinstance(item, ResponseReasoningItemInput)
+        assert "brand_new_upstream_field" not in item.model_dump()
         messages, _ = await map_input(cast("list[ResponseInputItem]", [item]), None)
         assert messages == []
 
@@ -384,7 +437,15 @@ class TestEchoedItemsTolerateUnknownFields:
     async def test_codex_style_reasoning_item_maps(
         self, payload: dict[str, object]
     ) -> None:
-        """Codex-serialized reasoning items parse and map to Bedrock blocks."""
+        """Codex-serialized reasoning items map to a Bedrock reasoningText block.
+
+        Codex CLI re-serializes reasoning content parts with ``type: "text"``
+        instead of ``reasoning_text``, may omit ``summary`` and may null the item
+        ``id``; all three variants must still reach the model as reasoning.
+
+        Ref: stdapi/types/openai_responses.py:ReasoningItemContentInput
+             stdapi/models/chat/_adapters/_openai_responses.py:_map_reasoning_item
+        """
         item = _parse(payload)
         assert isinstance(item, ResponseReasoningItemInput)
         messages, _ = await map_input(cast("list[ResponseInputItem]", [item]), None)
@@ -399,19 +460,36 @@ class TestEchoedItemsTolerateUnknownFields:
 
 
 class TestFunctionCallOutputContentParts:
-    """function_call_output part lists keep image and file parts."""
+    """A ``function_call_output`` part list keeps its image and file parts.
+
+    Upstream allows a function result to be a content-part list, and Bedrock
+    ``toolResult`` content blocks share their shape with message content blocks,
+    so image and document parts are resolved through the same input-file
+    machinery as user content instead of being flattened to text.
+
+    Ref: https://developers.openai.com/api/docs/guides/function-calling#tool-choice
+         https://developers.openai.com/api/docs/guides/file-inputs
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ContentBlock.html
+         stdapi/models/chat/_adapters/_openai_responses.py:_map_function_call_output
+    """
 
     async def test_image_part_maps_to_tool_result_image_block(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """An all-image output produces a non-empty toolResult image block."""
+        """An ``input_image`` output part resolves to a toolResult image block.
+
+        ``InputFile`` is stubbed so the test pins the routing of the part's
+        ``image_url`` into the file loader, not the loader's own fetching.
+        """
         image_block: dict[str, object] = {
             "image": {"format": "png", "source": {"bytes": b"img"}}
         }
+        sources: list[str] = []
 
         class _StubInputFile:
             def __init__(self, source: str) -> None:
                 self.source = source
+                sources.append(source)
 
             async def to_bedrock_content_block(self) -> dict[str, object]:
                 return image_block
@@ -425,20 +503,24 @@ class TestFunctionCallOutputContentParts:
             ],
         )
         messages, _ = await map_input([item], None)
+        assert messages[0]["role"] == "user", "toolResult must ride a user turn"
         tool_result = messages[0]["content"][0]["toolResult"]
         assert tool_result == {"toolUseId": "call_1", "content": [image_block]}
+        assert sources == ["https://x/i.png"]
 
     async def test_file_and_text_parts_map_to_document_and_text_blocks(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """File parts become document blocks alongside text parts."""
+        """An ``input_file`` part becomes a document block, keeping part order."""
         document_block: dict[str, object] = {
             "document": {"format": "pdf", "name": "doc", "source": {"bytes": b"pdf"}}
         }
+        sources: list[str] = []
 
         class _StubInputFile:
             def __init__(self, source: str) -> None:
                 self.source = source
+                sources.append(source)
 
             async def to_bedrock_content_block(self) -> dict[str, object]:
                 return document_block
@@ -453,15 +535,26 @@ class TestFunctionCallOutputContentParts:
             ],
         )
         messages, _ = await map_input([item], None)
+        assert messages[0]["role"] == "user"
         tool_result = messages[0]["content"][0]["toolResult"]
         assert tool_result["content"] == [{"text": "see attachment"}, document_block]
+        assert tool_result["toolUseId"] == "call_1"
+        assert sources == ["JVBER"], "file_data is handed to the input-file loader"
 
 
 class TestFunctionCallArguments:
-    """function_call arguments always produce a JSON object toolUse input."""
+    """A replayed ``function_call`` always produces a JSON object toolUse input.
+
+    Bedrock rejects a non-object ``toolUse.input``, while upstream types
+    ``arguments`` as an opaque JSON string that a client may echo back verbatim.
+
+    Ref: https://developers.openai.com/api/docs/guides/function-calling#tool-choice
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ContentBlock.html
+         stdapi/models/chat/_adapters/_openai_responses.py:_tool_use_input
+    """
 
     async def test_invalid_json_arguments_are_wrapped(self) -> None:
-        """Non-JSON arguments fall back to {"input": <raw>}."""
+        """Non-JSON ``arguments`` fall back to ``{"input": <raw>}``."""
         item = FunctionCallInput(
             type="function_call",
             call_id="call_1",
@@ -469,23 +562,37 @@ class TestFunctionCallArguments:
             arguments="run all the tests",
         )
         messages, _ = await map_input([item], None)
+        assert messages[0]["role"] == "assistant"
         tool_use = messages[0]["content"][0]["toolUse"]
         assert tool_use["input"] == {"input": "run all the tests"}
+        assert tool_use["toolUseId"] == "call_1"
+        assert tool_use["name"] == "fn"
 
     async def test_json_object_arguments_pass_through(self) -> None:
-        """Valid JSON object arguments are used as-is."""
+        """A JSON object in ``arguments`` is used as the toolUse input unchanged."""
         item = FunctionCallInput(
             type="function_call", call_id="call_1", name="fn", arguments='{"a": 1}'
         )
         messages, _ = await map_input([item], None)
-        assert messages[0]["content"][0]["toolUse"]["input"] == {"a": 1}
+        tool_use = messages[0]["content"][0]["toolUse"]
+        assert tool_use["input"] == {"a": 1}
+        assert tool_use["name"] == "fn"
 
 
 class TestImageGenerationCallInput:
-    """Echoed image_generation_call items replay the tool call and its image."""
+    """An echoed ``image_generation_call`` replays the tool call and its image.
+
+    ``image_generation`` is not a Bedrock hosted tool: the gateway exposes it to
+    the model as a synthetic function tool and generates the image itself, so a
+    replayed call has to be rebuilt as an assistant ``toolUse`` plus the user
+    ``toolResult`` that carries the decoded image.
+
+    Ref: https://developers.openai.com/api/docs/guides/tools-image-generation
+         stdapi/models/chat/_adapters/_openai_responses.py:_map_image_generation_call
+    """
 
     async def test_result_maps_to_tool_use_and_image_tool_result(self) -> None:
-        """A completed call becomes toolUse plus a toolResult image block."""
+        """A completed call becomes a toolUse plus a toolResult image block."""
         item = ImageGenerationCallInput(
             id="ig_1",
             status="completed",
@@ -527,7 +634,11 @@ class TestImageGenerationCallInput:
         ]
 
     async def test_jpeg_magic_bytes_are_detected(self) -> None:
-        """Non-PNG results are labeled with their sniffed format."""
+        """A JPEG result is labeled ``jpeg`` rather than the ``png`` fallback.
+
+        The item carries no MIME type, so the Bedrock image format is sniffed
+        from the decoded payload's magic bytes.
+        """
         item = ImageGenerationCallInput(
             id="ig_1",
             status="completed",
@@ -536,10 +647,17 @@ class TestImageGenerationCallInput:
         )
         messages, _ = await map_input([item], None)
         tool_result = messages[1]["content"][0]["toolResult"]
-        assert tool_result["content"][0]["image"]["format"] == "jpeg"
+        assert tool_result["content"][0]["image"] == {
+            "format": "jpeg",
+            "source": {"bytes": _JPEG_BYTES},
+        }
 
     async def test_empty_result_is_dropped(self) -> None:
-        """Items without a result produce no Bedrock message."""
+        """A call without a ``result`` produces no Bedrock message at all.
+
+        A failed generation must not leave a dangling ``toolUse`` with no
+        matching ``toolResult``, which Bedrock rejects.
+        """
         item = ImageGenerationCallInput(
             id="ig_1", status="failed", type="image_generation_call", result=None
         )
@@ -548,11 +666,21 @@ class TestImageGenerationCallInput:
 
 
 class TestSystemMessageContentParts:
-    """System/developer list content keeps input_text and output_text parts."""
+    """``system``/``developer`` list content becomes Bedrock system blocks.
+
+    Upstream states that instructions given with the ``developer`` or ``system``
+    role take precedence over the ``user`` role, so both roles are lifted out of
+    the message list into Converse ``system`` blocks; their ``input_text`` and
+    ``output_text`` parts are joined with a single space.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+         https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html
+         stdapi/models/chat/_adapters/_openai_responses.py:_map_message_item
+    """
 
     @pytest.mark.parametrize("role", ["system", "developer"])
     async def test_output_text_parts_are_included(self, role: str) -> None:
-        """output_text parts join input_text parts in the system blocks."""
+        """``output_text`` parts join ``input_text`` parts in one system block."""
         item = _parse(
             {
                 "type": "message",
@@ -571,7 +699,16 @@ class TestSystemMessageContentParts:
 
 
 class TestCountInputTokensToolConfig:
-    """count_input_tokens_via_bedrock mirrors the real converse toolConfig."""
+    """POST /responses/input_tokens counts the same toolConfig Converse would get.
+
+    Tool definitions are billable input, and Bedrock ``CountTokens`` returns the
+    count that the equivalent ``Converse`` call would be charged, so the route
+    reuses ``_build_tool_config`` verbatim instead of estimating.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/subresources/input_tokens
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CountTokens.html
+         stdapi/models/chat/_adapters/_openai_responses.py:count_input_tokens_via_bedrock
+    """
 
     @staticmethod
     def _stub_client(captured: dict[str, Any]) -> object:
@@ -587,7 +724,11 @@ class TestCountInputTokensToolConfig:
     async def test_synthetic_image_generation_tool_is_counted(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The toolConfig includes function and synthetic image_generation tools."""
+        """The counted toolConfig holds the function and synthetic image tools.
+
+        ``image_generation`` is executed gateway-side but is still presented to
+        the model as a function tool, so its schema is part of the billed input.
+        """
         captured: dict[str, Any] = {}
         monkeypatch.setattr(
             adapter, "get_client", lambda *_args, **_kwargs: self._stub_client(captured)
@@ -605,15 +746,26 @@ class TestCountInputTokensToolConfig:
         count = await adapter.count_input_tokens_via_bedrock(
             request, "model-id", "us-east-1"
         )
-        assert count == 7
-        tool_config = captured["input"]["converse"]["toolConfig"]
+        assert count == 7, "the route returns Bedrock's inputTokens unmodified"
+        assert captured["modelId"] == "model-id"
+        converse = captured["input"]["converse"]
+        assert converse["messages"] == [{"role": "user", "content": [{"text": "hi"}]}]
+        tool_config = converse["toolConfig"]
         names = [tool["toolSpec"]["name"] for tool in tool_config["tools"]]
         assert names == ["fn", "image_generation"]
+        synthetic = tool_config["tools"][1]["toolSpec"]["inputSchema"]["json"]
+        assert synthetic["required"] == ["prompt"], (
+            "the synthetic tool must be counted with its real schema"
+        )
 
     async def test_tool_choice_none_omits_tool_config(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """tool_choice="none" keeps the toolConfig out of the count request."""
+        """``tool_choice="none"`` keeps the whole toolConfig out of the count.
+
+        The gateway implements ``none`` by omitting the Bedrock tool
+        configuration, so the declared tools are not billed either.
+        """
         captured: dict[str, Any] = {}
         monkeypatch.setattr(
             adapter, "get_client", lambda *_args, **_kwargs: self._stub_client(captured)
@@ -633,13 +785,24 @@ class TestCountInputTokensToolConfig:
             == 7
         )
         assert "toolConfig" not in captured["input"]["converse"]
+        assert captured["input"]["converse"]["messages"] == [
+            {"role": "user", "content": [{"text": "hi"}]}
+        ]
 
 
 class TestRefusalParts:
-    """Assistant refusal parts are preserved as assistant text."""
+    """An echoed ``refusal`` part is replayed as assistant text.
+
+    Bedrock has no refusal content block, so dropping the part would erase a
+    whole assistant turn from the replayed history and leave the conversation
+    with two consecutive user turns.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+         stdapi/models/chat/_adapters/_openai_responses.py:_map_output_message
+    """
 
     async def test_refusal_maps_to_assistant_text(self) -> None:
-        """A refusal-only echoed message keeps the refusal text."""
+        """A refusal-only echoed message keeps its refusal text as assistant text."""
         item = ResponseOutputMessage(
             id="msg_1",
             content=[
@@ -658,10 +821,18 @@ class TestRefusalParts:
 
 
 class TestExtractReasoning:
-    """Reasoning extraction honors the upstream default effort."""
+    """The presence of ``reasoning`` decides whether reasoning is configured.
+
+    Upstream documents the ``reasoning.effort`` default as model-dependent; this
+    gateway pins its own default so that a bare ``reasoning: {}`` is actionable,
+    and treats only ``effort="none"`` as a request to disable reasoning.
+
+    Ref: https://developers.openai.com/api/docs/guides/reasoning#preserve-reasoning-without-stored-responses
+         stdapi/models/chat/_adapters/_openai_responses.py:extract_reasoning
+    """
 
     def test_reasoning_without_effort_defaults_to_medium(self) -> None:
-        """A reasoning object without effort enables medium-effort reasoning."""
+        """A ``reasoning`` object without ``effort`` enables medium-effort reasoning."""
         request = ResponseCreateParams(model="m", input="hi", reasoning=Reasoning())
         assert extract_reasoning(request) == {
             "enabled": True,
@@ -671,24 +842,38 @@ class TestExtractReasoning:
         }
 
     def test_effort_none_disables_reasoning(self) -> None:
-        """effort="none" still disables reasoning."""
+        """``effort="none"`` disables reasoning while keeping the effort value."""
         request = ResponseCreateParams(
             model="m", input="hi", reasoning=Reasoning(effort="none")
         )
         params = extract_reasoning(request)
         assert params is not None
         assert params["enabled"] is False
+        assert params["reasoning_effort"] == "none"
 
     def test_no_reasoning_returns_none(self) -> None:
-        """A request without a reasoning object configures nothing."""
+        """A request without a ``reasoning`` object configures nothing at all.
+
+        ``None`` leaves the model's own default in place instead of forcing
+        reasoning off, which matters for models that always reason.
+        """
         assert extract_reasoning(ResponseCreateParams(model="m", input="hi")) is None
 
 
 class TestToolChoiceAllowedTools:
-    """allowed_tools and type-variant tool choices map to Bedrock equivalents."""
+    """``allowed_tools`` and type-variant tool choices map onto Bedrock toolChoice.
+
+    Bedrock offers only ``auto``, ``any`` and a single named ``tool``, so the
+    richer upstream union is approximated; choices with no equivalent map to no
+    ``toolChoice`` key, leaving the model unconstrained.
+
+    Ref: https://developers.openai.com/api/docs/guides/function-calling#tool-choice
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
+         stdapi/models/chat/_adapters/_openai_responses.py:_map_tool_choice
+    """
 
     def test_required_with_single_function_forces_that_tool(self) -> None:
-        """Required + one allowed function tool maps to a named tool choice."""
+        """``required`` plus one allowed function tool forces that named tool."""
         choice = ToolChoiceAllowed(
             type="allowed_tools",
             mode="required",
@@ -697,7 +882,11 @@ class TestToolChoiceAllowedTools:
         assert _map_tool_choice(choice) == {"tool": {"name": "get_weather"}}
 
     def test_required_with_several_functions_forces_any_tool(self) -> None:
-        """Required + several allowed function tools maps to any."""
+        """``required`` plus several allowed function tools maps to ``any``.
+
+        Bedrock cannot restrict the choice to a subset of the declared tools, so
+        the allow-list is widened to "any tool" rather than silently narrowed.
+        """
         choice = ToolChoiceAllowed(
             type="allowed_tools",
             mode="required",
@@ -709,7 +898,7 @@ class TestToolChoiceAllowedTools:
         assert _map_tool_choice(choice) == {"any": {}}
 
     def test_required_without_function_entries_forces_any_tool(self) -> None:
-        """Required with only non-function entries still maps to any."""
+        """``required`` with only non-function entries still maps to ``any``."""
         choice = ToolChoiceAllowed(
             type="allowed_tools",
             mode="required",
@@ -718,7 +907,7 @@ class TestToolChoiceAllowedTools:
         assert _map_tool_choice(choice) == {"any": {}}
 
     def test_auto_mode_maps_to_auto(self) -> None:
-        """allowed_tools with mode auto maps to Bedrock auto."""
+        """``allowed_tools`` with ``mode: "auto"`` maps to Bedrock ``auto``."""
         choice = ToolChoiceAllowed(
             type="allowed_tools",
             mode="auto",
@@ -727,15 +916,28 @@ class TestToolChoiceAllowedTools:
         assert _map_tool_choice(choice) == {"auto": {}}
 
     def test_builtin_type_variant_maps_to_no_constraint(self) -> None:
-        """Built-in tool type variants remain unconstrained (auto behavior)."""
+        """A built-in tool type choice yields no Bedrock constraint.
+
+        ``None`` makes ``_build_tool_config`` omit ``toolChoice`` entirely, so
+        the model keeps its default (auto) behavior instead of being forced into
+        a tool Bedrock cannot name.
+        """
         assert _map_tool_choice(ToolChoiceTypes(type="file_search")) is None
 
 
 class TestReasoningSummarySignatures:
-    """Envelope signatures never attach to summary fallback texts."""
+    """Envelope signatures are never attached to summary fallback texts.
+
+    Bedrock computes a ``reasoningText.signature`` over the raw reasoning text;
+    replaying it against a summary would be a signature/content mismatch, which
+    Bedrock rejects.  Redacted payloads carry no such binding and survive.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ReasoningContentBlock.html
+         stdapi/models/chat/_adapters/_openai_responses.py:_map_reasoning_item
+    """
 
     async def test_signature_not_attached_to_summary_text(self) -> None:
-        """Summary fallback texts map without the envelope signature."""
+        """A summary fallback text maps to a reasoningText block with no signature."""
         item = ResponseReasoningItem(
             id="rs_1",
             summary=[ReasoningItemSummary(text="sum", type="summary_text")],
@@ -745,10 +947,10 @@ class TestReasoningSummarySignatures:
         messages, _ = await map_input(cast("list[ResponseInputItem]", [item]), None)
         assert messages[0]["content"] == [
             {"reasoningContent": {"reasoningText": {"text": "sum"}}}
-        ]
+        ], "a signature must not be bound to text it was not computed over"
 
     async def test_redacted_blocks_survive_summary_fallback(self) -> None:
-        """Redacted payloads are kept even when signatures are discarded."""
+        """Redacted payloads are still replayed when signatures are discarded."""
         item = ResponseReasoningItem(
             id="rs_1",
             summary=[ReasoningItemSummary(text="sum", type="summary_text")],

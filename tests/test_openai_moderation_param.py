@@ -1,4 +1,13 @@
-"""Tests for the request-level moderation parameter on chat and responses."""
+"""Tests for the request-level moderation parameter on chat and responses.
+
+Unlike /v1/moderations, this gateway extension derives its results from the
+Converse guardrail trace, so only the categories the trace actually reports are
+present (not the full 13-key OpenAI vocabulary).
+
+Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-converse-api.html
+     https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_GuardrailTraceAssessment.html
+     stdapi/routes/_moderation.py:apply_request_moderation
+"""
 
 from json import loads
 from typing import TYPE_CHECKING, Any, cast
@@ -30,7 +39,7 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.local
 
 
-#: Guardrail trace with a flagged input and a clean output assessment.
+#: Guardrail trace: flagged input (object) and clean output (list), as AWS shapes them.
 _TRACE: dict[str, Any] = {
     "inputAssessment": {
         "gr123": {
@@ -175,12 +184,25 @@ def _assert_output_result(result: dict[str, Any]) -> None:
 
 
 class TestChatModerationParam:
-    """moderation parameter on POST /v1/chat/completions."""
+    """moderation parameter on POST /v1/chat/completions.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+         stdapi/routes/_moderation.py:build_chat_moderation
+    """
 
     def test_moderation_sets_guardrail_and_reports_results(
         self, client: TestClient, chat_backend: _StubChatBackend
     ) -> None:
-        """The guardrail config is applied and trace results are reported."""
+        """The guardrail config is applied and trace results are reported.
+
+        The Converse request must carry ``trace: enabled``, otherwise AWS returns
+        no assessments at all. Both directions are reported as
+        ``moderation_results`` sets even though Converse spells the input
+        assessment as an object and the output ones as a list.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-converse-api.html
+             stdapi/routes/_moderation.py:_trace_results
+        """
         response = client.post(
             "/v1/chat/completions",
             json={
@@ -196,7 +218,11 @@ class TestChatModerationParam:
             "guardrailVersion": "1",
             "trace": "enabled",
         }
-        moderation = response.json()["moderation"]
+        body = response.json()
+        assert body["choices"][0]["message"]["content"] == "hi", (
+            "moderation must not alter the completion"
+        )
+        moderation = body["moderation"]
         for direction in ("input", "output"):
             assert moderation[direction]["type"] == "moderation_results"
             assert moderation[direction]["model"] == "gr123"
@@ -208,7 +234,14 @@ class TestChatModerationParam:
     def test_without_moderation_no_field(
         self, client: TestClient, chat_backend: _StubChatBackend
     ) -> None:
-        """Without the parameter no moderation field is reported."""
+        """Without the parameter no moderation field is reported.
+
+        The field is opt-in: an otherwise identical completion comes back
+        complete but with no ``moderation`` key at all, rather than an empty or
+        null one.
+
+        Ref: stdapi/routes/_moderation.py:build_chat_moderation
+        """
         response = client.post(
             "/v1/chat/completions",
             json={
@@ -217,12 +250,24 @@ class TestChatModerationParam:
             },
         )
         assert response.status_code == 200, response.text
-        assert "moderation" not in response.json()
+        body = response.json()
+        assert "moderation" not in body
+        # The completion itself is still fully reported.
+        assert body["choices"][0]["message"]["content"] == "hi"
+        assert body["choices"][0]["finish_reason"] == "stop"
 
     def test_comprehend_model_is_rejected(
         self, client: TestClient, chat_backend: _StubChatBackend
     ) -> None:
-        """The Comprehend moderation model is not usable as request parameter."""
+        """The Comprehend moderation model is not usable as request parameter.
+
+        Request-level moderation rides on the Converse guardrail trace, which
+        Comprehend cannot produce, so the model is refused before any generation
+        happens rather than silently ignored.
+
+        Ref: https://docs.aws.amazon.com/comprehend/latest/APIReference/API_DetectToxicContent.html
+             stdapi/routes/_moderation.py:apply_request_moderation
+        """
         response = client.post(
             "/v1/chat/completions",
             json={
@@ -232,13 +277,23 @@ class TestChatModerationParam:
             },
         )
         assert response.status_code == 400
-        assert "guardrail" in response.json()["error"]["message"]
-        assert not chat_backend.guardrail_configs
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "guardrail" in error["message"]
+        assert "Comprehend" in error["message"]
+        assert not chat_backend.guardrail_configs, "no generation must have happened"
 
     def test_default_guardrail_model_id(
         self, client: TestClient, chat_backend: _StubChatBackend
     ) -> None:
-        """amazon.bedrock-runtime-guardrail selects the configured guardrail."""
+        """amazon.bedrock-runtime-guardrail selects the configured guardrail.
+
+        The synthetic model ID resolves to the server's guardrail while the
+        reported ``model`` echoes what the client asked for.
+
+        Ref: stdapi/aws_bedrock.py:GUARDRAIL_MODERATION_MODEL
+             stdapi/aws_bedrock.py:resolve_guardrail_model
+        """
         response = client.post(
             "/v1/chat/completions",
             json={
@@ -250,13 +305,23 @@ class TestChatModerationParam:
         assert response.status_code == 200, response.text
         (config,) = chat_backend.guardrail_configs
         assert config["guardrailIdentifier"] == "gr123"
+        assert config["guardrailVersion"] == "1"
+        assert config["trace"] == "enabled"
         moderation = response.json()["moderation"]
         assert moderation["input"]["model"] == "amazon.bedrock-runtime-guardrail"
+        assert moderation["output"]["model"] == "amazon.bedrock-runtime-guardrail"
 
     def test_text_moderation_model_is_rejected(
         self, client: TestClient, chat_backend: _StubChatBackend
     ) -> None:
-        """text-moderation-* aliases Comprehend and is rejected here."""
+        """text-moderation-* aliases Comprehend and is rejected here.
+
+        The OpenAI legacy alias inherits the Comprehend restriction, so it fails
+        with the same guardrail-required error as the explicit model ID.
+
+        Ref: stdapi/aws_bedrock.py:is_comprehend_moderation_model
+             stdapi/routes/_moderation.py:apply_request_moderation
+        """
         response = client.post(
             "/v1/chat/completions",
             json={
@@ -266,7 +331,10 @@ class TestChatModerationParam:
             },
         )
         assert response.status_code == 400
-        assert "guardrail" in response.json()["error"]["message"]
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "guardrail" in error["message"]
+        assert "Comprehend" in error["message"]
         assert not chat_backend.guardrail_configs
 
     def test_no_guardrail_configured_hides_settings(
@@ -275,7 +343,15 @@ class TestChatModerationParam:
         chat_backend: _StubChatBackend,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Without a configured guardrail the 400 does not expose settings."""
+        """Without a configured guardrail the 400 does not expose settings.
+
+        Error messages are the one place server configuration could leak to
+        clients, so the setting name is replaced by a pointer to the
+        administrator. There is no Comprehend fallback here, unlike /moderations.
+
+        Ref: stdapi/aws_bedrock.py:resolve_guardrail_model
+             stdapi/utils.py:hide_security_details
+        """
         monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_identifier", None)
         response = client.post(
             "/v1/chat/completions",
@@ -286,7 +362,9 @@ class TestChatModerationParam:
             },
         )
         assert response.status_code == 400
-        message = response.json()["error"]["message"]
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        message = error["message"]
         assert "administrator" in message
         assert "guardrail" in message
         assert "aws_bedrock_guardrail_identifier" not in message.lower()
@@ -294,12 +372,24 @@ class TestChatModerationParam:
 
 
 class TestResponsesModerationParam:
-    """moderation parameter on POST /v1/responses."""
+    """moderation parameter on POST /v1/responses.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+         stdapi/routes/_moderation.py:build_response_moderation
+    """
 
     def test_moderation_sets_guardrail_and_reports_results(
         self, client: TestClient, chat_backend: _StubChatBackend
     ) -> None:
-        """The guardrail config is applied and trace results are reported."""
+        """The guardrail config is applied and trace results are reported.
+
+        The Responses shape reports one ``moderation_result`` per direction
+        directly, where Chat Completions nests a ``results`` list; both are fed
+        by the same guardrail trace.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_GuardrailTraceAssessment.html
+             stdapi/routes/_moderation.py:_to_moderation_result
+        """
         response = client.post(
             "/v1/responses",
             json={
@@ -319,10 +409,17 @@ class TestResponsesModerationParam:
         assert moderation["input"]["model"] == "omni-moderation-latest"
         assert moderation["input"]["type"] == "moderation_result"
         assert moderation["input"]["flagged"] is True
+        assert moderation["input"]["categories"] == {"sexual": True}
+        assert moderation["input"]["category_scores"] == {"sexual": 0.75}
         assert moderation["input"]["category_applied_input_types"] == {
             "sexual": ["text"]
         }
+        assert moderation["output"]["model"] == "omni-moderation-latest"
+        assert moderation["output"]["type"] == "moderation_result"
         assert moderation["output"]["flagged"] is False
+        # A LOW, non-blocking output filter: scored but not flagged.
+        assert moderation["output"]["categories"] == {"violence": False}
+        assert moderation["output"]["category_scores"] == {"violence": 0.25}
         assert moderation["output"]["category_applied_input_types"] == {
             "violence": ["text"]
         }
@@ -333,7 +430,14 @@ class TestResponsesModerationParam:
         chat_backend: _StubChatBackend,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """An explicit guardrail is rejected when overrides are not allowed."""
+        """An explicit guardrail is rejected when overrides are not allowed.
+
+        Client-chosen guardrails are refused unless the operator opted in, and the
+        request is stopped before generation so no tokens are billed.
+
+        Ref: stdapi/aws_bedrock.py:resolve_guardrail_model
+             stdapi/config.py:_Settings.aws_bedrock_allow_guardrail_override
+        """
         monkeypatch.setattr(SETTINGS, "aws_bedrock_allow_guardrail_override", False)
         response = client.post(
             "/v1/responses",
@@ -344,7 +448,9 @@ class TestResponsesModerationParam:
             },
         )
         assert response.status_code == 400
-        assert "not allowed" in response.json()["error"]["message"]
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "not allowed" in error["message"]
         assert not chat_backend.guardrail_configs
 
     def test_no_guardrail_configured_hides_settings(
@@ -353,7 +459,14 @@ class TestResponsesModerationParam:
         chat_backend: _StubChatBackend,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Without a configured guardrail the 400 does not expose settings."""
+        """Without a configured guardrail the 400 does not expose settings.
+
+        Same operator-privacy rule as Chat Completions: the message names the
+        administrator, never ``aws_bedrock_guardrail_identifier``.
+
+        Ref: stdapi/aws_bedrock.py:resolve_guardrail_model
+             stdapi/utils.py:hide_security_details
+        """
         monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_identifier", None)
         response = client.post(
             "/v1/responses",
@@ -364,7 +477,9 @@ class TestResponsesModerationParam:
             },
         )
         assert response.status_code == 400
-        message = response.json()["error"]["message"]
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        message = error["message"]
         assert "administrator" in message
         assert "guardrail" in message
         assert "aws_bedrock_guardrail_identifier" not in message.lower()
@@ -416,7 +531,12 @@ class _StubTraceClient:
 
 
 class TestGuardrailTraceCapture:
-    """converse()/converse_stream() capture trace.guardrail into the shared holder."""
+    """converse()/converse_stream() capture trace.guardrail into the shared holder.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ConverseStreamMetadataEvent.html
+         stdapi/aws_bedrock.py:GUARDRAIL_TRACE_VAR
+    """
 
     @pytest.fixture(autouse=True)
     def _stub_bedrock(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -436,17 +556,31 @@ class TestGuardrailTraceCapture:
         )
 
     async def test_converse_updates_the_trace_holder(self) -> None:
-        """The non-streaming wrapper merges the response trace into the holder."""
+        """The non-streaming wrapper merges the response trace into the holder.
+
+        The holder is a per-request ContextVar because the trace is produced deep
+        inside the model call but consumed by the route when it builds the
+        response's ``moderation`` field.
+
+        Ref: stdapi/models/__init__.py:ModelBase.converse
+        """
         holder: dict[str, Any] = {}
         token = GUARDRAIL_TRACE_VAR.set(holder)
         try:
-            await ModelBase("tracemodel").converse({"modelId": "tracemodel"})
+            response = await ModelBase("tracemodel").converse({"modelId": "tracemodel"})
         finally:
             GUARDRAIL_TRACE_VAR.reset(token)
         assert holder == _TRACE
+        assert response["stopReason"] == "end_turn", "the response is still returned"
 
     async def test_converse_stream_updates_the_trace_holder(self) -> None:
-        """Consuming the stream merges the metadata event trace into the holder."""
+        """Consuming the stream merges the metadata event trace into the holder.
+
+        ConverseStream only reports the guardrail trace in its trailing metadata
+        event, so the holder stays empty until the stream is fully consumed.
+
+        Ref: stdapi/models/__init__.py:ModelBase.converse_stream
+        """
         holder: dict[str, Any] = {}
         token = GUARDRAIL_TRACE_VAR.set(holder)
         try:
@@ -461,17 +595,37 @@ class TestGuardrailTraceCapture:
         assert holder == _TRACE
 
     async def test_converse_without_holder_is_a_no_op(self) -> None:
-        """Without an installed holder the trace is simply not captured."""
+        """Without an installed holder the trace is simply not captured.
+
+        Requests that did not ask for moderation must not pay any bookkeeping
+        cost, and the raw AWS trace still reaches the caller untouched.
+
+        Ref: stdapi/models/__init__.py:ModelBase.converse
+        """
         response = await ModelBase("tracemodel").converse({"modelId": "tracemodel"})
         assert response["trace"]["guardrail"] == _TRACE
+        assert response["stopReason"] == "end_turn"
         assert GUARDRAIL_TRACE_VAR.get(None) is None
 
 
 class TestChatStreamingModerationDrop:
-    """Streaming chat completions carry no moderation payload (documented drop)."""
+    """Streaming chat completions carry no moderation payload (documented drop).
+
+    Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events
+         stdapi/routes/_moderation.py:build_chat_moderation
+    """
 
     async def test_no_moderation_on_any_chunk(self) -> None:
-        """Even with a captured trace, no streamed chunk carries moderation."""
+        """Even with a captured trace, no streamed chunk carries moderation.
+
+        The guardrail trace only arrives in ConverseStream's trailing metadata
+        event, by which time earlier chunks are already sent, so the gateway
+        deliberately omits ``moderation`` from every chunk rather than emitting it
+        late on the last one.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ConverseStreamMetadataEvent.html
+             stdapi/models/chat/_adapters/_openai_chat_completion.py:format_stream
+        """
         events: list[dict[str, Any]] = [
             {"contentBlockDelta": {"delta": {"text": "hi"}, "contentBlockIndex": 0}},
             {"messageStop": {"stopReason": "end_turn"}},
@@ -502,9 +656,18 @@ class TestChatStreamingModerationDrop:
             GUARDRAIL_TRACE_VAR.reset(trace_token)
         assert holder == _TRACE  # The trace was captured...
         assert chunks
+        payloads: list[dict[str, Any]] = []
         for chunk in chunks:
             if chunk == "[DONE]":
                 continue
             payload = loads(chunk) if isinstance(chunk, str) else chunk
             assert isinstance(payload, dict)
             assert "moderation" not in payload  # ...but never reported on chunks.
+            payloads.append(payload)
+        assert payloads
+        # The stream itself is intact: the text delta and the finish reason are there.
+        choices = [
+            choice for payload in payloads for choice in payload.get("choices", [])
+        ]
+        assert any(choice.get("delta", {}).get("content") == "hi" for choice in choices)
+        assert any(choice.get("finish_reason") == "stop" for choice in choices)

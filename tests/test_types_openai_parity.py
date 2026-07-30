@@ -1,4 +1,14 @@
-"""Tests for OpenAI SDK schema-parity fields (unit)."""
+"""Unit tests for OpenAI SDK schema-parity fields on the local request/response types.
+
+Every request model here derives from ``BaseModelRequest`` (``extra`` is ignored
+or forbidden), so a field that is not declared is dropped instead of surviving
+as an extra: asserting that a value round-trips is therefore an assertion that
+the field exists in the gateway's schema.
+
+Ref: https://github.com/openai/openai-python
+     https://developers.openai.com/api/reference/resources/responses/methods/create
+     stdapi/types/openai_responses.py
+"""
 
 import pytest
 from pydantic import TypeAdapter, ValidationError
@@ -29,7 +39,15 @@ pytestmark = pytest.mark.local
 
 
 class TestInputTokenCountParity:
-    """personality and reasoning.context on POST /v1/responses/input_tokens."""
+    """personality and reasoning.context are accepted on POST /v1/responses/input_tokens.
+
+    Both fields exist only so newer SDKs validate; neither can change the
+    Bedrock ``CountTokens`` result, which counts the rendered input only.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/subresources/input_tokens
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CountTokens.html
+         stdapi/types/openai_responses.py:InputTokenCountParams
+    """
 
     def test_personality_is_accepted_and_ignored(self) -> None:
         """The personality parameter is accepted for compatibility."""
@@ -45,9 +63,23 @@ class TestInputTokenCountParity:
         assert params.reasoning.context == "auto"
 
     def test_unsupported_parameter_still_rejected(self) -> None:
-        """Parameters that would change the count remain rejected."""
-        with pytest.raises(UnsupportedParameterError, match="conversation"):
+        """Parameters that would change the count remain rejected.
+
+        ``conversation`` is one of ``InputTokenCountParams._UNSUPPORTED``; it is
+        surfaced as a 400 ``unsupported_parameter`` naming the offending field
+        rather than being silently ignored like ``personality``.
+
+        Ref: https://developers.openai.com/api/docs/guides/error-codes
+             stdapi/api_errors.py:UnsupportedParameterError
+        """
+        with pytest.raises(UnsupportedParameterError, match="conversation") as excinfo:
             InputTokenCountParams(model="m", input="x", conversation="conv_1")
+
+        error = excinfo.value
+        assert error.status == 400
+        assert error.code == "unsupported_parameter"
+        assert error.param == "conversation"
+        assert "not supported" in str(error)
 
     def test_reasoning_effort_still_accepted(self) -> None:
         """reasoning.effort remains accepted."""
@@ -59,7 +91,11 @@ class TestInputTokenCountParity:
 
 
 class TestResponseCreateParity:
-    """reasoning.context on POST /v1/responses."""
+    """reasoning.context and reasoning.mode are accepted on POST /v1/responses.
+
+    Ref: https://developers.openai.com/api/docs/guides/reasoning
+         stdapi/types/openai_responses.py:Reasoning
+    """
 
     def test_reasoning_context_is_accepted_and_ignored(self) -> None:
         """reasoning.context is accepted for compatibility."""
@@ -80,7 +116,11 @@ class TestResponseCreateParity:
 
 
 class TestAdditionalToolsItem:
-    """additional_tools output items parse through the output item union."""
+    """additional_tools output items parse through the output item union.
+
+    Ref: https://developers.openai.com/api/docs/guides/tools
+         stdapi/types/openai_responses.py:AdditionalTools
+    """
 
     def test_union_parses_additional_tools(self) -> None:
         """A canned additional_tools payload parses to AdditionalTools."""
@@ -104,7 +144,15 @@ class TestAdditionalToolsItem:
 
 
 class TestClientCompatibilityFields:
-    """Fields sent by newer OpenAI clients are accepted and ignored."""
+    """Fields sent by newer OpenAI clients are accepted and ignored.
+
+    Rejecting an unknown tool type at parse time would surface as a schema
+    error; the gateway keeps the type in its union so the request reaches the
+    route, which then raises the "unsupported on this implementation" 400.
+
+    Ref: https://developers.openai.com/api/docs/guides/tools
+         stdapi/types/openai_responses.py:ResponseCreateParams
+    """
 
     def test_client_metadata_accepted(self) -> None:
         """client_metadata (sent by Codex) is accepted and ignored."""
@@ -114,7 +162,10 @@ class TestClientCompatibilityFields:
         assert params.client_metadata == {"editor": "pycharm"}
 
     def test_unsupported_tools_accepted_and_parsed(self) -> None:
-        """Hosted tool types without a backend equivalent parse cleanly."""
+        """Hosted tool types without a backend equivalent parse cleanly.
+
+        Ref: stdapi/types/openai_responses.py:NamespaceTool
+        """
         params = ResponseCreateParams(
             model="m",
             input="x",
@@ -122,11 +173,18 @@ class TestClientCompatibilityFields:
                 {"type": "namespace", "name": "ns", "description": "d", "tools": []}  # type: ignore[list-item]
             ],
         )
-        assert params.tools
+        assert params.tools is not None
+        assert len(params.tools) == 1
+        assert params.tools[0].type == "namespace"
+        assert params.tools[0].name == "ns"
 
 
 class TestReasoningEffortParity:
-    """reasoning.effort accepts the upstream SDK's `max` literal."""
+    """reasoning.effort accepts the upstream SDK's `max` literal.
+
+    Ref: https://developers.openai.com/api/docs/guides/reasoning
+         stdapi/types/openai_responses.py:Reasoning
+    """
 
     def test_max_effort_is_accepted(self) -> None:
         """reasoning.effort="max" validates like the other SDK literals."""
@@ -138,7 +196,15 @@ class TestReasoningEffortParity:
 
 
 class TestToolAllowedCallersParity:
-    """allowed_callers/output_schema/tunnel_id round-trip on tool definitions."""
+    """allowed_callers/output_schema/tunnel_id round-trip on tool definitions.
+
+    These fields belong to programmatic tool calling; dropping them would
+    silently change which callers a tool accepts.
+
+    Ref: https://developers.openai.com/api/docs/guides/tools-programmatic-tool-calling
+         https://developers.openai.com/api/docs/guides/tools-connectors-mcp
+         stdapi/types/openai_responses.py:FunctionTool
+    """
 
     def test_function_tool_accepts_allowed_callers_and_output_schema(self) -> None:
         """FunctionTool keeps allowed_callers and output_schema instead of dropping them."""
@@ -161,7 +227,14 @@ class TestToolAllowedCallersParity:
 
 
 class TestResponseErrorCodeParity:
-    """ResponseErrorCode includes the full upstream error-code enum."""
+    """ResponseErrorCode includes the full upstream error-code enum.
+
+    A stored response with ``status="failed"`` echoes the upstream code back,
+    so a missing literal would make the response object unserializable.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/methods/retrieve
+         stdapi/types/openai_responses.py:ResponseError
+    """
 
     @pytest.mark.parametrize("code", ["data_residency_mismatch", "bio_policy"])
     def test_upstream_only_codes_are_accepted(self, code: str) -> None:
@@ -171,7 +244,11 @@ class TestResponseErrorCodeParity:
 
 
 class TestToolCallerParity:
-    """Tool-call items keep the `caller` provenance field when echoed as input."""
+    """Tool-call items keep the `caller` provenance field when echoed as input.
+
+    Ref: https://developers.openai.com/api/docs/guides/tools-programmatic-tool-calling
+         stdapi/types/openai_responses.py:FunctionCallInput
+    """
 
     def test_function_call_input_accepts_program_caller(self) -> None:
         """A function_call input item retains a program caller instead of dropping it."""
@@ -188,7 +265,14 @@ class TestToolCallerParity:
 
 
 class TestPromptCacheRetentionParity:
-    """prompt_cache_retention uses the OpenAI SDK literal `in_memory`."""
+    """prompt_cache_retention uses the OpenAI SDK literal `in_memory`.
+
+    The hyphenated spelling is not an accepted alias: it must fail validation
+    so a typo cannot silently select Bedrock's default TTL.
+
+    Ref: https://developers.openai.com/api/docs/guides/prompt-caching#prompt-cache-retention
+         stdapi/models/chat/_adapters/_openai_common.py:resolve_cache_ttl
+    """
 
     @pytest.mark.parametrize(
         "params_type", [ResponseCreateParams, CompactParams, CompletionCreateParams]
@@ -207,7 +291,15 @@ class TestPromptCacheRetentionParity:
 
 
 class TestPromptCacheOptionsParity:
-    """prompt_cache_options is accepted on the Responses create/compact request bodies."""
+    """prompt_cache_options is accepted on the Responses create/compact request bodies.
+
+    ``mode="explicit"`` is what suppresses the ``prompt_cache_key`` heuristic,
+    so the object must survive parsing rather than being dropped.
+
+    Ref: https://developers.openai.com/api/docs/guides/prompt-caching#prompt-cache-breakpoints
+         https://developers.openai.com/api/reference/resources/responses/methods/compact
+         stdapi/models/chat/_adapters/_openai_common.py:parse_prompt_cache_key
+    """
 
     @pytest.mark.parametrize("params_type", [ResponseCreateParams, CompactParams])
     def test_prompt_cache_options_is_accepted(self, params_type: type) -> None:
@@ -223,7 +315,16 @@ class TestPromptCacheOptionsParity:
 
 
 class TestPaginatedListEnvelopeParity:
-    """Paginated list responses share a common envelope base without changing wire keys."""
+    """Paginated list responses share a common envelope base without changing wire keys.
+
+    ``PaginatedListEnvelope`` factors out has_more/first_id/last_id; the dumped
+    key set proves the refactor did not reorder or rename the wire fields, and
+    that ``object`` still defaults to ``"list"`` per subclass.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/list
+         https://developers.openai.com/api/reference/resources/responses/subresources/input_items/methods/list
+         stdapi/types/openai.py:PaginatedListEnvelope
+    """
 
     @pytest.mark.parametrize(
         ("list_type", "extra"),
@@ -251,7 +352,14 @@ class TestPaginatedListEnvelopeParity:
 
 
 class TestAdditionalToolsInputEcho:
-    """A previously emitted `additional_tools` output item can be echoed back as input."""
+    """A previously emitted `additional_tools` output item can be echoed back as input.
+
+    Clients replay the whole output list as the next request's input, so an
+    output item that does not also parse as an input item breaks multi-turn use.
+
+    Ref: https://developers.openai.com/api/docs/guides/tools
+         stdapi/types/openai_responses.py:AdditionalToolsInput
+    """
 
     def test_additional_tools_accepted_as_input(self) -> None:
         """additional_tools parses as a ResponseCreateParams.input item without error."""
@@ -296,7 +404,15 @@ class TestAdditionalToolsInputEcho:
 
 
 class TestVideoParity:
-    """remixed_from_video_id on Video objects."""
+    """remixed_from_video_id exists on Video objects and stays null.
+
+    Bedrock async invocation has no remix operation, so the field is declared
+    for schema parity only and is excluded from the emitted payload.
+
+    Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+         https://stdapi.ai/api_openai_videos/
+         stdapi/types/openai_videos.py:Video
+    """
 
     def test_remixed_from_video_id_defaults_to_none(self) -> None:
         """The field exists for schema parity and defaults to null."""

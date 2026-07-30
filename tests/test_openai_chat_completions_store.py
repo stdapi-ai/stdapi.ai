@@ -1,6 +1,17 @@
-"""Tests for stored chat completions routes (unit)."""
+"""Tests for the stored chat completions surface: ``store=true`` and its CRUD routes.
+
+The route layer is exercised in-process against stubbed persistence, so the
+gateway-only behaviors (session-derived IDs, the streaming downgrade, the
+foreign/corrupt-document guard) are asserted without touching Bedrock session
+storage. The final class runs the same lifecycle live.
+
+Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/retrieve
+     https://docs.aws.amazon.com/bedrock/latest/userguide/sessions.html
+     stdapi/routes/openai_chat_completions.py
+"""
 
 from datetime import UTC, datetime
+from re import fullmatch
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
@@ -9,6 +20,7 @@ from sse_starlette import EventSourceResponse
 from starlette.testclient import TestClient
 
 from stdapi.api_errors import ApiError
+from stdapi.responses_store import COMPLETION_ID_PATTERN
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -196,12 +208,24 @@ def store(monkeypatch: pytest.MonkeyPatch) -> _StubStore:
 
 @pytest.mark.local
 class TestStoreOnChatCreate:
-    """store=true on POST /v1/chat/completions."""
+    """store=true on POST /v1/chat/completions.
+
+    Unlike upstream, a stored completion's ID is derived from the Bedrock
+    session that backs it (``chatcmpl-{session_id}``), and ``store`` is
+    silently downgraded when it cannot be honored.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+         stdapi/routes/openai_chat_completions.py:create_chat_completion
+    """
 
     def test_store_persists_completion(
         self, client: TestClient, backend: _StubChatBackend, store: _StubStore
     ) -> None:
-        """The completion is generated under a chat_completion session and persisted."""
+        """The completion is generated under a chat_completion session and persisted.
+
+        The session kind tag is what keeps Responses documents from being read
+        back through the Chat Completions routes.
+        """
         response = client.post(
             "/v1/chat/completions",
             json={
@@ -213,8 +237,10 @@ class TestStoreOnChatCreate:
         )
         assert response.status_code == 200, response.text
         assert response.json()["id"] == "chatcmpl-sess-1"
+        assert response.json()["object"] == "chat.completion"
         assert response.json()["metadata"] == {"team": "x"}
         assert store.created_kinds == ["chat_completion"]
+        assert not store.discarded
         ((completion_id, document),) = store.saved
         assert completion_id == "chatcmpl-sess-1"
         assert document["messages"][0]["content"] == "hello"
@@ -224,7 +250,11 @@ class TestStoreOnChatCreate:
     def test_store_rewrites_upstream_backend_id(
         self, client: TestClient, backend: _StubChatBackend, store: _StubStore
     ) -> None:
-        """A backend that ignores completion_id (e.g. Mantle passthrough) is rewritten when stored."""
+        """A backend that ignores completion_id (e.g. Mantle passthrough) is rewritten when stored.
+
+        The stored surface addresses documents by the server-assigned ID, so a
+        backend-chosen ID must not survive into the response or the document.
+        """
         backend.upstream_id = "chatcmpl-upstream-xyz"
         response = client.post(
             "/v1/chat/completions",
@@ -236,6 +266,10 @@ class TestStoreOnChatCreate:
         )
         assert response.status_code == 200, response.text
         assert response.json()["id"] == "chatcmpl-sess-1"
+        ((_, requested_id),) = backend.requests
+        assert requested_id == "chatcmpl-sess-1", (
+            "the backend is handed the session-derived ID even when it ignores it"
+        )
         ((completion_id, document),) = store.saved
         assert completion_id == "chatcmpl-sess-1"
         assert document["response"]["id"] == "chatcmpl-sess-1"
@@ -254,12 +288,18 @@ class TestStoreOnChatCreate:
         )
         assert response.status_code == 200, response.text
         assert response.json()["id"] == "chatcmpl-upstream-xyz"
+        assert not store.created_kinds
         assert not store.saved
 
     def test_store_with_stream_is_ignored(
         self, client: TestClient, backend: _StubChatBackend, store: _StubStore
     ) -> None:
-        """store=true with streaming is ignored: no session is involved."""
+        """store=true with streaming is ignored: no session is involved.
+
+        Upstream has no such restriction; here the request is still served as a
+        stream, only unstored, with the request-scoped ID instead of a
+        session-derived one.
+        """
         response = client.post(
             "/v1/chat/completions",
             json={
@@ -270,8 +310,10 @@ class TestStoreOnChatCreate:
             },
         )
         assert response.status_code == 200, response.text
+        assert response.headers["content-type"].startswith("text/event-stream")
         assert not store.created_kinds
         assert not store.saved
+        assert "chatcmpl-sess-1" not in response.text
 
     def test_store_without_session_storage_is_ignored(
         self,
@@ -280,7 +322,11 @@ class TestStoreOnChatCreate:
         store: _StubStore,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """store=true is ignored when session storage is unavailable."""
+        """store=true is ignored when session storage is unavailable.
+
+        The completion is still served, with a request-scoped ID that must
+        remain a syntactically valid completion ID (never ``chatcmpl-None``).
+        """
 
         async def _unavailable(_kind: str) -> None:
             return None
@@ -297,7 +343,9 @@ class TestStoreOnChatCreate:
             },
         )
         assert response.status_code == 200, response.text
-        assert response.json()["id"].startswith("chatcmpl-")
+        assert fullmatch(COMPLETION_ID_PATTERN, response.json()["id"]), (
+            "the fallback ID must still match the stored-completion path pattern"
+        )
         assert "None" not in response.json()["id"]
         assert not store.saved
         assert not store.discarded
@@ -315,12 +363,19 @@ class TestStoreOnChatCreate:
         )
         assert response.status_code == 200, response.text
         assert response.json()["id"] != "chatcmpl-sess-1"
+        assert not store.created_kinds
         assert not store.saved
 
     def test_generation_failure_discards_pending_session(
         self, client: TestClient, backend: _StubChatBackend, store: _StubStore
     ) -> None:
-        """A failed generation discards the pending stored session."""
+        """A failed generation discards the pending stored session.
+
+        The session is created before generation, so an aborted generation must
+        not leave an empty session behind.
+
+        Ref: https://developers.openai.com/api/docs/guides/error-codes
+        """
 
         async def _raise(
             _request: CompletionCreateParams, _completion_id: str, _created: int
@@ -338,7 +393,10 @@ class TestStoreOnChatCreate:
             },
         )
         assert response.status_code == 502
+        assert response.json()["error"]["type"] == "server_error"
+        assert response.json()["error"]["message"] == "backend failure"
         assert store.discarded == ["chatcmpl-sess-1"]
+        assert not store.saved
 
     def test_save_failure_discards_pending_session(
         self,
@@ -347,7 +405,13 @@ class TestStoreOnChatCreate:
         store: _StubStore,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A failed save after a successful generation discards the pending session."""
+        """A failed save after a successful generation discards the pending session.
+
+        The generated completion is not returned either: a stored completion the
+        client could not retrieve afterwards would be worse than an error.
+
+        Ref: https://developers.openai.com/api/docs/guides/error-codes
+        """
 
         async def _raise(_completion_id: str, _document: dict[str, Any]) -> None:
             msg = "save failure"
@@ -363,12 +427,22 @@ class TestStoreOnChatCreate:
             },
         )
         assert response.status_code == 502
+        assert response.json()["error"]["type"] == "server_error"
+        assert response.json()["error"]["message"] == "save failure"
         assert store.discarded == ["chatcmpl-sess-1"]
 
 
 @pytest.mark.local
 class TestStoredChatCompletionRoutes:
-    """GET/DELETE /v1/chat/completions/{id} and messages listing."""
+    """GET/DELETE /v1/chat/completions/{id} and messages listing.
+
+    A document that is missing, corrupt, or tagged as another stored kind is
+    reported as a plain 404 rather than a 500, so a foreign session can never
+    be read through these routes.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/retrieve
+         stdapi/routes/openai_chat_completions.py:_malformed_stored_document
+    """
 
     def test_retrieve_stored_completion(
         self, client: TestClient, store: _StubStore
@@ -384,7 +458,10 @@ class TestStoredChatCompletionRoutes:
         assert response.status_code == 200, response.text
         body = response.json()
         assert body["id"] == "chatcmpl-sess-1"
+        assert body["object"] == "chat.completion"
         assert body["choices"][0]["message"]["content"] == "answer"
+        assert body["choices"][0]["finish_reason"] == "stop"
+        assert store.load_calls == ["chatcmpl-sess-1"]
 
     def test_retrieve_unknown_is_not_found(
         self, client: TestClient, store: _StubStore
@@ -392,12 +469,17 @@ class TestStoredChatCompletionRoutes:
         """An unknown stored chat completion surfaces as 404."""
         response = client.get("/v1/chat/completions/chatcmpl-zzz")
         assert response.status_code == 404
-        assert "chatcmpl-zzz" in response.json()["error"]["message"]
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "chatcmpl-zzz" in error["message"]
 
     def test_delete_stored_completion(
         self, client: TestClient, store: _StubStore
     ) -> None:
-        """Deletion returns a confirmation object."""
+        """Deletion returns a confirmation object.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/delete
+        """
         store.documents["chatcmpl-sess-1"] = {"messages": [], "response": {}}
         response = client.delete("/v1/chat/completions/chatcmpl-sess-1")
         assert response.status_code == 200, response.text
@@ -411,13 +493,20 @@ class TestStoredChatCompletionRoutes:
     def test_retrieve_response_kind_session_is_not_found(
         self, client: TestClient, store: _StubStore
     ) -> None:
-        """Retrieving a response-kind session as a chat completion 404s."""
+        """Retrieving a response-kind session as a chat completion 404s.
+
+        Both surfaces store documents in Bedrock sessions, so the ``kind`` tag
+        is the only thing keeping a Responses document out of this route.
+        """
         store.documents["chatcmpl-sess-1"] = {
             "input": [],
             "response": {"object": "response"},
         }
         response = client.get("/v1/chat/completions/chatcmpl-sess-1")
         assert response.status_code == 404
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "chatcmpl-sess-1" in error["message"]
 
     def test_delete_response_kind_session_is_not_found_and_not_deleted(
         self, client: TestClient, store: _StubStore
@@ -429,6 +518,7 @@ class TestStoredChatCompletionRoutes:
         }
         response = client.delete("/v1/chat/completions/chatcmpl-sess-1")
         assert response.status_code == 404
+        assert "chatcmpl-sess-1" in response.json()["error"]["message"]
         assert not store.deleted
 
     @pytest.mark.parametrize(
@@ -441,11 +531,20 @@ class TestStoredChatCompletionRoutes:
         store.documents["chatcmpl-sess-1"] = document
         response = client.get("/v1/chat/completions/chatcmpl-sess-1")
         assert response.status_code == 404
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "chatcmpl-sess-1" in error["message"]
 
     def test_messages_listing_with_cursor(
         self, client: TestClient, store: _StubStore
     ) -> None:
-        """Messages get IDs, keep conversation order, and page with after."""
+        """Messages get IDs, keep conversation order, and page with after.
+
+        Message IDs are positional (``msg-{index}``), which is what makes them
+        usable as an opaque cursor into the stored request messages.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/subresources/messages/methods/list
+        """
         store.documents["chatcmpl-sess-1"] = {
             "messages": [
                 {"role": "system", "content": "sys"},
@@ -458,19 +557,27 @@ class TestStoredChatCompletionRoutes:
         body = response.json()
         assert body["object"] == "list"
         assert [message["id"] for message in body["data"]] == ["msg-0", "msg-1"]
+        assert [message["role"] for message in body["data"]] == ["system", "user"]
         assert body["data"][1]["content"] == "hello"
         assert body["has_more"] is False
+        assert (body["first_id"], body["last_id"]) == ("msg-0", "msg-1")
 
         response = client.get(
             "/v1/chat/completions/chatcmpl-sess-1/messages?after=msg-0&limit=1"
         )
+        assert response.status_code == 200, response.text
         body = response.json()
         assert [message["id"] for message in body["data"]] == ["msg-1"]
+        assert body["has_more"] is False, "msg-1 is the last message"
 
     def test_messages_listing_splits_array_content(
         self, client: TestClient, store: _StubStore
     ) -> None:
-        """Array content is split into concatenated text `content` and `content_parts`."""
+        """Array content is split into concatenated text `content` and `content_parts`.
+
+        A string-content message keeps a bare `content` with no `content_parts`,
+        which is how a client tells the two request shapes apart on read-back.
+        """
         store.documents["chatcmpl-sess-1"] = {
             "messages": [
                 {
@@ -513,7 +620,9 @@ class TestStoredChatCompletionRoutes:
             "/v1/chat/completions/chatcmpl-sess-1/messages?after=msg-99"
         )
         assert response.status_code == 404
-        assert "msg-99" in response.json()["error"]["message"]
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "msg-99" in error["message"]
 
     def test_messages_listing_order_desc(
         self, client: TestClient, store: _StubStore
@@ -532,6 +641,7 @@ class TestStoredChatCompletionRoutes:
         assert response.status_code == 200, response.text
         body = response.json()
         assert [message["id"] for message in body["data"]] == ["msg-1", "msg-0"]
+        assert [message["content"] for message in body["data"]] == ["hello", "sys"]
 
     def test_messages_listing_after_combined_with_desc_order(
         self, client: TestClient, store: _StubStore
@@ -566,11 +676,16 @@ class TestStoredChatCompletionRoutes:
         body = response.json()
         assert [message["id"] for message in body["data"]] == ["msg-0", "msg-1"]
         assert body["has_more"] is True
+        assert body["last_id"] == "msg-1", "last_id is the cursor for the next page"
 
     def test_messages_listing_cursor_at_last_message_returns_empty_page(
         self, client: TestClient, store: _StubStore
     ) -> None:
-        """An after cursor matching the last message returns an empty page, not a 404."""
+        """An after cursor matching the last message returns an empty page, not a 404.
+
+        Exhausting a cursor is normal pagination, unlike a cursor that never
+        matched any message, which is a client error.
+        """
         store.documents["chatcmpl-sess-1"] = {
             "messages": [
                 {"role": "system", "content": "sys"},
@@ -585,6 +700,8 @@ class TestStoredChatCompletionRoutes:
         body = response.json()
         assert body["data"] == []
         assert body["has_more"] is False
+        assert "first_id" not in body, "an empty page carries no cursor bounds"
+        assert "last_id" not in body
 
     def test_messages_listing_non_dict_message_entry_is_not_found(
         self, client: TestClient, store: _StubStore
@@ -596,11 +713,21 @@ class TestStoredChatCompletionRoutes:
         }
         response = client.get("/v1/chat/completions/chatcmpl-sess-1/messages")
         assert response.status_code == 404
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "chatcmpl-sess-1" in error["message"]
 
     def test_store_round_trip_preserves_multipart_and_tool_messages(
         self, client: TestClient, backend: _StubChatBackend, store: _StubStore
     ) -> None:
-        """A store request with multi-part and tool messages round-trips through /messages."""
+        """A store request with multi-part and tool messages round-trips through /messages.
+
+        Only text and image parts are re-exposed as ``content_parts``, and
+        assistant/tool messages keep their `tool_calls`/`tool_call_id` linkage so
+        a stored agent turn can be replayed.
+
+        Ref: https://developers.openai.com/api/docs/guides/function-calling
+        """
         messages = [
             {
                 "role": "user",
@@ -655,12 +782,24 @@ class TestStoredChatCompletionRoutes:
 
 @pytest.mark.local
 class TestListChatCompletions:
-    """GET /v1/chat/completions."""
+    """GET /v1/chat/completions.
+
+    Bedrock session storage has no server-side filtering or ordering, so the
+    route lists sessions, sorts them by creation time and loads candidate
+    documents in batches of ``_LIST_LOAD_BATCH_SIZE`` to apply the filters.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/list
+         stdapi/routes/openai_chat_completions.py:list_chat_completions
+    """
 
     def test_default_order_is_ascending_by_created_at(
         self, client: TestClient, store: _StubStore
     ) -> None:
-        """Without an explicit order, the oldest session comes first."""
+        """Without an explicit order, the oldest session comes first.
+
+        The stub returns the sessions newest-first so the ascending order can
+        only come from the route's own sort, not from the store's iteration order.
+        """
         store.sessions = [
             ("s2", datetime(2024, 1, 2, tzinfo=UTC)),
             ("s1", datetime(2024, 1, 1, tzinfo=UTC)),
@@ -711,7 +850,9 @@ class TestListChatCompletions:
         _store_completion(store, "s1")
         response = client.get("/v1/chat/completions?after=chatcmpl-zzz")
         assert response.status_code == 404
-        assert "chatcmpl-zzz" in response.json()["error"]["message"]
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "chatcmpl-zzz" in error["message"]
 
     def test_limit_reports_has_more(
         self, client: TestClient, store: _StubStore
@@ -725,13 +866,18 @@ class TestListChatCompletions:
         response = client.get("/v1/chat/completions?limit=2")
         assert response.status_code == 200, response.text
         body = response.json()
-        assert len(body["data"]) == 2
+        assert [item["id"] for item in body["data"]] == ["chatcmpl-s0", "chatcmpl-s1"]
         assert body["has_more"] is True
+        assert body["last_id"] == "chatcmpl-s1"
 
     def test_unfiltered_has_more_skips_probe_load(
         self, client: TestClient, store: _StubStore
     ) -> None:
-        """Without model/metadata filters, has_more is answered without loading the limit+1'th document."""
+        """Without model/metadata filters, has_more is answered without loading the limit+1'th document.
+
+        Every remaining session ID is a match by definition, so the extra
+        Bedrock read a probe load would cost is avoidable.
+        """
         store.sessions = [
             (f"s{i}", datetime(2024, 1, i + 1, tzinfo=UTC)) for i in range(3)
         ]
@@ -754,9 +900,14 @@ class TestListChatCompletions:
         assert response.status_code == 200, response.text
         body = response.json()
         assert [item["id"] for item in body["data"]] == ["chatcmpl-s2"]
+        assert [item["model"] for item in body["data"]] == ["model-b"]
+        assert body["has_more"] is False
 
     def test_metadata_filter(self, client: TestClient, store: _StubStore) -> None:
-        """metadata[key]=value filters on the stored completion's metadata."""
+        """metadata[key]=value filters on the stored completion's metadata.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/list
+        """
         store.sessions = [
             ("s1", datetime(2024, 1, 1, tzinfo=UTC)),
             ("s2", datetime(2024, 1, 2, tzinfo=UTC)),
@@ -767,6 +918,8 @@ class TestListChatCompletions:
         assert response.status_code == 200, response.text
         body = response.json()
         assert [item["id"] for item in body["data"]] == ["chatcmpl-s1"]
+        assert [item["metadata"] for item in body["data"]] == [{"team": "a"}]
+        assert body["has_more"] is False
 
     def test_response_envelope(self, client: TestClient, store: _StubStore) -> None:
         """The list response carries the list envelope fields."""
@@ -782,28 +935,51 @@ class TestListChatCompletions:
         assert body["object"] == "list"
         assert body["first_id"] == "chatcmpl-s1"
         assert body["last_id"] == "chatcmpl-s2"
+        assert body["has_more"] is False
+        assert [item["object"] for item in body["data"]] == [
+            "chat.completion",
+            "chat.completion",
+        ]
 
     def test_lists_chat_completion_kind_only(
         self, client: TestClient, store: _StubStore
     ) -> None:
-        """The route only scans sessions tagged as chat_completion."""
+        """The route only scans sessions tagged as chat_completion.
+
+        Responses and Chat Completions share the same session store, so the kind
+        tag is what keeps the two listings disjoint.
+        """
         response = client.get("/v1/chat/completions")
         assert response.status_code == 200, response.text
         assert store.list_sessions_kinds == ["chat_completion"]
+        assert response.json()["data"] == []
 
     def test_non_404_load_error_propagates(
         self, client: TestClient, store: _StubStore
     ) -> None:
-        """A non-404 ApiError while loading a candidate session is not swallowed."""
+        """A non-404 ApiError while loading a candidate session is not swallowed.
+
+        Only a 404 means "deleted between the scan and the read"; a throttle
+        must surface so the client retries instead of seeing a short list.
+
+        Ref: https://developers.openai.com/api/docs/guides/error-codes
+        """
         store.sessions = [("s1", datetime(2024, 1, 1, tzinfo=UTC))]
         store.load_errors["chatcmpl-s1"] = ApiError("throttled", status=429)
         response = client.get("/v1/chat/completions")
         assert response.status_code == 429
+        error = response.json()["error"]
+        assert error["type"] == "rate_limit_error"
+        assert error["message"] == "throttled"
 
     def test_list_scans_multiple_batches_and_stops_early(
         self, client: TestClient, store: _StubStore
     ) -> None:
-        """More than one load batch is scanned, stopping once the limit is reached."""
+        """More than one load batch is scanned, stopping once the limit is reached.
+
+        A limit of 12 spans two ``_LIST_LOAD_BATCH_SIZE`` (10) batches, and no
+        document past the limit is read.
+        """
         store.sessions = [
             (f"s{i}", datetime(2024, 1, i + 1, tzinfo=UTC)) for i in range(15)
         ]
@@ -816,11 +992,18 @@ class TestListChatCompletions:
             f"chatcmpl-s{i}" for i in range(12)
         ]
         assert body["has_more"] is True
+        assert store.load_calls == [f"chatcmpl-s{i}" for i in range(12)], (
+            "only the first 12 documents may be loaded, across two batches"
+        )
 
     def test_corrupt_stored_completion_is_skipped(
         self, client: TestClient, store: _StubStore
     ) -> None:
-        """A corrupt stored session is skipped instead of failing the whole list."""
+        """A corrupt stored session is skipped instead of failing the whole list.
+
+        A document that no longer validates would otherwise make the whole
+        listing unusable.
+        """
         store.sessions = [
             ("s1", datetime(2024, 1, 1, tzinfo=UTC)),
             ("s2", datetime(2024, 1, 2, tzinfo=UTC)),
@@ -831,11 +1014,21 @@ class TestListChatCompletions:
         assert response.status_code == 200, response.text
         body = response.json()
         assert [item["id"] for item in body["data"]] == ["chatcmpl-s2"]
+        assert store.load_calls == ["chatcmpl-s1", "chatcmpl-s2"], (
+            "the corrupt candidate must be attempted, then dropped from the page"
+        )
 
 
 @pytest.mark.local
 class TestUpdateChatCompletion:
-    """POST /v1/chat/completions/{id}."""
+    """POST /v1/chat/completions/{id}.
+
+    ``metadata`` is the only updatable field, and the update is written back to
+    the store so a later retrieve sees it.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/update
+         stdapi/routes/openai_chat_completions.py:update_chat_completion
+    """
 
     def test_replaces_metadata(self, client: TestClient, store: _StubStore) -> None:
         """A metadata body replaces the stored metadata."""
@@ -844,6 +1037,7 @@ class TestUpdateChatCompletion:
             "/v1/chat/completions/chatcmpl-s1", json={"metadata": {"team": "b"}}
         )
         assert response.status_code == 200, response.text
+        assert response.json()["id"] == "chatcmpl-s1"
         assert response.json()["metadata"] == {"team": "b"}
 
     def test_null_metadata_clears_it(
@@ -856,6 +1050,8 @@ class TestUpdateChatCompletion:
         )
         assert response.status_code == 200, response.text
         assert "metadata" not in response.json()
+        ((_, document),) = store.saved
+        assert "metadata" not in document["response"]
 
     def test_persists_updated_document(
         self, client: TestClient, store: _StubStore
@@ -878,6 +1074,10 @@ class TestUpdateChatCompletion:
             "/v1/chat/completions/chatcmpl-zzz", json={"metadata": {"k": "v"}}
         )
         assert response.status_code == 404
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "chatcmpl-zzz" in error["message"]
+        assert not store.saved
 
     @pytest.mark.parametrize(
         "document", [{"response": None}, {}], ids=["null-response", "no-response-key"]
@@ -891,6 +1091,10 @@ class TestUpdateChatCompletion:
             "/v1/chat/completions/chatcmpl-sess-1", json={"metadata": {"k": "v"}}
         )
         assert response.status_code == 404
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "chatcmpl-sess-1" in error["message"]
+        assert not store.saved, "a document that failed to update must not be written"
 
 
 @pytest.mark.local
@@ -900,6 +1104,10 @@ class TestStoredChatCompletionRoutesAuthRejection:
     Uses the session-wide ``test_client`` (lifespan-started, unlike the
     lifespan-free ``client`` fixture) so the auth handler is actually
     initialized and able to reject a missing token.
+
+    Ref: https://developers.openai.com/api/docs/guides/error-codes
+         https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+         stdapi/api_providers/openai.py:_format_error
     """
 
     @pytest.fixture(autouse=True)
@@ -927,7 +1135,11 @@ class TestStoredChatCompletionRoutesAuthRejection:
         test_client: TestClient,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """No Authorization header yields 401 without reaching the store layer."""
+        """No Authorization header yields 401 without reaching the store layer.
+
+        The message is the fixed ``Unauthorized`` string: authentication
+        failures must not leak why the credential was refused.
+        """
         calls: list[str] = []
 
         async def _counting_load(completion_id: str, _kind: str) -> dict[str, Any]:
@@ -952,6 +1164,7 @@ class TestStoredChatCompletionRoutesAuthRejection:
         err = body["error"]
         assert set(err.keys()) == {"message", "type", "param", "code"}
         assert err["type"] == "authentication_error"
+        assert err["message"] == "Unauthorized"
         assert not calls
 
 
@@ -961,7 +1174,12 @@ class TestInvalidCompletionIdPattern:
 
     Pins the current OpenAI-shaped 400 ``invalid_request_error`` envelope
     produced by FastAPI/Pydantic path validation (see ``main.py``'s
-    ``RequestValidationError`` handler).
+    ``RequestValidationError`` handler). The ``resp_`` cases matter because the
+    Responses surface uses that prefix over the same session store.
+
+    Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+         stdapi/routes/openai_chat_completions.py:_CompletionId
+         stdapi/main.py:handle_validation_exception
     """
 
     @pytest.mark.parametrize(
@@ -999,15 +1217,25 @@ class TestInvalidCompletionIdPattern:
         err = body["error"]
         assert set(err.keys()) == {"message", "type", "param", "code"}
         assert err["type"] == "invalid_request_error"
+        assert not store.load_calls, "rejection must happen before any store read"
+        assert not store.deleted
 
 
 class TestStoredChatCompletionsLive:
-    """Live stored chat completions lifecycle against AWS Bedrock sessions."""
+    """Live stored chat completions lifecycle against AWS Bedrock sessions.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/retrieve
+         https://docs.aws.amazon.com/bedrock/latest/userguide/sessions.html
+    """
 
     def test_store_lifecycle(
         self, openai_client: OpenAI, chat_model: str, use_official_api: bool
     ) -> None:
-        """store=true persists; retrieve, messages, list, update, and delete work."""
+        """store=true persists; retrieve, messages, list, update, and delete work.
+
+        ``/messages`` returns the *request* messages, so the prompt text is the
+        deterministic thing to assert on rather than the generated answer.
+        """
         if use_official_api:
             pytest.skip("official API stores completions asynchronously (delayed)")
         from openai import NotFoundError  # noqa: PLC0415
@@ -1029,6 +1257,7 @@ class TestStoredChatCompletionsLive:
             )
             messages = list(openai_client.chat.completions.messages.list(created.id))
             assert messages
+            assert messages[0].id == "msg-0"
             assert messages[0].content is not None
             assert "banana" in messages[0].content
 
@@ -1052,5 +1281,9 @@ class TestStoredChatCompletionsLive:
         finally:
             deleted = openai_client.chat.completions.delete(created.id)
             assert deleted.deleted is True
-        with pytest.raises(NotFoundError):
+            assert deleted.id == created.id
+            assert deleted.object == "chat.completion.deleted"
+        with pytest.raises(NotFoundError) as excinfo:
             openai_client.chat.completions.retrieve(created.id)
+        assert excinfo.value.status_code == 404
+        assert created.id in excinfo.value.message

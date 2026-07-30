@@ -1,4 +1,15 @@
-"""Basic tests for Cohere embedding models via OpenAI-compatible embeddings API."""
+"""Tests for Cohere Embed models on the OpenAI-compatible embeddings route.
+
+Cohere requires an ``input_type`` that OpenAI has no equivalent for, so the
+gateway always supplies ``search_document`` unless the caller overrides it, and it
+picks between the ``texts``, ``images`` and (v4-only) fused ``inputs`` request
+shapes from the kinds of input received.
+
+Ref: https://docs.cohere.com/reference/embed
+     https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-embed-v3.html
+     https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-embed-v4.html
+     stdapi/models/embedding/cohere_embed.py:EmbeddingModel
+"""
 
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
@@ -22,17 +33,32 @@ COHERE_SAMPLE = (COHERE_V4,)
 #: Minimal data URI, sufficient to exercise the image branch without a real image.
 _SAMPLE_IMAGE_DATA_URI = "data:image/png;base64,AAAA"
 
+#: Vector widths each model family can return (v3 is fixed, v4 is selectable).
+_SUPPORTED_DIMENSIONS = {
+    COHERE_V3: frozenset({1024}),
+    COHERE_V4: frozenset({256, 512, 1024, 1536}),
+}
+
 
 class TestCohereEmbeddings:
-    """Basic behavior checks for Cohere embeddings family (V4)."""
+    """Live behavior of the Cohere Embed v3 and v4 families.
+
+    Ref: https://docs.cohere.com/reference/embed
+         stdapi/models/embedding/cohere_embed.py:EmbeddingModel.embed_text
+    """
 
     @pytest.mark.parametrize("model_id", COHERE_SAMPLE)
     def test_text_extra_params_truncate(
         self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
-        """Extra body parameter "truncate" is forwarded to provider.
+        """The Cohere-only ``truncate`` body field is accepted alongside OpenAI fields.
 
-        Not part of OpenAI Embeddings API, but accepted here as an extra body field.
+        ``truncate`` has no OpenAI equivalent and its vocabulary changed between
+        families: v3 takes ``START``/``END``, v4 takes ``LEFT``/``RIGHT``. The value
+        only matters for over-long inputs, so a short input must simply succeed.
+
+        Ref: https://stdapi.ai/api_openai_embeddings/
+             stdapi/models/embedding/cohere_embed.py:_Request
         """
         if use_official_api:
             pytest.skip("Cohere models are not available on the official OpenAI API")
@@ -47,14 +73,20 @@ class TestCohereEmbeddings:
         assert len(response.data) == 1
         item = response.data[0]
         assert item.object == "embedding"
+        assert item.index == 0
         assert isinstance(item.embedding, list)
-        assert len(item.embedding) > 0
+        assert len(item.embedding) in _SUPPORTED_DIMENSIONS[model_id]
+        assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
 
     @pytest.mark.parametrize("model_id", COHERE_ALL)
     def test_text_single(
         self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
-        """Text input returns a valid embedding."""
+        """A text input is sent as ``texts`` and returns one vector of the model's width.
+
+        Ref: https://docs.cohere.com/reference/embed
+             stdapi/models/embedding/cohere_embed.py:EmbeddingModel.embed_text
+        """
         if use_official_api:
             pytest.skip("Cohere models are not available on the official OpenAI API")
 
@@ -65,8 +97,10 @@ class TestCohereEmbeddings:
         assert len(response.data) == 1
         item = response.data[0]
         assert item.object == "embedding"
+        assert item.index == 0
         assert isinstance(item.embedding, list)
-        assert len(item.embedding) > 0
+        assert len(item.embedding) in _SUPPORTED_DIMENSIONS[model_id]
+        assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
 
     @pytest.mark.parametrize("model_id", COHERE_ALL)
     def test_image_single(
@@ -76,7 +110,15 @@ class TestCohereEmbeddings:
         sample_image_file_base64: str,
         model_id: str,
     ) -> None:
-        """Image input (data URI) returns a valid embedding."""
+        """A PNG data URI is embedded through the ``images`` request field.
+
+        Bedrock accepts a single image per Cohere Embed call, passed as a data URI;
+        on v3 the gateway also has to switch ``input_type`` to ``image``, since v3
+        rejects images under a text input type.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-embed-v3.html
+             stdapi/models/embedding/cohere_embed.py:EmbeddingModel.embed_text
+        """
         if use_official_api:
             pytest.skip("Cohere models are not available on the official OpenAI API")
 
@@ -87,14 +129,23 @@ class TestCohereEmbeddings:
         assert len(response.data) == 1
         item = response.data[0]
         assert item.object == "embedding"
+        assert item.index == 0
         assert isinstance(item.embedding, list)
-        assert len(item.embedding) > 0
+        assert len(item.embedding) in _SUPPORTED_DIMENSIONS[model_id]
+        assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
 
     @pytest.mark.parametrize("model_id", COHERE_ALL)
     def test_text_batch(
         self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
-        """Batch of text inputs returns one embedding per item."""
+        """A text batch is one Cohere call returning one vector per input, in order.
+
+        Unlike Titan, Cohere embeds the whole ``texts`` array in a single
+        InvokeModel call, so the ordering guarantee comes from the provider.
+
+        Ref: https://docs.cohere.com/reference/embed
+             stdapi/models/embedding/cohere_embed.py:EmbeddingModel.embed_text
+        """
         if use_official_api:
             pytest.skip("Cohere models are not available on the official OpenAI API")
 
@@ -110,7 +161,12 @@ class TestCohereEmbeddings:
             assert item.index == i
             assert item.object == "embedding"
             assert isinstance(item.embedding, list)
-            assert len(item.embedding) > 0
+            assert len(item.embedding) in _SUPPORTED_DIMENSIONS[model_id]
+
+        vectors = [item.embedding for item in response.data]
+        assert len({tuple(vector) for vector in vectors}) == len(inputs), (
+            "distinct inputs produced identical vectors"
+        )
 
     @pytest.mark.parametrize("model_id", COHERE_SAMPLE)
     def test_image_batch(
@@ -120,7 +176,14 @@ class TestCohereEmbeddings:
         sample_image_file_base64: str,
         model_id: str,
     ) -> None:
-        """Batch of image data URIs returns embeddings for all items."""
+        """Several images in one call return one vector per image on Embed v4.
+
+        Multi-image calls are v4-only: Bedrock limits Cohere Embed v3 to a single
+        image per request.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-embed-v4.html
+             stdapi/models/embedding/cohere_embed.py:EmbeddingModel.embed_text
+        """
         if use_official_api:
             pytest.skip("Cohere models are not available on the official OpenAI API")
 
@@ -136,7 +199,8 @@ class TestCohereEmbeddings:
             assert item.index == i
             assert item.object == "embedding"
             assert isinstance(item.embedding, list)
-            assert len(item.embedding) > 0
+            assert len(item.embedding) in _SUPPORTED_DIMENSIONS[model_id]
+            assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
 
     @pytest.mark.parametrize("model_id", COHERE_SAMPLE)
     def test_mixed_text_image_batch(
@@ -146,10 +210,14 @@ class TestCohereEmbeddings:
         sample_image_file_base64: str,
         model_id: str,
     ) -> None:
-        """Mixed batch of text and image inputs should be handled.
+        """A text+image batch on v4 is fused into ``inputs`` and stays one vector per item.
 
-        Some backends may not support mixed batches and can return 400. In that
-        case, this is accepted behavior.
+        Mixing modalities in one call is a v4-only capability; the gateway rewrites
+        the batch into Cohere's ``inputs`` content-part shape rather than the
+        mutually exclusive ``texts``/``images`` fields.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-embed-v4.html
+             stdapi/models/embedding/cohere_embed.py:EmbeddingModel.embed_text
         """
         if use_official_api:
             pytest.skip("Cohere models are not available on the official OpenAI API")
@@ -162,16 +230,24 @@ class TestCohereEmbeddings:
             assert item.index == i
             assert item.object == "embedding"
             assert isinstance(item.embedding, list)
-            assert len(item.embedding) > 0
+            assert len(item.embedding) in _SUPPORTED_DIMENSIONS[model_id]
+            assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
+
+        assert response.data[0].embedding != response.data[1].embedding, (
+            "text and image inputs returned the same vector"
+        )
 
     @pytest.mark.parametrize("model_id", COHERE_SAMPLE)
     def test_dimensions_supported_when_valid(
         self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
-        """Dimensions parameter is honored when supported; otherwise 400 is acceptable.
+        """``dimensions`` maps to Cohere's ``output_dimension`` and is honored exactly.
 
-        The Cohere implementation supports output_dimension; for an unsupported
-        value the server may raise 400, which aligns with OpenAI behavior.
+        Embed v4 accepts 256, 512, 1024 and 1536, so a request for 512 must come
+        back with exactly 512 components rather than the model's default width.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-embed-v4.html
+             stdapi/models/embedding/cohere_embed.py:EmbeddingModel.embed_text
         """
         if use_official_api:
             pytest.skip("Cohere models are not available on the official OpenAI API")
@@ -187,17 +263,27 @@ class TestCohereEmbeddings:
         item = response.data[0]
         assert item.object == "embedding"
         assert isinstance(item.embedding, list)
-        assert len(item.embedding) > 0
-        # If respected exactly, length must match; otherwise just ensure non-empty
         assert len(item.embedding) == dimensions
+        assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
 
 
 @pytest.mark.local
 class TestCohereEmbedFusedInputsGuard:
-    """Offline checks for mixed text+image handling in the model layer."""
+    """Offline checks for mixed text+image handling in the Cohere model layer.
+
+    Ref: https://docs.cohere.com/reference/embed
+         stdapi/models/embedding/cohere_embed.py:EmbeddingModel.embed_text
+    """
 
     async def test_mixed_input_on_v3_model_raises_clear_error(self) -> None:
-        """A fused text+image request on a V3 model raises a 400 ApiError."""
+        """A fused text+image request on a V3 model raises a 400 ApiError.
+
+        Only Embed v4 has the ``inputs`` content-part shape, so the gateway refuses
+        the mixed batch up front instead of letting Bedrock reject it.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-embed-v3.html
+             stdapi/models/embedding/cohere_embed.py:EmbeddingModel.embed_text
+        """
         model = EmbeddingModel(COHERE_V3)
         model.invoke = AsyncMock()  # type: ignore[method-assign]
         with pytest.raises(ApiError, match="Cohere Embed v4") as exc_info:
@@ -210,12 +296,20 @@ class TestCohereEmbedFusedInputsGuard:
         model.invoke.assert_not_called()
 
     async def test_mixed_input_on_v4_model_builds_fused_body(self) -> None:
-        """A fused text+image request on the V4 model builds the ``inputs`` body."""
+        """A fused text+image request on the V4 model builds the ``inputs`` body.
+
+        Each input becomes its own ``content`` list entry, keeping request order, and
+        the gateway supplies the ``input_type`` Cohere requires but OpenAI does not
+        have. The mutually exclusive ``texts``/``images`` fields must stay absent.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-embed-v4.html
+             stdapi/models/embedding/cohere_embed.py:EmbeddingModel._to_input_content
+        """
         model = EmbeddingModel(COHERE_V4)
         model.invoke = AsyncMock(  # type: ignore[method-assign]
             return_value=InvokeResult(response={"embeddings": [[0.1]]})
         )
-        await model.embed_text(
+        response = await model.embed_text(
             ["A sample text.", InputFileUrl(_SAMPLE_IMAGE_DATA_URI)],
             dimensions=None,
             extra_params={},
@@ -229,3 +323,7 @@ class TestCohereEmbedFusedInputsGuard:
                 ]
             },
         ]
+        assert request["input_type"] == "search_document"
+        assert "texts" not in request
+        assert "images" not in request
+        assert response.embeddings == [[0.1]]

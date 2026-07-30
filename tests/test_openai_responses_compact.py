@@ -1,4 +1,16 @@
-"""Tests for the OpenAI-compatible POST /v1/responses/compact route (unit)."""
+"""Tests for the OpenAI-compatible POST /v1/responses/compact route.
+
+The gateway rejects ``context_management``, so the standalone compact endpoint is
+the only compaction path available.  It runs a summarisation turn on Bedrock and
+returns the conversation's user messages followed by one opaque ``compaction``
+item; the item content is self-contained (marker-prefixed base64url, not
+encrypted), so replaying it needs no server-side state.
+
+Ref: https://developers.openai.com/api/reference/resources/responses/methods/compact
+     https://developers.openai.com/api/docs/guides/compaction
+     stdapi/routes/openai_responses.py:compact_response
+     stdapi/types/openai_responses.py:CompactedResponse
+"""
 
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 from typing import TYPE_CHECKING, Any
@@ -112,12 +124,20 @@ def chat_backend(monkeypatch: pytest.MonkeyPatch) -> _StubChatModel:
 
 @pytest.mark.local
 class TestResponsesCompactRoute:
-    """POST /v1/responses/compact: response shape and generation request."""
+    """POST /v1/responses/compact: response shape and generation request.
+
+    Ref: stdapi/routes/openai_responses.py:_compaction_user_messages
+    """
 
     def test_compact_returns_compaction_item(
         self, client: TestClient, chat_backend: _StubChatModel
     ) -> None:
-        """String input yields a user message echo followed by the compaction item."""
+        """String input yields a user message echo followed by the compaction item.
+
+        A bare string input is the shorthand for a single ``user`` message, so
+        it is echoed as an ``input_text`` part, and the summary the backend
+        produced is what the compaction item carries.
+        """
         response = client.post(
             "/v1/responses/compact",
             json={"model": "amazon.nova-pro-v1:0", "input": "a long conversation"},
@@ -136,12 +156,20 @@ class TestResponsesCompactRoute:
         assert item["encrypted_content"].startswith(COMPACTION_CONTENT_PREFIX)
         encoded = item["encrypted_content"].removeprefix(COMPACTION_CONTENT_PREFIX)
         assert urlsafe_b64decode(encoded) == b"THE SUMMARY"
-        assert body["usage"]["total_tokens"] == 18
+        assert body["id"] == item["id"].replace("ci-", "resp-", 1)
+        assert body["usage"]["total_tokens"] == 18, (
+            "the summarisation turn's usage is billed to the caller"
+        )
 
     def test_compact_echoes_only_user_messages_in_order(
         self, client: TestClient, chat_backend: _StubChatModel
     ) -> None:
-        """Assistant messages are dropped; user echoes stay ordered before the compaction item."""
+        """Assistant messages are dropped; user echoes stay ordered before the compaction item.
+
+        The echoed window is what callers replay, and the assistant turns are
+        already folded into the summary, so re-sending them would duplicate
+        context.
+        """
         response = client.post(
             "/v1/responses/compact",
             json={
@@ -162,7 +190,13 @@ class TestResponsesCompactRoute:
     def test_compact_echoes_part_list_content_as_dicts(
         self, client: TestClient, chat_backend: _StubChatModel
     ) -> None:
-        """List-based user content parts are echoed back as dicts."""
+        """List-based user content parts are echoed back verbatim as dicts.
+
+        The echo is a replayable window, so image and text parts must survive
+        the round trip unchanged instead of being flattened to text.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+        """
         parts = [
             {"type": "input_text", "text": "look at this"},
             {"type": "input_image", "image_url": "https://example.com/img.png"},
@@ -182,7 +216,12 @@ class TestResponsesCompactRoute:
     def test_compact_appends_summarization_directive(
         self, client: TestClient, chat_backend: _StubChatModel
     ) -> None:
-        """The generation request keeps the input and appends the directive."""
+        """The generation request keeps the input and appends the directive.
+
+        Compaction is a normal generation turn, so the conversation is sent
+        unchanged with the summarisation instruction as a trailing user
+        message, and the caller's own ``instructions`` are preserved.
+        """
         client.post(
             "/v1/responses/compact",
             json={
@@ -192,13 +231,16 @@ class TestResponsesCompactRoute:
             },
         )
         (request,) = chat_backend.requests
+        assert request.model == "amazon.nova-pro-v1:0"
         assert request.instructions == "be nice"
         assert isinstance(request.input, list)
+        assert len(request.input) == 2, "the input plus the appended directive"
         first = request.input[0]
         assert isinstance(first, EasyInputMessage | InputMessage)
         assert first.content == "hello"
         last = request.input[-1]
         assert isinstance(last, EasyInputMessage | InputMessage)
+        assert last.role == "user"
         assert "Summarize the conversation" in str(last.content)
 
     def test_previous_response_id_compacts_stored_conversation(
@@ -207,7 +249,15 @@ class TestResponsesCompactRoute:
         chat_backend: _StubChatModel,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A stored conversation is prepended before the compaction directive."""
+        """A stored conversation is prepended before the compaction directive.
+
+        ``previous_response_id`` resolves against the local Bedrock-session
+        store, whose items are merged ahead of the new input so the summary
+        covers the whole thread; the echoed window covers it too.
+
+        Ref: stdapi/routes/openai_responses.py:_apply_previous_response
+             stdapi/responses_store.py:load_stored_response
+        """
 
         async def _load(response_id: str, kind: str) -> dict[str, Any]:
             assert response_id == "resp-1"
@@ -247,19 +297,33 @@ class TestResponsesCompactRoute:
         chat_backend: _StubChatModel,
         body_input: list[Any] | None,
     ) -> None:
-        """An empty conversation is rejected with 400 before any generation."""
+        """An empty conversation is rejected with 400 before any generation.
+
+        ``input`` is optional on the compact route (a stored conversation may
+        supply it), so an omitted and an empty list both have to be caught
+        explicitly rather than by schema validation.
+        """
         body: dict[str, Any] = {"model": "amazon.nova-pro-v1:0"}
         if body_input is not None:
             body["input"] = body_input
         response = client.post("/v1/responses/compact", json=body)
         assert response.status_code == 400, response.text
-        assert "no conversation to compact" in response.text
-        assert not chat_backend.requests
+        error = response.json()["error"]
+        assert "no conversation to compact" in error["message"]
+        assert error["type"] == "invalid_request_error"
+        assert not chat_backend.requests, "no model is billed for an empty request"
 
     def test_generation_parameters_are_forwarded(
         self, client: TestClient, chat_backend: _StubChatModel
     ) -> None:
-        """Caching and service-tier parameters reach the generation request."""
+        """Caching and service-tier parameters reach the generation request.
+
+        These are the compact-route parameters with no equivalent on
+        ``CompactedResponse``, so the only observable effect is that they are
+        forwarded to the summarisation turn.
+
+        Ref: stdapi/types/openai_responses.py:CompactParams
+        """
         response = client.post(
             "/v1/responses/compact",
             json={
@@ -283,7 +347,11 @@ class TestResponsesCompactRoute:
     def test_missing_usage_falls_back_to_zeros(
         self, client: TestClient, chat_backend: _StubChatModel
     ) -> None:
-        """A backend response without usage yields a zeroed usage envelope."""
+        """A backend response without usage yields a zeroed usage envelope.
+
+        ``usage`` is required on ``CompactedResponse``, so a backend that
+        reports none must still serialise a complete envelope.
+        """
         chat_backend.usage = None
         response = client.post(
             "/v1/responses/compact",
@@ -294,6 +362,7 @@ class TestResponsesCompactRoute:
         assert usage["input_tokens"] == 0
         assert usage["output_tokens"] == 0
         assert usage["total_tokens"] == 0
+        assert response.json()["output"][-1]["type"] == "compaction"
 
     def test_mantle_previous_response_id_is_not_found(
         self,
@@ -301,7 +370,15 @@ class TestResponsesCompactRoute:
         chat_backend: _StubChatModel,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A Mantle-stored previous_response_id is rejected with 404."""
+        """A Mantle-stored previous_response_id is rejected with 404.
+
+        Compaction always runs locally, and a Mantle conversation is only
+        readable through Mantle's own native chaining, so the region-tagged
+        ``resp_`` ID cannot be continued here.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html
+             stdapi/routes/openai_responses.py:_decode_mantle_id
+        """
         monkeypatch.setattr(
             openai_responses,
             "_decode_mantle_id",
@@ -316,13 +393,21 @@ class TestResponsesCompactRoute:
             },
         )
         assert response.status_code == 404, response.text
-        assert "cannot be continued with this model" in response.text
+        error = response.json()["error"]
+        assert "cannot be continued with this model" in error["message"]
+        assert error["type"] == "invalid_request_error"
         assert not chat_backend.requests
 
     def test_sdk_parses_compaction_envelope(
         self, client: TestClient, chat_backend: _StubChatModel
     ) -> None:
-        """The response JSON survives the OpenAI SDK's lenient envelope parse."""
+        """The response JSON validates against the SDK's ``CompactedResponse`` model.
+
+        Clients call this route through ``openai.responses.compact()``, so the
+        echoed user messages must be parseable alongside the compaction item.
+
+        Ref: https://github.com/openai/openai-python/tree/main/src/openai/types/responses
+        """
         response = client.post(
             "/v1/responses/compact",
             json={
@@ -333,6 +418,7 @@ class TestResponsesCompactRoute:
         assert response.status_code == 200, response.text
         parsed = construct_type(type_=SdkCompactedResponse, value=response.json())
         assert isinstance(parsed, SdkCompactedResponse)
+        assert [part.type for part in parsed.output] == ["message", "compaction"]
         item = next(part for part in parsed.output if part.type == "compaction")
         assert item.id
         assert item.encrypted_content.startswith(COMPACTION_CONTENT_PREFIX)
@@ -345,7 +431,10 @@ class TestResponsesCompactRoute:
         chat_backend: _StubChatModel,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """An unknown previous_response_id surfaces as 404."""
+        """An unknown previous_response_id surfaces as 404 with the requested ID.
+
+        Ref: stdapi/routes/openai_responses.py:_previous_response_not_found
+        """
 
         async def _load(response_id: str, kind: str) -> dict[str, Any]:  # noqa: ARG001
             from stdapi.api_errors import ApiError  # noqa: PLC0415
@@ -358,16 +447,24 @@ class TestResponsesCompactRoute:
             "/v1/responses/compact",
             json={"model": "m", "input": "x", "previous_response_id": "resp-zzz"},
         )
-        assert response.status_code == 404
+        assert response.status_code == 404, response.text
+        error = response.json()["error"]
+        assert "resp-zzz" in error["message"]
+        assert "not found" in error["message"]
         assert not chat_backend.requests
 
 
 @pytest.mark.local
 class TestCompactionItemRoundTrip:
-    """Compaction items round-trip through the Responses input mapping."""
+    """Compaction items round-trip through the Responses input mapping.
+
+    Ref: https://developers.openai.com/api/docs/guides/compaction
+         stdapi/models/chat/_adapters/_openai_responses.py:encode_compaction_content
+         stdapi/models/chat/_adapters/_openai_responses.py:_map_compaction_item
+    """
 
     async def test_compaction_item_maps_to_user_summary_message(self) -> None:
-        """The decoded summary is injected as a user message.
+        """The decoded summary is injected as a labelled user message.
 
         The summary's UTF-8 bytes base64-encode to characters that differ
         between the standard and urlsafe alphabets ('-'/'_' vs '+'/'/'),
@@ -386,15 +483,23 @@ class TestCompactionItemRoundTrip:
         assert system == []
         (message,) = messages
         assert message["role"] == "user"
-        assert summary in message["content"][0]["text"]
+        assert message["content"] == [
+            {"text": f"Summary of the earlier conversation:\n{summary}"}
+        ]
 
     async def test_invalid_compaction_content_is_rejected(self) -> None:
-        """Undecodable compaction content raises a 400 error."""
+        """Undecodable compaction content raises a 400 error.
+
+        ``!!!`` carries the local marker but is not valid base64url, so the
+        decode failure must surface as a client error rather than a 500.
+        """
         item = CompactionItemParam(
             encrypted_content=f"{COMPACTION_CONTENT_PREFIX}!!!", type="compaction"
         )
-        with pytest.raises(ApiError, match="produced by this server"):
+        with pytest.raises(ApiError, match="produced by this server") as excinfo:
             await map_input([item], None)
+        assert excinfo.value.status == 400
+        assert "Invalid compaction item content" in str(excinfo.value)
 
     async def test_unmarked_content_is_rejected(self) -> None:
         """Content without the local marker is rejected even when decodable.
@@ -406,17 +511,27 @@ class TestCompactionItemRoundTrip:
             encrypted_content=urlsafe_b64encode(b"upstream ciphertext").decode(),
             type="compaction",
         )
-        with pytest.raises(ApiError, match="produced by this server"):
+        with pytest.raises(ApiError, match="produced by this server") as excinfo:
             await map_input([item], None)
+        assert excinfo.value.status == 400
+        assert "Invalid compaction item content" in str(excinfo.value)
 
 
 class TestResponsesCompactLive:
-    """Live conversation compaction and round-trip continuation."""
+    """Live conversation compaction and round-trip continuation.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/methods/compact
+         https://developers.openai.com/api/docs/guides/compaction
+    """
 
     def test_compact_and_continue(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """A compacted conversation carries its facts into the next turn."""
+        """A compacted conversation carries its facts into the next turn.
+
+        The compaction item is self-contained, so replaying it with ``store``
+        disabled is enough for the model to recover the earlier fact.
+        """
         compacted = openai_client.responses.compact(
             model=responses_model,
             input=[
@@ -448,4 +563,5 @@ class TestResponsesCompactLive:
             ],
             store=False,
         )
+        assert follow.status == "completed", follow.model_dump_json()
         assert "teal" in follow.output_text.lower()

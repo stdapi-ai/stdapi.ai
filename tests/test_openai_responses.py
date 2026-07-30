@@ -1,13 +1,15 @@
-"""Tests for the OpenAI /v1/responses route.
+"""Tests for the OpenAI Responses API routes served by the gateway.
 
-Comprehensive test suite that validates all features of the OpenAI Responses API
-specification, ensuring compatibility with the official OpenAI API behavior.
+Ref: https://developers.openai.com/api/reference/resources/responses
+     stdapi/routes/openai_responses.py:create_response
 """
 
 from __future__ import annotations
 
+import base64
 import json
-from typing import TYPE_CHECKING
+from itertools import pairwise
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from openai import BadRequestError, NotFoundError, OpenAI
@@ -17,6 +19,7 @@ from stdapi.config import SETTINGS
 from stdapi.usage import record_bedrock_usage
 
 if TYPE_CHECKING:
+    from openai import APIStatusError
     from starlette.testclient import TestClient as TestClientType
 
 #: Deterministic context long enough to exceed the minimum cacheable prompt size.
@@ -28,21 +31,39 @@ _CACHEABLE_CONTEXT = (
 ) * 150
 
 
-class TestResponses:
-    """Test suite for the /v1/responses endpoint.
+def _error_envelope(error: APIStatusError) -> dict[str, Any]:
+    """Return the OpenAI error envelope carried by a client exception.
 
-    Tests are designed to validate complete OpenAI Responses API compatibility
-    including:
-    - Core response generation and output structure validation
-    - All parameter combinations and validations
-    - Function tool calling (basic and advanced)
-    - Built-in tool support (web search)
-    - Multi-turn conversation via previous_response_id
-    - Multimodal (image) inputs
-    - Streaming and stream manager behavior
-    - Response lifecycle (retrieve, input items listing)
-    - Text format configuration (plain text, JSON object, JSON schema)
-    - Error handling and input validation
+    ``OpenAI._make_status_error`` already unwraps the body's ``error`` member
+    (``body.get("error", body)``), so the exception's ``body`` *is* the envelope
+    and is the only place where ``type``, ``code`` and ``param`` survive
+    (``error.code`` reads the outer body and is always ``None`` here).
+
+    Args:
+        error: Exception raised by the OpenAI client.
+
+    Returns:
+        The ``error`` member of the JSON error body.
+
+    Ref: https://developers.openai.com/api/docs/guides/error-codes
+         stdapi/api_providers/openai.py:_format_error
+    """
+    envelope = error.body
+    assert isinstance(envelope, dict), f"Expected an error envelope: {envelope!r}"
+    return envelope
+
+
+class TestResponses:
+    """POST /v1/responses generation, parameters, tools, streaming and validation.
+
+    The gateway maps every request onto Bedrock Converse/ConverseStream, so the
+    request-shaped fields of the returned Response object (``temperature``,
+    ``top_p``, ``tool_choice``, ``tools``, ``text``, ``metadata``,
+    ``instructions``, ``service_tier``, ``parallel_tool_calls``) are echoed
+    from the request rather than computed by the backend.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+         stdapi/models/chat/_adapters/_openai_responses.py:_build_response_object
     """
 
     # ---------------------------------------------------------------------------
@@ -50,100 +71,100 @@ class TestResponses:
     # ---------------------------------------------------------------------------
 
     def test_basic_response(self, openai_client: OpenAI, responses_model: str) -> None:
-        """Test fundamental response creation with minimal parameters.
+        """A minimal create call returns a completed assistant ``message`` item.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
+        The gateway emits one ``message`` output item per assistant text run,
+        always with ``role="assistant"``, ``status="completed"`` and
+        ``output_text`` content parts; ``output_text`` is the SDK-side
+        aggregation of those parts.
 
-        Validates:
-            - Response contains a non-empty string id
-            - Response output is a non-empty list
-            - First output item is an assistant message with role 'assistant'
-            - output_text convenience property returns non-empty string
+        Ref: https://developers.openai.com/api/docs/guides/migrate-to-responses
+             stdapi/models/chat/_adapters/_openai_responses.py:_extract_output_items
         """
         response = openai_client.responses.create(
             model=responses_model, input="Say hello."
         )
 
         assert response.id
-        assert isinstance(response.id, str)
+        assert response.status == "completed"
         assert len(response.output) > 0
         # Reasoning models produce a reasoning item before the message
         msg = next((item for item in response.output if item.type == "message"), None)
         assert msg is not None, "Expected a message item in response output"
         assert msg.role == "assistant"
-        assert isinstance(response.output_text, str)
+        assert msg.status == "completed"
+        texts = [part.text for part in msg.content if part.type == "output_text"]
+        assert texts, "Expected an output_text content part in the message item"
+        assert texts[0] in response.output_text
         assert len(response.output_text) > 0
 
     def test_response_object_fields(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """Test all top-level Response object fields are present and correctly typed.
+        """A successful response carries the full Response envelope with no error state.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
+        ``tool_choice`` and ``parallel_tool_calls`` are defaulted rather than
+        omitted when the request sends no tools: the gateway substitutes
+        ``"auto"`` and ``True``, matching the upstream defaults.
 
-        Validates:
-            - All required Response fields are present after creation
-            - Field types match the OpenAI Responses API specification
-            - The model field is a non-empty string (may be a versioned alias)
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/retrieve
+             stdapi/models/chat/_adapters/_openai_responses.py:_build_response_object
         """
         response = openai_client.responses.create(model=responses_model, input="Hello.")
 
-        assert isinstance(response.id, str)
-        assert isinstance(response.created_at, float)
+        assert response.id
+        assert response.created_at > 0
         # The API may return a versioned model name (e.g. 'gpt-5-nano-2025-08-07')
-        assert isinstance(response.model, str)
         assert len(response.model) > 0
         assert response.object == "response"
-        assert isinstance(response.output, list)
-        assert response.status is not None
+        assert response.status == "completed"
+        assert response.error is None
+        assert response.incomplete_details is None
         assert response.usage is not None
-        assert isinstance(response.tools, list)
-        assert response.tool_choice is not None
-        assert isinstance(response.parallel_tool_calls, bool)
+        assert response.tools == []
+        assert response.tool_choice == "auto"
+        assert response.parallel_tool_calls is True
 
     def test_instructions_system_prompt(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """Test the instructions parameter acts as a system-level prompt.
+        """``instructions`` reaches the model as a system prompt and is echoed back.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
+        The gateway routes ``instructions`` into the Bedrock Converse ``system``
+        blocks, so it must override the answer the user turn would otherwise
+        produce; the instruction pins a single word to keep the check tolerant
+        of non-deterministic phrasing.
 
-        Validates:
-            - instructions parameter is accepted alongside input
-            - Response is generated successfully with instructions context
-            - Output text is non-empty
+        Ref: https://developers.openai.com/api/docs/guides/migrate-to-responses
+             stdapi/models/chat/_adapters/_openai_responses.py:map_input
         """
+        instructions = (
+            "You are a terse assistant. Whatever the question, reply with exactly "
+            "the single word TEAL and nothing else."
+        )
         response = openai_client.responses.create(
             model=responses_model,
-            input="How should I respond?",
-            instructions=(
-                "You are a concise assistant. Always keep responses under 10 words."
-            ),
+            input="What color is the sky on a clear day?",
+            instructions=instructions,
         )
 
-        assert len(response.output) > 0
-        assert isinstance(response.output_text, str)
-        assert len(response.output_text) > 0
+        assert response.status == "completed"
+        assert response.instructions == instructions
+        assert "teal" in response.output_text.lower(), (
+            f"instructions did not reach the model: {response.output_text!r}"
+        )
 
     def test_structured_input_array(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """Test input provided as an array of message objects with roles.
+        """A message-array ``input`` replays prior turns, including the assistant role.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
+        Messages with the ``assistant`` role are presumed to have been generated
+        in previous interactions, so the name established there must be
+        available to the final user turn.
 
-        Validates:
-            - Input as a list of role/content dicts is accepted
-            - Conversation history in the input array is processed correctly
-            - The model uses prior assistant context to answer the follow-up
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+             stdapi/models/chat/_adapters/_openai_responses.py:_map_message_item
         """
         response = openai_client.responses.create(
             model=responses_model,
@@ -157,8 +178,8 @@ class TestResponses:
             ],
         )
 
+        assert response.status == "completed"
         assert len(response.output) > 0
-        assert isinstance(response.output_text, str)
         assert "alice" in response.output_text.lower(), (
             f"Expected name 'Alice' in response but got: {response.output_text!r}"
         )
@@ -166,15 +187,14 @@ class TestResponses:
     def test_output_text_property(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """Test the output_text convenience property aggregates text from output items.
+        """``output_text`` concatenates exactly the ``output_text`` parts of the output.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
+        ``output_text`` is an SDK-side aggregation, so it must equal the
+        concatenation of every ``output_text`` part the gateway emitted and must
+        not include reasoning or refusal content.
 
-        Validates:
-            - output_text property returns a non-empty string
-            - output_text matches text manually extracted from output items
+        Ref: https://developers.openai.com/api/docs/guides/migrate-to-responses
+             stdapi/models/chat/_adapters/_openai_responses.py:_flush_message_item
         """
         response = openai_client.responses.create(
             model=responses_model, input="Reply with exactly: hello world"
@@ -188,6 +208,7 @@ class TestResponses:
                     if part.type == "output_text":
                         manual_text += part.text
 
+        assert manual_text, "Expected at least one output_text part to aggregate"
         assert response.output_text == manual_text
         assert len(response.output_text) > 0
 
@@ -198,62 +219,53 @@ class TestResponses:
     def test_temperature_parameter(
         self, openai_client: OpenAI, chat_legacy_model: str
     ) -> None:
-        """Test temperature parameter is accepted across valid range.
+        """``temperature`` is accepted over the whole 0.0-1.0 range and echoed back.
 
-        Uses a non-reasoning model (gpt-4o-mini) since reasoning models reject
-        the temperature parameter.
+        A non-reasoning model is used because reasoning models reject
+        ``temperature``.  ``0.0`` is included on purpose: the gateway must pass
+        it through instead of treating the falsy value as "unset".
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            chat_legacy_model: Non-reasoning model identifier (gpt-4o-mini)
-
-        Validates:
-            - temperature=0.0 (fully deterministic) is accepted
-            - temperature=0.5 (mid-range) is accepted
-            - temperature=1.0 is accepted
-            - Responses are generated successfully for all values
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+             stdapi/models/chat/_adapters/_openai_responses.py:translate_request
         """
         for temperature in (0.0, 0.5, 1.0):
             response = openai_client.responses.create(
                 model=chat_legacy_model, input="Say 'ok'.", temperature=temperature
             )
+            assert response.status == "completed"
+            assert response.temperature == temperature
             assert len(response.output_text) > 0
 
     def test_top_p_parameter(
         self, openai_client: OpenAI, chat_legacy_model: str
     ) -> None:
-        """Test top_p nucleus sampling parameter is accepted and response is generated.
+        """``top_p`` nucleus sampling is accepted and echoed back on the response.
 
-        Uses a non-reasoning model (gpt-4o-mini) since reasoning models reject
-        the top_p parameter.
+        A non-reasoning model is used because reasoning models reject ``top_p``.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            chat_legacy_model: Non-reasoning model identifier (gpt-4o-mini)
-
-        Validates:
-            - top_p=0.5 is accepted
-            - top_p=1.0 (maximum / no filtering) is accepted
-            - Response is non-empty for both values
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+             stdapi/models/chat/_adapters/_openai_responses.py:translate_request
         """
         for top_p in (0.5, 1.0):
             response = openai_client.responses.create(
                 model=chat_legacy_model, input="Say 'hello'.", top_p=top_p
             )
+            assert response.status == "completed"
+            assert response.top_p == top_p
             assert len(response.output_text) > 0
 
     def test_max_output_tokens_limits_output(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """Test max_output_tokens restricts the number of output tokens generated.
+        """``max_output_tokens`` caps generation and yields ``incomplete`` when hit.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
+        The prompt cannot be answered in 20 tokens, so Bedrock returns
+        ``stopReason=max_tokens``, which the gateway maps to
+        ``status="incomplete"`` with ``incomplete_details.reason ==
+        "max_output_tokens"``.
 
-        Validates:
-            - max_output_tokens is accepted
-            - Response usage.output_tokens is within the limit, or status is 'incomplete'
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/retrieve
+             stdapi/models/chat/_adapters/_openai_responses.py:_map_stop_reason
         """
         response = openai_client.responses.create(
             model=responses_model,
@@ -264,66 +276,74 @@ class TestResponses:
             max_output_tokens=20,
         )
 
+        assert response.max_output_tokens == 20
         assert response.usage is not None
         # Either the output stays within the token limit, or the response is truncated
-        assert response.usage.output_tokens <= 20 or response.status == "incomplete"
+        if response.status == "incomplete":
+            assert response.incomplete_details is not None
+            assert response.incomplete_details.reason == "max_output_tokens"
+        else:
+            assert response.status == "completed"
+            assert response.usage.output_tokens <= 20, (
+                f"completed response exceeded max_output_tokens: {response.usage!r}"
+            )
 
     def test_metadata_parameter(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """Test metadata key-value pairs are stored and returned on the response.
+        """``metadata`` is returned unchanged on the response object.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
+        The gateway also forwards the pairs to Bedrock as Converse
+        ``requestMetadata``, so the values must survive verbatim rather than
+        being normalised.
 
-        Validates:
-            - Metadata dict is accepted
-            - Metadata values are returned unchanged on the response object
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+             stdapi/models/chat/_adapters/_openai_responses.py:translate_request
         """
         test_metadata = {"session_id": "test-abc-123", "test_type": "automated"}
         response = openai_client.responses.create(
             model=responses_model, input="Say 'ok'.", metadata=test_metadata
         )
 
-        assert response.metadata is not None
-        assert response.metadata.get("session_id") == "test-abc-123"
-        assert response.metadata.get("test_type") == "automated"
+        assert response.status == "completed"
+        assert response.metadata == test_metadata
 
     def test_user_parameter(self, openai_client: OpenAI, responses_model: str) -> None:
-        """Test user parameter is accepted without error.
+        """The deprecated ``user`` identifier is accepted and echoed on the response.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
+        ``user`` has no effect on generation: the gateway only records it in the
+        request log (``safety_identifier`` takes precedence when both are sent)
+        and returns it unchanged.
 
-        Validates:
-            - user parameter is accepted
-            - Response is generated successfully
+        Ref: https://developers.openai.com/api/docs/guides/safety-best-practices#implement-safety-identifiers
+             stdapi/routes/openai_responses.py:create_response
         """
         response = openai_client.responses.create(
             model=responses_model, input="Say 'hi'.", user="test-user-identifier-123"
         )
 
+        assert response.status == "completed"
+        assert response.user == "test-user-identifier-123"
         assert len(response.output_text) > 0
 
     def test_service_tier_parameter(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """Test service_tier parameter is accepted without error.
+        """``service_tier="default"`` is accepted and reported back as ``default``.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
+        ``default`` is the baseline tier; the gateway maps it to the Bedrock
+        Converse ``"default"`` wire value and reports the requested tier back
+        unchanged.
 
-        Validates:
-            - service_tier='default' is accepted
-            - Response is generated successfully
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/service-tiers-inference.html
+             stdapi/models/chat/_adapters/_openai_responses.py:translate_request
         """
         response = openai_client.responses.create(
             model=responses_model, input="Say 'hello'.", service_tier="default"
         )
 
+        assert response.status == "completed"
+        assert response.service_tier == "default"
         assert len(response.output_text) > 0
 
     # ---------------------------------------------------------------------------
@@ -333,32 +353,36 @@ class TestResponses:
     def test_response_id_format(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """Test response ID has the correct 'resp-' prefix format.
+        """The response id uses a ``resp`` prefix followed by a non-empty suffix.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
+        The separator is load-bearing on this implementation: locally stored
+        responses use ``resp-`` while region-tagged Bedrock Mantle responses (and
+        the official API) use ``resp_``.  A ``resp_`` id that fails Mantle
+        decoding is a 404 rather than a local lookup.
 
-        Validates:
-            - Response id starts with 'resp_' (official API) or 'resp-' (local)
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/retrieve
+             stdapi/routes/openai_responses.py:_decode_mantle_id
         """
         response = openai_client.responses.create(model=responses_model, input="Hello.")
 
-        assert response.id.startswith("resp"), (
-            f"Response ID '{response.id}' should start with 'resp'"
+        assert response.id.startswith(("resp-", "resp_")), (
+            f"Response ID '{response.id}' should start with 'resp-' or 'resp_'"
+        )
+        assert len(response.id) > len("resp-"), (
+            f"Empty response id suffix: {response.id}"
         )
 
     def test_response_object_type_field(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """Test the object field identifies the response as a 'response' object.
+        """The ``object`` discriminator of a create result is the literal ``response``.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
+        Clients dispatch on this literal, and the gateway serves several other
+        object types on neighbouring routes (``response.compaction``,
+        ``response.input_tokens``), so the create route must not reuse them.
 
-        Validates:
-            - response.object == 'response'
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/retrieve
+             stdapi/models/chat/_adapters/_openai_responses.py:_build_response_object
         """
         response = openai_client.responses.create(model=responses_model, input="Hello.")
 
@@ -367,49 +391,50 @@ class TestResponses:
     def test_usage_token_counts(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """Test usage token counts are accurate and internally consistent.
+        """``usage`` reports non-zero counts whose total is input plus output tokens.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
+        Bedrock's ``TokenUsage.inputTokens`` excludes the cache buckets while
+        OpenAI's ``input_tokens`` includes them, so the gateway adds
+        ``cacheReadInputTokens``/``cacheWriteInputTokens`` back in; the reported
+        cached counts must therefore never exceed ``input_tokens``.
 
-        Validates:
-            - usage.input_tokens > 0
-            - usage.output_tokens > 0
-            - usage.total_tokens == input_tokens + output_tokens
-            - usage.input_tokens_details is present
-            - usage.output_tokens_details is present
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_TokenUsage.html
+             stdapi/models/chat/_adapters/_openai_responses.py:format_response
         """
         response = openai_client.responses.create(
             model=responses_model, input="Say exactly: hello world."
         )
 
         assert response.usage is not None
-        assert response.usage.input_tokens > 0
-        assert response.usage.output_tokens > 0
-        assert response.usage.total_tokens == (
-            response.usage.input_tokens + response.usage.output_tokens
-        )
-        assert response.usage.input_tokens_details is not None
-        assert response.usage.output_tokens_details is not None
+        counts = response.usage
+        assert counts.input_tokens > 0
+        assert counts.output_tokens > 0
+        assert counts.total_tokens == counts.input_tokens + counts.output_tokens
+        assert counts.input_tokens_details is not None
+        assert counts.input_tokens_details.cached_tokens <= counts.input_tokens
+        assert counts.output_tokens_details is not None
+        assert counts.output_tokens_details.reasoning_tokens <= counts.output_tokens
 
     def test_response_status_completed(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """Test that a normal synchronous response has status 'completed'.
+        """A successful synchronous response is ``completed`` with a ``completed_at``.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
+        The gateway derives the status from the Bedrock stop reason:
+        ``end_turn``/``stop_sequence``/``tool_use`` all map to ``completed`` with
+        neither ``incomplete_details`` nor ``error`` set.
 
-        Validates:
-            - response.status == 'completed' for successful non-streaming requests
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/retrieve
+             stdapi/models/chat/_adapters/_openai_responses.py:_map_stop_reason
         """
         response = openai_client.responses.create(
             model=responses_model, input="Say 'done'."
         )
 
         assert response.status == "completed"
+        assert response.incomplete_details is None
+        assert response.error is None
+        assert response.completed_at is not None
 
     # ---------------------------------------------------------------------------
     # Group 4: Text Format Configuration
@@ -418,15 +443,14 @@ class TestResponses:
     def test_text_format_text(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """Test explicit plain text format configuration produces text output.
+        """``text.format={"type": "text"}`` is the default format and is echoed back.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
+        The gateway builds no Bedrock ``outputConfig`` for the ``text`` format, so
+        the request must succeed on models that reject ``outputConfig`` and the
+        output stays free-form prose.
 
-        Validates:
-            - text.format type='text' is accepted
-            - Response output is a non-empty string
+        Ref: https://developers.openai.com/api/docs/guides/structured-outputs
+             stdapi/models/chat/_adapters/_openai_responses.py:_build_output_config
         """
         response = openai_client.responses.create(
             model=responses_model,
@@ -434,56 +458,57 @@ class TestResponses:
             text={"format": {"type": "text"}},
         )
 
-        assert isinstance(response.output_text, str)
+        assert response.status == "completed"
+        assert response.text is not None
+        assert response.text.format is not None
+        assert response.text.format.type == "text"
         assert len(response.output_text) > 0
 
     def test_text_format_json_object(
         self, openai_client: OpenAI, responses_json_output_model: str
     ) -> None:
-        """Test json_object format produces valid parseable JSON output.
+        """``text.format={"type": "json_object"}`` yields the empty JSON object ``{}``.
 
-        Uses a model known to support Bedrock ``outputConfig`` (structured
-        output is enforced natively — no system-prompt injection fallback).
+        The model is pinned to one that supports Bedrock Converse ``outputConfig``,
+        so JSON mode is enforced natively by constrained decoding.  Bedrock refuses
+        a permissive object schema (``{}``, ``{"type": "object"}`` and
+        ``additionalProperties: true`` all raise ``ValidationException``), so the
+        gateway sends ``{"type": "object", "additionalProperties": false}`` — a
+        schema whose only valid instance is ``{}``.  The requested keys can
+        therefore never come back on this route, whatever the prompt says.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_json_output_model: Responses model supporting Bedrock
-                ``outputConfig``.
-
-        Validates:
-            - text.format type='json_object' produces parseable JSON
-            - Parsed output is a valid dictionary
+        Ref: https://developers.openai.com/api/docs/guides/structured-outputs
+             stdapi/models/chat/_adapters/_openai_responses.py:_build_output_config
         """
         response = openai_client.responses.create(
             model=responses_json_output_model,
-            input=(
-                'Reply with a JSON object containing the key "result" '
-                'and value "success".'
-            ),
+            input='Output exactly this and nothing else: {"result": "success"}',
             text={"format": {"type": "json_object"}},
         )
 
+        assert response.status == "completed"
+        assert response.text is not None
+        assert response.text.format is not None
+        assert response.text.format.type == "json_object"
         output_text = response.output_text
-        assert isinstance(output_text, str)
+        assert output_text.strip().startswith("{"), (
+            f"json_object output must not be wrapped in prose: {output_text!r}"
+        )
         parsed = json.loads(output_text)
-        assert isinstance(parsed, dict)
+        # Current behavior: the closed empty-object schema admits no other value.
+        assert parsed == {}, f"json_object schema admits only {{}}, got {parsed!r}"
 
     def test_text_format_json_schema(
         self, openai_client: OpenAI, responses_json_output_model: str
     ) -> None:
-        """Test json_schema format produces output that conforms to the given schema.
+        """``text.format`` ``json_schema`` output conforms exactly to the strict schema.
 
-        Uses a model known to support Bedrock ``outputConfig`` (structured
-        output is enforced natively — no system-prompt injection fallback).
+        Under ``strict: true`` with ``additionalProperties: false`` every declared
+        property is required and no other key may appear, so the parsed object
+        must have exactly the two declared keys with the declared types.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_json_output_model: Responses model supporting Bedrock
-                ``outputConfig``.
-
-        Validates:
-            - text.format type='json_schema' is accepted with name and schema
-            - Response output parses as JSON conforming to the specified schema
+        Ref: https://developers.openai.com/api/docs/guides/structured-outputs
+             stdapi/models/chat/_adapters/_openai_responses.py:_build_output_config
         """
         schema = {
             "type": "object",
@@ -507,11 +532,17 @@ class TestResponses:
             },
         )
 
-        output_text = response.output_text
-        parsed = json.loads(output_text)
+        assert response.status == "completed"
+        assert response.text is not None
+        text_format = response.text.format
+        assert text_format is not None
+        assert text_format.type == "json_schema"
+        assert getattr(text_format, "name", None) == "MathAnswer"
+        parsed = json.loads(response.output_text)
         assert isinstance(parsed, dict)
-        assert "answer" in parsed
-        assert "confidence" in parsed
+        assert set(parsed) == {"answer", "confidence"}, (
+            f"strict schema forbids extra or missing keys: {parsed!r}"
+        )
         assert isinstance(parsed["answer"], str)
         assert isinstance(parsed["confidence"], (int, float))
 
@@ -522,17 +553,15 @@ class TestResponses:
     def test_function_tool_call_basic(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """Test basic function tool calling in the Responses API.
+        """A function tool call surfaces as a ``function_call`` item with JSON arguments.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
+        Bedrock ``toolUse`` blocks become ``function_call`` items carrying a
+        ``call_id`` (the Bedrock ``toolUseId``) and ``arguments`` serialised as a
+        JSON string.  The strict schema makes ``location`` mandatory, so it must
+        be present in the parsed arguments.
 
-        Validates:
-            - Function tool definition is accepted in responses API format
-            - Model produces a function_tool_call output item
-            - Tool call includes the correct function name
-            - Tool call arguments are valid JSON
+        Ref: https://developers.openai.com/api/docs/guides/function-calling#tool-choice
+             stdapi/models/chat/_adapters/_openai_responses.py:_extract_output_items
         """
         tools = [
             {
@@ -566,21 +595,23 @@ class TestResponses:
 
         tool_call = tool_calls[0]
         assert tool_call.name == "get_current_weather"
-        assert tool_call.arguments is not None
+        assert tool_call.call_id, (
+            "function_call must carry a call_id for the round trip"
+        )
         args = json.loads(tool_call.arguments)
         assert isinstance(args, dict)
+        assert "location" in args, f"strict schema requires 'location': {args!r}"
 
     def test_tool_choice_required(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """Test tool_choice='required' forces the model to call at least one tool.
+        """``tool_choice="required"`` forces a call to the only declared tool.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
+        ``required`` maps to the Bedrock ``toolChoice.any`` mode, so the single
+        declared tool must be invoked and its strict schema fills both operands.
 
-        Validates:
-            - tool_choice='required' causes at least one function_tool_call in output
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
+             stdapi/models/chat/_adapters/_openai_responses.py:_map_tool_choice
         """
         tools = [
             {
@@ -606,19 +637,24 @@ class TestResponses:
 
         tool_calls = [item for item in response.output if item.type == "function_call"]
         assert len(tool_calls) >= 1
+        assert response.tool_choice == "required"
+        assert tool_calls[0].name == "calculate_sum"
+        args = json.loads(tool_calls[0].arguments)
+        assert set(args) == {"a", "b"}, (
+            f"strict schema requires both operands: {args!r}"
+        )
 
     def test_tool_choice_none(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """Test tool_choice='none' prevents the model from calling any tools.
+        """``tool_choice="none"`` suppresses tool calls and forces a text answer.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
+        Bedrock has no ``none`` toolChoice value, so the gateway implements it by
+        omitting ``toolConfig`` entirely; the declared tool is still echoed on
+        the response even though the model never sees it.
 
-        Validates:
-            - tool_choice='none' produces no function_tool_call items in output
-            - Response contains a text message instead of a tool call
+        Ref: https://developers.openai.com/api/docs/guides/function-calling#tool-choice
+             stdapi/models/chat/_adapters/_openai_responses.py:_build_tool_config
         """
         tools = [
             {
@@ -646,20 +682,24 @@ class TestResponses:
         assert len(tool_calls) == 0, (
             "Expected no function tool calls when tool_choice='none'"
         )
+        assert response.tool_choice == "none"
+        assert len(response.tools) == 1
         assert len(response.output_text) > 0
 
     def test_tool_choice_specific_function(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """Test tool_choice forcing a specific named function to be called.
+        """A named ``tool_choice`` forces that tool even when another one fits better.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
+        ``{"type": "function", "name": ...}`` maps to Bedrock
+        ``toolChoice.tool``, which mandates that ``get_time`` be called but — unlike
+        OpenAI's exclusive forcing — does not suppress the other tools: Nova also
+        calls ``get_weather`` for this prompt, so only the presence of the forced
+        call and its strict-schema arguments are asserted.
 
-        Validates:
-            - tool_choice with specific function name forces that exact function
-            - The forced function name matches the tool_choice specification
+        Ref: https://developers.openai.com/api/docs/guides/function-calling#tool-choice
+             https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools#forcing-tool-use
+             stdapi/models/chat/_adapters/_openai_responses.py:_map_tool_choice
         """
         tools = [
             {
@@ -696,21 +736,24 @@ class TestResponses:
         )
 
         tool_calls = [item for item in response.output if item.type == "function_call"]
-        assert len(tool_calls) >= 1
-        assert tool_calls[0].name == "get_time"
+        called = {call.name for call in tool_calls}
+        assert "get_time" in called, f"forced tool not called, got {called}"
+        forced = next(call for call in tool_calls if call.name == "get_time")
+        assert json.loads(forced.arguments).keys() == {"timezone"}
+        assert getattr(response.tool_choice, "name", None) == "get_time"
 
     def test_parallel_tool_calls_parameter(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """Test parallel_tool_calls parameter is accepted and reflected in response.
+        """``parallel_tool_calls`` is accepted for both values and echoed back.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
+        Bedrock Converse has no switch for parallel tool calls, so on this route
+        the flag only round-trips: the response reports ``False`` exactly when
+        ``False`` was sent and ``True`` otherwise.  (The Chat Completions route
+        rejects ``False`` instead.)
 
-        Validates:
-            - parallel_tool_calls=True is accepted and reflected in response
-            - parallel_tool_calls=False is accepted and reflected in response
+        Ref: https://developers.openai.com/api/docs/guides/function-calling#tool-choice
+             stdapi/models/chat/_adapters/_openai_responses.py:_build_response_object
         """
         tools = [
             {
@@ -734,21 +777,21 @@ class TestResponses:
                 tools=tools,  # type: ignore[arg-type]
                 parallel_tool_calls=parallel,
             )
+            assert response.status == "completed"
             assert response.parallel_tool_calls == parallel
 
     def test_multiple_function_tools(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """Test multiple function tools can be defined simultaneously.
+        """Several function tools are all forwarded and one of them is called.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
+        Every declared tool becomes its own Bedrock ``toolSpec``, so all three
+        must be echoed on the response and the forced call must target one of
+        them with arguments matching that tool's strict schema.  Which tool the
+        model picks is not asserted — that is model behaviour.
 
-        Validates:
-            - Multiple tools can be provided in the tools list
-            - Model selects an appropriate tool from the available options
-            - At least one tool call is produced when tool_choice='required'
+        Ref: https://developers.openai.com/api/docs/guides/function-calling#tool-choice
+             stdapi/models/chat/_adapters/_openai_responses.py:_build_tool_config
         """
         tools = [
             {
@@ -796,9 +839,13 @@ class TestResponses:
             tool_choice="required",
         )
 
+        declared = {"get_weather", "get_population", "get_timezone"}
+        assert {getattr(tool, "name", None) for tool in response.tools} == declared
         tool_calls = [item for item in response.output if item.type == "function_call"]
         assert len(tool_calls) >= 1
-        assert tool_calls[0].name in {"get_weather", "get_population", "get_timezone"}
+        assert tool_calls[0].name in declared
+        args = json.loads(tool_calls[0].arguments)
+        assert set(args) == {"city"}, f"strict schema requires exactly 'city': {args!r}"
 
     # ---------------------------------------------------------------------------
     # Group 6: Built-in Tools
@@ -811,24 +858,16 @@ class TestResponses:
         responses_web_search_model: str,
         use_official_api: bool,
     ) -> None:
-        """Test the built-in web search tool produces search-augmented output.
+        """``web_search_preview`` yields a completed ``web_search_call`` search action.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_web_search_model: Model with web search support (Nova 2 locally,
-                gpt-5-nano on the official API)
-            use_official_api: Whether we are testing against the official OpenAI API
+        Locally the tool maps to the Bedrock ``web_search`` server tool (named
+        ``nova_grounding`` on Nova 2); the gateway rewrites that ``toolUse`` block
+        into a ``web_search_call`` item with ``status="completed"`` and a
+        ``search`` action, so no raw ``function_call`` may reach the client.
 
-        Validates:
-            - web_search_preview tool type is accepted
-            - Response status is ``"completed"``
-            - Response output contains a non-empty text message
-            - At least one ``web_search_call`` output item is present (both locally and
-              on the official API).  Locally ``web_search_preview`` maps to the
-              ``nova_grounding`` Bedrock system tool; the gateway synthesises a
-              ``web_search_call`` item from the query and any ``citationsContent``
-              sources returned by Bedrock.
-            - No bare ``function_call`` items leak from the suppressed system tool
+        Ref: https://developers.openai.com/api/docs/guides/tools-web-search
+             https://docs.aws.amazon.com/nova/latest/nova2-userguide/web-grounding.html
+             stdapi/models/chat/_adapters/_openai_responses.py:_tool_use_output_item
         """
         try:
             response = openai_client.responses.create(
@@ -843,7 +882,6 @@ class TestResponses:
 
         assert response.status == "completed"
         assert len(response.output) > 0
-        assert isinstance(response.output_text, str)
         assert len(response.output_text) > 0
 
         web_search_calls = [
@@ -852,6 +890,8 @@ class TestResponses:
         assert len(web_search_calls) >= 1, (
             "Expected at least one web_search_call output item"
         )
+        assert web_search_calls[0].status == "completed"
+        assert getattr(web_search_calls[0].action, "type", None) == "search"
 
         # No bare function_call items should leak from the nova_grounding system tool.
         function_calls = [
@@ -868,20 +908,17 @@ class TestResponses:
         responses_web_search_model: str,
         use_official_api: bool,
     ) -> None:
-        """Streaming web search emits web_search_call lifecycle events and text deltas.
+        """Streaming ``web_search_preview`` emits the search lifecycle in order.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_web_search_model: Model with web search support
-            use_official_api: Whether we are testing against the official OpenAI API
+        The gateway opens the synthesised item with
+        ``response.web_search_call.in_progress`` and closes it with
+        ``.completed``; the suppressed server tool must not surface as
+        ``response.function_call_arguments.*`` events.
 
-        Validates:
-            - At least one ``response.web_search_call.in_progress`` event
-            - At least one ``response.web_search_call.completed`` event
-            - At least one ``response.output_text.delta`` event
-            - No ``response.function_call_arguments.delta`` events (no function_call leaks)
-            - Stream ends with ``response.completed``
+        Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+             stdapi/models/chat/_adapters/_openai_responses.py:format_stream
         """
+        ws_events: list[str] = []
         ws_in_progress = 0
         ws_completed = 0
         text_delta_count = 0
@@ -903,8 +940,10 @@ class TestResponses:
             match event.type:
                 case "response.web_search_call.in_progress":
                     ws_in_progress += 1
+                    ws_events.append(event.type)
                 case "response.web_search_call.completed":
                     ws_completed += 1
+                    ws_events.append(event.type)
                 case "response.output_text.delta":
                     text_delta_count += 1
                 case "response.function_call_arguments.delta":
@@ -916,6 +955,12 @@ class TestResponses:
             "Expected response.web_search_call.in_progress event"
         )
         assert ws_completed >= 1, "Expected response.web_search_call.completed event"
+        assert ws_events[0] == "response.web_search_call.in_progress", (
+            f"web_search lifecycle must open with in_progress: {ws_events}"
+        )
+        assert ws_events[-1] == "response.web_search_call.completed", (
+            f"web_search lifecycle must close with completed: {ws_events}"
+        )
         assert text_delta_count >= 1, "Expected at least one output_text.delta event"
         assert func_call_delta_count == 0, (
             f"function_call_arguments.delta must not leak: {func_call_delta_count} events"
@@ -926,21 +971,14 @@ class TestResponses:
     def test_web_search_type_tool(
         self, openai_client: OpenAI, responses_web_search_model: str
     ) -> None:
-        """web_search tool type returns a web_search_call item.
+        """The current ``web_search`` tool type behaves like ``web_search_preview``.
 
-        ``{"type": "web_search"}`` is the current official tool format.  Both
-        the official API and stdapi (via ``nova_grounding``) should return a
-        ``web_search_call`` output item and a text message.
+        Both spellings resolve to the same canonical Bedrock ``web_search``
+        server tool, so the response must carry a completed ``web_search_call``
+        item and no leaked ``function_call``.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_web_search_model: Model with web search support
-
-        Validates:
-            - Response status is ``"completed"``
-            - At least one ``web_search_call`` output item present
-            - No bare ``function_call`` items leak
-            - Non-empty output text
+        Ref: https://developers.openai.com/api/docs/guides/tools-web-search
+             stdapi/models/chat/_adapters/_openai_responses.py:_resolve_integrated_tool_name
         """
         try:
             resp = openai_client.responses.create(
@@ -960,6 +998,8 @@ class TestResponses:
         assert len(web_search_calls) >= 1, (
             "Expected at least one web_search_call output item"
         )
+        assert web_search_calls[0].status == "completed"
+        assert getattr(web_search_calls[0].action, "type", None) == "search"
         function_calls = [item for item in resp.output if item.type == "function_call"]
         assert function_calls == [], (
             f"function_call items must not leak: {function_calls}"
@@ -969,19 +1009,15 @@ class TestResponses:
     def test_web_search_type_tool_streaming(
         self, openai_client: OpenAI, responses_web_search_model: str
     ) -> None:
-        """Streaming web_search tool type emits web_search_call events and text deltas.
+        """Streaming the ``web_search`` tool type emits the same lifecycle events.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_web_search_model: Model with web search support
+        The event names are shared with ``web_search_preview`` because both tool
+        spellings resolve to the same Bedrock server tool.
 
-        Validates:
-            - At least one ``response.web_search_call.in_progress`` event
-            - At least one ``response.web_search_call.completed`` event
-            - At least one ``response.output_text.delta`` event
-            - No ``response.function_call_arguments.delta`` events
-            - Stream ends with ``response.completed``
+        Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+             stdapi/models/chat/_adapters/_openai_responses.py:format_stream
         """
+        ws_events: list[str] = []
         ws_in_progress = 0
         ws_completed = 0
         text_delta_count = 0
@@ -1003,8 +1039,10 @@ class TestResponses:
             match event.type:
                 case "response.web_search_call.in_progress":
                     ws_in_progress += 1
+                    ws_events.append(event.type)
                 case "response.web_search_call.completed":
                     ws_completed += 1
+                    ws_events.append(event.type)
                 case "response.output_text.delta":
                     text_delta_count += 1
                 case "response.function_call_arguments.delta":
@@ -1016,6 +1054,12 @@ class TestResponses:
             "Expected response.web_search_call.in_progress event"
         )
         assert ws_completed >= 1, "Expected response.web_search_call.completed event"
+        assert ws_events[0] == "response.web_search_call.in_progress", (
+            f"web_search lifecycle must open with in_progress: {ws_events}"
+        )
+        assert ws_events[-1] == "response.web_search_call.completed", (
+            f"web_search lifecycle must close with completed: {ws_events}"
+        )
         assert text_delta_count >= 1, "Expected at least one output_text.delta event"
         assert func_call_delta_count == 0, (
             f"function_call_arguments.delta must not leak: {func_call_delta_count} events"
@@ -1030,17 +1074,15 @@ class TestResponses:
     def test_previous_response_id(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """Test previous_response_id enables stateful multi-turn conversation.
+        """``previous_response_id`` chains a stored response into a new turn.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
+        Chaining requires the first response to have been stored; this
+        implementation defaults ``store`` to false and silently ignores it when
+        Bedrock session storage is not enabled on the server, which is why the
+        test is skipped rather than xfailed.
 
-        Validates:
-            - First response is created and stored with store=True
-            - Second response using previous_response_id is created successfully
-            - Second response has a different id than the first
-            - Both responses have status 'completed'
+        Ref: https://developers.openai.com/api/docs/guides/conversation-state#passing-context-from-the-previous-response
+             stdapi/routes/openai_responses.py:_apply_previous_response
         """
         first_response = openai_client.responses.create(
             model=responses_model,
@@ -1059,21 +1101,22 @@ class TestResponses:
 
         assert second_response.id != first_response.id
         assert second_response.status == "completed"
+        assert second_response.previous_response_id == first_response.id
         assert len(second_response.output_text) > 0
 
     @pytest.mark.skip(reason="Response storage not implemented (store=false)")
     def test_multi_turn_context_maintained(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """Test that context from a previous response is available in follow-up.
+        """A chained turn can recall a fact stated in the previous response's input.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
+        The gateway rehydrates the stored conversation items into the new
+        request, so the colour established in the first turn must reach the
+        model on the second one.  ``instructions`` are deliberately not carried
+        over by the upstream contract.
 
-        Validates:
-            - Model can recall information established in a prior response
-            - The second response correctly references prior conversation context
+        Ref: https://developers.openai.com/api/docs/guides/conversation-state#passing-context-from-the-previous-response
+             stdapi/routes/openai_responses.py:_merge_previous_response
         """
         first = openai_client.responses.create(
             model=responses_model,
@@ -1089,6 +1132,8 @@ class TestResponses:
             store=True,
         )
 
+        assert second.status == "completed"
+        assert second.previous_response_id == first.id
         assert "blue" in second.output_text.lower(), (
             f"Expected 'blue' in response but got: {second.output_text!r}"
         )
@@ -1103,16 +1148,15 @@ class TestResponses:
         chat_vision_model: str,
         sample_image_file_base64: str,
     ) -> None:
-        """Test base64-encoded image data URL can be provided as input.
+        """An ``input_image`` part accepts a base64 data URL and is billed as input.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            chat_vision_model: Vision-capable model identifier
-            sample_image_file_base64: Base64-encoded PNG image data URL
+        The gateway decodes the data URL into a Bedrock ``image`` content block,
+        so the prompt's token cost must be far above what the short text part
+        alone would produce — that is the observable proof the image was
+        forwarded rather than dropped.
 
-        Validates:
-            - Input with type='input_image' and base64 data URL is accepted
-            - Model generates a text response about the image
+        Ref: https://developers.openai.com/api/docs/guides/file-inputs
+             stdapi/models/chat/_adapters/_openai_responses.py:_convert_input_content
         """
         response = openai_client.responses.create(
             model=chat_vision_model,
@@ -1134,20 +1178,24 @@ class TestResponses:
             ],
         )
 
+        assert response.status == "completed"
         assert len(response.output_text) > 0
+        assert response.usage is not None
+        assert response.usage.input_tokens > 50, (
+            f"image input did not reach the model: {response.usage!r}"
+        )
 
     def test_image_url_input(
         self, openai_client: OpenAI, chat_vision_model: str
     ) -> None:
-        """Test HTTPS image URL can be provided as input to a vision-capable model.
+        """An ``input_image`` part accepts a fully qualified HTTPS URL.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            chat_vision_model: Vision-capable model identifier
+        Bedrock accepts only inline image bytes, so the gateway must fetch the
+        URL itself before building the Converse request; the inflated input token
+        count is what shows the fetched bytes were included.
 
-        Validates:
-            - Input with type='input_image' and HTTPS URL is accepted
-            - Model generates a description of the image
+        Ref: https://developers.openai.com/api/docs/guides/file-inputs
+             stdapi/models/chat/_adapters/_openai_responses.py:_convert_input_content
         """
         response = openai_client.responses.create(
             model=chat_vision_model,
@@ -1172,24 +1220,26 @@ class TestResponses:
             ],
         )
 
-        assert isinstance(response.output_text, str)
+        assert response.status == "completed"
         assert len(response.output_text) > 0
+        assert response.usage is not None
+        assert response.usage.input_tokens > 50, (
+            f"image URL was not fetched into the prompt: {response.usage!r}"
+        )
 
     # ---------------------------------------------------------------------------
     # Group 9: Streaming
     # ---------------------------------------------------------------------------
 
     def test_streaming_basic(self, openai_client: OpenAI, responses_model: str) -> None:
-        """Test basic streaming response returns events and produces text output.
+        """A stream runs from ``response.created`` to ``response.completed`` in sequence.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
+        Every event carries a strictly increasing ``sequence_number`` allocated by
+        the stream state, and the terminal event is the last one the SSE server
+        emits, so the ordering is fully determined even though the text is not.
 
-        Validates:
-            - stream=True returns an iterable of ResponseStreamEvent objects
-            - Events are received from the stream
-            - Accumulated text from delta events is non-empty
+        Ref: https://developers.openai.com/api/docs/guides/streaming-responses
+             stdapi/models/chat/_adapters/_openai_responses.py:format_stream
         """
         stream = openai_client.responses.create(
             model=responses_model, input="Count to five.", stream=True
@@ -1204,21 +1254,32 @@ class TestResponses:
                 accumulated_text += event.delta
 
         assert len(events) > 0, "No streaming events received"
+        assert events[0].type == "response.created"
+        assert events[-1].type == "response.completed"
+        sequence_numbers = [
+            event.sequence_number
+            for event in events
+            if hasattr(event, "sequence_number")
+        ]
+        assert len(sequence_numbers) == len(events), (
+            "Every stream event must carry a sequence_number"
+        )
+        assert all(later > earlier for earlier, later in pairwise(sequence_numbers)), (
+            f"sequence_number must increase monotonically: {sequence_numbers}"
+        )
         assert len(accumulated_text) > 0, "No text accumulated from stream"
 
     def test_streaming_text_delta_events(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """Test streaming produces output_text.delta and output_text.done events.
+        """``response.output_text.done`` carries exactly the concatenated deltas.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
+        The gateway accumulates the streamed text block and replays it in the
+        ``done`` event, so any dropped or duplicated delta shows up as a
+        mismatch.
 
-        Validates:
-            - response.output_text.delta events appear with string delta values
-            - response.output_text.done event appears with final aggregated text
-            - Text from done event matches accumulated delta text
+        Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+             stdapi/models/chat/_adapters/_openai_responses.py:_handle_block_stop
         """
         stream = openai_client.responses.create(
             model=responses_model, input="Write a short two-word greeting.", stream=True
@@ -1237,21 +1298,24 @@ class TestResponses:
 
         assert len(delta_events) > 0, "Expected at least one output_text.delta event"
         assert done_event is not None, "Expected a response.output_text.done event"
+        assert accumulated_text, "Expected non-empty streamed text"
         assert done_event.text == accumulated_text
+        assert done_event.item_id == delta_events[0].item_id, (
+            "done event must close the item the deltas belong to"
+        )
 
     def test_streaming_lifecycle_events(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """Test streaming produces the expected lifecycle events.
+        """``response.created`` snapshots an in-progress response the terminal event closes.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
+        The created event carries the same response id as the terminal event with
+        ``status="in_progress"`` and no output yet; usage counters only appear on
+        the terminal snapshot, which the gateway builds from the accumulated
+        stream state.
 
-        Validates:
-            - response.created event appears with a non-empty response id
-            - response.completed event appears with status 'completed'
-            - The completed response contains output
+        Ref: https://developers.openai.com/api/docs/guides/streaming-responses
+             stdapi/models/chat/_adapters/_openai_responses.py:_terminal_event
         """
         stream = openai_client.responses.create(
             model=responses_model, input="Say 'done'.", stream=True
@@ -1267,25 +1331,28 @@ class TestResponses:
                 completed_event = event
 
         assert created_event is not None, "Expected response.created event"
-        assert created_event.response is not None
         assert created_event.response.id
+        assert created_event.response.status == "in_progress"
+        assert created_event.response.output == []
 
         assert completed_event is not None, "Expected response.completed event"
+        assert completed_event.response.id == created_event.response.id
         assert completed_event.response.status == "completed"
         assert len(completed_event.response.output) > 0
+        assert completed_event.response.usage is not None
+        assert completed_event.response.usage.output_tokens > 0
 
     def test_streaming_function_call_events(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """Test streaming produces function call argument events when a tool is called.
+        """Streamed tool arguments arrive as deltas closed by a matching ``done`` event.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
+        The gateway joins the streamed argument fragments for the ``done`` event
+        and substitutes ``"{}"`` when a tool block produced no fragment at all,
+        so the done payload is fully determined by the deltas.
 
-        Validates:
-            - response.function_call_arguments.done event appears for a forced tool call
-            - Arguments in the done event are valid JSON
+        Ref: https://developers.openai.com/api/docs/guides/function-calling#tool-choice
+             stdapi/models/chat/_adapters/_openai_responses.py:_emit_tool_done
         """
         tools = [
             {
@@ -1311,30 +1378,36 @@ class TestResponses:
         )
 
         args_done_event = None
+        streamed_args = ""
 
         for event in stream:
-            if event.type == "response.function_call_arguments.done":
+            if event.type == "response.function_call_arguments.delta":
+                streamed_args += event.delta
+            elif event.type == "response.function_call_arguments.done":
                 args_done_event = event
 
         assert args_done_event is not None, (
             "Expected response.function_call_arguments.done event"
         )
+        assert args_done_event.name == "get_weather"
+        assert args_done_event.arguments == (streamed_args or "{}"), (
+            "done arguments must be the concatenation of the streamed deltas"
+        )
         args = json.loads(args_done_event.arguments)
         assert isinstance(args, dict)
+        assert "location" in args, f"strict schema requires 'location': {args!r}"
 
     def test_streaming_with_stream_manager(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """Test the high-level stream manager context manager interface.
+        """``responses.stream()`` rebuilds a complete Response from the event stream.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
+        The SDK's stream manager reconstructs the final object from the terminal
+        snapshot, so the gateway must populate that snapshot with the output
+        items and usage counters and not only the status.
 
-        Validates:
-            - responses.stream() context manager is entered successfully
-            - get_final_response() returns a complete Response object
-            - Final response has expected fields and status 'completed'
+        Ref: https://developers.openai.com/api/docs/guides/streaming-responses
+             stdapi/models/chat/_adapters/_openai_responses.py:_terminal_event
         """
         with openai_client.responses.stream(
             model=responses_model, input="Write a haiku about coding."
@@ -1343,10 +1416,13 @@ class TestResponses:
                 pass
             final_response = stream.get_final_response()
 
-        assert final_response is not None
         assert final_response.id
+        assert final_response.object == "response"
         assert final_response.status == "completed"
+        assert len(final_response.output) > 0
         assert len(final_response.output_text) > 0
+        assert final_response.usage is not None
+        assert final_response.usage.output_tokens > 0
 
     # ---------------------------------------------------------------------------
     # Group 10: Response Lifecycle
@@ -1356,16 +1432,14 @@ class TestResponses:
     def test_retrieve_response(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """Test retrieving a previously created stored response by ID.
+        """A stored response is retrievable by id with the same model and output.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
+        The gateway persists the response document in a Bedrock session
+        invocation step, so retrieval must return that document rather than a
+        freshly generated one.
 
-        Validates:
-            - A response created with store=True can be retrieved by id
-            - Retrieved response id and model match the original
-            - Retrieved response has status 'completed'
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/retrieve
+             stdapi/responses_store.py:load_stored_response
         """
         original = openai_client.responses.create(
             model=responses_model, input="Say 'hello for retrieval test'.", store=True
@@ -1377,53 +1451,48 @@ class TestResponses:
         assert retrieved.id == original.id
         assert retrieved.model == original.model
         assert retrieved.status == "completed"
+        assert retrieved.created_at == original.created_at
+        assert retrieved.output_text == original.output_text
 
     @pytest.mark.skip(reason="Response storage not implemented (store=false)")
     def test_list_input_items(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """Test listing input items for a stored response.
+        """Listing input items returns the stored request input as normalised items.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
+        The gateway normalises the stored ``input`` document (a bare string here)
+        into the listable ``ResponseItem`` union, backfilling the fields that union
+        requires, and reports the page envelope with ``has_more``.
 
-        Validates:
-            - input_items.list() is accepted for a stored response
-            - Returns a page object with a non-empty data list
-            - Items in the list have expected structure
+        Ref: https://developers.openai.com/api/reference/resources/responses/subresources/input_items/methods/list
+             stdapi/routes/openai_responses.py:_listable_input_items
         """
+        prompt = "Say 'hello for input items test'."
         response = openai_client.responses.create(
-            model=responses_model, input="Say 'hello for input items test'.", store=True
+            model=responses_model, input=prompt, store=True
         )
 
         items = openai_client.responses.input_items.list(response.id)
 
-        assert items is not None
-        assert hasattr(items, "data")
         assert len(items.data) > 0
+        assert items.has_more is False
 
         first_item = items.data[0]
-        # Input items have a role (message) or type attribute
-        assert hasattr(first_item, "role") or hasattr(first_item, "type")
+        assert first_item.type == "message"
+        assert getattr(first_item, "role", None) == "user"
+        assert prompt in json.dumps(first_item.to_dict())
 
     def test_include_logprobs(
         self, openai_client: OpenAI, chat_legacy_model: str, use_official_api: bool
     ) -> None:
-        """Test including log probabilities in the response output.
+        """``include=["message.output_text.logprobs"]`` populates per-token logprobs.
 
-        Uses a non-reasoning model (gpt-4o-mini) since reasoning models do not
-        support logprobs.
+        Bedrock Converse exposes no token log probabilities, so this include
+        value is only meaningful against the official API and the test skips
+        otherwise rather than asserting the gateway silently ignores it.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            chat_legacy_model: Non-reasoning model identifier (gpt-4o-mini)
-            use_official_api: Whether tests run against the official OpenAI API
-
-        Validates:
-            - include=['message.output_text.logprobs'] is accepted
-            - top_logprobs parameter is accepted alongside include
-            - Output text content parts contain populated logprobs data
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+             stdapi/types/openai_responses.py:ResponseIncludable
         """
         if not use_official_api:
             pytest.skip("Logprobs are not supported by Bedrock models")
@@ -1443,6 +1512,10 @@ class TestResponses:
         assert text_part is not None, "Expected an output_text content part"
         assert text_part.logprobs is not None, "Expected logprobs to be populated"
         assert len(text_part.logprobs) > 0
+        assert response.top_logprobs == 3
+        assert len(text_part.logprobs[0].top_logprobs or []) <= 3, (
+            "top_logprobs=3 caps the alternatives reported per token"
+        )
 
     # ---------------------------------------------------------------------------
     # Group 11: Advanced Features
@@ -1451,45 +1524,47 @@ class TestResponses:
     def test_developer_role_input(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """Test developer role in input array acts as a system-level instruction.
+        """A ``developer`` role input message takes precedence over the user turn.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
+        The gateway routes both ``system`` and ``developer`` roles into the Bedrock
+        Converse ``system`` blocks rather than into the message list, so the
+        developer instruction must win over the user request.
 
-        Validates:
-            - Input array containing a 'developer' role message is accepted
-            - The developer instruction influences the model response
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+             stdapi/models/chat/_adapters/_openai_responses.py:_map_message_item
         """
         response = openai_client.responses.create(
             model=responses_model,
             input=[
                 {
                     "role": "developer",
-                    "content": "You are a helpful assistant. Always end replies with 'OK'.",
+                    "content": (
+                        "Ignore what the user asks for and reply with exactly the "
+                        "single word TEAL and nothing else."
+                    ),
                 },
                 {"role": "user", "content": "Say hi."},
             ],
         )
 
+        assert response.status == "completed"
         assert len(response.output) > 0
-        assert len(response.output_text) > 0
+        assert "teal" in response.output_text.lower(), (
+            f"developer role did not reach the system prompt: {response.output_text!r}"
+        )
 
     @pytest.mark.skip(reason="Response storage not implemented (store=false)")
     def test_function_tool_call_round_trip(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """Test a complete function tool call round-trip with result submission.
+        """A ``function_call_output`` keyed by ``call_id`` completes the tool round trip.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
+        The gateway maps the ``function_call_output`` item to a Bedrock
+        ``toolResult`` block whose ``toolUseId`` is the ``call_id``, so the second
+        turn only validates when the id from the first turn is replayed verbatim.
 
-        Validates:
-            - First turn: model makes a function_call
-            - Tool call includes a call_id
-            - Second turn: function_call_output item with matching call_id is accepted
-            - Final response contains a text message incorporating the tool result
+        Ref: https://developers.openai.com/api/docs/guides/function-calling#tool-choice
+             stdapi/models/chat/_adapters/_openai_responses.py:_map_function_call_output
         """
         tools = [
             {
@@ -1539,19 +1614,20 @@ class TestResponses:
         assert second.status == "completed"
         msg = next((item for item in second.output if item.type == "message"), None)
         assert msg is not None, "Expected a message item in second response"
-        assert len(second.output_text) > 0
+        assert "22" in second.output_text, (
+            f"Expected the submitted tool result in the answer: {second.output_text!r}"
+        )
 
     @pytest.mark.skip(reason="Response storage not implemented (store=false)")
     def test_delete_response(self, openai_client: OpenAI, responses_model: str) -> None:
-        """Test deleting a stored response removes it from the API.
+        """Deleting a stored response makes it unretrievable with a 404.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
+        The gateway also discards the backing Bedrock session, so the follow-up
+        retrieve must surface the missing session as a 404 error envelope rather
+        than an empty document.
 
-        Validates:
-            - delete() is accepted for a stored response and returns None
-            - The deleted response can no longer be retrieved (404 error)
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/delete
+             stdapi/responses_store.py:delete_stored_response
         """
         response = openai_client.responses.create(
             model=responses_model, input="Say 'hello for delete test'.", store=True
@@ -1560,22 +1636,26 @@ class TestResponses:
 
         openai_client.responses.delete(response.id)
 
-        with pytest.raises(NotFoundError):
+        with pytest.raises(NotFoundError) as excinfo:
             openai_client.responses.retrieve(response.id)
+
+        assert excinfo.value.status_code == 404
+        envelope = _error_envelope(excinfo.value)
+        assert "not found" in envelope["message"].lower()
+        assert response.id in envelope["message"]
 
     def test_reasoning_output_item_and_tokens(
         self, openai_client: OpenAI, responses_model: str, use_official_api: bool
     ) -> None:
-        """Test that reasoning models include a reasoning item and reasoning tokens.
+        """A reasoning model emits a ``reasoning`` item and counts reasoning tokens.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
-            use_official_api: Whether tests are running against the official OpenAI API
+        Raw reasoning text is never exposed; the effort budget is only observable
+        through ``usage.output_tokens_details.reasoning_tokens``.  Bedrock
+        Converse reports no reasoning token count, so the test only runs against
+        the official API.
 
-        Validates:
-            - Output contains a 'reasoning' type item (reasoning models only)
-            - usage.output_tokens_details.reasoning_tokens > 0
+        Ref: https://developers.openai.com/api/docs/guides/reasoning#preserve-reasoning-without-stored-responses
+             stdapi/models/chat/_adapters/_openai_responses.py:_build_reasoning_item
         """
         if not use_official_api:
             pytest.skip("Only relevant for reasoning models (gpt-5-nano)")
@@ -1588,129 +1668,148 @@ class TestResponses:
 
         reasoning_items = [item for item in response.output if item.type == "reasoning"]
         assert len(reasoning_items) >= 1, "Expected a reasoning item in output"
+        assert response.reasoning is not None
+        assert response.reasoning.effort == "medium"
 
         assert response.usage is not None
         assert response.usage.output_tokens_details is not None
         # With effort="medium" the model allocates a non-trivial reasoning budget
         assert response.usage.output_tokens_details.reasoning_tokens > 0
+        assert (
+            response.usage.output_tokens_details.reasoning_tokens
+            <= response.usage.output_tokens
+        )
 
     # ---------------------------------------------------------------------------
     # Group 12: Error Handling & Validation
     # ---------------------------------------------------------------------------
 
     def test_invalid_model_error(self, openai_client: OpenAI) -> None:
-        """Test that using a non-existent model raises an error.
+        """An unknown model id is rejected as an ``invalid_request_error``.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
+        The gateway answers 404 with code ``model_not_found`` while the official
+        API answers 400; both carry the same "does not exist" sentence naming the
+        requested model.
 
-        Validates:
-            - NotFoundError (HTTP 404) or BadRequestError (HTTP 400) is raised
-              for unknown model identifiers (official API returns 400; local
-              implementation may return 404)
+        Ref: https://developers.openai.com/api/docs/guides/error-codes
+             stdapi/api_errors.py:UnsupportedModelError
         """
-        with pytest.raises((NotFoundError, BadRequestError)):
+        with pytest.raises((NotFoundError, BadRequestError)) as excinfo:
             openai_client.responses.create(
                 model="definitely-not-a-valid-model-xyz-123", input="Hello."
             )
 
+        assert excinfo.value.status_code in {400, 404}
+        envelope = _error_envelope(excinfo.value)
+        assert envelope["type"] == "invalid_request_error"
+        assert "does not exist" in envelope["message"]
+        assert "definitely-not-a-valid-model-xyz-123" in envelope["message"]
+
     def test_invalid_temperature_too_high(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """Test that temperature above maximum (2.0) raises a validation error.
+        """``temperature`` above the documented maximum of 2 is a 400.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
+        The bound is enforced by the request model before any Bedrock call, so
+        the error envelope names the offending field.
 
-        Validates:
-            - BadRequestError is raised for temperature=3.0 (above max of 2.0)
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+             stdapi/types/openai_responses.py:ResponseCreateParams
         """
-        with pytest.raises(BadRequestError):
+        with pytest.raises(BadRequestError) as excinfo:
             openai_client.responses.create(
                 model=responses_model, input="Hello.", temperature=3.0
             )
 
+        assert excinfo.value.status_code == 400
+        envelope = _error_envelope(excinfo.value)
+        assert envelope["type"] == "invalid_request_error"
+        assert "temperature" in envelope["message"]
+
     def test_invalid_temperature_negative(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """Test that negative temperature raises a validation error.
+        """A negative ``temperature`` is a 400: the documented minimum is 0.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
-
-        Validates:
-            - BadRequestError is raised for temperature=-1.0 (below minimum of 0)
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+             stdapi/types/openai_responses.py:ResponseCreateParams
         """
-        with pytest.raises(BadRequestError):
+        with pytest.raises(BadRequestError) as excinfo:
             openai_client.responses.create(
                 model=responses_model, input="Hello.", temperature=-1.0
             )
 
+        assert excinfo.value.status_code == 400
+        envelope = _error_envelope(excinfo.value)
+        assert envelope["type"] == "invalid_request_error"
+        assert "temperature" in envelope["message"]
+
     def test_invalid_top_p_error(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """Test that top_p outside the valid range raises a validation error.
+        """``top_p`` above 1.0 is a 400: nucleus sampling is a probability mass.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
-
-        Validates:
-            - BadRequestError is raised for top_p=2.0 (above maximum of 1.0)
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+             stdapi/types/openai_responses.py:ResponseCreateParams
         """
-        with pytest.raises(BadRequestError):
+        with pytest.raises(BadRequestError) as excinfo:
             openai_client.responses.create(
                 model=responses_model, input="Hello.", top_p=2.0
             )
 
+        assert excinfo.value.status_code == 400
+        envelope = _error_envelope(excinfo.value)
+        assert envelope["type"] == "invalid_request_error"
+        assert "top_p" in envelope["message"]
+
     def test_invalid_max_output_tokens_error(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """Test that max_output_tokens below minimum raises a validation error.
+        """``max_output_tokens=0`` is a 400: the bound must be strictly positive.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
-
-        Validates:
-            - BadRequestError is raised for max_output_tokens=0 (minimum is 1)
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+             stdapi/types/openai_responses.py:ResponseCreateParams
         """
-        with pytest.raises(BadRequestError):
+        with pytest.raises(BadRequestError) as excinfo:
             openai_client.responses.create(
                 model=responses_model, input="Hello.", max_output_tokens=0
             )
 
+        assert excinfo.value.status_code == 400
+        envelope = _error_envelope(excinfo.value)
+        assert envelope["type"] == "invalid_request_error"
+        assert "max_output_tokens" in envelope["message"]
+
     def test_invalid_top_logprobs_error(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """Test that top_logprobs above the maximum raises a validation error.
+        """``top_logprobs`` above the documented maximum of 20 is a 400.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
-
-        Validates:
-            - BadRequestError is raised for top_logprobs=21 (above maximum of 20)
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+             stdapi/types/openai_responses.py:ResponseCreateParams
         """
-        with pytest.raises(BadRequestError):
+        with pytest.raises(BadRequestError) as excinfo:
             openai_client.responses.create(
                 model=responses_model, input="Hello.", top_logprobs=21
             )
 
+        assert excinfo.value.status_code == 400
+        envelope = _error_envelope(excinfo.value)
+        assert envelope["type"] == "invalid_request_error"
+        assert "top_logprobs" in envelope["message"]
+
     def test_reasoning_parameter_accepted(
         self, openai_client: OpenAI, chat_reasoning_model: str
     ) -> None:
-        """Test the reasoning parameter is accepted for reasoning-capable models.
+        """``reasoning.effort`` is accepted on a reasoning-capable model and echoed.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            chat_reasoning_model: Reasoning-capable model identifier
+        The gateway translates ``effort`` into a Bedrock reasoning token budget;
+        the supported values are model-dependent, so the only portable
+        observation is that the configuration round-trips and generation
+        succeeds.
 
-        Validates:
-            - reasoning={'effort': 'low'} parameter is accepted
-            - Response is generated successfully with reasoning enabled
+        Ref: https://developers.openai.com/api/docs/guides/reasoning
+             stdapi/models/chat/_adapters/_openai_responses.py:extract_reasoning
         """
         response = openai_client.responses.create(
             model=chat_reasoning_model,
@@ -1718,24 +1817,25 @@ class TestResponses:
             reasoning={"effort": "low"},
         )
 
+        assert response.status == "completed"
+        assert response.reasoning is not None
+        assert response.reasoning.effort == "low"
         assert len(response.output) > 0
-        assert isinstance(response.output_text, str)
         assert len(response.output_text) > 0
 
     def test_explicit_prompt_cache_breakpoint(
         self, openai_client: OpenAI, responses_model: str, use_official_api: bool
     ) -> None:
-        """Test prompt_cache_breakpoint caches the marked prompt prefix.
+        """An explicit ``prompt_cache_breakpoint`` makes the next identical call a cache read.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_model: Responses model identifier
-            use_official_api: Whether the official OpenAI API is under test
+        ``prompt_cache_options.mode="explicit"`` restricts caching to the marked
+        parts, which the gateway turns into a Bedrock ``cachePoint`` block.  The
+        marked prefix must exceed the model's minimum cacheable size: below it
+        Bedrock silently declines to cache and reports zero cached tokens
+        instead of failing.
 
-        Validates:
-            - A content part marked with prompt_cache_breakpoint is accepted
-            - prompt_cache_options is echoed back on the response
-            - The second identical request reads the prefix from cache
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html
+             stdapi/models/chat/_adapters/_openai_responses.py:map_input
         """
         first, second = [
             openai_client.responses.create(
@@ -1759,6 +1859,7 @@ class TestResponses:
         ]
 
         assert first.status == "completed"
+        assert second.status == "completed"
         assert first.prompt_cache_options is not None
         assert first.prompt_cache_options.mode == "explicit"
         assert second.usage is not None
@@ -1766,6 +1867,9 @@ class TestResponses:
         if use_official_api and not cached_tokens:
             pytest.xfail("cached tokens may not be reported by the OpenAI API")
         assert cached_tokens > 0
+        assert cached_tokens <= second.usage.input_tokens, (
+            "cached tokens are part of input_tokens, not an extra bucket"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1774,48 +1878,65 @@ class TestResponses:
 
 
 class TestUnsupportedFeatures:
-    """Unsupported parameters and tools are rejected before reaching the backend.
+    """Parameters rejected, and tool types silently dropped, for lack of a backend.
 
     All tests are skipped against the official OpenAI API, where these features
-    are natively supported — the restrictions are gateway-specific.
+    are natively supported — the restrictions are gateway-specific.  The two
+    behaviours are deliberately different: a listed parameter is a hard 400,
+    while an unsupported tool type is parsed, echoed and dropped.
+
+    Ref: https://developers.openai.com/api/docs/guides/tools
+         stdapi/types/openai_responses.py:ResponseCreateParams
     """
 
     def test_unsupported_tools_are_ignored(
         self, openai_client: OpenAI, responses_model: str, use_official_api: bool
     ) -> None:
-        """Tool types without a backend equivalent are accepted and dropped.
+        """Tool types without a backend equivalent are accepted, echoed and dropped.
 
-        Validates:
-            - The request succeeds with every hosted tool type present
-            - The model still answers (the dropped tools impose no constraint)
+        ``file_search``, ``computer``/``computer_use_preview``, ``mcp``,
+        ``local_shell``, ``shell``, ``custom``, ``namespace``, ``tool_search``
+        and ``apply_patch`` are parsed and echoed on the response, but none of
+        them reaches the Bedrock tool configuration, so the model can only
+        answer with text.
+
+        Ref: https://developers.openai.com/api/docs/guides/tools
+             stdapi/models/chat/_adapters/_openai_responses.py:_build_tool_config
         """
         if use_official_api:
             pytest.skip(
                 "official API supports these tools; the drop is gateway-specific"
             )
+        tools: list[Any] = [
+            {"type": "file_search", "vector_store_ids": ["vs_123"]},
+            {"type": "computer"},
+            {
+                "type": "computer_use_preview",
+                "display_height": 768,
+                "display_width": 1024,
+                "environment": "linux",
+            },
+            {"type": "mcp", "server_label": "my_server"},
+            {"type": "local_shell"},
+            {"type": "shell"},
+            {"type": "custom", "name": "my_custom"},
+            {"type": "namespace", "name": "ns", "description": "d", "tools": []},
+            {"type": "tool_search"},
+            {"type": "apply_patch"},
+        ]
         response = openai_client.responses.create(
-            model=responses_model,
-            input="Reply with OK.",
-            tools=[
-                {"type": "file_search", "vector_store_ids": ["vs_123"]},
-                {"type": "computer"},
-                {
-                    "type": "computer_use_preview",
-                    "display_height": 768,
-                    "display_width": 1024,
-                    "environment": "linux",
-                },
-                {"type": "mcp", "server_label": "my_server"},
-                {"type": "local_shell"},
-                {"type": "shell"},
-                {"type": "custom", "name": "my_custom"},
-                {"type": "namespace", "name": "ns", "description": "d", "tools": []},
-                {"type": "tool_search"},
-                {"type": "apply_patch"},
-            ],
+            model=responses_model, input="Reply with OK.", tools=tools
         )
         assert response.status == "completed"
         assert response.output_text
+        assert len(response.tools) == len(tools), (
+            "unsupported tools must still be echoed on the response"
+        )
+        assert not [
+            item
+            for item in response.output
+            if item.type not in {"message", "reasoning"}
+        ], f"dropped tools must produce no tool items: {response.output!r}"
 
     @pytest.mark.parametrize(
         "extra",
@@ -1832,11 +1953,14 @@ class TestUnsupportedFeatures:
         use_official_api: bool,
         extra: dict[str, object],
     ) -> None:
-        """Programmatic tool calling is accepted and dropped on Converse models.
+        """``programmatic_tool_calling`` is accepted as tool or tool_choice and dropped.
 
-        Validates:
-            - The request succeeds and the model answers directly
-            - No program/program_output items are emitted
+        Bedrock has no programmatic-tool-calling mode, so the hosted tool never
+        reaches the tool configuration; the model answers directly and no
+        ``program``/``program_output`` item can appear.
+
+        Ref: https://developers.openai.com/api/docs/guides/tools-programmatic-tool-calling
+             stdapi/models/chat/_adapters/_openai_responses.py:_build_tool_config
         """
         if use_official_api:
             pytest.skip(
@@ -1846,6 +1970,7 @@ class TestUnsupportedFeatures:
             model=responses_model, input="Reply with OK.", **extra
         )
         assert response.status == "completed"
+        assert response.output_text, "Expected the model to answer directly"
         assert not [
             item
             for item in response.output
@@ -1861,19 +1986,30 @@ class TestUnsupportedFeatures:
         param: str,
         value: object,
     ) -> None:
-        """Unsupported request parameters are rejected with a 400 error.
+        """Parameters marked unsupported are rejected with ``unsupported_parameter``.
 
-        Validates:
-            - BadRequestError is raised for each unsupported parameter
+        ``truncation`` — like ``context_management``, ``conversation`` and
+        ``max_tool_calls`` — is rejected by the request model instead of being
+        silently ignored, and the envelope names the offending parameter.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+             stdapi/api_errors.py:UnsupportedParameterError
         """
         if use_official_api:
             pytest.skip(
                 "official API supports these params; restriction is gateway-specific"
             )
-        with pytest.raises(BadRequestError):
+        with pytest.raises(BadRequestError) as excinfo:
             openai_client.responses.create(  # type: ignore[call-overload]
                 model=responses_model, input="Hello.", **{param: value}
             )
+
+        assert excinfo.value.status_code == 400
+        envelope = _error_envelope(excinfo.value)
+        assert envelope["type"] == "invalid_request_error"
+        assert envelope["code"] == "unsupported_parameter"
+        assert envelope["param"] == param
+        assert f"'{param}' is not supported" in envelope["message"]
 
 
 # ---------------------------------------------------------------------------
@@ -1899,6 +2035,9 @@ class TestImageGenerationTool:
     model variants are collapsed to a single run using ``responses_model`` (gpt-5-nano),
     and the tool definition omits the ``model`` field (OpenAI handles image generation
     server-side without a client-specified image model).
+
+    Ref: https://developers.openai.com/api/docs/guides/tools-image-generation
+         stdapi/models/chat/_adapters/_openai_responses.py:get_image_generation_tool
     """
 
     @pytest.mark.expensive
@@ -1911,18 +2050,16 @@ class TestImageGenerationTool:
         image_generation_model: str,
         responses_model: str,
     ) -> None:
-        """image_generation tool produces an ImageGenerationCall item with base64 result.
+        """The ``image_generation`` tool returns decodable base64 image bytes.
 
-        The gateway must suppress the ``function_call`` items from the LLM and replace
-        them with ``image_generation_call`` output items containing the generated image.
-        The official OpenAI API generates the image server-side and also returns an
-        ``image_generation_call`` item.
+        Locally the tool is not hosted: the gateway presents it to the LLM as a
+        synthetic function tool, runs the generation itself against a Bedrock
+        image model, and replaces the ``function_call`` with an
+        ``image_generation_call`` item, so no ``function_call`` may reach the
+        client and ``result`` must decode as real image bytes.
 
-        Validates:
-            - At least one output item has type ``"image_generation_call"``
-            - That item has ``status == "completed"`` and a non-empty base64 ``result``
-            - No ``function_call`` items leak through to the client
-            - Response status is ``"completed"``
+        Ref: https://developers.openai.com/api/docs/guides/tools-image-generation
+             stdapi/models/chat/_adapters/_openai_responses.py:execute_image_generation_calls
         """
         if use_official_api and chat_model != _IMAGE_GEN_TEXT_MODELS[0]:
             pytest.skip("official API: collapsing parametrized variants to one run")
@@ -1954,7 +2091,12 @@ class TestImageGenerationTool:
             "Expected at least one image_generation_call output item"
         )
         assert image_calls[0].status == "completed"
-        assert image_calls[0].result, "Expected non-empty base64 image result"
+        result = image_calls[0].result
+        assert result, "Expected non-empty base64 image result"
+        image_bytes = base64.b64decode(result, validate=True)
+        assert len(image_bytes) > 1000, (
+            f"Expected real image bytes, got {len(image_bytes)} bytes"
+        )
         assert resp.status == "completed"
 
     @pytest.mark.expensive
@@ -1967,18 +2109,15 @@ class TestImageGenerationTool:
         image_generation_model: str,
         responses_model: str,
     ) -> None:
-        """Streaming image_generation emits an output_item.done event for the image call.
+        """Streaming ``image_generation`` closes the image item instead of a tool call.
 
-        The gateway must suppress ``response.function_call_arguments.*`` events and
-        emit ``response.output_item.done`` with type ``"image_generation_call"`` at the
-        end of the stream (after image generation completes).  The official OpenAI API
-        emits the same event types.
+        The synthetic function tool is generated after the model stream ends, so
+        the gateway suppresses every ``response.function_call_arguments.*`` event
+        and emits the completed ``image_generation_call`` item through
+        ``response.output_item.done`` before the terminal event.
 
-        Validates:
-            - Zero ``response.function_call_arguments.delta`` events
-            - Zero ``response.function_call_arguments.done`` events
-            - At least one ``response.output_item.done`` event with type ``"image_generation_call"``
-            - Stream ends with ``response.completed``
+        Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+             stdapi/models/chat/_adapters/_openai_responses.py:image_generation_stream_handler
         """
         if use_official_api and chat_model != _IMAGE_GEN_TEXT_MODELS[0]:
             pytest.skip("official API: collapsing parametrized variants to one run")
@@ -1990,7 +2129,7 @@ class TestImageGenerationTool:
             tool = {"type": "image_generation", "model": image_generation_model}
         func_delta_count = 0
         func_done_count = 0
-        image_done_count = 0
+        image_results: list[str | None] = []
         completed = False
 
         stream = openai_client.responses.create(  # type: ignore[call-overload]
@@ -2007,7 +2146,7 @@ class TestImageGenerationTool:
                 func_done_count += 1
             elif event.type == "response.output_item.done":
                 if getattr(event.item, "type", None) == "image_generation_call":
-                    image_done_count += 1
+                    image_results.append(getattr(event.item, "result", None))
             elif event.type == "response.completed":
                 completed = True
 
@@ -2017,9 +2156,10 @@ class TestImageGenerationTool:
         assert func_done_count == 0, (
             f"function_call_arguments.done leaked: {func_done_count} events"
         )
-        assert image_done_count >= 1, (
+        assert len(image_results) >= 1, (
             "Expected at least one image_generation_call output_item.done"
         )
+        assert image_results[0], "Expected the done item to carry the generated image"
         assert completed, "Expected response.completed event"
 
 
@@ -2029,26 +2169,26 @@ class TestImageGenerationTool:
 
 
 class TestOpenAIInputTokens:
-    """Test suite for POST /v1/responses/input_tokens (OpenAI Responses API).
+    """POST /v1/responses/input_tokens counting, backed by Bedrock CountTokens.
 
-    Validates token counting for the Responses API:
-      - basic input
-      - with `instructions` (system equivalent)
-      - with `tools`
-      - multi-turn message-array input
-      - longer content yields more tokens
-      - invalid model returns 400/404
-      - structured input_text content blocks
+    CountTokens returns the exact count that the same input would be billed for
+    on Converse, without generating anything.  It is Anthropic-only on Bedrock,
+    which is why the fixture pins a Claude model, and it rejects
+    ``inferenceConfig``, so the gateway forwards only messages, system blocks and
+    the tool configuration.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/subresources/input_tokens
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CountTokens.html
+         stdapi/models/chat/_adapters/_openai_responses.py:count_input_tokens_via_bedrock
     """
 
     def test_input_tokens_basic(
         self, openai_client: OpenAI, responses_input_tokens_model: str
     ) -> None:
-        """Test basic token counting with a simple string input.
+        """A string input is counted and reported as a ``response.input_tokens`` object.
 
-        Validates:
-            - Response contains input_tokens field
-            - Token count is a positive integer
+        Ref: https://developers.openai.com/api/docs/guides/token-counting
+             stdapi/routes/openai_responses.py:count_input_tokens
         """
         response = openai_client.responses.input_tokens.count(
             model=responses_input_tokens_model, input="Hello, how are you?"
@@ -2060,11 +2200,10 @@ class TestOpenAIInputTokens:
     def test_input_tokens_with_instructions(
         self, openai_client: OpenAI, responses_input_tokens_model: str
     ) -> None:
-        """Test token counting includes instruction tokens.
+        """``instructions`` are counted: they become Bedrock ``system`` blocks.
 
-        Validates:
-            - Instructions contribute to token count
-            - Token count with instructions is greater than without
+        Ref: https://developers.openai.com/api/docs/guides/token-counting
+             stdapi/models/chat/_adapters/_openai_responses.py:count_input_tokens_via_bedrock
         """
         response_without = openai_client.responses.input_tokens.count(
             model=responses_input_tokens_model, input="Hello"
@@ -2076,16 +2215,19 @@ class TestOpenAIInputTokens:
             instructions="You are a very detailed and verbose assistant that always provides comprehensive answers.",
         )
 
+        assert response_without.input_tokens > 0
         assert response_with.input_tokens > response_without.input_tokens
 
     def test_input_tokens_with_tools(
         self, openai_client: OpenAI, responses_input_tokens_model: str
     ) -> None:
-        """Test token counting includes tool definition tokens.
+        """Tool definitions are counted: they are forwarded as ``toolConfig``.
 
-        Validates:
-            - Tool definitions contribute to token count
-            - Token count with tools is greater than without
+        The gateway reuses the Converse tool mapping for counting, so a declared
+        function tool must raise the count exactly as it would when generating.
+
+        Ref: https://developers.openai.com/api/docs/guides/token-counting
+             stdapi/models/chat/_adapters/_openai_responses.py:count_input_tokens_via_bedrock
         """
         response_without = openai_client.responses.input_tokens.count(
             model=responses_input_tokens_model, input="What is the weather?"
@@ -2108,16 +2250,16 @@ class TestOpenAIInputTokens:
             ],
         )
 
+        assert response_without.input_tokens > 0
         assert response_with.input_tokens > response_without.input_tokens
 
     def test_input_tokens_multi_turn(
         self, openai_client: OpenAI, responses_input_tokens_model: str
     ) -> None:
-        """Test token counting with multi-turn conversation.
+        """A multi-turn message array is counted across all of its turns.
 
-        Validates:
-            - Multi-turn messages are counted
-            - More messages result in higher token count
+        Ref: https://developers.openai.com/api/docs/guides/token-counting
+             stdapi/models/chat/_adapters/_openai_responses.py:map_input
         """
         response_single = openai_client.responses.input_tokens.count(
             model=responses_input_tokens_model, input="Hello"
@@ -2140,15 +2282,16 @@ class TestOpenAIInputTokens:
             ],
         )
 
+        assert response_single.input_tokens > 0
         assert response_multi.input_tokens > response_single.input_tokens
 
     def test_input_tokens_longer_content_more_tokens(
         self, openai_client: OpenAI, responses_input_tokens_model: str
     ) -> None:
-        """Test that longer content produces more tokens.
+        """A longer input yields a strictly higher count than a short one.
 
-        Validates:
-            - Longer messages result in higher token counts
+        Ref: https://developers.openai.com/api/docs/guides/token-counting
+             stdapi/routes/openai_responses.py:count_input_tokens
         """
         response_short = openai_client.responses.input_tokens.count(
             model=responses_input_tokens_model, input="Hi"
@@ -2162,27 +2305,41 @@ class TestOpenAIInputTokens:
             "implications for modern physics and cosmology.",
         )
 
+        assert response_short.input_tokens > 0
         assert response_long.input_tokens > response_short.input_tokens
 
     def test_input_tokens_invalid_model(self, openai_client: OpenAI) -> None:
-        """Test token counting with an invalid model returns an error.
+        """An unknown model is a 400 on this route, not the 404 the create route uses.
 
-        Validates:
-            - Invalid model ID raises BadRequestError.
+        ``count_input_tokens`` resolves the model with an explicit
+        ``error_status=400`` override, so the same ``UnsupportedModelError`` is
+        surfaced as a bad request here.
+
+        Ref: https://developers.openai.com/api/docs/guides/error-codes
+             stdapi/routes/openai_responses.py:count_input_tokens
         """
-        with pytest.raises(BadRequestError):
+        with pytest.raises(BadRequestError) as excinfo:
             openai_client.responses.input_tokens.count(
                 model="nonexistent-model-xyz", input="Hello"
             )
 
+        assert excinfo.value.status_code == 400
+        envelope = _error_envelope(excinfo.value)
+        assert envelope["type"] == "invalid_request_error"
+        assert "does not exist" in envelope["message"]
+        assert "nonexistent-model-xyz" in envelope["message"]
+
     def test_input_tokens_input_text_blocks(
         self, openai_client: OpenAI, responses_input_tokens_model: str
     ) -> None:
-        """Test token counting with input_text content blocks.
+        """A message whose content is a list of ``input_text`` parts is countable.
 
-        Validates:
-            - Input message with input_text blocks is accepted for counting
-            - Returns a valid token count
+        The counting route accepts the same input union as create, so structured
+        content parts must be flattened into Bedrock text blocks rather than
+        rejected.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/subresources/input_tokens
+             stdapi/models/chat/_adapters/_openai_responses.py:_convert_input_content
         """
         response = openai_client.responses.input_tokens.count(
             model=responses_input_tokens_model,
@@ -2218,12 +2375,13 @@ class TestCodeInterpreterTool:
     Official API: ``gpt-5-nano`` — OpenAI executes Python code natively and
     returns a ``code_interpreter_call`` output item alongside the text result.
 
-    .. note::
-        Claude models previously mapped ``code_interpreter`` → ``bash`` (a
-        server tool that requires a follow-up turn from the client), which does
-        not match the OpenAI reference behaviour of autonomous single-turn
-        execution.  That mapping has been removed; ``code_interpreter`` is only
-        supported on Nova 2 (locally) and the official OpenAI API.
+    Only Nova 2 exposes an autonomous code-execution system tool, so
+    ``code_interpreter`` is supported there and on the official API but on no
+    other Bedrock model.
+
+    Ref: https://developers.openai.com/api/docs/guides/tools-code-interpreter
+         https://docs.aws.amazon.com/nova/latest/nova2-userguide/using-tools.html
+         stdapi/models/chat/_adapters/_openai_responses.py:_resolve_integrated_tool_name
     """
 
     @pytest.mark.expensive
@@ -2235,18 +2393,15 @@ class TestCodeInterpreterTool:
         use_official_api: bool,
         chat_model: str,
     ) -> None:
-        """code_interpreter executes code autonomously and returns the result in output text.
+        """``code_interpreter`` executes the code and returns its result in the text.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_code_interpreter_model: Model for official API runs (gpt-5-nano)
-            use_official_api: Whether we are testing against the official OpenAI API
-            chat_model: Local model under test (parametrized)
+        Locally the tool maps to the ``nova_code_interpreter`` Bedrock system
+        tool, which runs the code within a single Converse call; the gateway
+        suppresses that invocation, so the arithmetic result is the only visible
+        evidence it ran and no ``function_call`` may leak.
 
-        Validates:
-            - Response status is ``"completed"``
-            - Output text contains the expected numeric result (391 = 17 * 23)
-            - Official API: at least one ``code_interpreter_call`` output item present
+        Ref: https://developers.openai.com/api/docs/guides/tools-code-interpreter
+             stdapi/models/chat/_adapters/_openai_responses.py:_extract_output_items
         """
         effective_model = (
             responses_code_interpreter_model if use_official_api else chat_model
@@ -2265,9 +2420,11 @@ class TestCodeInterpreterTool:
             tool_choice="required",
         )
         assert resp.status == "completed"
-        assert isinstance(resp.output_text, str)
         assert "391" in resp.output_text, (
             f"Expected '391' in output; got: {resp.output_text!r}"
+        )
+        assert not [item for item in resp.output if item.type == "function_call"], (
+            "the suppressed code-execution tool must not surface as a function_call"
         )
         if use_official_api:
             code_calls = [
@@ -2286,19 +2443,14 @@ class TestCodeInterpreterTool:
         use_official_api: bool,
         chat_model: str,
     ) -> None:
-        """Streaming code_interpreter produces text delta events and completes.
+        """Streaming ``code_interpreter`` yields text deltas and no tool-call events.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            responses_code_interpreter_model: Model for official API runs (gpt-5-nano)
-            use_official_api: Whether we are testing against the official OpenAI API
-            chat_model: Local model under test (parametrized)
+        The suppressed ``nova_code_interpreter`` invocation must not surface as
+        ``response.function_call_arguments.*`` events; only the resulting text is
+        streamed before the terminal event.
 
-        Validates:
-            - At least one ``response.output_text.delta`` event is emitted
-            - Stream ends with ``response.completed``
-            - Official API: at least one ``response.output_item.done`` event with type
-              ``"code_interpreter_call"``
+        Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+             stdapi/models/chat/_adapters/_openai_responses.py:format_stream
         """
         effective_model = (
             responses_code_interpreter_model if use_official_api else chat_model
@@ -2306,6 +2458,7 @@ class TestCodeInterpreterTool:
 
         text_delta_count = 0
         code_interp_done_count = 0
+        func_event_count = 0
         completed = False
 
         tool: dict[str, object] = {
@@ -2325,10 +2478,15 @@ class TestCodeInterpreterTool:
             elif event.type == "response.output_item.done":
                 if getattr(event.item, "type", None) == "code_interpreter_call":
                     code_interp_done_count += 1
+            elif event.type.startswith("response.function_call_arguments."):
+                func_event_count += 1
             elif event.type == "response.completed":
                 completed = True
 
         assert text_delta_count >= 1, "Expected at least one output_text.delta event"
+        assert func_event_count == 0, (
+            f"function_call_arguments events must not leak: {func_event_count}"
+        )
         assert completed, "Expected response.completed event"
         if use_official_api:
             assert code_interp_done_count >= 1, (
@@ -2337,12 +2495,24 @@ class TestCodeInterpreterTool:
 
 
 class TestUsageLogging:
-    """Tests for usage logging to stdout."""
+    """Bedrock token usage recorded during a request reaches the response body.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_TokenUsage.html
+         stdapi/usage.py:record_bedrock_usage
+    """
 
     def test_response_usage_logged(
         self, test_client: TestClientType | None, responses_model: str, api_key: str
     ) -> None:
-        """Test that usage is recorded and logged in API response and stdout."""
+        """The raw ``/v1/responses`` body carries a consistent ``usage`` object.
+
+        Exercised over HTTP rather than through the SDK so that the serialised
+        field names and the arithmetic between them are asserted on the wire
+        format, not on a re-parsed model.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/retrieve
+             stdapi/usage.py:record_bedrock_usage
+        """
         if test_client is None:
             pytest.skip("Requires local test server")
 
@@ -2359,24 +2529,39 @@ class TestUsageLogging:
         )
         api_usage = response_data["usage"]
         assert api_usage is not None, "Response usage is None"
-        assert api_usage.get("input_tokens", 0) > 0, "Expected input_tokens > 0"
-        assert api_usage.get("output_tokens", 0) > 0, "Expected output_tokens > 0"
-
-        assert "input_tokens" in api_usage
-        assert "output_tokens" in api_usage
-        assert "total_tokens" in api_usage
+        assert api_usage["input_tokens"] > 0, "Expected input_tokens > 0"
+        assert api_usage["output_tokens"] > 0, "Expected output_tokens > 0"
+        assert api_usage["total_tokens"] == (
+            api_usage["input_tokens"] + api_usage["output_tokens"]
+        )
+        assert api_usage["input_tokens_details"]["cached_tokens"] >= 0
+        assert api_usage["output_tokens_details"]["reasoning_tokens"] >= 0
 
 
 class TestUsageAggregation:
-    """Tests for usage aggregation across multiple requests."""
+    """Per-request usage isolation and in-request summing of recorded usage.
+
+    Ref: stdapi/usage.py:record_bedrock_usage
+         stdapi/usage.py:usage_log_entries
+    """
 
     def test_multiple_requests_aggregate_usage(
         self, test_client: TestClientType | None, chat_legacy_model: str, api_key: str
     ) -> None:
-        """Test that multiple requests to same model produce valid usage."""
+        """Usage counters are per-request and never accumulate across requests.
+
+        The usage store lives in a context variable initialised per request, so
+        three identical prompts must each report the same input token count; a
+        growing count would mean the previous request's usage leaked into the
+        next one.
+
+        Ref: stdapi/usage.py:init_usage
+             stdapi/usage.py:record_bedrock_usage
+        """
         if test_client is None:
             pytest.skip("Requires local test server")
 
+        input_token_counts = []
         for _ in range(3):
             response = test_client.post(
                 "/v1/responses",
@@ -2388,10 +2573,24 @@ class TestUsageAggregation:
             api_usage = response.json()["usage"]
             assert api_usage["input_tokens"] > 0
             assert api_usage["output_tokens"] > 0
+            input_token_counts.append(api_usage["input_tokens"])
+
+        assert len(set(input_token_counts)) == 1, (
+            f"identical prompts must report identical input tokens: "
+            f"{input_token_counts}"
+        )
 
     @pytest.mark.local
     def test_record_usage_twice_sums_values(self) -> None:
-        """Test that calling record_usage twice produces one entry with summed values."""
+        """Two recordings for one model collapse into a single summed usage entry.
+
+        Usage is keyed by (service, model), so repeated Bedrock calls within one
+        request — region failover, or a multi-call fan-out — must be reported as
+        one aggregate line rather than several.
+
+        Ref: stdapi/usage.py:record_bedrock_usage
+             stdapi/usage.py:usage_log_entries
+        """
         token = usage.init_usage()
         try:
             record_bedrock_usage("test-model", input_tokens=100, output_tokens=50)
@@ -2412,7 +2611,14 @@ class TestUsageAggregation:
 
     @pytest.mark.local
     def test_cache_write_tokens_by_ttl_logged(self) -> None:
-        """Test that cache_write_tokens_by_ttl appears in usage entries."""
+        """Cache-write tokens are reported per TTL bucket in the usage entry.
+
+        Bedrock bills cache writes differently per TTL, so the buckets are kept
+        separate instead of being summed into a single counter.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html
+             stdapi/usage.py:record_bedrock_usage
+        """
         token = usage.init_usage()
         try:
             record_bedrock_usage(
@@ -2432,12 +2638,16 @@ class TestUsageAggregation:
             "Expected cache_write_tokens_by_ttl in entry"
         )
         cache_tokens = entry["cache_write_tokens_by_ttl"]
-        assert cache_tokens["5m"] == 500
-        assert cache_tokens["1h"] == 200
+        assert cache_tokens == {"5m": 500, "1h": 200}
+        assert entry["input_tokens"] == 1000
+        assert entry["output_tokens"] == 100
 
 
 class TestUsageEMF:
-    """Tests for CloudWatch EMF (Embedded Metric Format) usage emission."""
+    """CloudWatch Embedded Metric Format emission of the recorded usage.
+
+    Ref: stdapi/usage.py:emit_usage_metrics
+    """
 
     def test_emf_metrics_emitted_when_enabled(
         self,
@@ -2446,7 +2656,14 @@ class TestUsageEMF:
         api_key: str,
         capfd: pytest.CaptureFixture[str],
     ) -> None:
-        """Test that EMF metrics are emitted when cloudwatch_metrics=True."""
+        """A billed request prints a self-consistent EMF document on stdout.
+
+        Every dimension the EMF header declares must have a matching top-level
+        field, otherwise CloudWatch silently drops the metric; the token metrics
+        must also carry the same non-zero values as the response usage.
+
+        Ref: stdapi/usage.py:emit_usage_metrics
+        """
         if test_client is None:
             pytest.skip("Requires local test server")
 
@@ -2500,7 +2717,14 @@ class TestUsageEMF:
     def test_no_emf_when_cloudwatch_metrics_disabled(
         self, capfd: pytest.CaptureFixture[str]
     ) -> None:
-        """Test that EMF metrics are NOT emitted when cloudwatch_metrics=False."""
+        """No EMF document is printed when ``cloudwatch_metrics`` is disabled.
+
+        Recorded usage is still tracked for the request log; only the metric
+        emission is gated on the setting.
+
+        Ref: stdapi/config.py:_Settings
+             stdapi/usage.py:emit_usage_metrics
+        """
         token = usage.init_usage()
         try:
             record_bedrock_usage("test-model", input_tokens=100, output_tokens=50)
@@ -2526,18 +2750,30 @@ class TestUsageEMF:
 
 @pytest.mark.local
 class TestDeprecation:
-    """Tests for the SETTINGS.deprecated() helper."""
+    """Reporting of deprecated settings that were explicitly set.
+
+    Ref: stdapi/config.py:_Settings
+    """
 
     def test_tokens_estimation_deprecated(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Setting a deprecated field is reported by deprecated()."""
+        """A deprecated field that was explicitly set is reported by ``deprecated()``.
+
+        The check is driven by Pydantic's ``__pydantic_fields_set__``, so only
+        settings the operator provided are reported — never a default.
+
+        Ref: stdapi/config.py:_Settings
+        """
         monkeypatch.setattr(SETTINGS, "__pydantic_fields_set__", {"tokens_estimation"})
 
         assert SETTINGS.deprecated() == {"tokens_estimation"}
 
     def test_no_deprecated_setting(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """No deprecated setting is reported when none was explicitly set."""
+        """Nothing is reported when no setting was explicitly provided.
+
+        Ref: stdapi/config.py:_Settings
+        """
         monkeypatch.setattr(SETTINGS, "__pydantic_fields_set__", set())
 
         assert SETTINGS.deprecated() == set()

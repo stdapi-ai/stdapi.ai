@@ -1,24 +1,29 @@
-"""Tests specific to Anthropic Claude chat completions.
+"""Anthropic Claude system tools and reasoning on the OpenAI Chat Completions route.
 
-Covers all Anthropic-defined system tools available on Claude models via the
-OpenAI-compatible ``/v1/chat/completions`` route.  The reference behavior is
-the native Anthropic tools tests.
+Anthropic-defined tools (``bash``, ``str_replace_based_edit_tool``, ``memory``,
+``computer``) are declared as ordinary OpenAI function tools, with the reserved
+tool name as ``function.name`` and no schema.  The gateway matches those names
+against ``SERVER_TOOL_NAME_TO_TYPE``, resolves each to its versioned Anthropic
+type, moves it into Bedrock ``additionalModelRequestFields["tools"]`` and injects
+the required ``anthropic_beta`` flags — Bedrock Converse ``toolConfig`` has no
+native representation for them.  Because the promotion empties ``toolConfig``,
+``tool_choice`` is forwarded into ``additionalModelRequestFields`` as well.
 
-Server tools are passed in standard function format with the tool name as
-``function.name`` (e.g. ``{"type": "function", "function": {"name": "bash"}}``).
-The gateway detects them by name and translates to Bedrock
-``additionalModelRequestFields`` automatically, injecting required
-``anthropic-beta`` headers.
+Model output stays in OpenAI shape: Anthropic ``tool_use`` blocks surface as
+``tool_calls`` with the tool name unchanged, and results are returned with
+``role: "tool"`` messages rather than Anthropic ``tool_result`` blocks.
 
-Tool responses use standard OpenAI ``tool_calls`` + ``tool`` role messages
-instead of Anthropic ``tool_use`` / ``tool_result`` blocks.
+``code_execution`` and ``web_fetch`` are Anthropic server-side tools that Bedrock
+does not host, so their inference tests never run on this route.  Tests are also
+skipped when ``--use-official-api`` is set, since Claude models are not served by
+the official OpenAI API.  ``@pytest.mark.expensive`` marks the tests that sweep
+the whole ``CLAUDE_ALL`` matrix instead of the cheap Haiku 4.5 model.
 
-Tests that only exercise the cheap ``_CLAUDE_CHEAP`` (Haiku 4.5) model run
-unmarked by default. ``@pytest.mark.expensive`` is reserved for tests that
-sweep the full ``CLAUDE_ALL`` model matrix (Opus/Fable tiers).
-
-Tests are always skipped when ``--use-official-api`` is set because Anthropic
-Claude is not available on the official OpenAI API.
+Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+     https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
+     https://platform.claude.com/docs/en/build-with-claude/claude-on-amazon-bedrock-legacy
+     stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel
+     stdapi/models/chat/_adapters/_openai_chat_completion.py:build_tool_config
 """
 
 import json
@@ -36,6 +41,7 @@ from stdapi.types.openai_chat_completions import CompletionCreateParams
 
 if TYPE_CHECKING:
     from openai import OpenAI
+    from types_aiobotocore_bedrock_runtime.type_defs import ToolConfigurationTypeDef
 
 # ---------------------------------------------------------------------------
 # Shared tool definitions (mirror of test_anthropic_messages_anthropic_claude)
@@ -117,36 +123,27 @@ def _tool_call_args(tool_call: object) -> dict[str, object]:
 
 
 class TestTextEditorTool:
-    """Tests for the ``str_replace_based_edit_tool`` server tool on Claude via OpenAI API.
+    """The ``str_replace_based_edit_tool`` Anthropic tool driven through OpenAI ``tools``.
 
-    Mirrors ``TestTextEditorTool`` in ``test_anthropic_messages_anthropic_claude.py``.
-    Tools are passed in standard function format; the gateway detects server tool
-    names and translates them into Bedrock ``additionalModelRequestFields``.
+    On Claude 4 and later the tool name ``str_replace_based_edit_tool`` maps to type
+    ``text_editor_20250728``, whose command set is view / create / str_replace /
+    insert (``undo_edit`` was removed in ``text_editor_20250429``).  The gateway
+    resolves that version itself, so requests carry only the bare name.
 
-    Validated scenarios
-    -------------------
-    - Tool accepted without error
-    - ``view`` command: produces ``tool_calls`` with ``command`` and ``path`` keys
-    - ``view`` of a directory path
-    - ``view`` with ``view_range`` lines hint
-    - Full multi-turn: view → tool result → stop text response
-    - ``str_replace`` command shape after inspecting a broken file
-    - ``create`` command shape when writing a new file
-    - ``insert`` command shape when prepending a line
-    - Error result accepted in multi-turn without crashing
-    - ``max_characters`` extra param accepted
-    - ``max_characters`` produces the same ``tool_calls`` output shape
-    - ``max_characters`` multi-turn: Turn 1 → stub Turn 2
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
+         stdapi/models/chat/anthropic_claude_37_to_45.py:ChatModel
     """
 
     # --- acceptance ---
 
     def test_accepted(self, openai_client: OpenAI, use_official_api: bool) -> None:
-        """Text editor tool definition is accepted without error.
+        """A schema-less ``str_replace_based_edit_tool`` entry yields a normal completion.
 
-        Validates:
-            - Request with ``str_replace_based_edit_tool`` does not raise
-            - Response has at least one choice
+        The reserved name alone is enough: the gateway supplies the versioned type and
+        the ``computer-use-2025-01-24`` beta flag, so no ``function.parameters`` are
+        needed and Bedrock must not reject the promoted tool.
+
+        Ref: stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
         """
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
@@ -157,21 +154,31 @@ class TestTextEditorTool:
             tools=tools,  # type: ignore[arg-type]
             max_completion_tokens=4096,
         )
-        assert len(resp.choices) >= 1
+        assert resp.object == "chat.completion"
+        assert len(resp.choices) == 1
         assert resp.choices[0].message.role == "assistant"
+        assert resp.choices[0].finish_reason in {"stop", "length", "tool_calls"}
+        assert resp.usage is not None
+        assert (
+            resp.usage.total_tokens
+            == resp.usage.prompt_tokens + resp.usage.completion_tokens
+        )
 
     # --- view command ---
 
     def test_view_file_triggers_tool_use(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """View command produces a ``tool_calls`` entry with ``command`` and ``path``.
+        """A ``view`` request surfaces as one ``tool_calls`` entry keeping the tool name.
 
-        Validates:
-            - ``finish_reason == "tool_calls"``
-            - Exactly one tool call with ``name == "str_replace_based_edit_tool"``
-            - ``args["command"] == "view"``
-            - ``args["path"]`` is a non-empty string
+        ``tool_choice="required"`` becomes Bedrock ``toolChoice {"any": {}}``, which the
+        gateway forwards as Anthropic ``{"type": "any"}`` once server-tool promotion has
+        emptied ``toolConfig``; the model must therefore call the editor, and the name is
+        echoed back unmapped with the arguments carrying the Anthropic command payload.
+
+        Ref: https://developers.openai.com/api/docs/guides/function-calling#tool-choice
+             stdapi/models/chat/_anthropic_claude.py:_forward_tool_choice_to_additional_request_fields
+             stdapi/models/chat/_adapters/_openai_chat_completion.py:extract_tool_calls
         """
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
@@ -192,17 +199,23 @@ class TestTextEditorTool:
         assert tc.id
         assert tc.function.name == "str_replace_based_edit_tool"
         args = _tool_call_args(tc)
+        assert isinstance(args, dict), "arguments must decode to a JSON object"
         assert args.get("command") == "view"
-        assert args.get("path")
+        assert isinstance(args.get("path"), str)
+        assert args["path"]
+        assert resp.usage is not None
+        assert resp.usage.completion_tokens > 0
 
     def test_view_directory_triggers_tool_use(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Claude uses the view command when asked to list a directory.
+        """Listing a directory is expressed as the editor's ``view`` command.
 
-        Validates:
-            - ``finish_reason == "tool_calls"``
-            - At least one tool call with ``command == "view"``
+        The text editor has no dedicated listing command: ``view`` on a directory path is
+        the documented way to enumerate it, so the promoted tool must still be usable
+        with a directory argument.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
         """
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
@@ -220,16 +233,20 @@ class TestTextEditorTool:
         tc = tool_calls[0]
         assert tc.type == "function"
         assert tc.id
-        assert _tool_call_args(tc).get("command") == "view"
+        assert tc.function.name == "str_replace_based_edit_tool"
+        args = _tool_call_args(tc)
+        assert args.get("command") == "view"
+        assert args.get("path")
 
     def test_view_file_with_range_emits_view_command(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Claude uses the view command when asked to inspect specific lines.
+        """A line-range request still resolves to the ``view`` command.
 
-        Validates:
-            - ``finish_reason == "tool_calls"``
-            - Tool call with ``command == "view"``
+        ``view_range`` is an optional input of ``view``; whether the model sends it is its
+        own choice, so only the command and the path are asserted here.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
         """
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
@@ -247,16 +264,27 @@ class TestTextEditorTool:
         tc = tool_calls[0]
         assert tc.type == "function"
         assert tc.id
-        assert _tool_call_args(tc).get("command") == "view"
+        assert tc.function.name == "str_replace_based_edit_tool"
+        args = _tool_call_args(tc)
+        assert args.get("command") == "view"
+        assert args.get("path")
 
     def test_view_multiturn(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """View + tool result → Turn 2 stop text response.
+        """A ``role: "tool"`` result closes an editor turn without an Anthropic tool_result.
 
-        Validates:
-            - Turn 1: ``finish_reason == "tool_calls"`` with ``command == "view"``
-            - Turn 2: tool result accepted; ``finish_reason == "stop"`` with content
+        Turn 2 keeps the tool declared, so the gateway takes the multi-turn stub path: the
+        server tool stays a schema-less ``toolSpec`` in ``toolConfig`` (Bedrock requires one
+        when the history contains ``toolResult`` blocks) instead of being promoted again.
+        Because that path drops the native editor definition — worth roughly 700 input
+        tokens — Turn 2 bills *fewer* prompt tokens than Turn 1 despite the longer history;
+        the reply quoting the injected hostname is what proves the result was forwarded.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+             https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
+             stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
+             stdapi/models/chat/_adapters/_openai_common.py:parse_tool_content
         """
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
@@ -270,11 +298,14 @@ class TestTextEditorTool:
             tool_choice="required",
             max_completion_tokens=4096,
         )
+        assert resp1.choices[0].finish_reason == "tool_calls"
         tool_calls = resp1.choices[0].message.tool_calls
         assert tool_calls, "Expected tool_calls in Turn 1"
         tc = tool_calls[0]
         assert tc.type == "function"
         assert tc.id
+        assert tc.function.name == "str_replace_based_edit_tool"
+        assert _tool_call_args(tc).get("command") == "view"
 
         assistant_msg = resp1.choices[0].message
         resp2 = openai_client.chat.completions.create(
@@ -301,22 +332,40 @@ class TestTextEditorTool:
             max_completion_tokens=4096,
         )
         assert resp2.choices[0].finish_reason == "stop"
-        assert resp2.choices[0].message.content
+        content = resp2.choices[0].message.content
+        assert content
+        assert resp2.choices[0].message.tool_calls is None
+        # Only the tool result can supply the hostname, so quoting it back proves the
+        # ``role: "tool"`` message reached the model.
+        assert "testhost" in content.lower().replace("-", "").replace(" ", ""), (
+            "Turn 2 must re-send the tool call and its result to the model"
+        )
+        assert resp1.usage is not None
+        assert resp2.usage is not None
+        assert resp2.usage.prompt_tokens < resp1.usage.prompt_tokens, (
+            "the stub path must not re-send the native editor definition"
+        )
 
     # --- str_replace command ---
 
     def test_str_replace_command_shape(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """After receiving a file with a syntax error, Claude uses str_replace to fix it.
+        """An editing turn reaches an edit command, with ``str_replace`` carrying both strings.
 
-        Two-turn flow:
-        1. Ask Claude to fix a syntax error → Claude views the file
-        2. Return file contents (line with missing colon) → Claude emits str_replace
+        Without ``tool_choice`` the model picks its own path: it may edit straight away or
+        first ``view`` the file, in which case the injected contents (line 6 misses its
+        colon) are returned as a ``role: "tool"`` message and the edit lands in Turn 2.
+        Both branches must end on one of the ``text_editor_20250728`` mutation commands.
+        Turn 1 carries the natively promoted tool definition, so a ``str_replace`` there
+        uses the documented ``old_str`` / ``new_str`` keys; Turn 2 runs on the schema-less
+        multi-turn stub, where Claude Haiku 4.5 names them ``old_text`` / ``new_text``
+        instead — so either pair is accepted, as long as both strings are present, differ,
+        and quote the file contents that were injected.
 
-        Validates:
-            - Edit tool call has ``command == "str_replace"``
-            - ``old_str`` and ``new_str`` keys are present and differ
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
+             stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
+             stdapi/models/chat/_adapters/_openai_chat_completion.py:extract_tool_calls
         """
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
@@ -339,10 +388,12 @@ class TestTextEditorTool:
             tc = str_replace_direct[0]
             assert tc.type == "function"
             assert tc.id
+            assert tc.function.name == "str_replace_based_edit_tool"
             args = _tool_call_args(tc)
             assert "old_str" in args
             assert "new_str" in args
             assert args["old_str"] != args["new_str"]
+            assert args.get("path")
             return
 
         view_calls = [
@@ -389,10 +440,31 @@ class TestTextEditorTool:
         )
         edit_calls = resp2.choices[0].message.tool_calls or []
         assert edit_calls, "Claude should emit an edit command after viewing the file"
-        assert _tool_call_args(edit_calls[0]).get("command") in (
-            "str_replace",
-            "create",
-            "insert",
+        assert edit_calls[0].function.name == "str_replace_based_edit_tool"  # type: ignore[union-attr]
+        edit_args = _tool_call_args(edit_calls[0])
+        assert edit_args.get("command") in ("str_replace", "create", "insert")
+        assert edit_args.get("path")
+        if edit_args.get("command") == "str_replace":
+            # The stub tool carries no input schema, so Haiku 4.5 improvises the payload
+            # key names here: old_text / new_text instead of the documented old_str / new_str.
+            old_text = edit_args.get("old_str", edit_args.get("old_text"))
+            new_text = edit_args.get("new_str", edit_args.get("new_text"))
+            assert isinstance(old_text, str)
+            assert isinstance(new_text, str)
+            assert old_text
+            assert old_text != new_text
+            # Only the injected tool result names the broken line, so quoting it proves
+            # the file contents were forwarded to the model.
+            viewed_body = " ".join(
+                line.split(": ", 1)[-1] for line in file_content.splitlines()
+            )
+            assert " ".join(old_text.split()) in " ".join(viewed_body.split()), (
+                "Turn 2 must re-send the viewed file contents to the model"
+            )
+        assert resp1.usage is not None
+        assert resp2.usage is not None
+        assert resp2.usage.prompt_tokens < resp1.usage.prompt_tokens, (
+            "the stub path must not re-send the native editor definition"
         )
 
     # --- create command ---
@@ -400,12 +472,12 @@ class TestTextEditorTool:
     def test_create_command_shape(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Claude uses the create command when asked to write a new file.
+        """Writing a new file emits ``create`` with ``path`` and ``file_text``.
 
-        Validates:
-            - ``args["command"] == "create"``
-            - ``args["path"]`` is non-empty
-            - ``args["file_text"]`` is non-empty
+        ``create`` is the only command that carries the whole file body, under the
+        ``file_text`` key — the requested content must therefore appear there.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
         """
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
@@ -428,23 +500,33 @@ class TestTextEditorTool:
         tc = tool_calls[0]
         assert tc.type == "function"
         assert tc.id
+        assert tc.function.name == "str_replace_based_edit_tool"
         args = _tool_call_args(tc)
         assert args.get("command") == "create"
-        assert args.get("path")
-        assert args.get("file_text")
+        path = args.get("path")
+        assert isinstance(path, str)
+        assert path.endswith("/hello.txt")
+        file_text = args.get("file_text")
+        assert isinstance(file_text, str)
+        assert "hello world" in file_text.lower()
 
     # --- insert command ---
 
     def test_insert_command_shape(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Claude uses the insert command when asked to prepend a line to a file.
+        """Prepending a line reaches an edit command, and ``insert`` carries a line number.
 
-        Two-turn flow: Claude views the file first, then inserts after receiving content.
+        The ``insert`` command is the only one taking ``insert_line`` — an integer line
+        offset — together with ``insert_text``.  As with ``str_replace`` the model may
+        ``view`` the file first, so the edit is accepted in either turn.  When Turn 2
+        answers with a ``str_replace`` instead, the replaced snippet must quote the
+        injected contents, which is what proves the tool result was forwarded: the stub
+        path used from Turn 2 on carries no tool definition, so its ~700 input tokens
+        disappear and the prompt shrinks rather than grows.
 
-        Validates:
-            - An edit tool call is emitted with ``command`` in ``{insert, str_replace, create}``
-            - If ``insert``: ``insert_line`` is an int and ``insert_text`` is non-empty
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
+             stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
         """
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
@@ -465,9 +547,11 @@ class TestTextEditorTool:
             tc = insert_direct[0]
             assert tc.type == "function"
             assert tc.id
+            assert tc.function.name == "str_replace_based_edit_tool"
             args = _tool_call_args(tc)
             assert isinstance(args.get("insert_line"), int)
             assert args.get("insert_text")
+            assert args.get("path")
             return
 
         view_calls = [
@@ -478,6 +562,7 @@ class TestTextEditorTool:
         assert view_tc.type == "function"
         assert view_tc.id
 
+        file_content = "1: def is_prime(n):\n2:     return n > 1\n"
         assistant_msg = resp1.choices[0].message
         resp2 = openai_client.chat.completions.create(
             model=_CLAUDE_CHEAP,
@@ -497,21 +582,38 @@ class TestTextEditorTool:
                         }
                     ],
                 },
-                {
-                    "role": "tool",
-                    "tool_call_id": view_tc.id,
-                    "content": "1: def is_prime(n):\n2:     return n > 1\n",
-                },
+                {"role": "tool", "tool_call_id": view_tc.id, "content": file_content},
             ],
             tools=tools,  # type: ignore[arg-type]
             max_completion_tokens=4096,
         )
         edit_calls = resp2.choices[0].message.tool_calls or []
         assert edit_calls, "Claude should emit an edit command"
-        assert _tool_call_args(edit_calls[0]).get("command") in (
-            "insert",
-            "str_replace",
-            "create",
+        assert edit_calls[0].function.name == "str_replace_based_edit_tool"  # type: ignore[union-attr]
+        edit_args = _tool_call_args(edit_calls[0])
+        command = edit_args.get("command")
+        assert command in ("insert", "str_replace", "create")
+        assert edit_args.get("path")
+        if command == "insert":
+            assert isinstance(edit_args.get("insert_line"), int)
+            assert edit_args.get("insert_text")
+        elif command == "str_replace":
+            # The stub tool has no input schema, so Haiku 4.5 improvises the payload key
+            # names: old_text / new_text instead of the documented old_str / new_str.
+            old_text = edit_args.get("old_str", edit_args.get("old_text"))
+            assert isinstance(old_text, str)
+            viewed_body = " ".join(
+                line.split(": ", 1)[-1] for line in file_content.splitlines()
+            )
+            assert " ".join(old_text.split()) in " ".join(viewed_body.split()), (
+                "Turn 2 must re-send the viewed file contents to the model"
+            )
+        else:
+            assert edit_args.get("file_text")
+        assert resp1.usage is not None
+        assert resp2.usage is not None
+        assert resp2.usage.prompt_tokens < resp1.usage.prompt_tokens, (
+            "the stub path must not re-send the native editor definition"
         )
 
     # --- error result ---
@@ -519,13 +621,20 @@ class TestTextEditorTool:
     def test_error_tool_result_accepted(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """A tool result with error content is accepted and Claude handles it gracefully.
+        """A failure reported as ordinary tool text is accepted in the next turn.
 
-        Simulates a "file not found" error on the host side.
+        OpenAI ``role: "tool"`` messages have no ``is_error`` flag, unlike Anthropic
+        ``tool_result`` blocks, so a host-side failure can only be reported as plain text.
+        The gateway wraps it in a Bedrock ``toolResult`` with ``{"text": ...}`` content and
+        the turn must complete normally, either by retrying with another tool call or by
+        explaining the failure it was told about.  Turn 2 runs on the multi-turn stub path,
+        which sheds the ~700-token native editor definition, so its prompt is cheaper than
+        Turn 1's despite the added history.
 
-        Validates:
-            - Turn 2 with error content does not raise
-            - Claude responds (either retries or explains)
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
+             https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
+             stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
+             stdapi/models/chat/_adapters/_openai_common.py:parse_tool_content
         """
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
@@ -573,18 +682,48 @@ class TestTextEditorTool:
             tools=tools,  # type: ignore[arg-type]
             max_completion_tokens=4096,
         )
-        assert resp2.choices[0].message.role == "assistant"
+        reply = resp2.choices[0].message
+        assert reply.role == "assistant"
+        assert resp2.choices[0].finish_reason in {"stop", "tool_calls"}
+        assert reply.content or reply.tool_calls
+        if reply.content and not reply.tool_calls:
+            # Nothing but the tool result reports the failure, so an explanation that
+            # mentions it proves the error text reached the model.
+            lowered = reply.content.lower()
+            assert any(
+                marker in lowered
+                for marker in (
+                    "not found",
+                    "not exist",
+                    "no such",
+                    "could not be found",
+                    "couldn't be found",
+                    "cannot be found",
+                    "unable to",
+                    "error",
+                )
+            ), "Turn 2 must re-send the failing tool result to the model"
+        assert resp1.usage is not None
+        assert resp2.usage is not None
+        assert resp2.usage.prompt_tokens < resp1.usage.prompt_tokens, (
+            "the stub path must not re-send the native editor definition"
+        )
 
     # --- max_characters ---
 
     def test_max_characters_accepted(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Text editor with ``max_characters`` extra param is accepted.
+        """``max_characters`` smuggled through ``function.parameters`` is accepted.
 
-        Validates:
-            - Request with ``max_characters=1000`` does not raise
-            - Response has at least one choice
+        ``max_characters`` is a ``text_editor_20250728``-only tool option with no place in
+        the OpenAI tool schema, so it travels inside ``function.parameters``.  The gateway
+        lifts every non-schema key out as an extra Anthropic tool param and resets the
+        Bedrock ``inputSchema`` to ``{"type": "object"}``, so Bedrock never sees it as a
+        JSON Schema keyword.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
+             stdapi/models/chat/_anthropic_claude.py:_req_extract_server_tools
         """
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
@@ -603,18 +742,27 @@ class TestTextEditorTool:
             tools=tools,  # type: ignore[arg-type]
             max_completion_tokens=4096,
         )
-        assert len(resp.choices) >= 1
+        assert resp.object == "chat.completion"
+        assert len(resp.choices) == 1
         assert resp.choices[0].message.role == "assistant"
+        assert resp.choices[0].finish_reason in {"stop", "length", "tool_calls"}
+        assert resp.usage is not None
+        assert (
+            resp.usage.total_tokens
+            == resp.usage.prompt_tokens + resp.usage.completion_tokens
+        )
 
     def test_max_characters_triggers_tool_use(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Text editor with ``max_characters`` returns the same tool_calls output shape.
+        """``max_characters`` leaves the emitted ``tool_calls`` shape unchanged.
 
-        Validates:
-            - ``finish_reason == "tool_calls"``
-            - Tool call name is ``str_replace_based_edit_tool``
-            - ``"command"`` key present in parsed arguments
+        The extra option is consumed on the request side only: the tool still comes back
+        under its plain name with an Anthropic command payload, and ``max_characters``
+        itself is not echoed into the tool-call arguments.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
+             stdapi/models/chat/_anthropic_claude.py:_req_extract_server_tools
         """
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
@@ -642,16 +790,25 @@ class TestTextEditorTool:
         assert tc.type == "function"
         assert tc.id
         assert tc.function.name == "str_replace_based_edit_tool"
-        assert "command" in _tool_call_args(tc)
+        args = _tool_call_args(tc)
+        assert args.get("command") == "view"
+        assert args.get("path")
+        assert "max_characters" not in args
 
     def test_max_characters_multiturn(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """``max_characters`` Turn 1 → tool result in Turn 2 → stop.
+        """A ``max_characters`` editor tool round-trips a tool result and stops.
 
-        Validates:
-            - Turn 1 produces a tool call
-            - Turn 2 with tool result returns ``finish_reason == "stop"`` with content
+        Turn 2 declares the same tool with the extra option while the history already
+        holds a ``toolResult``, which is the multi-turn stub path: the option must be
+        stripped from the ``toolSpec`` schema again or Bedrock would reject the request.
+        That path also leaves out the native editor definition and its ~700 input tokens,
+        so Turn 2 bills fewer prompt tokens than Turn 1; the reply quoting the injected
+        hostname is what proves the tool result was forwarded.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
+             stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
         """
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
@@ -673,11 +830,13 @@ class TestTextEditorTool:
             tool_choice="required",
             max_completion_tokens=4096,
         )
+        assert resp1.choices[0].finish_reason == "tool_calls"
         tool_calls = resp1.choices[0].message.tool_calls
         assert tool_calls, "Expected tool_calls in Turn 1"
         tc = tool_calls[0]
         assert tc.type == "function"
         assert tc.id
+        assert tc.function.name == "str_replace_based_edit_tool"
 
         assistant_msg = resp1.choices[0].message
         resp2 = openai_client.chat.completions.create(
@@ -704,7 +863,18 @@ class TestTextEditorTool:
             max_completion_tokens=4096,
         )
         assert resp2.choices[0].finish_reason == "stop"
-        assert resp2.choices[0].message.content
+        content = resp2.choices[0].message.content
+        assert content
+        # Only the tool result can supply the hostname, so quoting it back proves the
+        # ``role: "tool"`` message reached the model.
+        assert "testhost" in content.lower().replace("-", "").replace(" ", ""), (
+            "Turn 2 must re-send the tool call and its result to the model"
+        )
+        assert resp1.usage is not None
+        assert resp2.usage is not None
+        assert resp2.usage.prompt_tokens < resp1.usage.prompt_tokens, (
+            "the stub path must not re-send the native editor definition"
+        )
 
 
 # ===========================================================================
@@ -713,25 +883,20 @@ class TestTextEditorTool:
 
 
 class TestBashTool:
-    """Tests for the bash system tool (``bash``) on Claude via OpenAI API.
+    """The Anthropic ``bash`` tool driven through OpenAI ``tools``.
 
-    Mirrors ``TestBashTool`` in ``test_anthropic_messages_anthropic_claude.py``.
+    ``bash`` has a single GA version, ``bash_20250124``, and takes ``command`` (required
+    unless ``restart``) plus ``restart``.  Upstream it needs no beta header, but the
+    gateway still tags the promoted tool with ``computer-use-2025-01-24`` for Bedrock.
 
-    Validated scenarios
-    -------------------
-    - Tool accepted without error
-    - Triggers ``tool_calls`` with a non-empty command-like input
-    - Multi-turn: command → stdout → stop text response
-    - Error output accepted and Claude handles it
-    - A restart acknowledgement as tool result accepted
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/bash-tool
+         stdapi/models/chat/anthropic_claude_37_to_45.py:ChatModel
     """
 
     def test_accepted(self, openai_client: OpenAI, use_official_api: bool) -> None:
-        """Bash tool definition is accepted without error.
+        """A schema-less ``bash`` entry yields a normal completion.
 
-        Validates:
-            - Request with ``bash`` does not raise
-            - Response has at least one choice
+        Ref: stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
         """
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
@@ -742,20 +907,27 @@ class TestBashTool:
             tools=tools,  # type: ignore[arg-type]
             max_completion_tokens=4096,
         )
-        assert len(resp.choices) >= 1
+        assert resp.object == "chat.completion"
+        assert len(resp.choices) == 1
         assert resp.choices[0].message.role == "assistant"
+        assert resp.choices[0].finish_reason in {"stop", "length", "tool_calls"}
+        assert resp.usage is not None
+        assert (
+            resp.usage.total_tokens
+            == resp.usage.prompt_tokens + resp.usage.completion_tokens
+        )
 
     def test_accepted_via_function_format(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Standard function format ``{"type": "function", "function": {"name": "bash"}}`` works.
+        """An inline ``{"type": "function", "function": {"name": "bash"}}`` tool is usable.
 
-        LLM clients and OpenAI SDKs naturally produce this format.
+        This is the shape OpenAI SDKs and agent frameworks emit naturally; detection is by
+        ``function.name`` only, so no Anthropic-specific ``type`` discriminator is needed
+        on the way in, and the response keeps OpenAI's ``type: "function"`` on the way out.
 
-        Validates:
-            - Request with the standard function format does not raise
-            - Response has tool_calls with ``function.name == "bash"``
-            - ``type == "function"`` (TypedObject mirroring does not apply)
+        Ref: https://developers.openai.com/api/reference/resources/chat.md
+             stdapi/models/chat/_anthropic_claude.py:_req_extract_server_tools
         """
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
@@ -768,22 +940,27 @@ class TestBashTool:
             tools=tools,  # type: ignore[arg-type]
             max_completion_tokens=4096,
         )
-        assert len(resp.choices) >= 1
+        assert len(resp.choices) == 1
+        assert resp.choices[0].finish_reason == "tool_calls"
         tool_calls = resp.choices[0].message.tool_calls
         assert tool_calls
         tc = tool_calls[0]
         assert tc.type == "function"
+        assert tc.id
         assert tc.function.name == "bash"
+        assert _tool_call_args(tc), "bash input must not be an empty object"
 
     def test_triggers_tool_use(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Bash tool produces a ``tool_calls`` entry with a non-empty command input.
+        """A forced ``bash`` call comes back as a single ``tool_calls`` entry with input.
 
-        Validates:
-            - ``finish_reason == "tool_calls"``
-            - Exactly one tool call with ``name == "bash"``
-            - Parsed arguments are non-empty
+        The gateway resets the promoted tool's Bedrock ``inputSchema`` to a bare
+        ``{"type": "object"}`` and lets Anthropic own the real schema, so the argument key
+        (``command``) is model-side and only its presence is asserted.
+
+        Ref: https://developers.openai.com/api/docs/guides/function-calling#tool-choice
+             stdapi/models/chat/_anthropic_claude.py:_req_extract_server_tools
         """
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
@@ -803,14 +980,21 @@ class TestBashTool:
         assert tc.type == "function"
         assert tc.id
         assert tc.function.name == "bash"
-        assert _tool_call_args(tc)  # non-empty; key name varies by model version
+        args = _tool_call_args(tc)
+        assert isinstance(args, dict), "arguments must decode to a JSON object"
+        assert args, "bash input must not be an empty object"
 
     def test_multiturn(self, openai_client: OpenAI, use_official_api: bool) -> None:
-        """Bash multi-turn: command in Turn 1, stdout tool result in Turn 2.
+        """Command stdout returned as a ``role: "tool"`` message ends the bash turn.
 
-        Validates:
-            - Turn 1: ``finish_reason == "tool_calls"`` for the bash command
-            - Turn 2: tool result accepted; ``finish_reason == "stop"`` with content
+        Bedrock requires the ``toolSpec`` stub to stay in ``toolConfig`` once the history
+        carries a ``toolResult``, so Turn 2 exercises the stub path rather than promotion.
+        Demoting the tool to a stub also drops Anthropic's injected ``bash`` tool prompt,
+        so Turn 2 bills fewer prompt tokens than Turn 1 despite carrying more history
+        (measured 608 against 845 on Haiku 4.5).
+
+        Ref: stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
+             stdapi/models/chat/_adapters/_openai_common.py:parse_tool_content
         """
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
@@ -858,17 +1042,28 @@ class TestBashTool:
         )
         assert resp2.choices[0].finish_reason == "stop"
         assert resp2.choices[0].message.content
+        assert resp2.choices[0].message.tool_calls is None
+        assert resp1.usage is not None
+        assert resp2.usage is not None
+        assert resp2.usage.prompt_tokens < resp1.usage.prompt_tokens, (
+            "Turn 2 must run in stub mode, dropping the promoted bash tool prompt "
+            "that Turn 1 was billed for"
+        )
 
     def test_command_error_output_accepted(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """A tool result with stderr content is accepted gracefully.
+        """Command stderr returned as tool text is accepted in the next turn.
 
-        Simulates a command that fails with a non-zero exit code.
+        A non-zero exit is indistinguishable from success at the wire level on the OpenAI
+        surface — there is no ``is_error`` flag — so the gateway forwards it as ordinary
+        ``toolResult`` text and the turn must still complete.  The ``toolResult`` in the
+        history also switches Turn 2 to stub mode, which drops the promoted ``bash`` tool
+        prompt and therefore lowers the billed prompt tokens (measured 630 against 850).
 
-        Validates:
-            - Turn 2 with error content does not raise
-            - Claude responds (explains the error or suggests an alternative)
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/bash-tool
+             stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
+             stdapi/models/chat/_adapters/_openai_common.py:parse_tool_content
         """
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
@@ -917,15 +1112,28 @@ class TestBashTool:
             max_completion_tokens=4096,
         )
         assert resp2.choices[0].message.role == "assistant"
+        assert resp2.choices[0].finish_reason in {"stop", "tool_calls"}
+        assert resp2.choices[0].message.content or resp2.choices[0].message.tool_calls
+        assert resp1.usage is not None
+        assert resp2.usage is not None
+        assert resp2.usage.prompt_tokens < resp1.usage.prompt_tokens, (
+            "Turn 2 must run in stub mode, dropping the promoted bash tool prompt "
+            "that Turn 1 was billed for"
+        )
 
     def test_restart_tool_result_accepted(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """A tool result that acknowledges a session restart is accepted without error.
+        """A restart acknowledgement returned as tool text is accepted in the next turn.
 
-        Validates:
-            - Turn 2 with a restart acknowledgement does not raise
-            - Claude responds as a valid assistant message
+        ``bash`` accepts a ``restart`` input whose result is a bare acknowledgement instead
+        of command output; the gateway must forward that text like any other tool result.
+        As with any ``toolResult`` in the history, Turn 2 falls back to the ``toolSpec``
+        stub, so the promoted ``bash`` tool prompt is no longer billed (measured 606
+        prompt tokens against 843 on Turn 1).
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/bash-tool
+             stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
         """
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
@@ -974,6 +1182,14 @@ class TestBashTool:
             max_completion_tokens=4096,
         )
         assert resp2.choices[0].message.role == "assistant"
+        assert resp2.choices[0].finish_reason in {"stop", "tool_calls"}
+        assert resp2.choices[0].message.content or resp2.choices[0].message.tool_calls
+        assert resp1.usage is not None
+        assert resp2.usage is not None
+        assert resp2.usage.prompt_tokens < resp1.usage.prompt_tokens, (
+            "Turn 2 must run in stub mode, dropping the promoted bash tool prompt "
+            "that Turn 1 was billed for"
+        )
 
 
 # ===========================================================================
@@ -982,24 +1198,20 @@ class TestBashTool:
 
 
 class TestMemoryTool:
-    """Tests for the memory system tool (``memory``) on Claude via OpenAI API.
+    """The Anthropic ``memory`` tool driven through OpenAI ``tools``.
 
-    Mirrors ``TestMemoryTool`` in ``test_anthropic_messages_anthropic_claude.py``.
+    ``memory`` resolves to type ``memory_20250818`` and, unlike the editor and bash tools,
+    requires the ``context-management-2025-06-27`` beta flag, which the gateway injects
+    from ``TOOL_BETA_FLAGS`` when it promotes the tool.
 
-    Validated scenarios
-    -------------------
-    - Tool accepted without error
-    - First action is a ``view`` of ``/memories``
-    - Triggers ``tool_calls`` with non-empty input
-    - Multi-turn: view → directory listing tool result → accepted response
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
+         stdapi/models/chat/anthropic_claude_37_to_45.py:ChatModel
     """
 
     def test_accepted(self, openai_client: OpenAI, use_official_api: bool) -> None:
-        """Memory tool definition is accepted without error.
+        """A schema-less ``memory`` entry yields a normal completion.
 
-        Validates:
-            - Request with ``memory`` does not raise
-            - Response has at least one choice
+        Ref: stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
         """
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
@@ -1010,18 +1222,25 @@ class TestMemoryTool:
             tools=tools,  # type: ignore[arg-type]
             max_completion_tokens=4096,
         )
-        assert len(resp.choices) >= 1
+        assert resp.object == "chat.completion"
+        assert len(resp.choices) == 1
         assert resp.choices[0].message.role == "assistant"
+        assert resp.choices[0].finish_reason in {"stop", "length", "tool_calls"}
+        assert resp.usage is not None
+        assert (
+            resp.usage.total_tokens
+            == resp.usage.prompt_tokens + resp.usage.completion_tokens
+        )
 
     def test_auto_views_directory_first(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Claude always views ``/memories`` before starting a task.
+        """The memory tool's first action is a ``view`` of the ``/memories`` directory.
 
-        Validates:
-            - At least one tool call is emitted
-            - The first tool call has ``command == "view"``
-            - Its ``path`` is ``"/memories"``
+        The ``memory_20250818`` tool prompt directs Claude to inspect its memory directory
+        before working, which is what makes the fixed ``/memories`` path assertable here.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
         """
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
@@ -1044,6 +1263,7 @@ class TestMemoryTool:
         assert first_tc.type == "function"
         assert first_tc.id
         assert first_tc.function.name == "memory"
+        assert resp.choices[0].finish_reason == "tool_calls"
         args = _tool_call_args(first_tc)
         assert args.get("command") == "view"
         assert args.get("path") == "/memories"
@@ -1051,11 +1271,10 @@ class TestMemoryTool:
     def test_triggers_tool_use(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Memory tool produces a ``tool_calls`` entry with non-empty input.
+        """A forced ``memory`` call comes back under its own name with a command payload.
 
-        Validates:
-            - Tool call name is ``memory``
-            - Parsed arguments are non-empty
+        Ref: https://developers.openai.com/api/docs/guides/function-calling#tool-choice
+             stdapi/models/chat/_adapters/_openai_chat_completion.py:extract_tool_calls
         """
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
@@ -1079,14 +1298,22 @@ class TestMemoryTool:
         assert tc.type == "function"
         assert tc.id
         assert tc.function.name == "memory"
-        assert _tool_call_args(tc)
+        args = _tool_call_args(tc)
+        assert isinstance(args, dict), "arguments must decode to a JSON object"
+        assert args.get("command"), "memory input must name a command"
 
     def test_multiturn(self, openai_client: OpenAI, use_official_api: bool) -> None:
-        """Memory multi-turn: view → directory listing tool result → accepted response.
+        """A ``/memories`` listing returned as tool text is accepted in the next turn.
 
-        Validates:
-            - Turn 1: tool call (typically a view of ``/memories``)
-            - Turn 2: returning the directory listing is accepted without error
+        The listing is the literal shape the ``memory`` tool expects back from a ``view`` of
+        its directory, and the gateway must forward it as ``toolResult`` text.  Its presence
+        demotes ``memory`` to a ``toolSpec`` stub on Turn 2, which drops Anthropic's large
+        injected memory tool prompt: the billed prompt tokens fall (measured 657 against
+        1674 on Turn 1).
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
+             stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
+             stdapi/models/chat/_adapters/_openai_common.py:parse_tool_content
         """
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
@@ -1136,6 +1363,14 @@ class TestMemoryTool:
             max_completion_tokens=4096,
         )
         assert resp2.choices[0].message.role == "assistant"
+        assert resp2.choices[0].finish_reason in {"stop", "tool_calls"}
+        assert resp2.choices[0].message.content or resp2.choices[0].message.tool_calls
+        assert resp1.usage is not None
+        assert resp2.usage is not None
+        assert resp2.usage.prompt_tokens < resp1.usage.prompt_tokens, (
+            "Turn 2 must run in stub mode, dropping the promoted memory tool prompt "
+            "that Turn 1 was billed for"
+        )
 
 
 # ===========================================================================
@@ -1144,28 +1379,25 @@ class TestMemoryTool:
 
 
 class TestCodeExecutionTool:
-    """Tests for the code execution system tool (``code_execution_20250522``) via OpenAI API.
+    """The Anthropic ``code_execution`` server tool, unreachable on this route.
 
-    Mirrors ``TestCodeExecutionTool`` in ``test_anthropic_messages_anthropic_claude.py``.
+    ``code_execution`` runs on Anthropic's own infrastructure and is one of the server
+    tools Anthropic lists as unsupported on Amazon Bedrock; it is also absent from the
+    gateway's ``SERVER_TOOL_NAME_TO_TYPE``, so the name would reach Bedrock as an ordinary
+    custom function tool.  Every test here is therefore skipped unconditionally, and the
+    bodies document the expected first-party behavior only.
 
-    **Not supported on AWS Bedrock** — all tests in this class are always skipped
-    when running via stdapi (i.e., when ``use_official_api=False``), because the
-    gateway proxies to Bedrock where ``code_execution_20250522`` is unsupported.
-
-    Validated scenarios
-    -------------------
-    - Tool accepted without error (never runs via this route)
-    - Triggers ``tool_calls`` with a ``"code"`` key containing Python code
-    - Multi-turn: code → execution output → stop text that references the result
-    - Runtime error in tool result accepted
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool
+         https://platform.claude.com/docs/en/build-with-claude/claude-on-amazon-bedrock-legacy
+         stdapi/models/chat/anthropic_claude_37_to_45.py:ChatModel
     """
 
     @pytest.fixture(autouse=True)
     def _skip(self, use_official_api: bool) -> None:
-        """Skip all tests: code_execution is unsupported via stdapi/Bedrock.
+        """Skip every test in the class: ``code_execution`` needs Anthropic's own backend.
 
-        ``code_execution_20250522`` requires a direct Anthropic API connection.
-        Via the OpenAI route the backend is always Bedrock (when not on official API).
+        On this route the backend is always Bedrock when ``--use-official-api`` is off, and
+        Claude models do not exist on the official OpenAI API when it is on.
         """
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
@@ -1176,11 +1408,9 @@ class TestCodeExecutionTool:
 
     @pytest.mark.expensive
     def test_accepted(self, openai_client: OpenAI) -> None:
-        """Code execution tool definition is accepted without error.
+        """A ``code_execution`` tool entry yields a normal completion.
 
-        Validates:
-            - Request with ``code_execution_20250522`` does not raise
-            - Response has at least one choice
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool
         """
         tools: list[dict[str, object]] = [_CODE_EXECUTION_TOOL]
         resp = openai_client.chat.completions.create(
@@ -1189,15 +1419,20 @@ class TestCodeExecutionTool:
             tools=tools,  # type: ignore[arg-type]
             max_completion_tokens=4096,
         )
-        assert len(resp.choices) >= 1
+        assert resp.object == "chat.completion"
+        assert len(resp.choices) == 1
+        assert resp.choices[0].message.role == "assistant"
+        assert resp.usage is not None
+        assert (
+            resp.usage.total_tokens
+            == resp.usage.prompt_tokens + resp.usage.completion_tokens
+        )
 
     @pytest.mark.expensive
     def test_triggers_tool_use(self, openai_client: OpenAI) -> None:
-        """Code execution produces a ``tool_calls`` entry with a ``"code"`` key.
+        """A forced ``code_execution`` call carries Python source under a ``code`` key.
 
-        Validates:
-            - Tool call name is ``code_execution``
-            - ``"code"`` key present in parsed arguments (Python code to execute)
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool
         """
         tools: list[dict[str, object]] = [_CODE_EXECUTION_TOOL]
         resp = openai_client.chat.completions.create(  # type: ignore[call-overload]
@@ -1212,17 +1447,18 @@ class TestCodeExecutionTool:
         tc = tool_calls[0]
         assert tc.type == "function"
         assert tc.id
+        assert resp.choices[0].finish_reason == "tool_calls"
         assert tc.function.name == "code_execution"
-        assert "code" in _tool_call_args(tc)
+        assert _tool_call_args(tc).get("code")
 
     @pytest.mark.expensive
     def test_multiturn_with_result(self, openai_client: OpenAI) -> None:
-        """Code multi-turn: Python code in Turn 1, execution output in Turn 2.
+        """An execution result fed back as tool text is quoted in the closing answer.
 
-        Validates:
-            - Turn 1: tool call with ``"code"`` key
-            - Turn 2: providing the execution result is accepted
-            - Turn 2 response: ``finish_reason == "stop"`` with result reference
+        ``2 ** 10`` is used because its result, ``1024``, is unambiguous enough to assert on
+        the final text: the model can only produce it from the tool result it was given.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool
         """
         tools: list[dict[str, object]] = [_CODE_EXECUTION_TOOL]
         user_prompt = "Compute 2 ** 10 using code."
@@ -1268,14 +1504,17 @@ class TestCodeExecutionTool:
         content = resp2.choices[0].message.content
         assert content
         assert "1024" in content
+        assert resp1.usage is not None
+        assert resp2.usage is not None
+        assert resp2.usage.prompt_tokens > resp1.usage.prompt_tokens, (
+            "Turn 2 must re-send the execution result to the model"
+        )
 
     @pytest.mark.expensive
     def test_runtime_error_result_accepted(self, openai_client: OpenAI) -> None:
-        """A tool result with a Python traceback is accepted.
+        """A Python traceback returned as tool text is accepted in the next turn.
 
-        Validates:
-            - Turn 2 with traceback does not raise
-            - Claude responds gracefully (explains or retries)
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool
         """
         tools: list[dict[str, object]] = [_CODE_EXECUTION_TOOL]
         user_prompt = "Divide 1 by 0 using code."
@@ -1322,6 +1561,13 @@ class TestCodeExecutionTool:
             max_completion_tokens=4096,
         )
         assert resp2.choices[0].message.role == "assistant"
+        assert resp2.choices[0].finish_reason in {"stop", "tool_calls"}
+        assert resp2.choices[0].message.content or resp2.choices[0].message.tool_calls
+        assert resp1.usage is not None
+        assert resp2.usage is not None
+        assert resp2.usage.prompt_tokens > resp1.usage.prompt_tokens, (
+            "Turn 2 must re-send the traceback to the model"
+        )
 
 
 # ===========================================================================
@@ -1330,28 +1576,27 @@ class TestCodeExecutionTool:
 
 
 class TestWebFetchTool:
-    """Tests for the ``web_fetch`` server tool via the OpenAI API.
+    """The Anthropic ``web_fetch`` server tool, unreachable on this route.
 
-    Covers ``web_fetch`` — a Claude server tool; inference tests are
-    only available on the official Anthropic API and are skipped when running
-    against the local gateway (Bedrock backend).
+    ``web_fetch`` is fulfilled by Anthropic's infrastructure and is not offered on Bedrock,
+    where the gateway would forward the name as a plain ``toolSpec`` and Claude would treat
+    it as a client tool with no real fetching.  The class-level fixture skips the inference
+    tests on the Bedrock path, and each test skips itself on the official OpenAI API, so
+    none of them execute in either configuration.
 
-    Validated scenarios
-    -------------------
-    - Tool accepted without error (official API only)
-    - Claude emits a tool call with a ``"url"`` key (official API only)
-    - Multi-turn: fetch request → page content → stop summary (official API only)
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
+         https://platform.claude.com/docs/en/build-with-claude/claude-on-amazon-bedrock-legacy
+         stdapi/models/chat/anthropic_claude_37_to_45.py:ChatModel
     """
 
     @pytest.fixture(autouse=True)
     def _skip_inference(
         self, request: pytest.FixtureRequest, use_official_api: bool
     ) -> None:
-        """Skip inference tests when running via stdapi (Bedrock backend).
+        """Skip the inference tests when the backend is Bedrock.
 
-        ``web_fetch`` is not supported on Bedrock; it is passed as a regular
-        toolSpec and Claude treats it as a custom tool — real URL fetching does
-        not work.
+        ``web_fetch`` is not supported on Bedrock: it is passed as a regular ``toolSpec``
+        and Claude treats it as a client tool, so no URL is ever fetched.
         """
         inference_tests = {
             "test_accepted",
@@ -1366,11 +1611,9 @@ class TestWebFetchTool:
 
     @pytest.mark.expensive
     def test_accepted(self, openai_client: OpenAI, use_official_api: bool) -> None:
-        """Web fetch tool definition is accepted without error (official API only).
+        """A ``web_fetch`` tool entry yields a normal completion.
 
-        Validates:
-            - Request with ``web_fetch`` does not raise
-            - Response has at least one choice
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
         """
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
@@ -1381,17 +1624,22 @@ class TestWebFetchTool:
             tools=tools,  # type: ignore[arg-type]
             max_completion_tokens=1024,
         )
-        assert len(resp.choices) >= 1
+        assert resp.object == "chat.completion"
+        assert len(resp.choices) == 1
+        assert resp.choices[0].message.role == "assistant"
+        assert resp.usage is not None
+        assert (
+            resp.usage.total_tokens
+            == resp.usage.prompt_tokens + resp.usage.completion_tokens
+        )
 
     @pytest.mark.expensive
     def test_triggers_tool_use(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Web fetch produces a ``tool_calls`` entry with a ``"url"`` key.
+        """A forced ``web_fetch`` call carries the requested URL under a ``url`` key.
 
-        Validates:
-            - Tool call name is ``web_fetch``
-            - ``"url"`` key present in parsed arguments
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
         """
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
@@ -1413,19 +1661,19 @@ class TestWebFetchTool:
         tc = tool_calls[0]
         assert tc.type == "function"
         assert tc.id
+        assert resp.choices[0].finish_reason == "tool_calls"
         assert tc.function.name == "web_fetch"
-        assert "url" in _tool_call_args(tc)
+        url = _tool_call_args(tc).get("url")
+        assert isinstance(url, str)
+        assert "example.com" in url
 
     @pytest.mark.expensive
     def test_multiturn_with_page_content(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Web fetch multi-turn: fetch request → page content → stop summary.
+        """Page HTML fed back as tool text ends the ``web_fetch`` turn with a summary.
 
-        Validates:
-            - Turn 1: tool call with ``"url"`` key
-            - Turn 2: providing page HTML as tool result is accepted
-            - Turn 2 response: ``finish_reason == "stop"`` with a text summary
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
         """
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
@@ -1476,7 +1724,14 @@ class TestWebFetchTool:
             max_completion_tokens=1024,
         )
         assert resp2.choices[0].finish_reason == "stop"
-        assert resp2.choices[0].message.content
+        content = resp2.choices[0].message.content
+        assert content
+        assert "example domain" in content.lower()
+        assert resp1.usage is not None
+        assert resp2.usage is not None
+        assert resp2.usage.prompt_tokens > resp1.usage.prompt_tokens, (
+            "Turn 2 must re-send the fetched page to the model"
+        )
 
 
 # ===========================================================================
@@ -1485,25 +1740,27 @@ class TestWebFetchTool:
 
 
 class TestMixedServerAndCustomTools:
-    """Tests combining Anthropic system tools with user-defined custom tools via OpenAI API.
+    """Anthropic system tools mixed with user-defined function tools in one request.
 
-    Mirrors ``TestMixedServerAndCustomTools`` in
-    ``test_anthropic_messages_anthropic_claude.py``.
+    A single ``tools`` array can hold both kinds: the gateway splits it, promoting the
+    reserved names into ``additionalModelRequestFields["tools"]`` while ordinary functions
+    stay as Bedrock ``toolSpec`` entries, so ``toolConfig`` survives the promotion when at
+    least one custom tool remains.
 
-    Validated scenarios
-    -------------------
-    - System tool (bash) alongside one custom function tool: accepted
-    - Two system tools together (bash + text_editor): accepted
+    Ref: https://developers.openai.com/api/docs/guides/function-calling
+         stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
     """
 
     def test_server_tool_with_custom_tool(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """System tool accepted alongside a custom function tool.
+        """``bash`` and a custom function tool coexist in one request.
 
-        Validates:
-            - Mixing ``bash`` with a user-defined function tool does not raise
-            - Response has at least one choice
+        The custom ``get_time`` tool keeps ``toolConfig`` non-empty, so the request exercises
+        the split path rather than the "``toolConfig`` cleared" one; any tool the model
+        chooses must be one of the two declared names.
+
+        Ref: stdapi/models/chat/_adapters/_openai_chat_completion.py:build_tool_config
         """
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
@@ -1524,17 +1781,28 @@ class TestMixedServerAndCustomTools:
             tools=tools,  # type: ignore[arg-type]
             max_completion_tokens=4096,
         )
-        assert len(resp.choices) >= 1
+        assert resp.object == "chat.completion"
+        assert len(resp.choices) == 1
         assert resp.choices[0].message.role == "assistant"
+        assert resp.choices[0].finish_reason in {"stop", "length", "tool_calls"}
+        for tool_call in resp.choices[0].message.tool_calls or ():
+            assert tool_call.function.name in {"bash", "get_time"}  # type: ignore[union-attr]
+        assert resp.usage is not None
+        assert (
+            resp.usage.total_tokens
+            == resp.usage.prompt_tokens + resp.usage.completion_tokens
+        )
 
     def test_multiple_server_tools_together(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Multiple system tools in a single request are accepted without error.
+        """``bash`` and the text editor are promoted together in one request.
 
-        Validates:
-            - bash + text_editor together do not raise
-            - Response has at least one choice
+        Both names resolve to different versioned types and both need the
+        ``computer-use-2025-01-24`` beta flag, which must be injected once, not twice, when
+        the whole ``toolConfig`` is replaced by native Anthropic tool definitions.
+
+        Ref: stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
         """
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
@@ -1545,8 +1813,20 @@ class TestMixedServerAndCustomTools:
             tools=tools,  # type: ignore[arg-type]
             max_completion_tokens=4096,
         )
-        assert len(resp.choices) >= 1
+        assert resp.object == "chat.completion"
+        assert len(resp.choices) == 1
         assert resp.choices[0].message.role == "assistant"
+        assert resp.choices[0].finish_reason in {"stop", "length", "tool_calls"}
+        for tool_call in resp.choices[0].message.tool_calls or ():
+            assert tool_call.function.name in {  # type: ignore[union-attr]
+                "bash",
+                "str_replace_based_edit_tool",
+            }
+        assert resp.usage is not None
+        assert (
+            resp.usage.total_tokens
+            == resp.usage.prompt_tokens + resp.usage.completion_tokens
+        )
 
 
 # ===========================================================================
@@ -1555,14 +1835,35 @@ class TestMixedServerAndCustomTools:
 
 
 class TestAnthropicClaudeChatCompletions:
-    """Anthropic Claude chat completions tests — reasoning, response structure, error paths."""
+    """Claude reasoning configuration and response envelope on the Chat Completions route.
+
+    ``reasoning_effort`` has no Bedrock Converse equivalent: the gateway turns it into an
+    Anthropic ``reasoning_config`` in ``additionalModelRequestFields`` — a token budget on
+    Claude 3.7-4.5 and adaptive thinking plus an ``output_config.effort`` on later
+    generations — and surfaces the resulting thinking text as the non-standard
+    ``reasoning_content`` field of the assistant message.
+
+    Ref: https://developers.openai.com/api/docs/guides/reasoning
+         https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+         stdapi/models/chat/_adapters/_openai_chat_completion.py:extract_reasoning
+         stdapi/models/chat/_anthropic_claude.py:_req_configure_reasoning
+    """
 
     @pytest.mark.expensive
     @pytest.mark.parametrize("model", CLAUDE_ALL)
     def test_reasoning_effort_parameter(
         self, openai_client: OpenAI, use_official_api: bool, model: str
     ) -> None:
-        """reasoning_effort parameter: accepted and yields valid response on this backend."""
+        """``reasoning_effort="minimal"`` is honored across the whole Claude matrix.
+
+        Each generation encodes the effort differently — a 1,024-token budget on Claude
+        3.7-4.5, ``output_config.effort="low"`` on 4.6 and later — so the assertable common
+        denominator is a well-formed completion whose usage adds up.  Models that Bedrock
+        has moved to LEGACY answer 404 and are reported as expected failures.
+
+        Ref: stdapi/models/chat/anthropic_claude_37_to_45.py:ChatModel._req_configure_reasoning
+             https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html
+        """
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
         try:
@@ -1577,15 +1878,31 @@ class TestAnthropicClaudeChatCompletions:
                 pytest.xfail(str(exc))
             raise
 
-        assert hasattr(resp, "choices")
-        assert len(resp.choices) >= 1
+        assert resp.object == "chat.completion"
+        assert len(resp.choices) == 1
         msg = resp.choices[0].message
         assert msg.role == "assistant"
+        assert msg.content or getattr(msg, "reasoning_content", None)
+        assert resp.choices[0].finish_reason in {"stop", "length"}
+        assert resp.usage is not None
+        assert resp.usage.completion_tokens > 0
+        assert (
+            resp.usage.total_tokens
+            == resp.usage.prompt_tokens + resp.usage.completion_tokens
+        )
 
     def test_reasoning_effort_medium(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """reasoning_effort='medium' maps to 'medium' effort on Claude."""
+        """``reasoning_effort="medium"`` makes Claude emit ``reasoning_content``.
+
+        On Haiku 4.5 the effort becomes a budget of half of ``max_completion_tokens``, so
+        thinking is enabled and the Bedrock ``reasoningContent`` block is mapped onto the
+        message's ``reasoning_content`` field.
+
+        Ref: stdapi/models/chat/anthropic_claude_37_to_45.py:ChatModel._req_configure_reasoning
+             stdapi/models/chat/_adapters/_openai_chat_completion.py:extract_output_text
+        """
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
         resp = openai_client.chat.completions.create(
@@ -1594,13 +1911,29 @@ class TestAnthropicClaudeChatCompletions:
             reasoning_effort="medium",
             max_completion_tokens=4096,
         )
-        assert len(resp.choices) >= 1
-        assert resp.choices[0].message.role == "assistant"
+        assert len(resp.choices) == 1
+        msg = resp.choices[0].message
+        assert msg.role == "assistant"
+        reasoning = msg.reasoning_content  # type: ignore[attr-defined]
+        assert reasoning, "medium effort must enable thinking and return its text"
+        assert resp.usage is not None
+        assert (
+            resp.usage.total_tokens
+            == resp.usage.prompt_tokens + resp.usage.completion_tokens
+        )
 
     def test_claude_streaming_with_reasoning(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Streaming with reasoning_effort produces valid streaming chunks."""
+        """A reasoning stream is a ``chat.completion.chunk`` sequence led by a role-only delta.
+
+        The gateway opens every stream with a synthetic ``delta={"role": "assistant"}`` chunk
+        before any content, and all chunks share the completion id.  Only the first 30
+        chunks are read: this test covers the envelope, not the end of the stream.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events
+             stdapi/models/chat/_adapters/_openai_chat_completion.py:format_stream
+        """
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
         response = openai_client.chat.completions.create(
@@ -1626,11 +1959,29 @@ class TestAnthropicClaudeChatCompletions:
 
         assert len(chunks) > 0
         assert len(accumulated_content) > 0
+        assert all(chunk.object == "chat.completion.chunk" for chunk in chunks)
+        assert chunks[0].id.startswith("chatcmpl-")
+        assert all(chunk.id == chunks[0].id for chunk in chunks), (
+            "every chunk must carry the same completion id"
+        )
+        first_delta = chunks[0].choices[0].delta
+        assert first_delta.role == "assistant"
+        assert not first_delta.content, "the leading chunk carries the role only"
 
     def test_reasoning_effort_none_explicit_disable(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """reasoning_effort='none' explicitly disables reasoning on Claude models."""
+        """``reasoning_effort="none"`` suppresses thinking on Haiku 4.5.
+
+        ``none`` is mapped to an explicit ``reasoning_config {"type": "disabled"}`` rather
+        than being dropped, so no thinking may come back — unlike a plain omission, which
+        leaves the model's own default in place.  The gateway serialises the message with
+        ``reasoning_content`` unset, so the field is absent from the payload rather than
+        present and empty, and the SDK model exposes no such attribute at all.
+
+        Ref: stdapi/models/chat/_adapters/_openai_chat_completion.py:extract_reasoning
+             stdapi/models/chat/anthropic_claude_37_to_45.py:ChatModel._req_configure_reasoning
+        """
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
         resp = openai_client.chat.completions.create(
@@ -1639,17 +1990,33 @@ class TestAnthropicClaudeChatCompletions:
             reasoning_effort="none",
             max_completion_tokens=4096,
         )
-        assert hasattr(resp, "choices")
-        assert len(resp.choices) >= 1
+        assert len(resp.choices) == 1
         msg = resp.choices[0].message
         assert msg.role == "assistant"
+        assert msg.content
+        assert getattr(msg, "reasoning_content", None) is None, (
+            "disabled reasoning must not return thinking text"
+        )
+        assert resp.usage is not None
+        assert (
+            resp.usage.total_tokens
+            == resp.usage.prompt_tokens + resp.usage.completion_tokens
+        )
 
     @pytest.mark.expensive
     @pytest.mark.parametrize("model", CLAUDE_ALL)
     def test_reasoning_effort_none_explicit_disable_all_models(
         self, openai_client: OpenAI, use_official_api: bool, model: str
     ) -> None:
-        """reasoning_effort='none' explicitly disables reasoning on all Claude models."""
+        """``reasoning_effort="none"`` is accepted by every Claude model, reasoner or not.
+
+        Absence of thinking is deliberately not asserted here: the Fable and Mythos
+        families always reason, so the gateway logs a warning and falls back to their
+        adaptive default instead of sending a disabled ``reasoning_config``.
+
+        Ref: stdapi/models/chat/anthropic_claude_fable_mythos.py:ChatModel
+             https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html
+        """
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
         try:
@@ -1664,17 +2031,31 @@ class TestAnthropicClaudeChatCompletions:
                 pytest.xfail(str(exc))
             raise
 
-        assert hasattr(resp, "choices")
-        assert len(resp.choices) >= 1
+        assert resp.object == "chat.completion"
+        assert len(resp.choices) == 1
         msg = resp.choices[0].message
         assert msg.role == "assistant"
+        assert msg.content or getattr(msg, "reasoning_content", None)
+        assert resp.choices[0].finish_reason in {"stop", "length"}
+        assert resp.usage is not None
+        assert (
+            resp.usage.total_tokens
+            == resp.usage.prompt_tokens + resp.usage.completion_tokens
+        )
 
     # --- Response structure fields ---
 
     def test_response_id_format(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Verify response ID starts with 'chatcmpl-' for Claude models."""
+        """The completion id is ``chatcmpl-`` followed by the gateway request id.
+
+        Bedrock has no completion id of its own, so the gateway mints one: ``store`` is off
+        here, hence the id is derived from the request id rather than from a session id.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat.md
+             stdapi/routes/openai_chat_completions.py:create_chat_completion
+        """
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
         resp = openai_client.chat.completions.create(
@@ -1683,11 +2064,19 @@ class TestAnthropicClaudeChatCompletions:
             max_completion_tokens=50,
         )
         assert resp.id.startswith("chatcmpl-")
+        assert resp.id != "chatcmpl-", "the request id suffix must not be empty"
 
     def test_response_object_and_created_fields(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Verify response.object and response.created fields."""
+        """``object`` is ``chat.completion`` and ``created`` is a Unix-seconds timestamp.
+
+        ``created`` comes from the gateway's request timestamp, so it must be in seconds —
+        a millisecond value would be roughly a thousand times too large.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat.md
+             stdapi/routes/openai_chat_completions.py:create_chat_completion
+        """
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
         resp = openai_client.chat.completions.create(
@@ -1697,12 +2086,22 @@ class TestAnthropicClaudeChatCompletions:
         )
         assert resp.object == "chat.completion"
         assert isinstance(resp.created, int)
-        assert resp.created > 0
+        assert 1_700_000_000 < resp.created < 4_000_000_000, (
+            "created must be a Unix timestamp in seconds"
+        )
 
     def test_user_parameter_accepted(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Verify the user parameter is accepted for Claude models."""
+        """The deprecated ``user`` field is accepted and never echoed back.
+
+        Upstream has superseded ``user`` by ``safety_identifier`` and ``prompt_cache_key``;
+        the gateway keeps accepting it, using it only as the logged user id, so it must not
+        appear anywhere in the response envelope.
+
+        Ref: https://developers.openai.com/api/docs/guides/safety-best-practices#implement-safety-identifiers
+             stdapi/routes/openai_chat_completions.py:create_chat_completion
+        """
         if use_official_api:
             pytest.skip("Anthropic Claude is not supported on the official API")
         resp = openai_client.chat.completions.create(
@@ -1711,8 +2110,10 @@ class TestAnthropicClaudeChatCompletions:
             max_completion_tokens=50,
             user="test-user-123",
         )
-        assert len(resp.choices) >= 1
+        assert len(resp.choices) == 1
         assert resp.choices[0].message.role == "assistant"
+        assert resp.choices[0].message.content
+        assert "test-user-123" not in resp.model_dump_json()
 
 
 # ===========================================================================
@@ -1721,7 +2122,15 @@ class TestAnthropicClaudeChatCompletions:
 
 
 class TestBuildToolConfig:
-    """Unit tests for ``build_tool_config`` with the standard function format."""
+    """``build_tool_config`` treats Anthropic tool names as plain function tools.
+
+    Server-tool recognition happens one layer later, in the model's
+    ``_req_extract_server_tools``, so this adapter step must pass the reserved names and
+    any extra options through untouched.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+         stdapi/models/chat/_adapters/_openai_chat_completion.py:build_tool_config
+    """
 
     def _make_request(self, tools: list[dict[str, object]]) -> CompletionCreateParams:
         """Build a minimal ``CompletionCreateParams`` with the given tools."""
@@ -1732,7 +2141,13 @@ class TestBuildToolConfig:
         )
 
     def test_function_tool_unaffected(self) -> None:
-        """Regular ``function`` tools produce a ``toolSpec`` with the function name."""
+        """A user function becomes a single ``toolSpec`` carrying name and description.
+
+        No ``tool_choice`` is sent, so the Bedrock config must not gain a ``toolChoice``
+        either: absence means Converse applies its own default.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
+        """
         cfg = build_tool_config(
             self._make_request(
                 [
@@ -1744,25 +2159,38 @@ class TestBuildToolConfig:
             )
         )
         assert cfg is not None
+        assert len(cfg["tools"]) == 1
         spec = cfg["tools"][0]["toolSpec"]
         assert spec["name"] == "my_fn"
         assert spec["description"] == "desc"
+        assert "toolChoice" not in cfg
 
     def test_function_format_server_tool_name_stored_as_toolspec_name(self) -> None:
-        """Server tool name is stored as toolSpec.name unchanged.
+        """A reserved tool name is emitted verbatim as ``toolSpec.name``.
 
-        ``build_tool_config`` treats this as a regular function tool; server tool
-        detection happens at the model layer in ``_req_extract_server_tools``.
+        Bedrock requires a description, so a tool declared with nothing but a name gets the
+        ``"function"`` placeholder — the name is the only thing the model layer matches on.
+
+        Ref: stdapi/models/chat/_anthropic_claude.py:_req_extract_server_tools
         """
         cfg = build_tool_config(
             self._make_request([{"type": "function", "function": {"name": "bash"}}])
         )
         assert cfg is not None
+        assert len(cfg["tools"]) == 1
         spec = cfg["tools"][0]["toolSpec"]
         assert spec["name"] == "bash"
+        assert spec["description"] == "function"
 
     def test_function_format_server_tool_inputschema_is_empty(self) -> None:
-        """Server tool name without parameters produces an empty inputSchema."""
+        """A parameterless tool gets the canonical empty Bedrock schema.
+
+        Bedrock rejects a ``toolSpec`` without ``inputSchema``, so the adapter substitutes
+        ``{"type": "object"}`` for the missing ``function.parameters``.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+             stdapi/models/chat/_adapters/_openai_chat_completion.py:_map_tool_spec
+        """
         cfg = build_tool_config(
             self._make_request([{"type": "function", "function": {"name": "bash"}}])
         )
@@ -1771,12 +2199,14 @@ class TestBuildToolConfig:
         assert cfg["tools"][0]["toolSpec"]["inputSchema"]["json"] == {"type": "object"}
 
     def test_function_format_extra_params_in_parameters_forwarded(self) -> None:
-        """Extra configuration fields in ``parameters`` are forwarded to ``inputSchema.json``.
+        """Non-schema keys inside ``function.parameters`` survive into ``inputSchema.json``.
 
-        e.g. ``{"name": "str_replace_based_edit_tool", "parameters": {"type": "object",
-        "max_characters": 5000}}`` → ``inputSchema.json["max_characters"] == 5000``.
-        The gateway strips them out at the server-tool layer and forwards them as
-        extra Anthropic tool params.
+        This is how an Anthropic-only tool option such as ``max_characters`` reaches the
+        model layer, which then lifts it out as an extra tool param and restores the empty
+        schema.  The declared ``type`` must be preserved alongside it.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
+             stdapi/models/chat/_anthropic_claude.py:_req_extract_server_tools
         """
         cfg = build_tool_config(
             self._make_request(
@@ -1794,17 +2224,33 @@ class TestBuildToolConfig:
         assert cfg is not None
         json_params = cfg["tools"][0]["toolSpec"]["inputSchema"]["json"]
         assert json_params.get("max_characters") == 5000
+        assert json_params.get("type") == "object"
 
 
 class TestServerToolNamePassthrough:
-    """Unit tests verifying tool names pass through unchanged in tool call responses.
+    """Server-tool promotion on the way in, unmapped tool names on the way out.
 
-    Since ``extract_tool_calls`` no longer remaps names, Bedrock echoes the tool
-    name directly back to the client without transformation.
+    Anthropic tool names are reserved on the request side only: they are lifted into
+    ``additionalModelRequestFields["tools"]`` with their versioned type and beta flags,
+    while ``extract_tool_calls`` performs no reverse mapping, so whatever name Bedrock
+    echoes is what the client sees.
+
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
+         stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
+         stdapi/models/chat/_adapters/_openai_chat_completion.py:extract_tool_calls
     """
 
-    def _run_configure_tools(self, tools: list[dict[str, object]]) -> None:
-        """Run ``build_tool_config`` + model-layer server tool setup for *tools*."""
+    def _run_configure_tools(
+        self, tools: list[dict[str, object]]
+    ) -> tuple[ToolConfigurationTypeDef | None, dict[str, object]]:
+        """Run ``build_tool_config`` + model-layer server tool setup for *tools*.
+
+        Args:
+            tools: OpenAI-format tool definitions to configure.
+
+        Returns:
+            The mutated Bedrock tool config and the ``additionalModelRequestFields`` dict.
+        """
         request = CompletionCreateParams(
             model="anthropic.claude-sonnet-4-6-v1",
             messages=[{"role": "user", "content": "hi"}],  # type: ignore[list-item]
@@ -1812,28 +2258,77 @@ class TestServerToolNamePassthrough:
         )
         cfg = build_tool_config(request)
         model = _ClaudeModel("anthropic.claude-sonnet-4-6-v1")
+        additional_request_fields: dict[str, object] = {}
         server_tools = model._req_extract_server_tools(cfg)  # noqa: SLF001
-        model._req_configure_tools(cfg, {}, server_tools)  # noqa: SLF001
+        model._req_configure_tools(  # noqa: SLF001
+            cfg,
+            additional_request_fields,  # type: ignore[arg-type]
+            server_tools,
+        )
+        return cfg, additional_request_fields
 
     def test_extract_tool_calls_returns_tool_name_unchanged(self) -> None:
-        """extract_tool_calls returns the tool name as echoed by Bedrock (no remapping)."""
-        self._run_configure_tools([_BASH_TOOL])
+        """``bash`` is promoted to a native Anthropic tool and echoed back under its name.
+
+        With no ``toolResult`` in the history this is the Turn 1 path: the ``toolSpec`` stub
+        is dropped, the tool reappears as ``{"name": "bash", "type": "bash_20250124"}`` in
+        ``additionalModelRequestFields`` together with the computer-use beta flag, and the
+        response side turns the Bedrock ``toolUse`` back into an OpenAI tool call unchanged.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/bash-tool
+             stdapi/models/chat/_anthropic_claude.py:_req_extract_server_tools
+        """
+        cfg, additional_request_fields = self._run_configure_tools([_BASH_TOOL])
+        assert additional_request_fields["tools"] == [
+            {"name": "bash", "type": "bash_20250124"}
+        ]
+        assert additional_request_fields["anthropic_beta"] == [
+            "computer-use-2025-01-24"
+        ]
+        assert not cfg, "an emptied toolConfig must not be sent to Bedrock"
+
         contents = [{"toolUse": {"toolUseId": "id1", "name": "bash", "input": {}}}]
-        tool_calls, _ = extract_tool_calls(contents, legacy_function=False)  # type: ignore[arg-type]
+        tool_calls, function_call = extract_tool_calls(contents, legacy_function=False)  # type: ignore[arg-type]
+        assert function_call is None
         assert tool_calls is not None
         assert tool_calls[0].function.name == "bash"  # type: ignore[union-attr]
+        assert tool_calls[0].id == "id1"
+        assert tool_calls[0].function.arguments == "{}"  # type: ignore[union-attr]
 
     def test_extract_tool_calls_non_server_tool_name_unchanged(self) -> None:
-        """Regular function tools are not remapped."""
+        """A user-defined tool name is returned as-is with its id and JSON arguments.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat.md
+        """
         contents = [
-            {"toolUse": {"toolUseId": "id1", "name": "my_function", "input": {}}}
+            {
+                "toolUse": {
+                    "toolUseId": "id1",
+                    "name": "my_function",
+                    "input": {"city": "Paris"},
+                }
+            }
         ]
-        tool_calls, _ = extract_tool_calls(contents, legacy_function=False)  # type: ignore[arg-type]
+        tool_calls, function_call = extract_tool_calls(contents, legacy_function=False)  # type: ignore[arg-type]
+        assert function_call is None
         assert tool_calls is not None
-        assert tool_calls[0].function.name == "my_function"  # type: ignore[union-attr]
+        assert len(tool_calls) == 1
+        assert tool_calls[0].type == "function"
+        assert tool_calls[0].function.name == "my_function"
+        assert tool_calls[0].id == "id1"
+        assert json.loads(tool_calls[0].function.arguments) == {"city": "Paris"}
 
     def test_all_server_tools_pass_through_name(self) -> None:
-        """All server tools (bash, str_replace_based_edit_tool, computer, memory) pass through unchanged."""
+        """Four Anthropic tools at once keep their names and gain their versioned types.
+
+        The Claude 3.7-4.5 generation pins ``computer`` to ``computer_20250124`` and the text
+        editor to ``text_editor_20250728``, and the ``computer`` display options declared
+        inside ``function.parameters`` are carried over as Anthropic tool params.  Beta flags
+        are collected per tool and de-duplicated, so four tools yield exactly two flags.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool
+             stdapi/models/chat/anthropic_claude_37_to_45.py:ChatModel
+        """
         tools = [
             _BASH_TOOL,
             _TEXT_EDITOR_TOOL,
@@ -1850,7 +2345,26 @@ class TestServerToolNamePassthrough:
                 },
             },
         ]
-        self._run_configure_tools(tools)  # type: ignore[arg-type]
+        cfg, additional_request_fields = self._run_configure_tools(tools)  # type: ignore[arg-type]
+        assert additional_request_fields["tools"] == [
+            {"name": "bash", "type": "bash_20250124"},
+            {"name": "str_replace_based_edit_tool", "type": "text_editor_20250728"},
+            {"name": "memory", "type": "memory_20250818"},
+            {
+                "name": "computer",
+                "type": "computer_20250124",
+                "display_width_px": 1024,
+                "display_height_px": 768,
+            },
+        ]
+        beta_flags = additional_request_fields["anthropic_beta"]
+        assert isinstance(beta_flags, list)
+        assert set(beta_flags) == {
+            "computer-use-2025-01-24",
+            "context-management-2025-06-27",
+        }
+        assert not cfg
+
         contents = [
             {"toolUse": {"toolUseId": "id1", "name": "bash", "input": {}}},
             {
@@ -1867,3 +2381,4 @@ class TestServerToolNamePassthrough:
         assert tool_calls is not None
         names = [tc.function.name for tc in tool_calls]  # type: ignore[union-attr]
         assert names == ["bash", "str_replace_based_edit_tool", "memory", "computer"]
+        assert [tc.id for tc in tool_calls] == ["id1", "id2", "id3", "id4"]

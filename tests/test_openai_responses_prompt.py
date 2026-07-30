@@ -1,10 +1,18 @@
 """Unit tests for the Responses ``prompt`` parameter (Bedrock Prompt Management).
 
-Covers the prompt ARN matcher, the ``prompt.variables`` -> Converse
-``promptVariables`` mapping, the request-level parameter rejections, the
-``GetPrompt`` model resolution and its TTL cache, and the region/``modelId``
-pinning of the resulting Converse call.  Entirely offline: the ``bedrock-agent``
-client and the model catalog are stubbed.
+This ``prompt`` parameter is not OpenAI's reusable prompt object: it resolves to
+an Amazon Bedrock Prompt Management ARN (optionally ``:version``) and its
+``variables`` become Converse ``promptVariables``.  Bedrock renders the
+messages, system prompt, tools and inference config from the stored prompt
+version, so the request must not supply request-level equivalents, and the
+prompt ARN replaces the ``modelId`` of a region-pinned Converse call.
+Entirely offline: the ``bedrock-agent`` client and the model catalog are stubbed.
+
+Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-management.html
+     https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html
+     https://developers.openai.com/api/reference/resources/responses/methods/create
+     stdapi/types/openai_responses.py:ResponsePrompt
+     stdapi/models/__init__.py:resolve_bedrock_prompt
 """
 
 from typing import TYPE_CHECKING, Any
@@ -123,7 +131,10 @@ def prompt_enabled(
 
 
 class TestPromptArnMatcher:
-    """The prompt ARN matcher must accept only Prompt Management ARNs."""
+    """The prompt ARN matcher accepts only Prompt Management ARNs.
+
+    Ref: stdapi/utils.py:match_bedrock_prompt_arn
+    """
 
     @pytest.mark.parametrize(
         ("arn", "version"),
@@ -138,11 +149,19 @@ class TestPromptArnMatcher:
         ],
     )
     def test_accepts_prompt_arn(self, arn: str, version: str | None) -> None:
-        """A prompt ARN matches, with its optional version captured."""
+        """A prompt ARN matches, splitting off its region and optional version.
+
+        The ``base`` group is what the resolver sends to ``GetPrompt``, so the
+        version suffix must not be part of it; non-``aws`` partitions such as
+        ``aws-us-gov`` are accepted too.
+        """
         result = match_bedrock_prompt_arn(arn)
         assert result is not None
         assert result.group("version") == version
-        assert result.group("region") in {"us-east-1", "us-gov-west-1"}
+        assert result.group("region") == arn.split(":")[3]
+        assert result.group("base") == (
+            arn.removesuffix(f":{version}") if version else arn
+        )
 
     @pytest.mark.parametrize(
         "arn",
@@ -156,12 +175,20 @@ class TestPromptArnMatcher:
         ],
     )
     def test_rejects_other_ids(self, arn: str) -> None:
-        """Non-prompt identifiers, and trailing data, do not match."""
+        """Non-prompt identifiers, and trailing data, do not match.
+
+        The matcher is end-anchored, so a trailing space or a non-numeric
+        version suffix must not be absorbed into the prompt ID; prompt routers
+        and inference profiles are distinct resource types.
+        """
         assert match_bedrock_prompt_arn(arn) is None
 
 
 class TestPromptVariables:
-    """``prompt.variables`` map onto Bedrock ``promptVariables`` text blocks."""
+    """``prompt.variables`` map onto Bedrock ``promptVariables`` text blocks.
+
+    Ref: stdapi/models/chat/_adapters/_openai_responses.py:map_prompt_variables
+    """
 
     def test_maps_string_values(self) -> None:
         """String values are wrapped in a ``text`` block."""
@@ -177,21 +204,28 @@ class TestPromptVariables:
     def test_rejects_content_part_values(self) -> None:
         """Bedrock prompt variables only carry text, so content parts are rejected."""
         variables = {"doc": {"type": "input_text", "text": "hello"}}
-        with pytest.raises(ApiError, match="must be a string"):
+        with pytest.raises(ApiError, match="must be a string") as excinfo:
             map_prompt_variables(variables)  # type: ignore[arg-type]
+        assert excinfo.value.status == 400
+        assert "'doc'" in str(excinfo.value), "the offending variable is named"
 
 
 class TestPromptRequestValidation:
-    """A ``prompt`` request cannot carry what the prompt template provides."""
+    """A ``prompt`` request cannot carry what the prompt template provides.
+
+    Ref: stdapi/types/openai_responses.py:ResponseCreateParams
+    """
 
     def test_prompt_alone_is_accepted(self) -> None:
-        """``prompt`` is no longer rejected outright."""
+        """A ``prompt`` reference with variables is accepted on its own."""
         request = ResponseCreateParams(
             model=_PROMPT_MODEL,
             prompt=ResponsePrompt(id=_PROMPT_ARN, variables={"a": "b"}),
         )
         assert request.prompt is not None
         assert request.prompt.id == _PROMPT_ARN
+        assert request.prompt.variables == {"a": "b"}
+        assert request.input is None, "the template supplies the conversation"
 
     @pytest.mark.parametrize(
         ("field", "value"),
@@ -207,13 +241,20 @@ class TestPromptRequestValidation:
         ],
     )
     def test_rejects_incompatible_parameters(self, field: str, value: Any) -> None:  # noqa: ANN401
-        """Request-level equivalents of the prompt's own content are rejected."""
-        with pytest.raises(ApiError, match="cannot be used with 'prompt'"):
+        """Request-level equivalents of the prompt's own content are rejected.
+
+        Bedrock renders these from the stored prompt version, so accepting and
+        dropping them would silently ignore what the caller asked for; the
+        error names the offending field.
+        """
+        with pytest.raises(ApiError, match="cannot be used with 'prompt'") as excinfo:
             ResponseCreateParams(
                 model=_PROMPT_MODEL,
                 prompt=ResponsePrompt(id=_PROMPT_ARN),
                 **{field: value},
             )
+        assert excinfo.value.status == 400
+        assert f"'{field}'" in str(excinfo.value)
 
     def test_allows_orthogonal_parameters(self) -> None:
         """Runtime-level parameters unrelated to the template stay allowed."""
@@ -225,68 +266,127 @@ class TestPromptRequestValidation:
             metadata={"k": "v"},
         )
         assert request.stream is True
+        assert request.store is True
+        assert request.metadata == {"k": "v"}
 
 
 class TestResolveBedrockPrompt:
-    """``resolve_bedrock_prompt`` gates, validates and resolves the prompt."""
+    """``resolve_bedrock_prompt`` gates, validates and resolves the prompt.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-management.html
+         stdapi/models/__init__.py:_get_prompt_model_id
+    """
 
     async def test_disabled_by_configuration(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The feature gate returns a clear 400 instead of an opaque rejection."""
+        """The feature gate rejects prompt ARNs with a 400 before any AWS call."""
         monkeypatch.setattr(SETTINGS, "aws_bedrock_allow_prompt_arn", False)
-        with pytest.raises(ApiError, match="not allowed by server configuration"):
+        with pytest.raises(
+            ApiError, match="not allowed by server configuration"
+        ) as excinfo:
             await resolve_bedrock_prompt(_PROMPT_ARN, None)
+        assert excinfo.value.status == 400
 
-    @pytest.mark.usefixtures("prompt_enabled")
-    async def test_rejects_hosted_prompt_id(self) -> None:
-        """An OpenAI-hosted prompt template ID cannot exist on this gateway."""
-        with pytest.raises(ApiError, match="not an Amazon Bedrock Prompt Management"):
+    async def test_rejects_hosted_prompt_id(
+        self, prompt_enabled: _StubBedrockAgentClient
+    ) -> None:
+        """An OpenAI-hosted prompt template ID cannot exist on this gateway.
+
+        ``prompt.id`` is an Amazon Bedrock ARN here, so upstream's ``pmpt_``
+        identifiers are unresolvable and are rejected before ``GetPrompt``.
+        """
+        with pytest.raises(
+            ApiError, match="not an Amazon Bedrock Prompt Management"
+        ) as excinfo:
             await resolve_bedrock_prompt("pmpt_abc123", None)
+        assert excinfo.value.status == 400
+        assert "pmpt_abc123" in str(excinfo.value)
+        assert prompt_enabled.calls == []
 
-    @pytest.mark.usefixtures("prompt_enabled")
-    async def test_rejects_unconfigured_region(self) -> None:
-        """An ARN region that is not configured must not reach get_client()."""
+    async def test_rejects_unconfigured_region(
+        self, prompt_enabled: _StubBedrockAgentClient
+    ) -> None:
+        """An ARN region that is not configured must not reach ``GetPrompt``.
+
+        The region is parsed from client-supplied data and used as a client
+        lookup key, so an unconfigured region is rejected instead of raising an
+        unhandled ``KeyError``.
+
+        Ref: stdapi/models/__init__.py:_validate_bedrock_region
+        """
         arn = "arn:aws:bedrock:ap-south-1:123456789012:prompt/ABCDE12345"
-        with pytest.raises(ApiError, match="not a configured Bedrock region"):
+        with pytest.raises(
+            ApiError, match="not a configured Bedrock region"
+        ) as excinfo:
             await resolve_bedrock_prompt(arn, None)
+        assert excinfo.value.status == 400
+        assert "ap-south-1" in str(excinfo.value)
+        assert prompt_enabled.calls == []
 
-    @pytest.mark.usefixtures("prompt_enabled")
     @pytest.mark.parametrize("version", ["DRAFT", "", "١٢", "123456"])
-    async def test_rejects_non_numeric_version(self, version: str) -> None:
-        """Only the ASCII digits Bedrock accepts as an ARN version suffix are allowed."""
-        with pytest.raises(ApiError, match="Invalid prompt version"):
-            await resolve_bedrock_prompt(_PROMPT_ARN, version)
+    async def test_rejects_non_numeric_version(
+        self, prompt_enabled: _StubBedrockAgentClient, version: str
+    ) -> None:
+        """Only the ASCII digits Bedrock accepts as an ARN version suffix are allowed.
 
-    @pytest.mark.usefixtures("prompt_enabled")
-    async def test_rejects_version_conflict(self) -> None:
+        ``١٢`` is an Arabic-Indic pair that ``str.isdigit()`` accepts, so the
+        check is ASCII-restricted; ``123456`` exceeds the five-digit suffix
+        Bedrock allows.
+        """
+        with pytest.raises(ApiError, match="Invalid prompt version") as excinfo:
+            await resolve_bedrock_prompt(_PROMPT_ARN, version)
+        assert excinfo.value.status == 400
+        assert prompt_enabled.calls == []
+
+    async def test_rejects_version_conflict(
+        self, prompt_enabled: _StubBedrockAgentClient
+    ) -> None:
         """A version suffix disagreeing with ``prompt.version`` is ambiguous."""
-        with pytest.raises(ApiError, match="conflicts with the version"):
+        with pytest.raises(ApiError, match="conflicts with the version") as excinfo:
             await resolve_bedrock_prompt(f"{_PROMPT_ARN}:2", "3")
+        assert excinfo.value.status == 400
+        assert "'3'" in str(excinfo.value)
+        assert "'2'" in str(excinfo.value)
+        assert prompt_enabled.calls == []
 
     async def test_rejects_chat_prompt(
         self, prompt_enabled: _StubBedrockAgentClient
     ) -> None:
-        """Only TEXT prompts are supported by this implementation."""
+        """Only TEXT prompts are supported by this implementation.
+
+        A CHAT template carries its own message list, which the ``prompt``
+        request has no way to complete.
+        """
         prompt_enabled.prompt["variants"][0]["templateType"] = "CHAT"
-        with pytest.raises(ApiError, match="is not a TEXT prompt"):
+        with pytest.raises(ApiError, match="is not a TEXT prompt") as excinfo:
             await resolve_bedrock_prompt(_PROMPT_ARN, None)
+        assert excinfo.value.status == 400
+        assert _PROMPT_ARN in str(excinfo.value)
 
     async def test_rejects_prompt_without_model(
         self, prompt_enabled: _StubBedrockAgentClient
     ) -> None:
         """A prompt with no bound model has no dispatch/billing model."""
         prompt_enabled.prompt = _text_prompt(None)
-        with pytest.raises(ApiError, match="is not bound to a model"):
+        with pytest.raises(ApiError, match="is not bound to a model") as excinfo:
             await resolve_bedrock_prompt(_PROMPT_ARN, None)
+        assert excinfo.value.status == 400
+        assert _PROMPT_ARN in str(excinfo.value)
 
     async def test_rejects_unservable_model(
         self, prompt_enabled: _StubBedrockAgentClient
     ) -> None:
-        """A prompt model missing from the catalog cannot be served."""
+        """A prompt model missing from the catalog cannot be served.
+
+        The variant's ``modelId`` is validated against the catalog, so the
+        rejection carries the model read from the prompt, not the request's.
+        """
         prompt_enabled.prompt = _text_prompt("vendor.unknown-v1")
-        with pytest.raises(ApiError, match="unknown model"):
+        with pytest.raises(ApiError, match="unknown model") as excinfo:
             await resolve_bedrock_prompt(_PROMPT_ARN, None)
+        assert "vendor.unknown-v1" in str(excinfo.value)
+        assert prompt_enabled.calls == [{"promptIdentifier": _PROMPT_ARN}]
 
     @pytest.mark.parametrize(
         "model_id",
@@ -302,7 +402,12 @@ class TestResolveBedrockPrompt:
         monkeypatch: pytest.MonkeyPatch,
         model_id: str,
     ) -> None:
-        """A prompt may name an inference profile or an ARN instead of the model."""
+        """A prompt may name an inference profile or an ARN instead of the model.
+
+        The catalog is keyed by bare model ID, so a variant bound to a ``us.``
+        cross-Region profile or to a full ARN must be folded back to that key
+        before the model is validated.
+        """
         monkeypatch.setitem(
             models_module._ALL_MODELS,  # noqa: SLF001
             _PROMPT_MODEL,
@@ -311,11 +416,17 @@ class TestResolveBedrockPrompt:
         prompt_enabled.prompt = _text_prompt(model_id)
         resolved = await resolve_bedrock_prompt(_PROMPT_ARN, None)
         assert resolved.model_id == _PROMPT_MODEL
+        assert resolved.arn == _PROMPT_ARN
+        assert resolved.region == "us-east-1"
 
     async def test_resolves_versioned_arn(
         self, prompt_enabled: _StubBedrockAgentClient
     ) -> None:
-        """``prompt.version`` is appended to the ARN and read via GetPrompt."""
+        """``prompt.version`` is appended to the ARN and read via GetPrompt.
+
+        Bedrock accepts the versioned ARN as a ``modelId``, so the version is
+        folded into the ARN rather than kept as a separate field.
+        """
         resolved = await resolve_bedrock_prompt(_PROMPT_ARN, "2")
         assert resolved == BedrockPrompt(
             arn=f"{_PROMPT_ARN}:2", region="us-east-1", model_id=_PROMPT_MODEL
@@ -330,9 +441,10 @@ class TestResolveBedrockPrompt:
         """A version already in the ARN is used when ``prompt.version`` is unset."""
         resolved = await resolve_bedrock_prompt(f"{_PROMPT_ARN}:7", None)
         assert resolved.arn == f"{_PROMPT_ARN}:7"
+        assert resolved.model_id == _PROMPT_MODEL
         assert prompt_enabled.calls == [
             {"promptIdentifier": _PROMPT_ARN, "promptVersion": "7"}
-        ]
+        ], "GetPrompt takes the bare ARN plus an explicit promptVersion"
 
     async def test_draft_prompt_without_version(
         self, prompt_enabled: _StubBedrockAgentClient
@@ -340,20 +452,33 @@ class TestResolveBedrockPrompt:
         """Without a version, the working draft is read and the ARN kept bare."""
         resolved = await resolve_bedrock_prompt(_PROMPT_ARN, None)
         assert resolved.arn == _PROMPT_ARN
-        assert prompt_enabled.calls == [{"promptIdentifier": _PROMPT_ARN}]
+        assert resolved.model_id == _PROMPT_MODEL
+        assert prompt_enabled.calls == [{"promptIdentifier": _PROMPT_ARN}], (
+            "no promptVersion is sent, so GetPrompt returns the draft"
+        )
 
     async def test_get_prompt_is_cached(
         self, prompt_enabled: _StubBedrockAgentClient
     ) -> None:
-        """Repeated resolutions of the same version hit the TTL cache."""
-        await resolve_bedrock_prompt(_PROMPT_ARN, "1")
-        await resolve_bedrock_prompt(_PROMPT_ARN, "1")
+        """Repeated resolutions of the same version hit the TTL cache.
+
+        The cache is keyed per ARN *and* version, so a second version still
+        calls ``GetPrompt``.
+        """
+        first = await resolve_bedrock_prompt(_PROMPT_ARN, "1")
+        cached = await resolve_bedrock_prompt(_PROMPT_ARN, "1")
         await resolve_bedrock_prompt(_PROMPT_ARN, "2")
         assert [call["promptVersion"] for call in prompt_enabled.calls] == ["1", "2"]
+        assert cached == first
 
 
 class TestPromptConverseRequest:
-    """The Converse call of a prompt request is pinned to the prompt resource."""
+    """The Converse call of a prompt request is pinned to the prompt resource.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+         https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html
+         stdapi/models/__init__.py:_prepare_converse_request_for_region
+    """
 
     @pytest.fixture
     def prompt_context(self) -> Iterator[BedrockPrompt]:
@@ -370,7 +495,12 @@ class TestPromptConverseRequest:
     async def test_body_carries_only_prompt_variables(
         self, monkeypatch: pytest.MonkeyPatch, prompt_context: BedrockPrompt
     ) -> None:
-        """The whole request body is the prompt variables (plus the modelId)."""
+        """The whole request body is the prompt variables (plus the modelId).
+
+        Bedrock materializes ``messages``, ``system`` and ``inferenceConfig``
+        from the stored prompt, so sending any of them would be rejected
+        upstream.
+        """
         captured: dict[str, Any] = {}
 
         async def fake_converse(
@@ -395,7 +525,11 @@ class TestPromptConverseRequest:
     async def test_no_variables_omits_the_field(
         self, monkeypatch: pytest.MonkeyPatch, prompt_context: BedrockPrompt
     ) -> None:
-        """A prompt without variables sends no ``promptVariables`` at all."""
+        """A prompt without variables sends no ``promptVariables`` at all.
+
+        Bedrock rejects an empty ``promptVariables`` map, so the field is
+        omitted rather than sent as ``{}``.
+        """
         captured: dict[str, Any] = {}
 
         async def fake_converse(
@@ -418,7 +552,11 @@ class TestPromptConverseRequest:
     async def test_streaming_uses_converse_stream(
         self, monkeypatch: pytest.MonkeyPatch, prompt_context: BedrockPrompt
     ) -> None:
-        """A streaming prompt request opens ConverseStream with the same body."""
+        """A streaming prompt request opens ConverseStream with the same body.
+
+        ``stream`` is one of the parameters a prompt request may still set, so
+        the SSE path must carry the prompt variables just like Converse does.
+        """
         captured: dict[str, Any] = {}
 
         async def fake_converse_stream(
@@ -435,12 +573,23 @@ class TestPromptConverseRequest:
         )
         result = await ChatModel(_PROMPT_MODEL).create_response(request, "resp-1", 0.0)
         assert isinstance(result, EventSourceResponse)
+        assert set(captured) == {"modelId", "promptVariables"}
         assert captured["promptVariables"] == {"genre": {"text": "pop"}}
 
     async def test_candidate_regions_pinned_to_prompt(
-        self, prompt_context: BedrockPrompt
+        self, monkeypatch: pytest.MonkeyPatch, prompt_context: BedrockPrompt
     ) -> None:
-        """A region-bound prompt ARN disables cross-region failover."""
+        """A region-bound prompt ARN disables cross-region failover.
+
+        The prompt ARN embeds its own region, so retrying the call in one of the
+        model's other candidate regions could only fail; the candidate list
+        collapses to the prompt's region even when the model has more.
+        """
+
+        async def _model_regions(_model_id: str, **_kwargs: Any) -> list[str]:  # noqa: ANN401
+            return ["us-west-2", "eu-west-1"]
+
+        monkeypatch.setattr(models_module, "compute_candidate_regions", _model_regions)
         model = ChatModel(_PROMPT_MODEL)
         assert await model._converse_candidate_regions() == [  # noqa: SLF001
             prompt_context.region
@@ -449,9 +598,14 @@ class TestPromptConverseRequest:
     async def test_model_id_is_the_prompt_arn(
         self, prompt_context: BedrockPrompt
     ) -> None:
-        """The prompt ARN replaces the resolved model/profile ID."""
+        """The prompt ARN replaces the resolved model/profile ID.
+
+        Bedrock keys inference on the ``modelId``, so the versioned prompt ARN
+        goes there instead of the catalog model or its inference profile.
+        """
         request: ConverseRequestBaseTypeDef = {"modelId": ""}
         await ChatModel(_PROMPT_MODEL)._prepare_converse_request_for_region(  # noqa: SLF001
             request, "us-east-1"
         )
         assert request["modelId"] == prompt_context.arn
+        assert request["modelId"].endswith(":1"), "the resolved version is kept"

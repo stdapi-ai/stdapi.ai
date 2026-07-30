@@ -1,28 +1,19 @@
-"""Multi-model parametrized tests for the OpenAI /v1/chat/completions route.
+"""OpenAI /v1/chat/completions exercised across one model per Bedrock provider family.
 
-Covers representative "real-world" usage across one model per provider family
-available on AWS Bedrock, including:
+The gateway funnels every family through the same Converse adapter, so these tests are
+the cross-model regression net for the shared envelope: response/chunk shape, the
+Bedrock ``stopReason`` → ``finish_reason`` map, usage accounting, tool-call plumbing and
+image input.  A Claude model heads every parametrize list as the reference baseline, and
+the narrower lists reflect Bedrock capabilities (Mistral 7B and Llama 3.3 70B reject
+streaming with tools, Llama 3.3 70B emits raw JSON instead of ``toolUse`` blocks).
 
-  - Basic chat completion and usage tokens
-  - Streaming SSE chunk sequence
-  - Multi-turn context retention
-  - Single-turn tool calling
-  - Tool result continuation (two-turn tool use cycle)
-  - Full agentic loop with real local tool execution (multi-turn, multi-tool)
-  - Structured JSON output
+Model-specific behaviour lives in the per-family modules; only vendor-neutral behaviour
+is asserted here, because live model text is not reproducible.
 
-All tests require actual Bedrock access and are therefore marked
-``@pytest.mark.expensive``.  Run with::
-
-    pytest --expensive tests/test_openai_chat_completions_multi_model.py
-
-A ``Claude`` model is included in every parametrized list as the reference
-baseline.  Feature-gated tests (streaming+tools) carry narrower parametrize
-lists reflecting known Bedrock capabilities.
-
-If a model does not support a specific feature (e.g. Mistral or Llama3 cannot
-use tools in streaming mode), the test calls ``pytest.skip()`` so the result
-is recorded as *skipped* — not as a failure — in the report.
+Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+     https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+     stdapi/routes/openai_chat_completions.py:create_chat_completion
+     stdapi/models/chat/_adapters/_openai_chat_completion.py:format_response
 """
 
 import base64
@@ -199,6 +190,12 @@ _TOOLS: list[dict[str, object]] = [
 
 _PROJECT_ROOT = "/var/opt/projects/stdapi.ai"
 
+#: finish_reason values the OpenAI Chat Completions reference defines.
+_FINISH_REASONS = frozenset({"stop", "length", "content_filter", "tool_calls"})
+
+#: Tool names declared in ``_TOOLS``.
+_TOOL_NAMES = frozenset({"list_directory", "read_file"})
+
 
 def _run_tool(name: str, arguments_json: str) -> str:
     """Execute a local read-only tool and return the string result.
@@ -246,21 +243,26 @@ def _message_text(completion: ChatCompletion) -> str:
 
 
 class TestMultiModelChatCompletions:
-    """Basic and streaming functionality across all supported model families."""
+    """Basic and streaming functionality across all supported model families.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat.md
+         stdapi/models/chat/_default.py:ChatModel.create_completion
+    """
 
     @pytest.mark.expensive
     @_BASIC_MODELS
     def test_basic_chat_completion(
         self, model: str, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Non-streaming chat completion has assistant message and usage.
+        """Every family answers with the same ``chat.completion`` envelope.
 
-        Validates:
-            - Response has at least one choice
-            - First choice has ``role == "assistant"``
-            - ``finish_reason`` is set
-            - ``usage.prompt_tokens > 0`` and ``usage.completion_tokens > 0``
-            - Content is non-empty text
+        The id prefix, the ``chat.completion`` literal and ``total_tokens`` as the sum of
+        the two counters are produced by the gateway, not the model, so they must hold
+        identically for all families.  The prompt is pinned to one word so the text can
+        be checked without depending on style.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat.md
+             stdapi/models/chat/_adapters/_openai_chat_completion.py:format_response
         """
         if use_official_api:
             pytest.skip("Multi-model tests only run against the local server")
@@ -272,28 +274,44 @@ class TestMultiModelChatCompletions:
             ],
         )
 
+        assert completion.object == "chat.completion"
+        assert completion.id.startswith("chatcmpl-")
+        assert completion.created > 0
         assert len(completion.choices) >= 1
         choice = completion.choices[0]
+        assert choice.index == 0
         assert choice.message.role == "assistant"
-        assert choice.finish_reason is not None
+        assert choice.finish_reason in _FINISH_REASONS, (
+            f"Unexpected finish_reason for {model!r}: {choice.finish_reason!r}"
+        )
         assert completion.usage is not None
         assert completion.usage.prompt_tokens > 0
         assert completion.usage.completion_tokens > 0
+        assert (
+            completion.usage.total_tokens
+            == completion.usage.prompt_tokens + completion.usage.completion_tokens
+        )
 
         content = choice.message.content or ""
         assert content, f"Expected non-empty content for {model!r}"
+        assert "hello" in content.lower(), (
+            f"Expected the pinned word for {model!r}, got: {content[:200]!r}"
+        )
 
     @pytest.mark.expensive
     @_BASIC_MODELS
     def test_streaming_chat_completion(
         self, model: str, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Streaming response delivers content delta chunks and a final chunk.
+        """Streaming delivers a role chunk, text deltas and exactly one stop chunk.
 
-        Validates:
-            - At least one chunk with delta content
-            - Last chunk has ``finish_reason`` set
-            - Accumulated content is non-empty
+        Chat Completions has a single SSE event type, ``chat.completion.chunk``.  The
+        gateway prepends a synthetic ``delta={"role": "assistant"}`` chunk, emits one
+        finish-reason chunk, and — without ``stream_options.include_usage`` — never
+        attaches usage.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events
+             stdapi/models/chat/_adapters/_openai_chat_completion.py:format_stream
         """
         if use_official_api:
             pytest.skip("Multi-model tests only run against the local server")
@@ -301,6 +319,7 @@ class TestMultiModelChatCompletions:
         accumulated = ""
         finish_reasons: list[str | None] = []
         delta_count = 0
+        first_delta_role: str | None = None
 
         stream = openai_client.chat.completions.create(
             model=model,
@@ -308,7 +327,13 @@ class TestMultiModelChatCompletions:
             messages=[{"role": "user", "content": "Count from 1 to 5."}],
             stream=True,
         )
-        for chunk in stream:
+        for index, chunk in enumerate(stream):
+            assert chunk.object == "chat.completion.chunk"
+            assert chunk.usage is None, (
+                "usage must only be streamed when stream_options.include_usage is set"
+            )
+            if index == 0 and chunk.choices:
+                first_delta_role = chunk.choices[0].delta.role
             if chunk.choices:
                 choice = chunk.choices[0]
                 if choice.delta.content:
@@ -317,19 +342,29 @@ class TestMultiModelChatCompletions:
                 if choice.finish_reason:
                     finish_reasons.append(choice.finish_reason)
 
+        assert first_delta_role == "assistant", (
+            f"Stream for {model!r} must open with the synthetic role-only chunk"
+        )
         assert delta_count > 0, f"No content deltas received for {model!r}"
         assert accumulated, f"No accumulated content for {model!r}"
-        assert finish_reasons, f"No finish_reason received for {model!r}"
+        assert len(finish_reasons) == 1, (
+            f"Expected exactly one finish chunk for {model!r}, got: {finish_reasons}"
+        )
+        assert finish_reasons[0] in _FINISH_REASONS
 
     @pytest.mark.expensive
     @_BASIC_MODELS
     def test_multi_turn_context_retention(
         self, model: str, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Model correctly uses conversation history in multi-turn dialogue.
+        """Prior turns reach the model, so a first-turn identifier can be recalled.
 
-        Validates:
-            - Third turn response references information shared in the first turn
+        ``map_messages`` translates the alternating user/assistant history into Bedrock
+        ``messages``, merging adjacent same-role turns; a dropped or reordered history
+        would leave the model unable to echo ``ZEBRA99``.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+             stdapi/models/chat/_adapters/_openai_chat_completion.py:map_messages
         """
         if use_official_api:
             pytest.skip("Multi-model tests only run against the local server")
@@ -353,6 +388,9 @@ class TestMultiModelChatCompletions:
             ],
         )
 
+        assert completion.choices[0].finish_reason in _FINISH_REASONS
+        assert completion.usage is not None
+        assert completion.usage.prompt_tokens > 0
         text = _message_text(completion)
         assert text, "Expected non-empty response"
         assert "ZEBRA99" in text, (
@@ -366,19 +404,26 @@ class TestMultiModelChatCompletions:
 
 
 class TestMultiModelToolUse:
-    """Tool-calling functionality across tool-capable model families."""
+    """Tool-calling functionality across tool-capable model families.
+
+    Ref: https://developers.openai.com/api/docs/guides/function-calling
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
+         stdapi/models/chat/_adapters/_openai_chat_completion.py:build_tool_config
+    """
 
     @pytest.mark.expensive
     @_TOOL_MODELS
     def test_tool_call_single_turn(
         self, model: str, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Model invokes a tool when asked to perform a task requiring it.
+        """A ``toolUse`` answer becomes a ``tool_calls`` message with JSON arguments.
 
-        Validates:
-            - ``finish_reason == "tool_calls"``
-            - At least one tool call in ``message.tool_calls``
-            - Tool name matches a defined tool
+        Bedrock's ``tool_use`` stop reason maps to ``finish_reason="tool_calls"``, the
+        Bedrock ``toolUseId`` becomes the OpenAI call id, and the structured ``input`` is
+        re-serialized to the ``arguments`` JSON string the OpenAI contract requires.
+
+        Ref: https://developers.openai.com/api/docs/guides/function-calling
+             stdapi/models/chat/_adapters/_openai_chat_completion.py:extract_tool_calls
         """
         if use_official_api:
             pytest.skip("Multi-model tests only run against the local server")
@@ -400,24 +445,30 @@ class TestMultiModelToolUse:
         )
         assert choice.message.tool_calls, "Expected at least one tool call"
 
-        tool_names = {
-            t["function"]["name"]  # type: ignore[index]
-            for t in _TOOLS
-        }
-        called_name = choice.message.tool_calls[0].function.name  # type: ignore[union-attr]
-        assert called_name in tool_names, f"Unexpected tool name: {called_name!r}"
+        call = choice.message.tool_calls[0]
+        assert call.type == "function"
+        assert call.id, "Expected a tool call id derived from the Bedrock toolUseId"
+        called_name = call.function.name
+        assert called_name in _TOOL_NAMES, f"Unexpected tool name: {called_name!r}"
+        arguments = json.loads(call.function.arguments)
+        assert isinstance(arguments, dict), (
+            f"Expected a JSON object in arguments, got: {call.function.arguments!r}"
+        )
 
     @pytest.mark.expensive
     @_TOOL_MODELS
     def test_tool_result_continuation(
         self, model: str, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Two-turn tool-use cycle: model calls tool, receives result, gives answer.
+        """A ``tool`` message closes the tool cycle and the model answers from it.
 
-        Validates:
-            - First turn: ``finish_reason == "tool_calls"``
-            - Second turn (after injecting tool result): ``finish_reason == "stop"``
-            - Second turn response contains non-empty text
+        The second request replays the assistant ``tool_calls`` message and a ``tool``
+        message keyed by ``tool_call_id``; ``_extract_tool_blocks`` turns those into
+        Bedrock ``toolUse``/``toolResult`` blocks, which Converse rejects if the pairing
+        is lost.
+
+        Ref: https://developers.openai.com/api/docs/guides/function-calling
+             stdapi/models/chat/_adapters/_openai_chat_completion.py:_extract_tool_blocks
         """
         if use_official_api:
             pytest.skip("Multi-model tests only run against the local server")
@@ -462,23 +513,38 @@ class TestMultiModelToolUse:
             f"Turn 2: expected finish_reason='stop', got {choice2.finish_reason!r}"
         )
         assert choice2.message.content, "Turn 2: expected non-empty text response"
+        assert choice2.message.tool_calls is None, (
+            f"Turn 2: expected no further tool call, got {choice2.message.tool_calls}"
+        )
+        assert resp2.usage is not None
+        assert resp2.usage.prompt_tokens > 0, (
+            "Turn 2 must bill the replayed tool result"
+        )
 
     @pytest.mark.expensive
     @_STREAMING_TOOL_MODELS
     def test_streaming_tool_call(
         self, model: str, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Streaming response emits tool_call delta chunks.
+        """Streaming tool calls arrive as deltas indexed from zero, then a stop chunk.
 
-        Validates:
-            - At least one chunk with ``delta.tool_calls``
-            - Final chunk has ``finish_reason == "tool_calls"``
+        Bedrock content-block indices are remapped to contiguous OpenAI
+        ``tool_calls[].index`` positions, and the first delta of a call carries its id and
+        name while later deltas carry only argument fragments.  Bedrock refuses streaming
+        with tools on a few models; those raise a 400 mentioning streaming mode and are
+        skipped rather than failed.
+
+        Ref: https://developers.openai.com/api/docs/guides/function-calling
+             stdapi/models/chat/_adapters/_openai_chat_completion.py:_stream_delta_chunk
         """
         if use_official_api:
             pytest.skip("Multi-model tests only run against the local server")
 
         tool_call_chunks = 0
         finish_reasons: list[str | None] = []
+        first_call_index: int | None = None
+        first_call_name: str | None = None
+        first_call_id: str | None = None
 
         try:
             stream = openai_client.chat.completions.create(
@@ -494,6 +560,13 @@ class TestMultiModelToolUse:
                 if chunk.choices:  # type: ignore[union-attr]
                     c = chunk.choices[0]  # type: ignore[union-attr]
                     if c.delta.tool_calls:
+                        if tool_call_chunks == 0:
+                            first = c.delta.tool_calls[0]
+                            first_call_index = first.index
+                            first_call_id = first.id
+                            first_call_name = (
+                                first.function.name if first.function else None
+                            )
                         tool_call_chunks += 1
                     if c.finish_reason:
                         finish_reasons.append(c.finish_reason)
@@ -505,6 +578,13 @@ class TestMultiModelToolUse:
         assert tool_call_chunks > 0, (
             f"Expected tool_call delta chunks for {model!r}, got 0"
         )
+        assert first_call_index == 0, (
+            f"First tool call must be remapped to index 0, got {first_call_index!r}"
+        )
+        assert first_call_id, "First tool_call delta must carry the call id"
+        assert first_call_name in _TOOL_NAMES, (
+            f"First tool_call delta must name a declared tool, got {first_call_name!r}"
+        )
         assert "tool_calls" in finish_reasons, (
             f"Expected finish_reason='tool_calls', got: {finish_reasons}"
         )
@@ -515,14 +595,16 @@ class TestMultiModelToolUse:
     def test_agentic_loop_directory_and_file(
         self, model: str, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Full agentic loop: model lists directory then reads pyproject.toml.
+        """A multi-turn loop with two distinct tools reaches a grounded final answer.
 
-        Simulates a realistic "code assistant" workflow where the model must
-        use two different tools across multiple turns to answer a question.
+        Each iteration replays the whole growing history — assistant ``tool_calls``
+        messages interleaved with ``tool`` results — so this is the cross-model check
+        that repeated tool round-trips stay accepted by Converse.  ``read_file`` must be
+        among the calls: the project name lives in ``pyproject.toml``, and a directory
+        listing alone would let a model guess it.
 
-        Validates:
-            - Model calls at least two tools in the loop
-            - Final answer (``finish_reason == "stop"``) contains the project name
+        Ref: https://developers.openai.com/api/docs/guides/function-calling
+             stdapi/models/chat/_adapters/_openai_chat_completion.py:map_messages
         """
         if use_official_api:
             pytest.skip("Multi-model tests only run against the local server")
@@ -568,6 +650,9 @@ class TestMultiModelToolUse:
         assert len(tools_used) >= 2, (
             f"Expected ≥2 tool calls in agentic loop, got: {tools_used}"
         )
+        assert "read_file" in tools_used, (
+            f"Expected the model to read pyproject.toml, tools used: {tools_used}"
+        )
         assert final_text, "Expected non-empty final answer from model"
         assert "stdapi" in final_text.lower(), (
             f"Expected project name 'stdapi' in final answer, got: {final_text[:300]!r}"
@@ -580,7 +665,11 @@ class TestMultiModelToolUse:
 
 
 class TestStructuredOutput:
-    """Models can reliably produce JSON-structured output when asked."""
+    """Models can reliably produce JSON-structured output when asked.
+
+    Ref: https://developers.openai.com/api/docs/guides/structured-outputs
+         stdapi/models/chat/_adapters/_openai_chat_completion.py:build_output_config
+    """
 
     @pytest.mark.expensive
     @pytest.mark.parametrize(
@@ -595,11 +684,15 @@ class TestStructuredOutput:
     def test_json_output_parseable(
         self, model: str, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Model produces valid JSON when the system prompt requests it.
+        """Prompted JSON output round-trips through the gateway unaltered.
 
-        Validates:
-            - Response text can be parsed as JSON
-            - JSON object contains at least one expected key
+        No ``response_format`` is sent: the JSON contract here is prompt-only, which is
+        the fallback for families whose Bedrock profile has no ``outputConfig`` support.
+        The point of the test is that the adapter returns the model text verbatim —
+        Markdown fences are the models' own, so they are stripped before parsing.
+
+        Ref: https://developers.openai.com/api/docs/guides/structured-outputs
+             stdapi/models/chat/_adapters/_openai_chat_completion.py:extract_output_text
         """
         if use_official_api:
             pytest.skip("Multi-model tests only run against the local server")
@@ -634,9 +727,13 @@ class TestStructuredOutput:
                 f"Response is not valid JSON for {model!r}: {exc}\nRaw: {raw!r}"
             )
 
+        assert completion.choices[0].finish_reason in _FINISH_REASONS
         assert isinstance(data, dict), f"Expected JSON object, got {type(data)}"
         assert "language" in data or "version" in data, (
             f"Expected 'language' or 'version' key in JSON, got: {data}"
+        )
+        assert str(data.get("language", "Python")).lower() == "python", (
+            f"Expected the pinned 'language' value for {model!r}, got: {data}"
         )
 
 
@@ -680,20 +777,27 @@ _VISION_MODELS = pytest.mark.parametrize(
 
 
 class TestVision:
-    """Vision-capable models correctly identify the color of a simple image."""
+    """Vision-capable models correctly identify the color of a simple image.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat.md
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ContentBlock.html
+    """
 
     @pytest.mark.expensive
     @_VISION_MODELS
     def test_image_color_recognition(
         self, model: str, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Vision model identifies the color of a 1x1 red PNG via image_url.
+        """A base64 ``image_url`` data URI reaches vision models as a Bedrock image block.
 
-        Uses a locally generated minimal PNG encoded as a data URI.
+        ``_convert_content_part`` decodes the data URI and emits a Converse ``image``
+        block with the format taken from the MIME type; the picture is a locally built
+        1x1 red PNG so the expected answer needs no fixture.  "orange" is accepted
+        because models disagree on naming a single saturated pixel.
 
-        Validates:
-            - Response contains non-empty text
-            - Response correctly identifies "red" as the image color
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ContentBlock.html
+             https://docs.aws.amazon.com/nova/latest/userguide/modalities-image.html
+             stdapi/models/chat/_adapters/_openai_chat_completion.py:_convert_content_part
         """
         if use_official_api:
             pytest.skip("Multi-model tests only run against the local server")
@@ -720,6 +824,11 @@ class TestVision:
             ],
         )
 
+        assert completion.choices[0].finish_reason in _FINISH_REASONS
+        assert completion.usage is not None
+        assert completion.usage.prompt_tokens > 0, (
+            "image input must be billed as prompt tokens"
+        )
         text = _message_text(completion)
         assert text, f"Expected non-empty response from {model!r}"
         assert any(color in text.lower() for color in ("red", "orange")), (

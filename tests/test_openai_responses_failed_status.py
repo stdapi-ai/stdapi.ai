@@ -1,4 +1,8 @@
-"""Tests for the synchronous-failure HTTP contract of POST /v1/responses (unit)."""
+"""Tests for the synchronous-failure HTTP contract of POST /v1/responses (unit).
+
+Ref: https://developers.openai.com/api/reference/resources/responses/methods/retrieve
+     stdapi/routes/openai_responses.py:_failed_response_error
+"""
 
 from __future__ import annotations
 
@@ -81,20 +85,45 @@ def failed_chat_backend(monkeypatch: pytest.MonkeyPatch) -> _StubFailedChatModel
 
 @pytest.mark.usefixtures("failed_chat_backend")
 def test_synchronous_failed_response_returns_502(client: TestClient) -> None:
-    """A synchronous request must surface a failed status as a 502, not a 200 body."""
+    """A synchronous ``status="failed"`` Response is surfaced as a 502 error envelope.
+
+    A failed Response carries the failure in ``error`` and no usable output, so
+    returning it as a 200 body would hide the failure from clients that only
+    read ``output_text``. The gateway re-raises it as a 502, which the OpenAI
+    error formatter types as ``server_error``.
+
+    Ref: stdapi/api_providers/openai.py:_format_error
+    """
     response = client.post(
         "/v1/responses", json={"model": "amazon.nova-pro-v1:0", "input": "hi"}
     )
     assert response.status_code == 502
-    assert "failed to generate" in response.json()["error"]["message"]
+    error = response.json()["error"]
+    assert "failed to generate" in error["message"]
+    assert error["type"] == "server_error"
 
 
 @pytest.mark.usefixtures("failed_chat_backend")
 def test_background_failed_response_stays_200(client: TestClient) -> None:
-    """A background request keeps the failed terminal state for polling instead of raising."""
+    """A background request returns the failed terminal state as a 200 Response.
+
+    ``background`` responses are polled, so the terminal ``failed`` state and
+    its ``error`` object must stay readable on the Response object instead of
+    being raised as an HTTP error.
+
+    Ref: https://developers.openai.com/api/docs/guides/background
+    """
     response = client.post(
         "/v1/responses",
         json={"model": "amazon.nova-pro-v1:0", "input": "hi", "background": True},
     )
     assert response.status_code == 200, response.text
-    assert response.json()["status"] == "failed"
+    body = response.json()
+    assert body["object"] == "response"
+    assert body["status"] == "failed"
+    assert body["background"] is True
+    assert body["error"] == {
+        "code": "server_error",
+        "message": "The model failed to generate output.",
+    }
+    assert body["output"] == []

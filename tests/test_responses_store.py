@@ -1,4 +1,8 @@
-"""Tests for the AWS Bedrock session-backed stored responses (unit)."""
+"""Stored responses and chat completions persisted in AWS Bedrock sessions (unit).
+
+Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/sessions.html
+     stdapi/responses_store.py
+"""
 
 from datetime import UTC, datetime
 from typing import Any
@@ -135,12 +139,25 @@ def stub(monkeypatch: pytest.MonkeyPatch) -> _StubSessionClient:
 
 
 class TestStoredResponseSessions:
-    """Session-backed persistence of stored responses."""
+    """Create / save / load / delete over the Bedrock session workflow.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/sessions.html
+         stdapi/responses_store.py
+    """
 
     async def test_create_session_with_tags_and_kms(
         self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The session is created with metadata tags, the kind tag, and the KMS key."""
+        """CreateSession carries the request metadata tags, the kind tag and the KMS key.
+
+        The kind tag is what later lets listing and deletion tell a stored
+        response from a stored chat completion, and
+        ``aws_bedrock_session_encryption_key_arn`` is forwarded as
+        ``encryptionKeyArn`` so the session content is encrypted with a
+        customer-managed key.
+
+        Ref: stdapi/responses_store.py:create_stored_response_session
+        """
         monkeypatch.setattr(
             SETTINGS, "aws_bedrock_session_encryption_key_arn", "arn:kms"
         )
@@ -156,7 +173,14 @@ class TestStoredResponseSessions:
     async def test_create_session_without_kms(
         self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Without a configured KMS key, no encryptionKeyArn is passed."""
+        """Without a configured KMS key, ``encryptionKeyArn`` is omitted from CreateSession.
+
+        The parameter is left out of the call entirely rather than sent as
+        null, and the kind tag records that this session holds a chat
+        completion rather than a response.
+
+        Ref: stdapi/responses_store.py:create_stored_response_session
+        """
         monkeypatch.setattr(SETTINGS, "aws_bedrock_session_encryption_key_arn", None)
         session_id = await responses_store.create_stored_response_session(
             "chat_completion"
@@ -171,7 +195,14 @@ class TestStoredResponseSessions:
     async def test_try_create_session_access_denied_returns_none(
         self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """An AccessDenied create is ignored with a warning, returning None."""
+        """An ``AccessDeniedException`` on CreateSession returns None and logs a warning.
+
+        AccessDenied means session storage is not enabled on this server, so
+        the request must proceed with ``store`` ignored instead of failing;
+        the warning tells the administrator which permission is missing.
+
+        Ref: stdapi/responses_store.py:try_create_stored_response_session
+        """
 
         async def _denied(**_params: Any) -> dict[str, Any]:  # noqa: ANN401
             raise ClientError(
@@ -193,7 +224,13 @@ class TestStoredResponseSessions:
     async def test_try_create_session_other_errors_propagate(
         self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Non-AccessDenied client errors are not swallowed."""
+        """A ``ThrottlingException`` on CreateSession propagates instead of returning None.
+
+        Only AccessDenied means "storage not enabled"; every other client
+        error is a real failure the caller must see.
+
+        Ref: stdapi/responses_store.py:try_create_stored_response_session
+        """
 
         async def _throttled(**_params: Any) -> dict[str, Any]:  # noqa: ANN401
             raise ClientError(
@@ -202,20 +239,35 @@ class TestStoredResponseSessions:
             )
 
         monkeypatch.setattr(stub, "create_session", _throttled)
-        with pytest.raises(ClientError, match="slow down"):
+        with pytest.raises(ClientError) as exc_info:
             await responses_store.try_create_stored_response_session("response")
+        assert exc_info.value.response["Error"]["Code"] == "ThrottlingException"
+        assert exc_info.value.operation_name == "CreateSession"
+        assert "slow down" in str(exc_info.value)
 
     async def test_try_create_session_success(self, stub: _StubSessionClient) -> None:
-        """On success the session ID is returned as-is."""
+        """On success the created session ID is returned as-is, with no retry.
+
+        Ref: stdapi/responses_store.py:try_create_stored_response_session
+        """
         session_id = await responses_store.try_create_stored_response_session(
             "response"
         )
         assert session_id == "sess-1"
+        assert [name for name, _ in stub.requests] == ["create_session"]
 
     async def test_save_and_load_round_trip_with_chunking(
         self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A document larger than the chunk size round-trips across steps."""
+        """A document larger than the chunk size round-trips across several steps.
+
+        Invocation-step payloads are content blocks, so a document is split
+        over one PutInvocationStep per chunk, all under the same invocation
+        and with strictly increasing step times so the read can reorder them.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/sessions.html
+             stdapi/responses_store.py:save_stored_response
+        """
         monkeypatch.setattr(responses_store, "_CHUNK_SIZE", 10)
         document = {
             "response": {"id": "resp-sess-1", "object": "response"},
@@ -223,8 +275,14 @@ class TestStoredResponseSessions:
         }
 
         await responses_store.save_stored_response("resp-sess-1", document)
-        steps = [name for name, _ in stub.requests if name == "put_invocation_step"]
+        steps = [
+            params for name, params in stub.requests if name == "put_invocation_step"
+        ]
         assert len(steps) > 1
+        assert {step["invocationIdentifier"] for step in steps} == {"inv-1"}
+        step_times = [step["invocationStepTime"] for step in steps]
+        assert step_times == sorted(step_times)
+        assert len(set(step_times)) == len(step_times)
 
         loaded = await responses_store.load_stored_response("resp-sess-1", "response")
         assert loaded == document
@@ -232,7 +290,14 @@ class TestStoredResponseSessions:
     async def test_save_chunks_by_utf8_bytes_not_characters(
         self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Multibyte content is chunked by UTF-8 byte count, and round-trips exactly."""
+        """Multibyte content is chunked by UTF-8 byte count and round-trips exactly.
+
+        The chunk limit bounds bytes, not characters, and a boundary
+        backtracks off a continuation byte so no chunk splits a code point:
+        concatenating the stored chunks reproduces the serialized document.
+
+        Ref: stdapi/responses_store.py:_iter_utf8_chunks
+        """
         monkeypatch.setattr(responses_store, "_CHUNK_SIZE", 10)
         document = {
             "response": {"id": "resp-sess-1", "object": "response"},
@@ -255,7 +320,14 @@ class TestStoredResponseSessions:
     async def test_save_chunk_boundary_at_exact_multiple_of_chunk_size(
         self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A document byte length that is an exact multiple of the chunk size has no empty trailing chunk."""
+        """A byte length that is an exact multiple of the chunk size yields no empty chunk.
+
+        The boundary case must produce exactly ``length / limit`` chunks and
+        never a trailing empty one, since an empty text content block would be
+        written as a useless invocation step.
+
+        Ref: stdapi/responses_store.py:_iter_utf8_chunks
+        """
         text = "x"
         document: dict[str, Any] = {
             "response": {"id": "resp-sess-1", "object": "response"},
@@ -281,7 +353,14 @@ class TestStoredResponseSessions:
     async def test_load_paginates_invocation_steps(
         self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Steps from every nextToken page are loaded, in order."""
+        """Steps from every ListInvocationSteps page are loaded, in step-time order.
+
+        The stub returns the step summaries newest-first and split over two
+        pages, so a reader that stopped at the first page or kept the returned
+        order would rebuild a corrupt document.
+
+        Ref: stdapi/responses_store.py:_load_invocation_document
+        """
         monkeypatch.setattr(responses_store, "_CHUNK_SIZE", 10)
         document = {
             "response": {"id": "resp-sess-1", "object": "response"},
@@ -312,7 +391,10 @@ class TestStoredResponseSessions:
     async def test_load_session_vanishing_during_step_fetch_is_not_found(
         self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A session deleted mid-read surfaces as a stored-response 404, not a raw ClientError."""
+        """A session deleted mid-read surfaces as a 404, not a raw ClientError.
+
+        Ref: stdapi/responses_store.py:_stored_document_or_none
+        """
         document = {"response": {"id": "resp-sess-1", "object": "response"}}
         await responses_store.save_stored_response("resp-sess-1", document)
 
@@ -320,49 +402,74 @@ class TestStoredResponseSessions:
             raise _NOT_FOUND
 
         monkeypatch.setattr(stub, "get_invocation_step", _vanished)
-        with pytest.raises(ApiError, match="not found") as exc_info:
+        with pytest.raises(ApiError) as exc_info:
             await responses_store.load_stored_response("resp-sess-1", "response")
         assert exc_info.value.status == 404
+        assert str(exc_info.value) == "Response with id 'resp-sess-1' not found."
 
     async def test_load_unknown_session_is_not_found(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """An unknown session surfaces as a stored-response 404."""
+        """An unknown session surfaces as a 404 naming the requested response ID.
+
+        Ref: stdapi/responses_store.py:load_stored_response
+        """
         client = _StubSessionClient(missing=True)
         monkeypatch.setattr(responses_store, "get_client", lambda *_: client)
-        with pytest.raises(ApiError, match="not found") as exc_info:
+        with pytest.raises(ApiError) as exc_info:
             await responses_store.load_stored_response("resp-zzz", "response")
         assert exc_info.value.status == 404
+        assert str(exc_info.value) == "Response with id 'resp-zzz' not found."
 
     async def test_load_malformed_identifier_is_not_found(
         self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A pattern-valid but AWS-invalid ID (ValidationException) 404s, not 400/500."""
+        """A pattern-valid but AWS-invalid ID (ValidationException) 404s, not 400 or 500.
+
+        An ID matching the route pattern can still fail Bedrock's own session
+        identifier validation; such an ID can never name a stored object, so
+        it is reported as not found rather than as an upstream error.
+
+        Ref: stdapi/responses_store.py:_stored_document_or_none
+        """
 
         async def _invalid(**_params: Any) -> dict[str, Any]:  # noqa: ANN401
             raise _VALIDATION_ERROR
 
         monkeypatch.setattr(stub, "list_invocations", _invalid)
-        with pytest.raises(ApiError, match="not found") as exc_info:
+        with pytest.raises(ApiError) as exc_info:
             await responses_store.load_stored_response("resp-notauuid", "response")
         assert exc_info.value.status == 404
+        assert str(exc_info.value) == "Response with id 'resp-notauuid' not found."
 
     async def test_load_empty_session_is_not_found(
         self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A session without stored document surfaces as 404."""
+        """An existing session holding no invocation surfaces as a 404.
+
+        Ref: stdapi/responses_store.py:_stored_document_or_none
+        """
 
         async def _no_invocations(**_params: object) -> dict[str, Any]:
             return {"invocationSummaries": []}
 
         monkeypatch.setattr(stub, "list_invocations", _no_invocations)
-        with pytest.raises(ApiError, match="not found"):
+        with pytest.raises(ApiError) as exc_info:
             await responses_store.load_stored_response("resp-sess-1", "response")
+        assert exc_info.value.status == 404
+        assert str(exc_info.value) == "Response with id 'resp-sess-1' not found."
 
     async def test_delete_ends_then_deletes_session(
         self, stub: _StubSessionClient
     ) -> None:
-        """Deletion checks the (absent) kind tag, then ends and deletes the session."""
+        """Deletion checks the kind tag, then ends the session before deleting it.
+
+        A session is ended before it is deleted, and the kind check is a single
+        tag lookup on the session ARN returned by GetSession.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/sessions.html
+             stdapi/responses_store.py:delete_stored_response
+        """
         await responses_store.delete_stored_response("resp-sess-1", "response")
         assert [name for name, _ in stub.requests] == [
             "get_session",
@@ -376,21 +483,45 @@ class TestStoredResponseSessions:
     async def test_delete_tolerates_already_ended_session(
         self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch, code: str
     ) -> None:
-        """A state error from EndSession (e.g. already ended) defers to the delete."""
+        """A state error from EndSession (e.g. already ended) still deletes the session.
 
-        async def _already_ended(**_params: Any) -> dict[str, Any]:  # noqa: ANN401
+        ``ConflictException`` and ``ValidationException`` on EndSession are
+        tolerated: EndSession is attempted exactly once and DeleteSession then
+        runs on the same session identifier, surfacing any real problem itself.
+
+        Ref: stdapi/responses_store.py:delete_stored_response
+        """
+        end_attempts: list[dict[str, Any]] = []
+
+        async def _already_ended(**params: Any) -> dict[str, Any]:  # noqa: ANN401
+            end_attempts.append(params)
             raise ClientError(
                 {"Error": {"Code": code, "Message": "already ended"}}, "EndSession"
             )
 
         monkeypatch.setattr(stub, "end_session", _already_ended)
         await responses_store.delete_stored_response("resp-sess-1", "response")
-        assert "delete_session" in [name for name, _ in stub.requests]
+        assert end_attempts == [{"sessionIdentifier": "sess-1"}]
+        # The raising stub replaces the recording one, so the calls the client
+        # completed are the kind lookup then the delete that follows the failure.
+        assert [name for name, _ in stub.requests] == [
+            "get_session",
+            "list_tags_for_resource",
+            "delete_session",
+        ]
+        assert stub.requests[-1][1] == {"sessionIdentifier": "sess-1"}
 
     async def test_delete_propagates_end_session_throttling(
         self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A ThrottlingException from EndSession is not swallowed."""
+        """A ThrottlingException from EndSession propagates and skips the delete.
+
+        Only the tolerated state errors defer to DeleteSession; a throttled
+        EndSession must not be mistaken for "already ended" and must leave the
+        session intact so the caller can retry.
+
+        Ref: stdapi/responses_store.py:delete_stored_response
+        """
 
         async def _throttled(**_params: Any) -> dict[str, Any]:  # noqa: ANN401
             raise ClientError(
@@ -399,8 +530,11 @@ class TestStoredResponseSessions:
             )
 
         monkeypatch.setattr(stub, "end_session", _throttled)
-        with pytest.raises(ClientError, match="slow down"):
+        with pytest.raises(ClientError) as exc_info:
             await responses_store.delete_stored_response("resp-sess-1", "response")
+        assert exc_info.value.response["Error"]["Code"] == "ThrottlingException"
+        assert "slow down" in str(exc_info.value)
+        assert "delete_session" not in [name for name, _ in stub.requests]
 
     async def test_delete_malformed_identifier_is_not_found(
         self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch
@@ -409,6 +543,8 @@ class TestStoredResponseSessions:
 
         The tag lookup tolerates it (as it does a missing session), the end
         call defers it, and ``delete_session``'s own rejection maps to 404.
+
+        Ref: stdapi/responses_store.py:_not_found_as_404
         """
 
         async def _invalid(**_params: Any) -> dict[str, Any]:  # noqa: ANN401
@@ -417,18 +553,27 @@ class TestStoredResponseSessions:
         monkeypatch.setattr(stub, "get_session", _invalid)
         monkeypatch.setattr(stub, "end_session", _invalid)
         monkeypatch.setattr(stub, "delete_session", _invalid)
-        with pytest.raises(ApiError, match="not found") as exc_info:
+        with pytest.raises(ApiError) as exc_info:
             await responses_store.delete_stored_response("resp-notauuid", "response")
         assert exc_info.value.status == 404
+        assert str(exc_info.value) == "Response with id 'resp-notauuid' not found."
 
     async def test_delete_does_not_load_the_full_document(
         self, stub: _StubSessionClient
     ) -> None:
-        """Deletion never reads invocations: the kind check uses only the tag call."""
+        """Deletion never reads invocations: the kind check uses only the tag call.
+
+        Reading the whole document to check its kind would add latency and
+        throttling exposure for no benefit, since the session tag already
+        records the kind.
+
+        Ref: stdapi/responses_store.py:_session_kind_tag_or_none
+        """
         document = {"response": {"id": "resp-sess-1", "object": "response"}}
         await responses_store.save_stored_response("resp-sess-1", document)
         await responses_store.delete_stored_response("resp-sess-1", "response")
         called = {name for name, _ in stub.requests}
+        assert "list_tags_for_resource" in called
         assert not called & {
             "list_invocations",
             "list_invocation_steps",
@@ -438,24 +583,45 @@ class TestStoredResponseSessions:
     async def test_delete_unknown_session_is_not_found(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Deleting an unknown session surfaces as 404."""
+        """Deleting an unknown session surfaces as a 404 naming the response ID.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/delete
+             stdapi/responses_store.py:delete_stored_response
+        """
         client = _StubSessionClient(missing=True)
         monkeypatch.setattr(responses_store, "get_client", lambda *_: client)
-        with pytest.raises(ApiError, match="not found"):
+        with pytest.raises(ApiError) as exc_info:
             await responses_store.delete_stored_response("resp-zzz", "response")
+        assert exc_info.value.status == 404
+        assert str(exc_info.value) == "Response with id 'resp-zzz' not found."
 
     async def test_discard_suppresses_errors(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Best-effort cleanup never raises."""
+        """Best-effort cleanup attempts the delete and swallows its 404.
+
+        Discard runs on a failed generation, where the response has already
+        failed: the delete is attempted (EndSession here raises
+        ``ResourceNotFoundException``) and the resulting 404 must not replace
+        the original error.
+
+        Ref: stdapi/responses_store.py:discard_stored_response_session
+        """
         client = _StubSessionClient(missing=True)
         monkeypatch.setattr(responses_store, "get_client", lambda *_: client)
         await responses_store.discard_stored_response_session("resp-zzz", "response")
+        assert [name for name, _ in client.requests] == ["get_session", "end_session"]
 
     async def test_load_reads_latest_invocation(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Reading picks the invocation with the latest createdAt."""
+        """Reading picks the invocation with the latest ``createdAt``.
+
+        Each save appends a new invocation rather than overwriting, so the
+        newest one is the visible document.
+
+        Ref: stdapi/responses_store.py:_stored_document_or_none
+        """
         documents = {
             "inv-old": {"response": {"id": "stale", "object": "response"}},
             "inv-new": {"response": {"id": "fresh", "object": "response"}},
@@ -506,7 +672,13 @@ class TestStoredResponseSessions:
     async def test_load_paginates_invocations_before_picking_latest(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A newer invocation on a later nextToken page beats a stale first-page one."""
+        """A newer invocation on a later ListInvocations page beats a stale first-page one.
+
+        Page order is not assumed to be creation order, so every page is
+        collected before the latest invocation is chosen.
+
+        Ref: stdapi/responses_store.py:_stored_document_or_none
+        """
         documents = {
             "inv-old": {"response": {"id": "stale", "object": "response"}},
             "inv-new": {"response": {"id": "fresh", "object": "response"}},
@@ -563,7 +735,13 @@ class TestStoredResponseSessions:
     async def test_load_falls_back_when_latest_invocation_is_empty(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """An interrupted update leaving the latest invocation stepless falls back."""
+        """A stepless latest invocation falls back to the last-good invocation.
+
+        An update interrupted between CreateInvocation and its first
+        PutInvocationStep must not hide the previously stored document.
+
+        Ref: stdapi/responses_store.py:_load_invocation_document
+        """
         documents = {"inv-old": {"response": {"id": "stale", "object": "response"}}}
 
         class _EmptyLatestClient:
@@ -618,7 +796,13 @@ class TestStoredResponseSessions:
     async def test_load_falls_back_when_latest_invocation_is_corrupt(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A truncated/unparsable latest invocation payload falls back to the previous one."""
+        """A truncated, unparsable latest invocation falls back to the previous one.
+
+        A read racing a partially written invocation reassembles invalid JSON;
+        that invocation is skipped instead of failing the whole read.
+
+        Ref: stdapi/responses_store.py:_load_invocation_document
+        """
         documents = {"inv-old": {"response": {"id": "stale", "object": "response"}}}
 
         class _CorruptLatestClient:
@@ -670,7 +854,10 @@ class TestStoredResponseSessions:
     async def test_load_is_not_found_when_all_invocations_are_empty(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """When every invocation is stepless, the read surfaces as a stored-response 404."""
+        """When every invocation is stepless, the read surfaces as a 404.
+
+        Ref: stdapi/responses_store.py:load_stored_response
+        """
 
         class _AllEmptyClient:
             async def list_invocations(self, **_params: Any) -> dict[str, Any]:  # noqa: ANN401
@@ -698,7 +885,10 @@ class TestStoredResponseSessions:
     async def test_load_null_response_field_is_not_found(
         self, stub: _StubSessionClient
     ) -> None:
-        """A document with a null ``response`` field lacks the expected shape and 404s."""
+        """A document with a null ``response`` field lacks the expected shape and 404s.
+
+        Ref: stdapi/responses_store.py:_kind_mismatches
+        """
         document = {"response": None, "input": "hello"}
         await responses_store.save_stored_response("resp-sess-1", document)
         with pytest.raises(ApiError, match="not found") as exc_info:
@@ -708,7 +898,13 @@ class TestStoredResponseSessions:
     async def test_load_foreign_document_without_object_field_is_not_found(
         self, stub: _StubSessionClient
     ) -> None:
-        """A foreign session's step text that parses as an unrelated JSON dict 404s."""
+        """A step payload parsing as an unrelated JSON object 404s.
+
+        A session created by another tool can hold arbitrary JSON; without a
+        ``response.object`` field declaring the kind it is not a stored object.
+
+        Ref: stdapi/responses_store.py:_document_kind
+        """
         document = {"unrelated": "data"}
         await responses_store.save_stored_response("resp-sess-1", document)
         with pytest.raises(ApiError, match="not found") as exc_info:
@@ -718,33 +914,55 @@ class TestStoredResponseSessions:
     async def test_load_kind_mismatch_is_not_found(
         self, stub: _StubSessionClient
     ) -> None:
-        """A document stored as a chat completion 404s when loaded as a response."""
+        """A document stored as a chat completion 404s when loaded as a response.
+
+        The ``response.object`` field is the document's self-declared kind, so
+        a chat completion is never readable through the Responses routes even
+        when its session ID is guessed.
+
+        Ref: stdapi/responses_store.py:_kind_mismatches
+        """
         document = {"response": {"id": "chatcmpl-sess-1", "object": "chat.completion"}}
         await responses_store.save_stored_response("resp-sess-1", document)
-        with pytest.raises(ApiError, match="not found") as exc_info:
+        with pytest.raises(ApiError) as exc_info:
             await responses_store.load_stored_response("resp-sess-1", "response")
         assert exc_info.value.status == 404
+        assert str(exc_info.value) == "Response with id 'resp-sess-1' not found."
 
     async def test_load_kind_mismatch_the_other_direction_is_not_found(
         self, stub: _StubSessionClient
     ) -> None:
-        """A document stored as a response 404s when loaded as a chat completion."""
+        """A document stored as a response 404s when loaded as a chat completion.
+
+        The 404 message is worded for the requested kind, so a
+        ``chatcmpl-`` ID is reported as a missing chat completion.
+
+        Ref: stdapi/responses_store.py:_not_found
+        """
         document = {"response": {"id": "resp-sess-1", "object": "response"}}
         await responses_store.save_stored_response("chatcmpl-sess-1", document)
-        with pytest.raises(ApiError, match="not found") as exc_info:
+        with pytest.raises(ApiError) as exc_info:
             await responses_store.load_stored_response(
                 "chatcmpl-sess-1", "chat_completion"
             )
         assert exc_info.value.status == 404
+        assert (
+            str(exc_info.value)
+            == "Chat completion with id 'chatcmpl-sess-1' not found."
+        )
 
     async def test_delete_kind_mismatch_is_not_found_and_does_not_delete(
         self, stub: _StubSessionClient
     ) -> None:
-        """A session tagged with a different kind 404s without ending or deleting it."""
+        """A session tagged with a different kind 404s without ending or deleting it.
+
+        Ref: stdapi/responses_store.py:delete_stored_response
+        """
         stub.tags["arn:sess-1"] = {"stdapi-ai.stored-object": "chat_completion"}
-        with pytest.raises(ApiError, match="not found") as exc_info:
+        with pytest.raises(ApiError) as exc_info:
             await responses_store.delete_stored_response("resp-sess-1", "response")
         assert exc_info.value.status == 404
+        assert str(exc_info.value) == "Response with id 'resp-sess-1' not found."
         called = [name for name, _ in stub.requests]
         assert "end_session" not in called
         assert "delete_session" not in called
@@ -752,7 +970,13 @@ class TestStoredResponseSessions:
     async def test_delete_missing_kind_tag_is_deletable(
         self, stub: _StubSessionClient
     ) -> None:
-        """A session without a kind tag (predating kind tracking) is still deletable."""
+        """A session without a kind tag is still deletable.
+
+        An untagged session predates kind tracking or was orphaned by a failed
+        generation, so an absent tag must not be read as a kind mismatch.
+
+        Ref: stdapi/responses_store.py:delete_stored_response
+        """
         await responses_store.delete_stored_response("resp-sess-1", "response")
         assert [name for name, _ in stub.requests][-2:] == [
             "end_session",
@@ -766,6 +990,8 @@ class TestStoredResponseSessions:
 
         It falls through to the delete calls, which apply the usual 404
         handling (here the session still exists, so deletion just proceeds).
+
+        Ref: stdapi/responses_store.py:_session_kind_tag_or_none
         """
 
         async def _vanished(**_params: Any) -> dict[str, Any]:  # noqa: ANN401
@@ -779,12 +1005,23 @@ class TestStoredResponseSessions:
 
 
 class TestListStoredSessions:
-    """Listing sessions tagged with a stored object kind."""
+    """Bounded ListSessions scan filtered by the stored-object kind tag.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/sessions.html
+         stdapi/responses_store.py:list_stored_sessions
+    """
 
     async def test_filters_by_kind_tag(
         self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Only sessions tagged with the requested kind are returned."""
+        """Only sessions tagged with the requested kind are returned.
+
+        ListSessions returns every session of the account, including chat
+        completions and sessions created by other tools, so the kind tag is the
+        only filter available.
+
+        Ref: stdapi/responses_store.py:list_stored_sessions
+        """
         monkeypatch.setattr(responses_store, "build_metadata", lambda **_: {})
         stub.sessions = [
             {
@@ -813,7 +1050,10 @@ class TestListStoredSessions:
     async def test_paginates_across_pages(
         self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Sessions from every nextToken page are scanned and returned."""
+        """Sessions from every ListSessions page are scanned and returned.
+
+        Ref: stdapi/responses_store.py:list_stored_sessions
+        """
         monkeypatch.setattr(responses_store, "_LIST_PAGE_SIZE", 2)
         stub.sessions = [
             {
@@ -839,7 +1079,10 @@ class TestListStoredSessions:
     async def test_returns_session_id_and_created_at_pairs(
         self, stub: _StubSessionClient
     ) -> None:
-        """Each result pair holds the session ID and its creation time."""
+        """Each result pair holds the session ID and its ListSessions creation time.
+
+        Ref: stdapi/responses_store.py:list_stored_sessions
+        """
         created_at = datetime(2024, 3, 4, tzinfo=UTC)
         stub.sessions = [
             {"sessionId": "resp-1", "sessionArn": "arn:resp-1", "createdAt": created_at}
@@ -851,7 +1094,13 @@ class TestListStoredSessions:
     async def test_second_list_call_does_not_refetch_tags(
         self, stub: _StubSessionClient
     ) -> None:
-        """A cached kind tag is not fetched again on a later list call."""
+        """A cached kind tag is reused, not re-fetched, on a later list call.
+
+        The kind tag never changes, so the second listing must classify the
+        session from the cache and issue no further ListTagsForResource call.
+
+        Ref: stdapi/responses_store.py:_cached_kind_tag
+        """
         stub.sessions = [
             {
                 "sessionId": "resp-1",
@@ -860,8 +1109,9 @@ class TestListStoredSessions:
             }
         ]
         stub.tags = {"arn:resp-1": {"stdapi-ai.stored-object": "response"}}
-        await responses_store.list_stored_sessions("response")
-        await responses_store.list_stored_sessions("response")
+        expected = [("resp-1", datetime(2024, 1, 1, tzinfo=UTC))]
+        assert await responses_store.list_stored_sessions("response") == expected
+        assert await responses_store.list_stored_sessions("response") == expected
         tag_calls = [
             name for name, _ in stub.requests if name == "list_tags_for_resource"
         ]
@@ -870,7 +1120,13 @@ class TestListStoredSessions:
     async def test_second_list_call_does_not_refetch_tags_for_untagged_session(
         self, stub: _StubSessionClient
     ) -> None:
-        """A negatively-cached (untagged/foreign) session is not re-fetched either."""
+        """An untagged session is negatively cached and stays excluded, without re-fetching.
+
+        A missing tag is cached as a sentinel rather than as a cache miss, so a
+        foreign session does not cost one ListTagsForResource call per listing.
+
+        Ref: stdapi/responses_store.py:_cached_kind_tag
+        """
         stub.sessions = [
             {
                 "sessionId": "untagged-1",
@@ -879,8 +1135,8 @@ class TestListStoredSessions:
             }
         ]
         # No tags configured for "arn:untagged-1": list_tags_for_resource returns {}.
-        await responses_store.list_stored_sessions("response")
-        await responses_store.list_stored_sessions("response")
+        assert await responses_store.list_stored_sessions("response") == []
+        assert await responses_store.list_stored_sessions("response") == []
         tag_calls = [
             name for name, _ in stub.requests if name == "list_tags_for_resource"
         ]
@@ -889,7 +1145,14 @@ class TestListStoredSessions:
     async def test_bounded_concurrency_returns_correct_results(
         self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Bounding concurrent tag lookups does not drop or misattribute any result."""
+        """Bounding concurrent tag lookups drops or misattributes no result.
+
+        Tag lookups run concurrently behind a semaphore and are zipped back
+        onto their session summaries, so a page larger than the concurrency
+        limit must still classify every session correctly.
+
+        Ref: stdapi/responses_store.py:list_stored_sessions
+        """
         monkeypatch.setattr(responses_store, "_TAG_FETCH_CONCURRENCY", 4)
         stub.sessions = [
             {
@@ -915,7 +1178,14 @@ class TestListStoredSessions:
     async def test_list_scan_limit_stops_scanning(
         self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Scanning stops at `_LIST_SCAN_LIMIT` even when more sessions remain."""
+        """Scanning stops at ``_LIST_SCAN_LIMIT`` even when more sessions remain.
+
+        The listing is a bounded scan, not true pagination: the last page's
+        ``maxResults`` is shrunk to the remaining budget so the limit is never
+        overshot and the extra sessions are simply never seen.
+
+        Ref: stdapi/responses_store.py:list_stored_sessions
+        """
         monkeypatch.setattr(responses_store, "_LIST_SCAN_LIMIT", 5)
         monkeypatch.setattr(responses_store, "_LIST_PAGE_SIZE", 2)
         stub.sessions = [
@@ -933,11 +1203,22 @@ class TestListStoredSessions:
         assert sorted(session_id for session_id, _ in sessions) == [
             f"sess-{i}" for i in range(5)
         ]
+        assert [
+            params["maxResults"]
+            for name, params in stub.requests
+            if name == "list_sessions"
+        ] == [2, 2, 1]
 
     async def test_kind_cache_clears_when_exceeding_limit(
         self, stub: _StubSessionClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The kind-tag cache is cleared once its size exceeds `_KIND_CACHE_LIMIT`."""
+        """The kind-tag cache is cleared once its size exceeds ``_KIND_CACHE_LIMIT``.
+
+        Because a session's kind never changes, the cache is bounded by a full
+        clear rather than by eviction, and the freshly fetched entry survives.
+
+        Ref: stdapi/responses_store.py:_cached_kind_tag
+        """
         monkeypatch.setattr(responses_store, "_KIND_CACHE_LIMIT", 2)
         cache = responses_store._KIND_CACHE  # noqa: SLF001 (isolated per-test by the stub fixture)
         cache.update({"sess-0": "response", "sess-1": "response", "sess-2": "response"})
@@ -948,9 +1229,10 @@ class TestListStoredSessions:
             async def list_tags_for_resource(self, **_params: Any) -> dict[str, Any]:  # noqa: ANN401
                 return {"tags": {"stdapi-ai.stored-object": "response"}}
 
-        await responses_store._cached_kind_tag(  # noqa: SLF001
+        kind = await responses_store._cached_kind_tag(  # noqa: SLF001
             _TagOnlyClient(),  # type: ignore[arg-type]
             "sess-3",
             "arn:sess-3",
         )
+        assert kind == "response"
         assert set(cache) == {"sess-3"}

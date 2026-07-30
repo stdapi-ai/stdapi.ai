@@ -2,6 +2,11 @@
 
 Covers ``tool_choice='none'`` semantics and agent round-trip history where the
 final turn omits ``tools`` but still contains ``toolUse``/``toolResult`` blocks.
+
+Ref: https://developers.openai.com/api/docs/guides/function-calling#tool-choice
+     https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+     stdapi/models/chat/_adapters/_openai_chat_completion.py:build_tool_config
+     stdapi/models/chat/_default.py:_synthesize_tool_config_from_history
 """
 
 from __future__ import annotations
@@ -32,6 +37,11 @@ _WEATHER_TOOL: dict[str, Any] = {
         "name": "get_weather",
         "parameters": {"type": "object", "properties": {}},
     },
+}
+
+#: The permissive ``toolSpec`` the model layer synthesizes from tool history.
+_SYNTHESIZED_WEATHER_SPEC: dict[str, Any] = {
+    "toolSpec": {"name": "get_weather", "inputSchema": {"json": {"type": "object"}}}
 }
 
 
@@ -87,34 +97,61 @@ async def _prepare(
 
 
 def test_tool_choice_none_with_tools_omits_tool_config() -> None:
-    """``tool_choice='none'`` validates and yields no tool config (no forced tools)."""
-    request = _request(tools=[_WEATHER_TOOL], tool_choice="none")
-    assert build_tool_config(request) is None
+    """``tool_choice='none'`` validates and yields no tool config (no forced tools).
+
+    Bedrock Converse has no ``none`` ``toolChoice``, so upstream's "the model
+    must not call a tool" is expressed by dropping ``toolConfig`` entirely.
+    The control request pins that the omission comes from ``none`` and not from
+    the tool list being ignored.
+    """
+    assert (
+        build_tool_config(_request(tools=[_WEATHER_TOOL], tool_choice="none")) is None
+    )
+    control = build_tool_config(_request(tools=[_WEATHER_TOOL]))
+    assert control is not None
+    assert [tool["toolSpec"]["name"] for tool in control["tools"]] == ["get_weather"]
 
 
 def test_tool_choice_none_legacy_function_call_omits_tool_config() -> None:
-    """Legacy ``function_call='none'`` also yields no tool config."""
-    request = _request(functions=[_WEATHER_TOOL["function"]], function_call="none")
-    assert build_tool_config(request) is None
+    """Legacy ``function_call='none'`` also yields no tool config.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+    """
+    assert (
+        build_tool_config(
+            _request(functions=[_WEATHER_TOOL["function"]], function_call="none")
+        )
+        is None
+    )
+    control = build_tool_config(_request(functions=[_WEATHER_TOOL["function"]]))
+    assert control is not None
+    assert [tool["toolSpec"]["name"] for tool in control["tools"]] == ["get_weather"]
 
 
 async def test_tool_choice_none_with_tool_history_still_succeeds() -> None:
-    """``tool_choice='none'`` plus tool history keeps a synthesized config so Converse accepts it."""
+    """``tool_choice='none'`` plus tool history keeps a synthesized config so Converse accepts it.
+
+    Converse rejects ``toolUse``/``toolResult`` blocks without a ``toolConfig``,
+    so the dropped config is replaced by one permissive ``toolSpec`` per tool
+    name found in history — never a ``toolChoice``, which would force a call.
+    """
     request = _request(tools=[_WEATHER_TOOL], tool_choice="none")
     payload = await _prepare(_tool_call_history(), build_tool_config(request))
     tool_config = payload["toolConfig"]
-    names = {tool["toolSpec"]["name"] for tool in tool_config["tools"]}
-    assert names == {"get_weather"}
+    assert tool_config["tools"] == [_SYNTHESIZED_WEATHER_SPEC]
     # 'none' must never force a tool call: no explicit toolChoice is emitted.
     assert "toolChoice" not in tool_config
 
 
 async def test_round_trip_history_without_tools_synthesizes_tool_config() -> None:
-    """History with toolUse/toolResult but no request tools gets a synthesized config."""
+    """History with toolUse/toolResult but no request tools gets a synthesized config.
+
+    The synthesized spec carries the permissive ``{"type": "object"}`` input
+    schema, since the original tool declaration is no longer in the request.
+    """
     payload = await _prepare(_tool_call_history(), None)
     tool_config = payload["toolConfig"]
-    names = {tool["toolSpec"]["name"] for tool in tool_config["tools"]}
-    assert names == {"get_weather"}
+    assert tool_config["tools"] == [_SYNTHESIZED_WEATHER_SPEC]
     assert "toolChoice" not in tool_config
 
 
@@ -138,5 +175,7 @@ async def test_round_trip_with_tools_left_unchanged() -> None:
 
 async def test_no_tools_no_history_has_no_tool_config() -> None:
     """Plain history without tool blocks stays free of any tool config."""
-    payload = await _prepare([{"role": "user", "content": [{"text": "hi"}]}], None)
+    messages: list[MessageTypeDef] = [{"role": "user", "content": [{"text": "hi"}]}]
+    payload = await _prepare(messages, None)
     assert "toolConfig" not in payload
+    assert payload["messages"] == messages

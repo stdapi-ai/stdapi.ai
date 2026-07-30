@@ -1,29 +1,25 @@
-"""Multi-model parametrized tests for the OpenAI /v1/responses route.
+"""Multi-model parametrized coverage of the OpenAI /v1/responses route.
 
-Covers representative "real-world" usage across one model per provider family
-available on AWS Bedrock, including:
+One model per provider family available on AWS Bedrock, with a Claude model in
+every parametrize list as the reference baseline.  Only assertions that hold on
+both backing paths are made here: models served by bedrock-runtime go through
+the Converse adapter, while Bedrock Mantle models answer on the Chat Completions
+or Messages API and their responses are composed into the Responses shape, which
+drops the echo of request parameters.
 
-  - Basic response generation and usage tokens
-  - Streaming SSE event sequence
-  - Multi-turn context retention via input array
-  - Single-turn function tool calling
-  - Streaming tool call events
-  - Structured JSON output
-  - Vision / image input
-
-All tests require actual Bedrock access and are marked both
-``@pytest.mark.expensive`` and ``@pytest.mark.slow``.  The markers are
-conjunctive, so run with::
+All tests require live Bedrock access and are marked both ``expensive`` and
+``slow``; the markers are conjunctive, so run with::
 
     pytest --expensive --slow tests/test_openai_responses_multi_model.py
 
-A ``Claude`` model is included in every parametrized list as the reference
-baseline.  Feature-gated tests (streaming+tools) carry narrower parametrize
-lists reflecting known Bedrock capabilities.
+Models lacking a feature (streaming tool use, ``tool_choice="required"``) or
+missing from the configured Regions call ``pytest.skip()`` so the result is
+recorded as *skipped* rather than as a failure.
 
-If a model does not support a specific feature (e.g. Mistral or Llama3 cannot
-use tools in streaming mode), the test calls ``pytest.skip()`` so the result
-is recorded as *skipped* — not as a failure — in the report.
+Ref: https://developers.openai.com/api/reference/resources/responses
+     stdapi/routes/openai_responses.py:create_response
+     stdapi/models/chat/_adapters/_openai_responses.py:translate_request
+     stdapi/models/chat/_mantle/_convert.py:_chat_to_responses_response
 """
 
 import base64
@@ -37,6 +33,7 @@ from openai import BadRequestError, NotFoundError
 
 if TYPE_CHECKING:
     from openai import OpenAI
+    from openai.types.responses import ResponseFunctionToolCall, ResponseStreamEvent
 
 #: ~87 sequential live calls across many model families; requires --expensive --slow.
 pytestmark = pytest.mark.slow
@@ -168,20 +165,26 @@ _PROJECT_ROOT = "/var/opt/projects/stdapi.ai"
 
 
 class TestMultiModelResponses:
-    """Basic and streaming functionality across all supported model families."""
+    """Non-streaming, streaming and multi-turn generation per model family.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+         stdapi/models/chat/_adapters/_openai_responses.py:format_response
+    """
 
     @pytest.mark.expensive
     @_BASIC_MODELS
     def test_basic_response(
         self, model: str, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Non-streaming response has a message output item and usage.
+        """A plain string input returns one completed assistant message with usage.
 
-        Validates:
-            - At least one output item of type ``"message"``
-            - ``output_text`` is non-empty
-            - ``status == "completed"``
-            - ``usage.input_tokens > 0`` and ``usage.output_tokens > 0``
+        ``output_text`` is an SDK-side aggregation of the ``output_text`` parts of
+        the message items, so it must equal their concatenation.  ``total_tokens``
+        is the sum of the input and output counts on both the Converse and the
+        Mantle-composed path.
+
+        Ref: https://developers.openai.com/api/docs/guides/migrate-to-responses
+             stdapi/models/chat/_adapters/_openai_responses.py:_extract_output_items
         """
         if use_official_api:
             pytest.skip("Multi-model tests only run against the local server")
@@ -195,32 +198,53 @@ class TestMultiModelResponses:
         except NotFoundError:
             pytest.skip(f"Model {model!r} not available in configured regions")
 
+        assert response.object == "response"
+        assert response.status == "completed"
+        assert response.error is None
+        assert response.incomplete_details is None
+
         msg = next((i for i in response.output if i.type == "message"), None)
         assert msg is not None, f"Expected a message output item for {model!r}"
         assert msg.role == "assistant"
+        assert msg.status == "completed"
         assert response.output_text, f"Expected non-empty output_text for {model!r}"
-        assert response.status == "completed"
+        assert response.output_text == "".join(
+            part.text
+            for item in response.output
+            if item.type == "message"
+            for part in item.content
+            if part.type == "output_text"
+        ), "output_text must aggregate the output_text parts of the message items"
+
         assert response.usage is not None
         assert response.usage.input_tokens > 0
         assert response.usage.output_tokens > 0
+        assert response.usage.total_tokens == (
+            response.usage.input_tokens + response.usage.output_tokens
+        )
 
     @pytest.mark.expensive
     @_BASIC_MODELS
     def test_streaming_response(
         self, model: str, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Streaming response emits text delta events and a completed lifecycle event.
+        """A stream opens with ``response.created`` and ends with ``response.completed``.
 
-        Validates:
-            - At least one ``response.output_text.delta`` event with non-empty delta
-            - A ``response.completed`` event is present with ``status == "completed"``
-            - Accumulated text from deltas is non-empty
+        Both backing paths emit the same wire grammar: ``response.created`` first,
+        a ``sequence_number`` starting at 0 and incremented once per event, and a
+        terminal event whose response snapshot carries the full text — so the
+        concatenated deltas must equal the snapshot's ``output_text``.
+
+        Ref: https://developers.openai.com/api/docs/guides/streaming-responses
+             stdapi/models/chat/_adapters/_openai_responses.py:format_stream
+             stdapi/models/chat/_mantle/_convert.py:_chat_stream_to_responses
         """
         if use_official_api:
             pytest.skip("Multi-model tests only run against the local server")
 
         accumulated = ""
         completed_event = None
+        events: list[ResponseStreamEvent] = []
 
         try:
             stream = openai_client.responses.create(
@@ -230,6 +254,7 @@ class TestMultiModelResponses:
                 stream=True,
             )
             for event in stream:
+                events.append(event)
                 if event.type == "response.output_text.delta":
                     accumulated += event.delta
                 elif event.type == "response.completed":
@@ -242,16 +267,38 @@ class TestMultiModelResponses:
             f"No response.completed event received for {model!r}"
         )
         assert completed_event.response.status == "completed"
+        assert completed_event.response.output_text == accumulated, (
+            f"Deltas do not rebuild the final text for {model!r}"
+        )
+        assert completed_event.response.usage is not None
+        assert completed_event.response.usage.output_tokens > 0
+
+        assert events[0].type == "response.created", (
+            f"Stream must open with response.created for {model!r}, "
+            f"got {events[0].type!r}"
+        )
+        assert events[-1] is completed_event, (
+            "response.completed must be the terminal event, got "
+            f"{events[-1].type!r} last for {model!r}"
+        )
+        assert [event.sequence_number for event in events] == list(
+            range(len(events))
+        ), f"sequence_number must increase by one per event for {model!r}"
 
     @pytest.mark.expensive
     @_BASIC_MODELS
     def test_multi_turn_context_retention(
         self, model: str, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Model uses prior conversation turns in the input array correctly.
+        """A prior ``assistant`` turn replayed in ``input`` is visible to the model.
 
-        Validates:
-            - Third turn response references the identifier set in the first turn
+        The identifier only exists in the first two items of the input array, so
+        quoting it back proves the gateway mapped the ``user``/``assistant``
+        message items onto Bedrock messages in order instead of keeping the last
+        turn only.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+             stdapi/models/chat/_adapters/_openai_responses.py:map_input
         """
         if use_official_api:
             pytest.skip("Multi-model tests only run against the local server")
@@ -283,6 +330,12 @@ class TestMultiModelResponses:
             f"Expected test identifier in response for {model!r}, "
             f"got: {response.output_text[:200]!r}"
         )
+        msg = next((i for i in response.output if i.type == "message"), None)
+        assert msg is not None, f"Expected a message output item for {model!r}"
+        assert msg.role == "assistant"
+        assert response.usage is not None
+        # Three replayed turns are billed as input, not just the trailing question.
+        assert response.usage.input_tokens > 0
 
 
 # ---------------------------------------------------------------------------
@@ -291,19 +344,27 @@ class TestMultiModelResponses:
 
 
 class TestMultiModelToolUse:
-    """Function tool calling across tool-capable model families."""
+    """Function tool calling across tool-capable model families.
+
+    Ref: https://developers.openai.com/api/docs/guides/function-calling#tool-choice
+         stdapi/models/chat/_adapters/_openai_responses.py:_build_tool_config
+    """
 
     @pytest.mark.expensive
     @_TOOL_MODELS
     def test_tool_call_single_turn(
         self, model: str, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Model produces a function_call output item when forced to use a tool.
+        """``tool_choice="required"`` yields a function_call item for the declared tool.
 
-        Validates:
-            - At least one output item with ``type == "function_call"``
-            - Tool name matches the defined tool
-            - ``arguments`` field is valid JSON
+        Bedrock's ``toolChoice: {any: {}}`` forces a tool call, so the output must
+        name the only declared tool and carry a JSON-object ``arguments`` string
+        plus the ``call_id`` a later ``function_call_output`` item is keyed by.
+        Models whose Bedrock family rejects a forced tool choice are skipped on the
+        ``toolChoice`` validation error rather than failing.
+
+        Ref: https://developers.openai.com/api/docs/guides/function-calling#tool-choice
+             stdapi/models/chat/_adapters/_openai_responses.py:_map_tool_choice
         """
         if use_official_api:
             pytest.skip("Multi-model tests only run against the local server")
@@ -334,26 +395,37 @@ class TestMultiModelToolUse:
         assert tc.name == "list_directory", (
             f"Unexpected tool name {tc.name!r} for {model!r}"
         )
+        assert tc.call_id, "function_call items must carry the call_id to answer with"
         args = json.loads(tc.arguments)
-        assert isinstance(args, dict)
+        assert isinstance(args, dict), f"arguments must be a JSON object, got {args!r}"
+        assert all(call.name == "list_directory" for call in tool_calls), (
+            f"Only the declared tool may be called: {[c.name for c in tool_calls]}"
+        )
 
     @pytest.mark.expensive
     @_STREAMING_TOOL_MODELS
     def test_streaming_tool_call(
         self, model: str, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Streaming response emits function_call_arguments events for a forced tool call.
+        """Streamed tool-call argument deltas concatenate to the ``.done`` arguments.
 
-        Validates:
-            - At least one ``response.function_call_arguments.delta`` event
-            - A ``response.function_call_arguments.done`` event is present
-            - Arguments from the done event parse as valid JSON
+        Both backing paths build the ``.done`` event's ``arguments`` by joining the
+        fragments already streamed as ``response.function_call_arguments.delta``,
+        and close the item with a ``response.output_item.done`` carrying the
+        complete ``function_call``.  The ``.done`` event's ``name`` field is not
+        checked because the Mantle-composed path omits it; the closing output item
+        carries the tool name on both paths.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+             stdapi/models/chat/_adapters/_openai_responses.py:_emit_tool_done
+             stdapi/models/chat/_mantle/_convert.py:_close_responses_tool
         """
         if use_official_api:
             pytest.skip("Multi-model tests only run against the local server")
 
-        delta_count = 0
+        deltas: dict[str, str] = {}
         done_event = None
+        done_items: list[ResponseFunctionToolCall] = []
 
         try:
             stream = openai_client.responses.create(  # type: ignore[call-overload]
@@ -366,9 +438,14 @@ class TestMultiModelToolUse:
             )
             for event in stream:
                 if event.type == "response.function_call_arguments.delta":
-                    delta_count += 1
+                    deltas[event.item_id] = deltas.get(event.item_id, "") + event.delta
                 elif event.type == "response.function_call_arguments.done":
                     done_event = event
+                elif (
+                    event.type == "response.output_item.done"
+                    and event.item.type == "function_call"
+                ):
+                    done_items.append(event.item)
         except NotFoundError:
             pytest.skip(f"Model {model!r} not available in configured regions")
         except BadRequestError as exc:
@@ -380,14 +457,26 @@ class TestMultiModelToolUse:
                 )
             raise
 
-        assert delta_count > 0, (
+        assert deltas, (
             f"Expected function_call_arguments.delta events for {model!r}, got 0"
         )
         assert done_event is not None, (
             f"Expected function_call_arguments.done event for {model!r}"
         )
         args = json.loads(done_event.arguments)
-        assert isinstance(args, dict)
+        assert isinstance(args, dict), f"arguments must be a JSON object, got {args!r}"
+        assert done_event.arguments == deltas.get(done_event.item_id), (
+            f"Argument deltas do not rebuild the final arguments for {model!r}"
+        )
+
+        closed = [item for item in done_items if item.id == done_event.item_id]
+        assert closed, (
+            f"No response.output_item.done closing {done_event.item_id!r} for {model!r}"
+        )
+        assert closed[0].name == "list_directory"
+        assert closed[0].arguments == done_event.arguments
+        assert closed[0].status == "completed"
+        assert closed[0].call_id
 
 
 # ---------------------------------------------------------------------------
@@ -436,20 +525,26 @@ _VISION_MODELS = pytest.mark.parametrize(
 
 
 class TestVision:
-    """Vision-capable models correctly identify the color of a simple image."""
+    """Image input through ``input_image`` parts on vision-capable families.
+
+    Ref: https://developers.openai.com/api/docs/guides/file-inputs
+         stdapi/models/chat/_adapters/_openai_responses.py:_convert_input_content
+    """
 
     @pytest.mark.expensive
     @_VISION_MODELS
     def test_image_color_recognition(
         self, model: str, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Vision model identifies the color of a 1x1 red PNG via input_image.
+        """A base64 ``input_image`` data URL reaches the model, which reports its color.
 
-        Uses a locally generated minimal PNG encoded as a data URI.
+        The PNG is generated in-process, so no network fetch or Files API entry is
+        involved: the gateway must decode the data URL into a Bedrock image block.
+        ``"orange"`` is accepted alongside ``"red"`` because a 1x1 pixel leaves the
+        models some latitude in naming the hue.
 
-        Validates:
-            - Response contains non-empty text
-            - Response correctly identifies "red" as the image color
+        Ref: https://docs.aws.amazon.com/nova/latest/userguide/modalities-image.html
+             stdapi/models/chat/_adapters/_openai_responses.py:map_input
         """
         if use_official_api:
             pytest.skip("Multi-model tests only run against the local server")
@@ -483,3 +578,9 @@ class TestVision:
         assert any(color in text.lower() for color in ("red", "orange")), (
             f"Expected 'red' or 'orange' in response for {model!r}, got: {text!r}"
         )
+        msg = next((i for i in response.output if i.type == "message"), None)
+        assert msg is not None, f"Expected a message output item for {model!r}"
+        assert msg.role == "assistant"
+        assert response.usage is not None
+        # The image is billed as input tokens, so the prompt cannot be text-only.
+        assert response.usage.input_tokens > 0

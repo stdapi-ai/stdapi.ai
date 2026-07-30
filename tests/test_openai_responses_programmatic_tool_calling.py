@@ -1,4 +1,15 @@
-"""Unit tests for the Responses API programmatic-tool-calling surface (no AWS calls)."""
+"""Unit tests for the Responses API programmatic-tool-calling surface (no AWS calls).
+
+Bedrock Converse has no equivalent of OpenAI's ``programmatic_tool_calling``
+hosted tool (the model calls tools directly), so the gateway accepts the tool,
+its ``tool_choice`` form and the ``program``/``program_output`` items it
+produces, then drops them instead of failing the request.
+
+Ref: https://developers.openai.com/api/docs/guides/tools-programmatic-tool-calling
+     https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
+     stdapi/types/openai_responses.py:ProgrammaticToolCalling
+     stdapi/models/chat/_adapters/_openai_responses.py:_build_tool_config
+"""
 
 from __future__ import annotations
 
@@ -7,6 +18,7 @@ from pydantic import TypeAdapter
 
 from stdapi.models.chat._adapters._openai_responses import _build_tool_config, map_input
 from stdapi.types.openai_responses import (
+    FunctionTool,
     InputTokenCountParams,
     Program,
     ProgrammaticToolCalling,
@@ -15,6 +27,7 @@ from stdapi.types.openai_responses import (
     ResponseInputItem,
     ResponseItem,
     ResponseOutputItem,
+    ToolChoiceProgrammaticToolCalling,
 )
 
 pytestmark = pytest.mark.local
@@ -42,7 +55,7 @@ class TestTypeSurface:
     """The upstream programmatic-tool-calling types parse instead of 422-ing."""
 
     def test_tool_parses(self) -> None:
-        """A programmatic_tool_calling tool validates through the Tool union."""
+        """A programmatic_tool_calling tool validates as its own Tool union member."""
         request = ResponseCreateParams.model_validate(
             {
                 "model": "m",
@@ -51,7 +64,9 @@ class TestTypeSurface:
             }
         )
         assert request.tools is not None
-        assert isinstance(request.tools[0], ProgrammaticToolCalling)
+        (tool,) = request.tools
+        assert isinstance(tool, ProgrammaticToolCalling)
+        assert tool.type == "programmatic_tool_calling"
 
     def test_tool_choice_parses(self) -> None:
         """The matching tool_choice object validates through the ToolChoice union."""
@@ -62,15 +77,22 @@ class TestTypeSurface:
                 "tool_choice": {"type": "programmatic_tool_calling"},
             }
         )
-        assert getattr(request.tool_choice, "type", None) == "programmatic_tool_calling"
+        assert isinstance(request.tool_choice, ToolChoiceProgrammaticToolCalling)
+        assert request.tool_choice.type == "programmatic_tool_calling"
 
     @pytest.mark.parametrize("payload", [_PROGRAM_ITEM, _PROGRAM_OUTPUT_ITEM])
     def test_input_items_parse(self, payload: dict[str, str]) -> None:
-        """program/program_output items validate as request input items."""
+        """program/program_output items validate as request input items.
+
+        The input-item union is a plain (non-discriminated) union, so the
+        round-trip dump is asserted to prove the payload is not absorbed by a
+        laxer member that would silently drop ``code``/``result``.
+        """
         item = TypeAdapter[ResponseInputItem](ResponseInputItem).validate_python(
             payload
         )
         assert item.type == payload["type"]
+        assert item.model_dump(exclude_none=True) == payload
 
     @pytest.mark.parametrize(
         ("payload", "expected"),
@@ -82,16 +104,21 @@ class TestTypeSurface:
             payload
         )
         assert isinstance(item, expected)
+        assert item.model_dump(exclude_none=True) == payload
 
     @pytest.mark.parametrize("payload", [_PROGRAM_ITEM, _PROGRAM_OUTPUT_ITEM])
     def test_stored_items_parse(self, payload: dict[str, str]) -> None:
         """program/program_output items validate as listed stored items."""
         item = TypeAdapter[ResponseItem](ResponseItem).validate_python(payload)
         assert item.type == payload["type"]
+        assert item.model_dump(exclude_none=True) == payload
 
 
 class TestConverseDrop:
-    """Converse-served models accept the tool and drop it instead of 400-ing."""
+    """Converse-served models accept the tool and drop it instead of 400-ing.
+
+    Ref: stdapi/models/chat/_adapters/_openai_responses.py:_build_tool_config
+    """
 
     def test_tool_is_dropped(self) -> None:
         """The tool is dropped while the other tools stay callable directly."""
@@ -123,7 +150,11 @@ class TestConverseDrop:
         assert _build_tool_config(request) is None
 
     def test_tool_choice_degrades_to_default(self) -> None:
-        """The forced tool_choice is ignored, leaving the model's default choice."""
+        """The forced tool_choice is ignored, leaving the model's default choice.
+
+        Bedrock's ToolChoice union has no programmatic variant, so omitting
+        ``toolChoice`` is the only mapping that keeps the request valid.
+        """
         request = ResponseCreateParams.model_validate(
             {
                 "model": "m",
@@ -135,6 +166,9 @@ class TestConverseDrop:
         tool_config = _build_tool_config(request)
         assert tool_config is not None
         assert "toolChoice" not in tool_config
+        assert [tool["toolSpec"]["name"] for tool in tool_config["tools"]] == [
+            "get_weather"
+        ]
 
     def test_tool_choice_without_tools_yields_no_tool_config(self) -> None:
         """The tool_choice alone is accepted and yields no Bedrock tool config."""
@@ -159,7 +193,12 @@ class TestConverseDrop:
         assert _build_tool_config(request) is None
 
     def test_programmatic_only_callers_stay_direct_tools(self) -> None:
-        """A tool opted into programmatic callers only is still exposed directly."""
+        """A tool opted into programmatic callers only is still exposed directly.
+
+        Without a program to run the tool from, honoring ``allowed_callers``
+        would make the tool unreachable; it is parsed and then left out of the
+        Bedrock toolSpec.
+        """
         request = ResponseCreateParams.model_validate(
             {
                 "model": "m",
@@ -173,9 +212,15 @@ class TestConverseDrop:
                 ],
             }
         )
+        assert request.tools is not None
+        (function_tool,) = request.tools
+        assert isinstance(function_tool, FunctionTool)
+        assert function_tool.allowed_callers == ["programmatic"]
         tool_config = _build_tool_config(request)
         assert tool_config is not None
-        assert tool_config["tools"][0]["toolSpec"]["name"] == "get_weather"
+        (tool,) = tool_config["tools"]
+        assert tool["toolSpec"]["name"] == "get_weather"
+        assert "allowed_callers" not in tool["toolSpec"]
 
     def test_other_tools_are_unaffected(self) -> None:
         """Requests without programmatic tool calling still build a tool config."""
@@ -192,7 +237,10 @@ class TestConverseDrop:
 
 
 class TestInputReplay:
-    """Echoed program history items are accepted and dropped on replay."""
+    """Echoed program history items are accepted and dropped on replay.
+
+    Ref: stdapi/models/chat/_adapters/_openai_responses.py:map_input
+    """
 
     async def test_program_items_are_dropped(self) -> None:
         """program/program_output items produce no Bedrock message."""

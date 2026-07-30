@@ -1,4 +1,10 @@
-"""Unit tests for Mantle project-header forwarding on the stored-response proxy."""
+"""Unit tests for Mantle project-header forwarding on the stored-response proxy.
+
+Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/projects.html
+     https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html
+     stdapi/routes/openai_responses.py:_mantle_stored_response
+     stdapi/aws_bedrock_mantle.py:mantle_request_headers
+"""
 
 from __future__ import annotations
 
@@ -28,7 +34,15 @@ def mantle_project() -> Generator[str]:
 async def test_stored_response_proxy_forwards_project_header(
     monkeypatch: pytest.MonkeyPatch, mantle_project: str
 ) -> None:
-    """GET/DELETE/cancel/input_items calls carry the selected OpenAI-Project header."""
+    """The stored-response proxy call carries the selected ``OpenAI-Project`` header.
+
+    Mantle stored responses are Region-local and Project-scoped, so a response
+    created under one Project cannot be read from another; the proxy must
+    therefore re-send the caller's Project scoping on every GET/DELETE/cancel/
+    input_items call. Unknown IDs are probed on ``/openai/v1`` first.
+
+    Ref: stdapi/aws_bedrock_mantle.py:cached_response_surface
+    """
     calls: list[dict[str, Any]] = []
 
     async def _fake_request_json(
@@ -44,5 +58,8 @@ async def test_stored_response_proxy_forwards_project_header(
     payload = await _mantle_stored_response("us-east-1", "GET", "resp-native-1")
 
     assert payload == {"id": "resp-native-1"}
-    assert len(calls) == 1
+    assert len(calls) == 1, "the first surface answered, so no fallback probe is due"
     assert calls[0]["headers"] == {"OpenAI-Project": mantle_project}
+    assert calls[0]["region"] == "us-east-1"
+    assert calls[0]["method"] == "GET"
+    assert calls[0]["path"] == "/openai/v1/responses/resp-native-1"

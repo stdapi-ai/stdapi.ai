@@ -1,35 +1,24 @@
-"""Agentic tests for Codex CLI connected to stdapi.ai via the Responses API route.
+"""End-to-end /v1/responses coverage driven by the real Codex CLI (agentic lane).
 
-Tests launch a real ``codex exec`` process in non-interactive (``--json``) mode
-against a **dedicated stdapi.ai server** spawned by the test fixture on a free port.
-This provides full end-to-end isolation — each test session owns its own server,
-captures its JSON request logs, and asserts that requests were routed to the
-expected Bedrock model.
+Each test runs ``codex exec --json`` against a dedicated stdapi.ai server spawned
+by ``_stdapi_server_session`` on a free port in no-auth mode (Codex sends no
+``Authorization`` header for a custom provider).  The server's stdout JSON logs
+are streamed into the handle, and the autouse ``_model_identity_check`` fixture
+asserts every logged ``model_id`` belongs to the parametrized Bedrock model.
 
-Architecture:
-    - ``_stdapi_server_session`` (session-scoped): spawns ``uvicorn stdapi.main:app``
-      on a random free port **without an API key** (no-auth mode), and streams its
-      stdout JSON logs into a shared list.
-    - ``_model_identity_check`` (autouse function-scoped): takes a snapshot of the
-      log list before each test and, after it completes, verifies that every logged
-      ``model_id`` field matches the expected Bedrock model ID for that parametrize
-      variant.
+What this exercises that no unit test does: a ~7600-token ``instructions`` field,
+``developer``-role messages in ``input``, multi-turn ``function_call`` items
+replayed as input with their ``function_call_output`` results, and real SSE
+streaming — all against one Bedrock model per family.
 
-Requirements:
-    - ``codex`` CLI binary at the JetBrains IDE cache location (tests skip otherwise).
-    - AWS Bedrock credentials in the environment (same as for the normal test suite).
-    - Pass ``--agentic`` to pytest to enable these tests.
+Requires the ``codex`` binary (tests skip otherwise), Bedrock credentials, and
+``--agentic``.  Per-run metrics are printed as
+``CO-METRICS | <model> | <test> | tool_calls=<N> | in=<N> out=<N>``.
 
-What these tests uniquely exercise on /v1/responses:
-    - Codex sends a large ``instructions`` field (~7600 tokens of system prompt).
-    - Multi-turn tool use: ``function_call`` items echoed back as input followed by
-      ``function_call_output`` results — the pattern that required the bug fix for
-      ``FunctionCallInput`` in ``ResponseInputItem``.
-    - ``developer`` role messages in the ``input`` array.
-    - Real SSE streaming of multi-turn agentic responses.
-
-Metrics collected per run (visible with ``pytest -s`` or on failure):
-    ``CO-METRICS | <model> | <test> | turns=<N> | <Xs> | in=<N> out=<N>``
+Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+     https://developers.openai.com/api/docs/guides/function-calling
+     stdapi/routes/openai_responses.py:create_response
+     stdapi/models/chat/_adapters/_openai_responses.py:_map_function_call
 """
 
 import contextlib
@@ -721,17 +710,27 @@ Document at least 4 model-specific files with real code quotes.
 @_SKIP_NO_CODEX
 @pytest.mark.parametrize("model_config", _MODEL_CONFIGS)
 class TestCodexPipeline:
-    """Codex traces multi-file execution paths via /v1/responses with shell tools."""
+    """Codex traces multi-file execution paths via /v1/responses with shell tools.
+
+    Ref: https://developers.openai.com/api/docs/guides/streaming-responses
+         stdapi/models/chat/_adapters/_openai_responses.py:format_stream
+    """
 
     def test_trace_request_pipeline(
         self,
         model_config: dict,  # type: ignore[type-arg]
         codex_base_url: str,
     ) -> None:
-        """Trace POST /v1/responses from route handler to Bedrock converse().
+        """Codex completes a route-to-Bedrock trace over at least two shell calls.
 
-        Requires multi-file shell exploration: route → handler → adapter → Bedrock.
-        Target: ≥2 shell tool calls.
+        The task cannot be answered from the prompt alone, so the run only
+        succeeds if the ``function_call`` / ``function_call_output`` round trip
+        works across turns: the assertions require no ``turn.failed`` event, a
+        final ``agent_message`` mentioning ``converse`` and at least one gateway
+        function name, and ≥2 ``command_execution`` items.
+
+        Ref: https://developers.openai.com/api/docs/guides/function-calling
+             stdapi/models/chat/_adapters/_openai_responses.py:_map_function_call_output
         """
         events = _run_codex(
             base_url=codex_base_url,
@@ -759,10 +758,15 @@ class TestCodexPipeline:
         model_config: dict,  # type: ignore[type-arg]
         codex_base_url: str,
     ) -> None:
-        """Trace the streaming code path from stream=True to SSE output.
+        """Codex reports on the SSE code path after at least two shell calls.
 
-        Requires reading the adapter and SSE formatting code.
-        Target: ≥2 shell tool calls.
+        Asserted: no ``turn.failed`` event, a non-trivial final ``agent_message``
+        containing a streaming-related keyword, and ≥2 ``command_execution``
+        items.  The run itself is streamed, so the gateway's own SSE output must
+        stay parseable by the Codex client for the turn to complete.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+             stdapi/models/chat/_adapters/_openai_responses.py:format_stream
         """
         events = _run_codex(
             base_url=codex_base_url,
@@ -792,17 +796,26 @@ class TestCodexPipeline:
 @_SKIP_NO_CODEX
 @pytest.mark.parametrize("model_config", _MODEL_CONFIGS)
 class TestCodexAnalysis:
-    """Codex performs multi-file analysis tasks via /v1/responses with shell tools."""
+    """Codex performs multi-file analysis tasks via /v1/responses with shell tools.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+         stdapi/types/openai_responses.py:ResponseCreateParams
+    """
 
     def test_audit_parameter_mapping(
         self,
         model_config: dict,  # type: ignore[type-arg]
         codex_base_url: str,
     ) -> None:
-        """Audit the Responses API → Bedrock parameter translation across source files.
+        """Codex audits the Responses-to-Converse parameter mapping over ≥2 shell calls.
 
-        Requires reading types, adapter, and map_input.
-        Target: ≥2 shell tool calls.
+        Asserted: no ``turn.failed`` event, a non-trivial final ``agent_message``
+        naming at least one mapped parameter (``instructions``,
+        ``inferenceConfig``, ``temperature``, ``toolConfig`` or ``messages``), and
+        ≥2 ``command_execution`` items.
+
+        Ref: https://developers.openai.com/api/docs/guides/migrate-to-responses
+             stdapi/models/chat/_adapters/_openai_responses.py:translate_request
         """
         events = _run_codex(
             base_url=codex_base_url,
@@ -833,10 +846,17 @@ class TestCodexAnalysis:
         model_config: dict,  # type: ignore[type-arg]
         codex_base_url: str,
     ) -> None:
-        """Find and explain all model-specific override files in stdapi/models/chat/.
+        """Codex enumerates the model-specific chat overrides over ≥3 shell calls.
 
-        Requires glob + reading multiple files.
-        Target: ≥3 shell tool calls.
+        The highest tool-call floor in this module: listing ``stdapi/models/chat/``
+        and then reading several files keeps the ``function_call`` /
+        ``function_call_output`` cycle running long enough to exercise a growing
+        input array.  Asserted: no ``turn.failed`` event, a non-trivial final
+        ``agent_message`` naming a model family or override, and ≥3
+        ``command_execution`` items.
+
+        Ref: https://developers.openai.com/api/docs/guides/function-calling
+             stdapi/models/chat/__init__.py:get_chat_model
         """
         events = _run_codex(
             base_url=codex_base_url,

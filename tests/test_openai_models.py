@@ -1,248 +1,177 @@
 """Tests for the OpenAI /v1/models route.
 
-Comprehensive test suite that validates all features of the OpenAI Models API
-specification, ensuring compatibility with the official OpenAI API behavior.
+The gateway synthesizes the catalogue from Bedrock ``ListFoundationModels``
+across every configured region, plus the non-Bedrock services it fronts (Polly,
+Transcribe, Comprehend).  Two fields are therefore gateway conventions rather
+than upstream values: ``created`` is the Bedrock ``startOfLifeTime`` epoch and
+falls back to ``0`` when unknown, and ``owned_by`` is the provider name (e.g.
+``Amazon``) instead of ``openai``/``organization-owner``.
+
+Ref: https://developers.openai.com/api/reference/resources/models/methods/list
+     https://developers.openai.com/api/reference/resources/models/methods/retrieve
+     stdapi/routes/openai_models.py:format_bedrock_model_to_openai
 """
+
+import time
 
 import pytest
 from openai import NotFoundError, OpenAI
 
+#: The four fields the OpenAI Models API documents on a Model object.
+_MODEL_FIELDS = frozenset({"id", "object", "created", "owned_by"})
+
+#: 2020-01-01T00:00:00Z — earliest plausible model launch date, in Unix seconds.
+_EARLIEST_CREATED = 1577836800
+
 
 class TestModels:
-    """Test suite for the /v1/models endpoint.
+    """List and retrieve behavior of ``GET /v1/models`` and ``GET /v1/models/{model}``.
 
-    Tests are designed to validate complete OpenAI API compatibility including:
-    - Model listing and availability validation
-    - Model metadata and capabilities verification
-    - Model retrieval and detailed information access
-    - Complete error scenario coverage with exact error matching
-    - Edge cases and boundary conditions
-    - Response structure and field validation
+    Ref: https://developers.openai.com/api/reference/resources/models/methods/list
+         stdapi/routes/openai_models.py:list_models
     """
 
     def test_list_models_basic_functionality(self, openai_client: OpenAI) -> None:
-        """Test fundamental model listing functionality.
+        """``GET /models`` returns a ``list`` envelope of ``model`` objects.
 
-        Validates the core model listing functionality to ensure the service
-        can retrieve available models successfully.
-
-        Args:
-            openai_client: OpenAI client instance for API calls
-
-        Validates:
-            - Response contains models list
-            - Each model has required fields
-            - Response structure matches OpenAI specification
-            - Models list is not empty
+        Ref: stdapi/types/openai_models.py:Model
         """
         response = openai_client.models.list()
 
-        # Validate response structure
-        assert hasattr(response, "object")
         assert response.object == "list"
-        assert hasattr(response, "data")
         assert isinstance(response.data, list)
-        assert len(response.data) > 0
+        assert len(response.data) > 1, "the catalogue must expose more than one model"
 
-        # Validate each model in the list
         for model in response.data:
-            assert hasattr(model, "id")
-            assert hasattr(model, "object")
-            assert hasattr(model, "created")
-            assert hasattr(model, "owned_by")
             assert model.object == "model"
             assert isinstance(model.id, str)
-            assert len(model.id) > 0
+            assert model.id
             assert isinstance(model.created, int)
+            assert not isinstance(model.created, bool)
             assert model.created >= 0
             assert isinstance(model.owned_by, str)
+            assert model.owned_by
 
     def test_list_models_response_structure_validation(
         self, openai_client: OpenAI
     ) -> None:
-        """Test comprehensive validation of models list response structure.
+        """Every listed model carries all four documented fields, none of them null.
 
-        Validates that the models list response contains all required fields
-        and optional fields as specified in the OpenAI API documentation.
+        The OpenAI SDK builds ``Model`` leniently, so a field the gateway failed
+        to emit arrives as ``None`` rather than as a validation error: the
+        serialized payload is checked instead of the attributes.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-
-        Validates:
-            - All required fields are present
-            - Field types match specification
-            - Optional fields are handled correctly
-            - Response format is consistent
+        Ref: https://developers.openai.com/api/reference/overview
+             stdapi/types/openai_models.py:Model
         """
         response = openai_client.models.list()
 
-        # Validate top-level response structure
         assert response.object == "list"
-        assert isinstance(response.data, list)
+        assert response.data
 
-        # Validate detailed structure of each model
         for model in response.data:
-            # Required fields validation
-            assert isinstance(model.id, str)
-            assert len(model.id) > 0
-            assert model.object == "model"
-            assert isinstance(model.created, int)
-            assert model.created >= 0
-            assert isinstance(model.owned_by, str)
-
-            # Optional fields validation (if present)
-            if hasattr(model, "permission"):
-                assert isinstance(model.permission, list)
-
-            if hasattr(model, "root"):
-                assert isinstance(model.root, str)
-
-            if hasattr(model, "parent"):
-                assert model.parent is None or isinstance(model.parent, str)
+            dumped = model.model_dump()
+            assert dumped.keys() >= _MODEL_FIELDS, (
+                f"{model.id} is missing documented fields: "
+                f"{sorted(_MODEL_FIELDS - dumped.keys())}"
+            )
+            assert all(dumped[field] is not None for field in _MODEL_FIELDS)
+            assert dumped["object"] == "model"
 
     def test_retrieve_specific_model(self, openai_client: OpenAI) -> None:
-        """Test retrieval of a specific model by ID.
+        """``GET /models/{model}`` returns a bare Model echoing the requested id.
 
-        Validates that individual model retrieval works correctly
-        and returns detailed model information.
+        Unlike the list route the payload is not wrapped in a ``list`` envelope,
+        so it carries no ``data`` key.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-
-        Validates:
-            - Model retrieval by ID works correctly
-            - Response contains detailed model information
-            - Response structure matches OpenAI specification
+        Ref: https://developers.openai.com/api/reference/resources/models/methods/retrieve
+             stdapi/routes/openai_models.py:retrieve_model
         """
-        # First get the list of models to find a valid model ID
         models_response = openai_client.models.list()
-        assert len(models_response.data) > 0
+        assert models_response.data
 
-        # Use the first available model for testing
         test_model_id = models_response.data[0].id
-
-        # Retrieve the specific model
         model = openai_client.models.retrieve(test_model_id)
-
-        # Validate retrieved model structure
-        assert hasattr(model, "id")
-        assert hasattr(model, "object")
-        assert hasattr(model, "created")
-        assert hasattr(model, "owned_by")
 
         assert model.id == test_model_id
         assert model.object == "model"
         assert isinstance(model.created, int)
         assert model.created >= 0
-        assert isinstance(model.owned_by, str)
+        assert model.owned_by
+
+        dumped = model.model_dump()
+        assert dumped.keys() >= _MODEL_FIELDS
+        assert "data" not in dumped, "retrieve must not return a list envelope"
 
     def test_model_filtering_and_availability(self, openai_client: OpenAI) -> None:
-        """Test model filtering and availability validation.
+        """Listed ids are unique and every advertised id is individually retrievable.
 
-        Validates that different types of models are available and
-        can be properly identified and categorized.
+        A model reachable in several regions is merged into a single catalogue
+        entry, so a duplicate id would mean the cross-region merge regressed.
+        The first and last entries are retrieved to prove the list and the
+        single-model route agree on what exists.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-
-        Validates:
-            - Multiple model types are available
-            - Model IDs are consistent and valid
-            - Different model categories can be identified
+        Ref: stdapi/models/__init__.py:get_all_models_details
         """
         response = openai_client.models.list()
 
-        # Collect model information for analysis
         model_ids = [model.id for model in response.data]
-        model_owners = [model.owned_by for model in response.data]
-
-        # Validate model diversity and consistency
+        assert model_ids, "Should have at least one model available"
         assert len(set(model_ids)) == len(model_ids), "Model IDs should be unique"
-        assert len(model_ids) > 0, "Should have at least one model available"
 
-        # Validate that we have models from expected categories
-        # (This may vary based on the implementation)
-        assert len(set(model_owners)) >= 1, "Should have models from at least one owner"
-
-        # Validate model ID formats are reasonable
         for model_id in model_ids:
-            assert isinstance(model_id, str)
-            assert len(model_id) > 0
-            # Model IDs should not contain obviously invalid characters
             assert not any(char in model_id for char in [" ", "\n", "\t"])
 
+        for model_id in (model_ids[0], model_ids[-1]):
+            assert openai_client.models.retrieve(model_id).id == model_id
+
     def test_model_metadata_consistency(self, openai_client: OpenAI) -> None:
-        """Test consistency of model metadata across list and retrieve operations.
+        """List and retrieve return byte-identical metadata for the same model.
 
-        Validates that model information is consistent between
-        the models list and individual model retrieval.
+        Both routes serialize through ``format_bedrock_model_to_openai``, so
+        every field — not just the id — must match; a difference would mean one
+        of the two paths reads a different cache.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-
-        Validates:
-            - Model metadata is consistent between operations
-            - List and retrieve return the same core information
-            - Field values match across different endpoints
+        Ref: stdapi/routes/openai_models.py:format_bedrock_model_to_openai
         """
-        # Get models list
         models_response = openai_client.models.list()
-        assert len(models_response.data) > 0
+        assert models_response.data
 
-        # Test consistency for first few models (limit for efficiency)
         test_models = models_response.data[: min(3, len(models_response.data))]
 
         for list_model in test_models:
-            # Retrieve the same model individually
             retrieved_model = openai_client.models.retrieve(list_model.id)
 
-            # Validate consistency of core fields
-            assert list_model.id == retrieved_model.id
-            assert list_model.object == retrieved_model.object
-            assert list_model.owned_by == retrieved_model.owned_by
-
-            # Validate that both have the same structure type
             assert type(list_model) is type(retrieved_model)
+            assert retrieved_model.model_dump() == list_model.model_dump(), (
+                f"list and retrieve disagree on {list_model.id}"
+            )
 
     def test_model_creation_timestamps(self, openai_client: OpenAI) -> None:
-        """Test validation of model creation timestamps.
+        """``created`` is either 0 (launch date unknown) or a past Unix timestamp.
 
-        Validates that model creation timestamps are reasonable
-        and follow expected patterns.
+        The gateway derives it from the Bedrock model lifecycle's
+        ``startOfLifeTime``, which is optional, and uses ``0`` as the sentinel —
+        a launch date in the future would mean the epoch conversion is wrong.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-
-        Validates:
-            - Creation timestamps are valid Unix timestamps
-            - Timestamps are within reasonable ranges
-            - All models have non-zero creation times
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html
+             stdapi/models/__init__.py:ModelDetails
         """
         response = openai_client.models.list()
+        now = int(time.time())
 
-        # Validate creation timestamps
         for model in response.data:
             assert isinstance(model.created, int)
             assert model.created >= 0
-
-            # Timestamps should be 0 (epoch, unknown) or reasonable (after 2020, before far future)
-            # 1577836800 = Jan 1, 2020 UTC
-            # 2147483647 = Max 32-bit signed int (year 2038)
-            assert model.created == 0 or 1577836800 < model.created < 2147483647
+            assert model.created == 0 or _EARLIEST_CREATED < model.created <= now, (
+                f"{model.id} has an implausible created timestamp: {model.created}"
+            )
 
     def test_invalid_model_retrieval_error(self, openai_client: OpenAI) -> None:
-        """Test error handling for invalid model ID retrieval.
+        """An unknown model id is a 404 ``model_not_found`` naming the requested id.
 
-        Validates proper error response for non-existent model IDs.
-
-        Args:
-            openai_client: OpenAI client instance for API calls
-
-        Validates:
-            - Correct HTTP status code (404)
-            - Proper error type ("invalid_request_error") and code ("model_not_found")
-            - Error message identifies model as invalid
-            - Consistent error response structure
+        Ref: https://developers.openai.com/api/docs/guides/error-codes
+             stdapi/api_errors.py:UnsupportedModelError
         """
         with pytest.raises(NotFoundError) as exc_info:
             openai_client.models.retrieve("invalid-nonexistent-model-id")
@@ -254,21 +183,18 @@ class TestModels:
         assert error_body["type"] == "invalid_request_error"
         assert error_body["code"] == "model_not_found"
         assert "model" in error_body["message"].lower()
+        assert "invalid-nonexistent-model-id" in error_body["message"]
 
     def test_empty_model_id_retrieval_error(self, openai_client: OpenAI) -> None:
-        """Test error handling for empty model ID.
+        """The OpenAI SDK refuses an empty model id before any HTTP request is made.
 
-        OpenAI client validates model ID before making API calls,
-        raising ValueError for empty model IDs.
+        This is an SDK-side guard, not gateway behavior: no request reaches
+        ``GET /models/{model}``, whose path parameter has its own
+        ``min_length=1`` constraint.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-
-        Validates:
-            - ValueError is raised for empty model ID
-            - Error message indicates empty value issue
+        Ref: https://github.com/openai/openai-python
+             stdapi/routes/openai_models.py:retrieve_model
         """
-        # Test with empty string - client validates before API call
         with pytest.raises(ValueError, match=r".*(?:non-empty|empty).*") as exc_info:
             openai_client.models.retrieve("")
 
@@ -280,131 +206,96 @@ class TestModels:
         assert "model" in error_message.lower()
 
     def test_model_ownership_validation(self, openai_client: OpenAI) -> None:
-        """Test validation of model ownership information.
+        """``owned_by`` is a per-model provider string, not a constant or the model id.
 
-        Validates that model ownership information is properly
-        formatted and consistent.
+        The gateway fills it from the Bedrock ``providerName`` (e.g. ``Amazon``,
+        ``Anthropic``), so a catalogue spanning several providers must expose
+        more than one distinct owner.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-
-        Validates:
-            - All models have valid ownership information
-            - Owner information is consistently formatted
-            - Owner strings are non-empty and valid
+        Ref: stdapi/routes/openai_models.py:format_bedrock_model_to_openai
         """
         response = openai_client.models.list()
 
         owners = set()
         for model in response.data:
             assert isinstance(model.owned_by, str)
-            assert len(model.owned_by) > 0
+            assert model.owned_by
             assert not any(char in model.owned_by for char in ["\n", "\t"])
+            assert model.owned_by != model.id
             owners.add(model.owned_by)
 
-        # Should have at least one distinct owner
-        assert len(owners) >= 1
-
-        # Common expected owners (may vary by implementation)
-        # At least some models should have recognized owners
-        # (This is flexible to accommodate different implementations)
+        assert len(owners) > 1, (
+            f"owned_by must be derived per model, got a single value: {owners}"
+        )
 
     def test_model_list_pagination_behavior(self, openai_client: OpenAI) -> None:
-        """Test model list pagination and response size behavior.
+        """The catalogue is returned in a single, stably ordered page.
 
-        Validates that the models list endpoint handles response
-        size and pagination appropriately.
+        ``GET /models`` takes no cursor parameters: iterating the SDK pager
+        yields exactly the entries of ``data``.  The gateway serves the list from
+        a sorted cache, so a second call must return the same ids in the same
+        order rather than the region-merge iteration order of the moment.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-
-        Validates:
-            - Models list returns reasonable number of results
-            - Response is not empty
-            - All results are valid and complete
+        Ref: stdapi/routes/openai_models.py:list_models
         """
         response = openai_client.models.list()
 
-        # Validate response size is reasonable
-        assert len(response.data) > 0
+        assert response.data
         assert len(response.data) < 1000  # Reasonable upper bound
+        assert [model.id for model in response] == [
+            model.id for model in response.data
+        ], "the models list is not paginated: iterating must yield exactly one page"
 
-        # Validate all entries are complete
         for model in response.data:
-            assert model.id is not None
+            assert model.id
             assert model.object == "model"
             assert model.created is not None
             assert model.owned_by is not None
 
+        assert [model.id for model in openai_client.models.list().data] == [
+            model.id for model in response.data
+        ], "repeated calls must return the same models in the same order"
+
     def test_model_id_format_validation(self, openai_client: OpenAI) -> None:
-        """Test validation of model ID formats and conventions.
+        """Model ids are URL-usable path segments, including Bedrock ``:`` versions.
 
-        Validates that model IDs follow consistent formatting
-        and naming conventions.
+        Bedrock ids embed a version suffix (``…-v1:0``); the retrieve route must
+        accept that colon unescaped, since clients paste the id straight from the
+        list response.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-
-        Validates:
-            - Model IDs are properly formatted
-            - IDs follow consistent naming patterns
-            - No invalid characters or formats
+        Ref: stdapi/routes/openai_models.py:retrieve_model
         """
         response = openai_client.models.list()
 
         for model in response.data:
             model_id = model.id
 
-            # Basic format validation
             assert isinstance(model_id, str)
-            assert len(model_id) > 0
-            assert len(model_id) < 256  # Reasonable length limit
-
-            # Character validation
-            assert not model_id.startswith(" ")
-            assert not model_id.endswith(" ")
+            assert model_id
+            assert len(model_id) < 256  # Route path parameter max_length
+            assert model_id == model_id.strip()
             assert not any(char in model_id for char in ["\n", "\r", "\t"])
 
-    def test_model_capabilities_detection(self, openai_client: OpenAI) -> None:
-        """Test detection and validation of model capabilities.
+        versioned = next((model.id for model in response.data if ":" in model.id), None)
+        if versioned is not None:
+            assert openai_client.models.retrieve(versioned).id == versioned
 
-        Validates that different model types can be identified
-        and their capabilities properly understood.
+    def test_model_capabilities_detection(
+        self, openai_client: OpenAI, models: dict[str, str]
+    ) -> None:
+        """The catalogue advertises the models the suite actually calls.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
+        The chat and embedding entries come from Bedrock while the transcription
+        entry is an extra, non-Bedrock service registered by the gateway, so all
+        three being listed proves the catalogue merges every source rather than
+        exposing Bedrock only.
 
-        Validates:
-            - Different model types are available
-            - Model capabilities can be inferred from metadata
-            - Model categorization is consistent
+        Ref: stdapi/models/__init__.py:EXTRA_MODELS
         """
         response = openai_client.models.list()
+        model_ids = {model.id for model in response.data}
 
-        # Categorize models by their IDs (implementation-specific logic)
-        model_categories: dict[str, list[str]] = {
-            "chat": [],
-            "embedding": [],
-            "speech": [],
-            "other": [],
-        }
-
-        for model in response.data:
-            model_id_lower = model.id.lower()
-
-            if any(
-                keyword in model_id_lower for keyword in ["chat", "gpt", "completion"]
-            ):
-                model_categories["chat"].append(model.id)
-            elif any(keyword in model_id_lower for keyword in ["embed", "embedding"]):
-                model_categories["embedding"].append(model.id)
-            elif any(
-                keyword in model_id_lower for keyword in ["tts", "speech", "whisper"]
-            ):
-                model_categories["speech"].append(model.id)
-            else:
-                model_categories["other"].append(model.id)
-
-        # Should have at least some models (flexibility for different implementations)
-        total_models = sum(len(models) for models in model_categories.values())
-        assert total_models > 0
+        for capability in ("chat", "embedding", "transcription"):
+            assert models[capability] in model_ids, (
+                f"{capability} model {models[capability]} is not advertised by /v1/models"
+            )

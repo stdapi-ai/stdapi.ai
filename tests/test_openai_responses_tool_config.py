@@ -1,28 +1,26 @@
-"""Unit tests for Responses API tool-config and structured-output mapping (no AWS calls)."""
+"""Unit tests for the Responses ``text.format`` -> Bedrock ``outputConfig`` mapping.
+
+Structured Outputs are served by Bedrock's native ``outputConfig.textFormat``
+JSON schema definition rather than by prompt-level instructions, so the schema
+name and description supplied by the client must reach Bedrock verbatim.
+
+Ref: https://developers.openai.com/api/docs/guides/structured-outputs
+     https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+     stdapi/models/chat/_adapters/_openai_responses.py:_build_output_config
+"""
 
 from __future__ import annotations
 
 import pytest
 
 from stdapi.models.chat._adapters._openai_responses import _build_output_config
-from stdapi.types.openai_responses import FunctionTool, ResponseTextConfig
+from stdapi.types.openai_responses import ResponseTextConfig
 
 pytestmark = pytest.mark.local
 
 
-def _tool(**kwargs: object) -> FunctionTool:
-    """Build a validated function tool with the given overrides."""
-    base: dict[str, object] = {
-        "type": "function",
-        "name": "get_weather",
-        "parameters": {"type": "object", "properties": {}},
-    }
-    base.update(kwargs)
-    return FunctionTool.model_validate(base)
-
-
 def test_build_output_config_forwards_json_schema_name_and_description() -> None:
-    """The client-supplied schema name and description reach Bedrock's jsonSchema."""
+    """The client-supplied schema, name and description reach Bedrock's jsonSchema."""
     text = ResponseTextConfig.model_validate(
         {
             "format": {
@@ -37,6 +35,9 @@ def test_build_output_config_forwards_json_schema_name_and_description() -> None
     assert output_config is not None
     assert output_config["name"] == "weather_report"
     assert output_config["description"] == "A weather report."
+    assert output_config["schema"] == '{"type":"object"}', (
+        "the schema is forwarded as a serialised JSON string"
+    )
 
 
 def test_build_output_config_omits_description_when_unset() -> None:
@@ -53,3 +54,4 @@ def test_build_output_config_omits_description_when_unset() -> None:
     output_config = _build_output_config(text)
     assert output_config is not None
     assert "description" not in output_config
+    assert output_config["name"] == "weather_report"
