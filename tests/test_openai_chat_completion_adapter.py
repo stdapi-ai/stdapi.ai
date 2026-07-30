@@ -772,7 +772,10 @@ class TestBuildOutputConfig:
                 "json_schema": {"name": "answer", "schema": {"type": "object"}},
             }
         )
-        assert build_output_config(response_format) == {"schema": '{"type":"object"}'}
+        assert build_output_config(response_format) == {
+            "schema": '{"type":"object"}',
+            "name": "answer",
+        }
 
     def test_string_schema_is_passed_through_verbatim(self) -> None:
         """A pre-serialized schema string reaches Bedrock unaltered.
@@ -787,7 +790,10 @@ class TestBuildOutputConfig:
                 name="answer", schema_='{"type":"object"}'
             ),
         )
-        assert build_output_config(response_format) == {"schema": '{"type":"object"}'}
+        assert build_output_config(response_format) == {
+            "schema": '{"type":"object"}',
+            "name": "answer",
+        }
 
     def test_json_object_and_text_formats(self) -> None:
         """``json_object`` sends the empty schema and plain text sends none."""

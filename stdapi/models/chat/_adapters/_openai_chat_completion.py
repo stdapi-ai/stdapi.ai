@@ -317,11 +317,15 @@ def build_output_config(
             return {"schema": "{}"}
         case ResponseFormatJSONSchema(json_schema=js):
             schema = js.schema_
-            return {
+            json_schema: JsonSchemaDefinitionTypeDef = {
                 "schema": schema
                 if isinstance(schema, str)
-                else to_json(schema).decode()
+                else to_json(schema).decode(),
+                "name": js.name,
             }
+            if js.description is not None:
+                json_schema["description"] = js.description
+            return json_schema
 
 
 def translate_request(
