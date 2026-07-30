@@ -30,6 +30,12 @@ if TYPE_CHECKING:
     from anthropic.types.beta import FileMetadata
     from openai import OpenAI
 
+#: The Files API is one namespace shared by the whole account, and the cursor
+#: pagination tests here read it across two requests. Without a group,
+#: ``--dist=loadgroup`` spreads even a single module's tests across workers, so an
+#: upload from a sibling test can land between those two requests and shift the page.
+pytestmark = pytest.mark.xdist_group("anthropic_files")
+
 #: Simple plain-text file bytes for general tests.
 _TEXT_FILE: bytes = b"The capital of France is Paris."
 

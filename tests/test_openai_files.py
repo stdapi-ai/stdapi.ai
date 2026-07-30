@@ -45,6 +45,12 @@ _MINIMAL_PDF: bytes = (
 )
 
 #: Simple plain-text file bytes for chat integration tests.
+#: The Files API is one namespace shared by the whole account, and these tests
+#: create, list and delete in it. Without a group, ``--dist=loadgroup`` spreads even
+#: a single module's tests across workers, so they would race against each other:
+#: a listing assertion can see files another test is midway through deleting.
+pytestmark = pytest.mark.xdist_group("openai_files")
+
 _TEXT_FILE: bytes = b"The capital of France is Paris."
 
 #: Minimum part size enforced by S3 for all parts except the last (5 MiB).
@@ -266,7 +272,10 @@ class TestOpenAIFiles:
             purpose="assistants",
         )
         try:
-            files = list(openai_client.files.list(limit=10))
+            # .data is the first page. Iterating the page object instead would
+            # auto-paginate the whole account, and ordering only has to hold within
+            # one server-side snapshot, not across pages fetched seconds apart.
+            files = openai_client.files.list(limit=10).data
             assert len(files) >= 2
             created = [f.created_at for f in files]
             assert created == sorted(created, reverse=True), (
@@ -304,7 +313,8 @@ class TestOpenAIFiles:
             purpose="assistants",
         )
         try:
-            files = list(openai_client.files.list(order="asc", limit=10))
+            # First page only — see test_list_order_desc on why not to auto-paginate.
+            files = openai_client.files.list(order="asc", limit=10).data
             assert len(files) >= 2
             timestamps = [f.created_at for f in files]
             assert timestamps == sorted(timestamps), (
