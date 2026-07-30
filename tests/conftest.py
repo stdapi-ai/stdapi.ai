@@ -403,11 +403,13 @@ def pytest_report_header() -> str | None:
 def pytest_collection_modifyitems(
     config: pytest.Config, items: list[pytest.Item]
 ) -> None:
-    """Skip opt-in tests, and local tests against a remote target, at collection time.
+    """Skip opt-in tests, and tests their target cannot serve, at collection time.
 
     ``local``-marked tests are skipped when ``--server-url`` or
-    ``--use-official-api`` selects a remote target; the ``_OPT_IN_MARKERS``
-    tests are skipped unless their matching flag is passed.
+    ``--use-official-api`` selects a remote target; ``gateway``-marked tests are
+    skipped only for ``--use-official-api``, since a deployed gateway can serve
+    them but the upstream vendors cannot; the ``_OPT_IN_MARKERS`` tests are
+    skipped unless their matching flag is passed.
     """
     if config.getoption("--server-url") or config.getoption("--use-official-api"):
         skip_marker = pytest.mark.skip(
@@ -416,6 +418,13 @@ def pytest_collection_modifyitems(
         for item in items:
             if item.get_closest_marker("local"):
                 item.add_marker(skip_marker)
+    if config.getoption("--use-official-api"):
+        skip_gateway = pytest.mark.skip(
+            reason="Exercises a gateway-only capability (official API selected)"
+        )
+        for item in items:
+            if item.get_closest_marker("gateway"):
+                item.add_marker(skip_gateway)
     for marker in _OPT_IN_MARKERS:
         if config.getoption(f"--{marker}"):
             continue

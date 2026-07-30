@@ -245,12 +245,14 @@ class TestOpenAIFiles:
     def test_list_order_desc(self, openai_client: OpenAI) -> None:
         """The default list order is newest first.
 
-        ``order`` defaults to ``desc`` upstream; the gateway gets that ordering for
-        free from the UUIDv7 prefix of the S3 keys, reversed. The ordering key is
-        therefore the file ID, not ``created_at`` — the latter is the S3
-        ``LastModified`` timestamp and is only second-granular, so a page can hold
-        equal and even slightly inverted ``created_at`` values while still being
-        correctly ordered. The ID sequence is the property worth pinning.
+        ``order`` defaults to ``desc`` and is defined on ``created_at``. Sorting by
+        file ID would be a gateway-only shortcut: its IDs carry a UUIDv7 prefix, so
+        lexicographic order happens to match creation order, but OpenAI's file IDs
+        are random and never sort. The gateway's ``created_at`` is the S3
+        ``LastModified`` and only second-granular, so two files created in the same
+        second can tie or invert; the assertion is therefore that the page is
+        non-increasing to the second, plus the relative position of the two files
+        this test created, which is exact on both targets.
 
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
              stdapi/files/_core.py:list_files
@@ -266,11 +268,12 @@ class TestOpenAIFiles:
         try:
             files = list(openai_client.files.list(limit=10))
             assert len(files) >= 2
-            ids = [f.id for f in files]
-            assert ids == sorted(ids, reverse=True), (
-                f"the default page must be newest-first by file id, got {ids}"
+            created = [f.created_at for f in files]
+            assert created == sorted(created, reverse=True), (
+                f"the default page must be newest-first by created_at, got {created}"
             )
-            # The two files just created are the newest, in reverse creation order.
+            # Exact even when the two share a created_at second.
+            ids = [f.id for f in files]
             assert ids.index(f2.id) < ids.index(f1.id)
         finally:
             openai_client.files.delete(f1.id)

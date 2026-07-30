@@ -159,6 +159,43 @@ def validate_error_response(
         )
 
 
+#: OpenAI image models that have been retired upstream. A request naming one is
+#: refused before any other parameter is looked at, so nothing else is observable.
+_RETIRED_OFFICIAL_IMAGE_MODELS = frozenset({"dall-e-2", "dall-e-3"})
+
+
+def _skip_retired_official_image_model(
+    use_official_api: bool, model: str, parameter: str
+) -> None:
+    """Skip the official lane when the mapped OpenAI image model has been retired.
+
+    OpenAI has removed the DALL-E models: ``GET /v1/models/dall-e-2`` answers
+    ``model_not_found``, and every ``/v1/images/*`` request naming one is
+    refused with ``The model 'dall-e-2' does not exist`` before any other
+    parameter is looked at. The upstream rejection of *parameter* is therefore
+    unobservable until ``MODEL_MAPPINGS["openai"]`` is repointed at a live image
+    model; the gateway lane keeps asserting it.
+
+    The guard tests the model, not just the lane, so repointing the mapping at a
+    live model restores this coverage automatically instead of leaving a skip that
+    claims a live model was retired.
+
+    Args:
+        use_official_api: True when the suite targets the official OpenAI API.
+        model: Model id the test sends.
+        parameter: Request parameter whose rejection the test asserts.
+
+    Ref: https://developers.openai.com/api/docs/guides/image-generation
+         tests/conftest.py:MODEL_MAPPINGS
+    """
+    if use_official_api and model in _RETIRED_OFFICIAL_IMAGE_MODELS:
+        pytest.skip(
+            f"OpenAI retired '{model}': the request is rejected as "
+            f"\"The model '{model}' does not exist\" before '{parameter}' is "
+            f"validated"
+        )
+
+
 def validate_streaming_image_response(
     response: Iterable[ImageStreamEvent],
 ) -> list[ImageStreamEvent]:
@@ -575,15 +612,21 @@ class TestImageGeneration:
         )
 
     def test_empty_prompt_error(
-        self, openai_client: OpenAI, image_generation_model: str
+        self, openai_client: OpenAI, image_generation_model: str, use_official_api: bool
     ) -> None:
         """An empty ``prompt`` is rejected as an ``invalid_request_error``.
 
         ``prompt`` has ``min_length=1``, so the request never reaches Bedrock.
+        OpenAI reports the same envelope (``invalid_request_error`` on
+        ``prompt``, code ``empty_string``) on a live image model.
 
         Ref: stdapi/types/openai_images.py:ImageGenerateParams
              stdapi/main.py:handle_validation_exception
         """
+        _skip_retired_official_image_model(
+            use_official_api, image_generation_model, "prompt"
+        )
+
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.images.generate(
                 prompt="", model=image_generation_model, n=1, size="512x512"
@@ -595,12 +638,19 @@ class TestImageGeneration:
             expected_param="prompt",
         )
 
-    def test_invalid_model_error(self, openai_client: OpenAI) -> None:
-        """An unknown ``model`` is rejected with ``model_not_found`` as a 400.
+    def test_invalid_model_error(
+        self, openai_client: OpenAI, use_official_api: bool
+    ) -> None:
+        """An unknown ``model`` is rejected as a 400 naming ``model``.
 
         The images route passes ``error_status=400`` to model validation, so an
         unknown model is reported as a bad request rather than the 404 the
         underlying error class defaults to.
+
+        The two targets label that 400 differently: OpenAI answers
+        ``image_generation_user_error``/``invalid_value`` on its image
+        endpoints, whereas the gateway answers the generic
+        ``invalid_request_error``/``model_not_found`` it uses everywhere else.
 
         Ref: stdapi/routes/openai_images_generations.py:create_images
              stdapi/api_errors.py:UnsupportedModelError
@@ -612,20 +662,35 @@ class TestImageGeneration:
 
         validate_error_response(
             exc_info.value,
-            expected_type="invalid_request_error",
-            expected_code="model_not_found",
+            expected_type=(
+                "image_generation_user_error"
+                if use_official_api
+                else "invalid_request_error"
+            ),
+            expected_code="invalid_value" if use_official_api else "model_not_found",
             expected_param="model",
         )
 
     @pytest.mark.parametrize("invalid_n", [0, -1, 11])
     def test_invalid_n_parameter_error(
-        self, openai_client: OpenAI, image_generation_model: str, invalid_n: int
+        self,
+        openai_client: OpenAI,
+        image_generation_model: str,
+        invalid_n: int,
+        use_official_api: bool,
     ) -> None:
         """``n`` outside 1-10 is rejected as an ``invalid_request_error``.
+
+        OpenAI enforces the same 1-10 bound with the same envelope
+        (``invalid_request_error`` on ``n``) on a live image model.
 
         Ref: stdapi/types/openai_images.py:_ImageBaseParams
              stdapi/main.py:handle_validation_exception
         """
+        _skip_retired_official_image_model(
+            use_official_api, image_generation_model, "n"
+        )
+
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.images.generate(
                 prompt="A test image",
@@ -639,13 +704,21 @@ class TestImageGeneration:
         )
 
     def test_invalid_size_error(
-        self, openai_client: OpenAI, image_generation_model: str
+        self, openai_client: OpenAI, image_generation_model: str, use_official_api: bool
     ) -> None:
         """A ``size`` that is neither ``auto`` nor ``WIDTHxHEIGHT`` is rejected.
+
+        The gateway rejects it in schema validation as an
+        ``invalid_request_error``; OpenAI rejects it after model resolution as
+        an ``image_generation_user_error``/``invalid_value`` on ``size``.
 
         Ref: stdapi/types/openai_images.py:_ImageBaseParams
              stdapi/main.py:handle_validation_exception
         """
+        _skip_retired_official_image_model(
+            use_official_api, image_generation_model, "size"
+        )
+
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.images.generate(
                 prompt="A test image",
@@ -682,17 +755,22 @@ class TestImageGeneration:
         )
 
     def test_invalid_quality_error(
-        self, openai_client: OpenAI, image_generation_model: str
+        self, openai_client: OpenAI, image_generation_model: str, use_official_api: bool
     ) -> None:
         """A ``quality`` the model cannot honor is rejected as a 400 naming ``quality``.
 
         ``quality`` is a free-form string on the gateway because the accepted
         values are model-dependent, so the rejection comes from the backend job
-        rather than from schema validation.
+        rather than from schema validation. OpenAI produces the same envelope
+        (``invalid_request_error`` on ``quality``) on a live image model.
 
         Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase._validate_no_quality
              stdapi/api_providers/openai.py:_format_error
         """
+        _skip_retired_official_image_model(
+            use_official_api, image_generation_model, "quality"
+        )
+
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.images.generate(  # type: ignore[call-overload]
                 prompt="A test image",
@@ -742,6 +820,9 @@ class TestImageGeneration:
         Only OpenAI's GPT image models stream. The gateway streams every Bedrock
         image model instead, so this is exercised against the official API only.
 
+        The claim is currently unobservable on both targets: OpenAI has retired
+        the DALL-E family, and every remaining official image model streams.
+
         Ref: https://developers.openai.com/api/docs/guides/image-generation
              stdapi/routes/openai_images_generations.py:stream_generator
         """
@@ -749,6 +830,9 @@ class TestImageGeneration:
             pytest.skip(
                 "Streaming supported on all Bedrock models in this implementation"
             )
+        _skip_retired_official_image_model(
+            use_official_api, image_generation_model, "stream"
+        )
 
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.images.generate(
@@ -767,16 +851,22 @@ class TestImageGeneration:
         )
 
     def test_partial_images_without_stream_error(
-        self, openai_client: OpenAI, image_generation_model: str
+        self, openai_client: OpenAI, image_generation_model: str, use_official_api: bool
     ) -> None:
         """``partial_images`` without ``stream=True`` is rejected as a 400.
 
         The incompatibility is caught by a model-level validator, so the gateway
-        envelope names ``partial_images`` in the message and carries no ``param``.
+        envelope names ``partial_images`` in the message and carries no
+        ``param``. OpenAI rejects it as an ``image_generation_user_error``
+        (code ``unsupported_parameter``, ``param`` ``input``) instead.
 
         Ref: stdapi/types/openai_images.py:ImageGenerateParams._unsupported
              stdapi/main.py:handle_validation_exception
         """
+        _skip_retired_official_image_model(
+            use_official_api, image_generation_model, "partial_images"
+        )
+
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.images.generate(
                 prompt="A test image",

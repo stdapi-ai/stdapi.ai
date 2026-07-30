@@ -69,6 +69,9 @@ _CACHE_MESSAGES: list[Any] = [
     {"role": "user", "content": "What is 2 + 2?"},
 ]
 
+#: ``max_completion_tokens`` for the official lane, whose model bills reasoning against it.
+_OFFICIAL_TOKEN_BUDGET = 1024
+
 #: Third-party HTTPS image used to exercise the gateway's own image downloader.
 _REMOTE_IMAGE_URL = (
     "https://raw.githubusercontent.com/JGoutin/asus-s14na-u12-uefi/"
@@ -266,7 +269,7 @@ class TestChatCompletions:
         )
 
     def test_streaming_basic_functionality(
-        self, openai_client: OpenAI, chat_model: str
+        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
     ) -> None:
         """Streaming starts with a role-only delta and continues with content deltas.
 
@@ -275,15 +278,18 @@ class TestChatCompletions:
         chunk repeats the same completion id and the ``chat.completion.chunk``
         object type.  The answer is bounded with ``max_completion_tokens`` rather
         than a chunk counter, so the whole stream is consumed and the single
-        terminal chunk is observable.
+        terminal chunk is observable.  The budget is larger on the official lane
+        because its model bills reasoning tokens against ``max_completion_tokens``
+        and would otherwise stop on ``length`` before emitting any content delta.
 
         Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events
+             https://developers.openai.com/api/docs/guides/reasoning
              stdapi/models/chat/_adapters/_openai_chat_completion.py:format_stream
         """
         response = openai_client.chat.completions.create(
             model=chat_model,
             messages=[{"role": "user", "content": "Count to 5 slowly."}],
-            max_completion_tokens=64,
+            max_completion_tokens=_OFFICIAL_TOKEN_BUDGET if use_official_api else 64,
             stream=True,
         )
 
@@ -600,15 +606,19 @@ class TestChatCompletions:
         assert final_choice.finish_reason in ("stop", "length")
 
     def test_legacy_functions_streaming(
-        self, openai_client: OpenAI, chat_vision_model: str
+        self, openai_client: OpenAI, chat_vision_model: str, use_official_api: bool
     ) -> None:
         """Streaming a forced legacy function emits ``delta.function_call`` fragments.
 
         In legacy mode the gateway streams the tool call as ``function_call``
         argument fragments instead of indexed ``tool_calls`` entries; the
-        fragments concatenate into the complete JSON argument object.
+        fragments concatenate into the complete JSON argument object.  The
+        official lane gets a larger budget because its model bills reasoning
+        tokens against ``max_completion_tokens`` and would otherwise stop on
+        ``length`` before emitting the forced call.
 
         Ref: https://developers.openai.com/api/docs/guides/function-calling#streaming
+             https://developers.openai.com/api/docs/guides/reasoning
              stdapi/models/chat/_adapters/_openai_chat_completion.py:format_stream
         """
         functions = [
@@ -629,7 +639,7 @@ class TestChatCompletions:
             functions=functions,
             function_call={"name": "calculate_sum"},
             stream=True,
-            max_completion_tokens=60,
+            max_completion_tokens=_OFFICIAL_TOKEN_BUDGET if use_official_api else 60,
         )
 
         chunks, saw_function_delta, args_fragments, has_finish = (
@@ -2054,6 +2064,11 @@ class TestChatCompletions:
              https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html
              stdapi/models/chat/_adapters/_openai_common.py:resolve_cache_ttl
         """
+        if use_official_api:
+            pytest.skip(
+                "gpt-5-nano rejects prompt_cache_options with "
+                "'prompt_cache_options is not supported on this model'"
+            )
         messages: list[Any] = [
             {
                 "role": "system",
@@ -2079,10 +2094,6 @@ class TestChatCompletions:
             )
         assert response.usage is not None
         usage_details = response.usage.prompt_tokens_details
-        if use_official_api and (
-            usage_details is None or not usage_details.cached_tokens
-        ):
-            pytest.xfail("Cached tokens may not be available on the official API")
         assert usage_details is not None
         assert usage_details.cached_tokens
         assert response.usage.prompt_tokens >= usage_details.cached_tokens, (
@@ -2129,7 +2140,7 @@ class TestChatCompletions:
         assert bad_charset_body["code"] == "ValidationException"
 
     def test_reasoning_effort_max_parameter(
-        self, openai_client: OpenAI, chat_reasoning_model: str
+        self, openai_client: OpenAI, chat_reasoning_model: str, use_official_api: bool
     ) -> None:
         """The upstream ``max`` effort level is accepted and answered.
 
@@ -2140,6 +2151,12 @@ class TestChatCompletions:
         Ref: https://developers.openai.com/api/docs/guides/reasoning#reasoning-effort
              stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel._req_configure_reasoning
         """
+        if use_official_api:
+            pytest.skip(
+                "gpt-5-nano rejects reasoning_effort='max' with an "
+                "unsupported_value error: it only accepts 'minimal', 'low', "
+                "'medium' and 'high'"
+            )
         response = openai_client.chat.completions.create(
             model=chat_reasoning_model,
             messages=[{"role": "user", "content": "Reply with OK."}],
@@ -2152,22 +2169,25 @@ class TestChatCompletions:
         assert response.usage.completion_tokens > 0
 
     def test_disabled_logprobs_accepted(
-        self, openai_client: OpenAI, chat_model: str
+        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
     ) -> None:
         """``logprobs: false`` requests the default behavior and is not rejected.
 
         ``logprobs`` is on the gateway's unsupported list, but a ``false``/``null``
         value is treated as omission rather than as a request for the feature, so
-        the call succeeds and returns no logprobs.
+        the call succeeds and returns no logprobs.  The official lane gets a
+        larger budget because its model bills reasoning tokens against
+        ``max_completion_tokens`` and would otherwise return empty content.
 
         Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+             https://developers.openai.com/api/docs/guides/reasoning
              stdapi/types/openai_chat_completions.py:CompletionCreateParams._unsupported
         """
         response = openai_client.chat.completions.create(
             model=chat_model,
             messages=[{"role": "user", "content": "Say OK."}],
             logprobs=False,
-            max_completion_tokens=16,
+            max_completion_tokens=_OFFICIAL_TOKEN_BUDGET if use_official_api else 16,
         )
         assert response.choices[0].message.role == "assistant"
         assert response.choices[0].message.content
@@ -2243,9 +2263,12 @@ class TestChatCompletions:
         Bedrock tier; every other requested tier resolves to an effective
         ``default``, which is what the response reports. The
         ``X-Amzn-Bedrock-*`` headers configure Bedrock directly and deliberately
-        do not populate the OpenAI ``service_tier`` field.
+        do not populate the OpenAI ``service_tier`` field.  The official lane gets
+        a larger budget because its model bills reasoning tokens against
+        ``max_completion_tokens`` and would otherwise return empty content.
 
         Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+             https://developers.openai.com/api/docs/guides/reasoning
              https://docs.aws.amazon.com/bedrock/latest/userguide/service-tiers-inference.html
              stdapi/models/chat/_adapters/_openai_common.py:map_service_tier
         """
@@ -2253,7 +2276,7 @@ class TestChatCompletions:
             model=chat_model,
             messages=[{"role": "user", "content": "Say hi again"}],
             service_tier="default",
-            max_completion_tokens=32,
+            max_completion_tokens=_OFFICIAL_TOKEN_BUDGET if use_official_api else 32,
         )
         assert getattr(response, "service_tier", None) == "default"
         assert response.choices[0].message.content
@@ -2462,15 +2485,18 @@ class TestChatCompletions:
         )
 
     def test_tool_choice_none_no_tool_calls(
-        self, openai_client: OpenAI, chat_vision_model: str
+        self, openai_client: OpenAI, chat_vision_model: str, use_official_api: bool
     ) -> None:
         """``tool_choice="none"`` with tools declared returns text and no tool calls.
 
         OpenAI ``none`` means "behave as if no tools were passed"; Bedrock has no
         ``none`` value in its ``toolChoice`` union, so the gateway implements it by
-        omitting the tool configuration entirely.
+        omitting the tool configuration entirely.  The official lane gets a larger
+        budget because its model bills reasoning tokens against
+        ``max_completion_tokens`` and would otherwise return empty content.
 
         Ref: https://developers.openai.com/api/docs/guides/function-calling#tool-choice
+             https://developers.openai.com/api/docs/guides/reasoning
              stdapi/models/chat/_adapters/_openai_chat_completion.py:build_tool_config
         """
         tools = [
@@ -2491,7 +2517,7 @@ class TestChatCompletions:
             messages=[{"role": "user", "content": "Hello"}],
             tools=tools,
             tool_choice="none",
-            max_completion_tokens=64,
+            max_completion_tokens=_OFFICIAL_TOKEN_BUDGET if use_official_api else 64,
         )
         assert resp.choices[0].message.tool_calls is None
         assert isinstance(resp.choices[0].message.content, str)
@@ -3059,21 +3085,25 @@ class TestChatCompletions:
         assert finish_reason == "stop"
 
     def test_user_parameter_accepted(
-        self, openai_client: OpenAI, chat_model: str
+        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
     ) -> None:
         """The deprecated ``user`` field is still accepted as an end-user identifier.
 
         It is superseded by ``safety_identifier`` and ``prompt_cache_key`` but is
         kept for compatibility: the gateway uses it as the request log's user id.
+        The official lane gets a larger budget because its model bills reasoning
+        tokens against ``max_completion_tokens`` and would otherwise return empty
+        content.
 
         Ref: https://developers.openai.com/api/docs/guides/safety-best-practices#implement-safety-identifiers
+             https://developers.openai.com/api/docs/guides/reasoning
              stdapi/routes/openai_chat_completions.py:create_chat_completion
         """
         response = openai_client.chat.completions.create(
             model=chat_model,
             messages=[{"role": "user", "content": "Say OK."}],
             user="test-user-123",
-            max_completion_tokens=16,
+            max_completion_tokens=_OFFICIAL_TOKEN_BUDGET if use_official_api else 16,
         )
         assert len(response.choices) >= 1
         assert response.choices[0].message.role == "assistant"

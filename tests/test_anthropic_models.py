@@ -15,7 +15,7 @@ Ref: https://platform.claude.com/docs/en/api/models/list
 from datetime import UTC, datetime
 
 import pytest
-from anthropic import Anthropic, NotFoundError
+from anthropic import Anthropic, BadRequestError, NotFoundError
 
 from stdapi.routes.anthropic_models import paginate_models
 from stdapi.types.anthropic_messages import ModelInfo
@@ -221,18 +221,28 @@ class TestAnthropicModels:
                 f"{model.id} created_at predates the epoch fallback: {model.created_at!r}"
             )
 
-    def test_list_models_ids_are_sorted(self, anthropic_client: Anthropic) -> None:
-        """The gateway orders models by ID, not by release date.
+    def test_list_models_ids_are_sorted(
+        self, anthropic_client: Anthropic, use_official_api: bool
+    ) -> None:
+        """The catalog is ordered: by descending release date upstream, by ID on the gateway.
 
-        Upstream documents "more recently released models are listed first"; the
-        synthesized list instead sorts Bedrock's model IDs lexicographically, which is what
-        makes the ID cursors stable across calls.
+        Upstream documents "More recently released models are listed first", so its page is
+        sorted on ``created_at`` descending. The gateway synthesizes the catalog from
+        Bedrock metadata, where the release date is a best-effort field with an epoch
+        fallback, and sorts on the model ID instead so the ID cursors stay stable.
 
-        Ref: stdapi/routes/anthropic_models.py:list_models
+        Ref: https://platform.claude.com/docs/en/api/models/list
+             stdapi/routes/anthropic_models.py:list_models
         """
-        response = anthropic_client.models.list(limit=1000)
-        ids = [m.id for m in response.data]
-        assert ids == sorted(ids)
+        data = anthropic_client.models.list(limit=1000).data
+        assert len(data) > 0
+
+        if use_official_api:
+            created = [m.created_at for m in data]
+            assert created == sorted(created, reverse=True)
+        else:
+            ids = [m.id for m in data]
+            assert ids == sorted(ids)
 
     def test_list_models_consistency(self, anthropic_client: Anthropic) -> None:
         """Repeated list calls serve the identical cached catalog.
@@ -309,14 +319,31 @@ class TestAnthropicModels:
         assert after_last.first_id is None
         assert after_last.last_id is None
 
-    def test_list_models_invalid_after_id(self, anthropic_client: Anthropic) -> None:
-        """An unmatched ``after_id`` is ignored and the unfiltered list is returned.
+    def test_list_models_invalid_after_id(
+        self, anthropic_client: Anthropic, use_official_api: bool
+    ) -> None:
+        """An unmatched ``after_id`` is a 400 upstream and is ignored by the gateway.
 
-        Gateway-specific: ``paginate_models`` only slices when the cursor is found, so an
-        unknown cursor degrades to "no cursor" instead of erroring or returning nothing.
+        Upstream resolves the cursor and answers ``invalid_request_error`` "Model with id
+        ... not found". ``paginate_models`` only slices when the cursor is found, so on the
+        gateway an unknown cursor degrades to "no cursor" and the unfiltered list is
+        returned instead of erroring or returning nothing.
 
-        Ref: stdapi/routes/anthropic_models.py:paginate_models
+        Ref: https://platform.claude.com/docs/en/api/models/list
+             stdapi/routes/anthropic_models.py:paginate_models
         """
+        if use_official_api:
+            with pytest.raises(BadRequestError) as excinfo:
+                anthropic_client.models.list(
+                    limit=1000, after_id="nonexistent-cursor-id-xyz"
+                )
+            assert excinfo.value.status_code == 400
+            assert excinfo.value.type == "invalid_request_error"
+            body = excinfo.value.body
+            assert isinstance(body, dict)
+            assert "nonexistent-cursor-id-xyz" in body["error"]["message"]
+            return
+
         full_list = anthropic_client.models.list(limit=1000)
         invalid_cursor = anthropic_client.models.list(
             limit=1000, after_id="nonexistent-cursor-id-xyz"
@@ -328,14 +355,30 @@ class TestAnthropicModels:
         assert invalid_cursor.last_id == full_list.last_id
         assert invalid_cursor.has_more == full_list.has_more
 
-    def test_list_models_invalid_before_id(self, anthropic_client: Anthropic) -> None:
-        """An unmatched ``before_id`` is ignored and the unfiltered list is returned.
+    def test_list_models_invalid_before_id(
+        self, anthropic_client: Anthropic, use_official_api: bool
+    ) -> None:
+        """An unmatched ``before_id`` is a 400 upstream and is ignored by the gateway.
 
-        Gateway-specific: an unknown ``before_id`` must not silently switch the page to the
-        end of the list, which is the failure mode the offline pagination tests pin down.
+        Upstream rejects the unknown cursor with ``invalid_request_error``. On the gateway
+        it is ignored, and the page must not silently switch to the end of the list — the
+        failure mode the offline pagination tests pin down.
 
-        Ref: stdapi/routes/anthropic_models.py:paginate_models
+        Ref: https://platform.claude.com/docs/en/api/models/list
+             stdapi/routes/anthropic_models.py:paginate_models
         """
+        if use_official_api:
+            with pytest.raises(BadRequestError) as excinfo:
+                anthropic_client.models.list(
+                    limit=1000, before_id="nonexistent-cursor-id-xyz"
+                )
+            assert excinfo.value.status_code == 400
+            assert excinfo.value.type == "invalid_request_error"
+            body = excinfo.value.body
+            assert isinstance(body, dict)
+            assert "nonexistent-cursor-id-xyz" in body["error"]["message"]
+            return
+
         full_list = anthropic_client.models.list(limit=1000)
         invalid_cursor = anthropic_client.models.list(
             limit=1000, before_id="nonexistent-cursor-id-xyz"

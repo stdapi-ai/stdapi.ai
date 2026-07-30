@@ -127,13 +127,23 @@ class TestImagesEditsBasic:
         assert response.output_format == image_format
 
     def test_invalid_model(
-        self, openai_client: OpenAI, sample_image_file: bytes
+        self, openai_client: OpenAI, sample_image_file: bytes, use_official_api: bool
     ) -> None:
         """An unknown model id is rejected with a 400 naming the requested model.
+
+        The two targets label that 400 differently: OpenAI answers
+        ``image_generation_user_error``/``invalid_value`` on its image
+        endpoints, whereas the gateway answers the generic
+        ``invalid_request_error``/``model_not_found``.
 
         Ref: stdapi/models/__init__.py:validate_model
              stdapi/api_errors.py:UnsupportedModelError
         """
+        expected_type = (
+            "image_generation_user_error"
+            if use_official_api
+            else "invalid_request_error"
+        )
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.images.edit(
                 image=sample_image_file,
@@ -141,10 +151,16 @@ class TestImagesEditsBasic:
                 model="invalid-model-name",
                 size="512x512",
             )
-        validate_error_response(exc_info.value)
-        assert exc_info.value.type == "invalid_request_error"
+        validate_error_response(
+            exc_info.value,
+            expected_type=expected_type,
+            expected_code="invalid_value" if use_official_api else "model_not_found",
+            expected_param="model",
+        )
+        assert exc_info.value.type == expected_type
         assert "invalid-model-name" in str(exc_info.value)
 
+    @pytest.mark.gateway
     def test_invalid_mask_format(
         self, openai_client: OpenAI, sample_image_file: bytes
     ) -> None:
@@ -153,7 +169,9 @@ class TestImagesEditsBasic:
         The gateway never decodes the mask: the bytes are base64-encoded and
         forwarded, and the backend's ``ValidationException`` is mapped to a 400
         ``invalid_request_error``. The message text comes from AWS, so only the
-        status and the envelope are asserted.
+        status and the envelope are asserted. The mapping of a Bedrock
+        ``ValidationException`` onto the OpenAI envelope exists only in the
+        gateway, and the inpaint model it needs is Bedrock-only.
 
         Ref: stdapi/aws_bedrock.py:handle_bedrock_client_error
              stdapi/routes/openai_images_edits.py:edit_images
@@ -175,7 +193,7 @@ class TestImagesEditsBasic:
         assert body["message"], "error envelope must carry a message"
 
     def test_image_array_notation_accepted(
-        self, openai_client: OpenAI, sample_image_file: bytes
+        self, openai_client: OpenAI, sample_image_file: bytes, use_official_api: bool
     ) -> None:
         """The multipart ``image[]`` field name is merged into the image list.
 
@@ -183,6 +201,9 @@ class TestImagesEditsBasic:
         was added, causing a 400 "at least 1 image" error instead of reaching
         the model. Failing on the unknown model instead proves the upload was
         parsed.
+
+        OpenAI labels that unknown-model 400 ``image_generation_user_error`` on
+        its image endpoints, where the gateway uses ``invalid_request_error``.
 
         Ref: stdapi/routes/openai_images_edits.py:_merge_image_parameters
         """
@@ -196,12 +217,25 @@ class TestImagesEditsBasic:
         # image[] was parsed → error is about the model, not missing image
         assert response.status_code == 400
         error = response.json()["error"]
-        assert error["type"] == "invalid_request_error"
+        assert error["type"] == (
+            "image_generation_user_error"
+            if use_official_api
+            else "invalid_request_error"
+        )
         assert "model" in error["message"].lower()
         assert "invalid-model-name" in error["message"]
 
-    def test_image_array_notation_invalid_type(self, openai_client: OpenAI) -> None:
+    def test_image_array_notation_invalid_type(
+        self, openai_client: OpenAI, use_official_api: bool
+    ) -> None:
         """A non-file value under ``image[]`` is a validation error on ``body.image[]``.
+
+        Sending only form fields makes httpx encode the body as
+        ``application/x-www-form-urlencoded``. The gateway parses that encoding
+        like multipart and reports the offending field, while OpenAI accepts
+        only ``multipart/form-data`` or ``application/json`` here and rejects
+        the request on its content type before looking at any field. Both
+        targets answer 400 ``invalid_request_error``.
 
         Ref: stdapi/routes/openai_images_edits.py:_merge_image_parameters
              stdapi/main.py:handle_validation_exception
@@ -220,7 +254,10 @@ class TestImagesEditsBasic:
         assert response.status_code == 400
         error = response.json()["error"]
         assert error["type"] == "invalid_request_error"
-        assert "body.image[]" in error["message"], error["message"]
+        expected = (
+            "application/x-www-form-urlencoded" if use_official_api else "body.image[]"
+        )
+        assert expected in error["message"], error["message"]
 
     @pytest.mark.skip("Currently no models to use for this test case")
     def test_model_not_supporting_image_editing(
@@ -250,6 +287,7 @@ class TestImagesEditsBasic:
             or "edit" in error_msg
         )
 
+    @pytest.mark.gateway
     def test_multiple_images_error(
         self, openai_client: OpenAI, sample_image_file: bytes
     ) -> None:
@@ -257,7 +295,8 @@ class TestImagesEditsBasic:
 
         The OpenAI schema allows up to 16 images for GPT image models; the
         Bedrock backends consume exactly one, so the extra image is rejected by
-        the job rather than by request validation.
+        the job rather than by request validation. Both the single-image limit
+        and the model enforcing it are Bedrock-specific.
 
         Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase._get_one_image_from_list
         """

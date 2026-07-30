@@ -774,13 +774,18 @@ class TestAnthropicMessages:
         assert all(b.type in ("text", "tool_use") for b in response.content)
 
     def test_tool_choice_specific_tool(
-        self, anthropic_client: Anthropic, anthropic_chat_vision_model: str
+        self,
+        anthropic_client: Anthropic,
+        anthropic_chat_vision_model: str,
+        use_official_api: bool,
     ) -> None:
-        """``tool_choice`` ``tool`` forces that tool and suppresses calls to any other.
+        """``tool_choice`` ``tool`` always calls that tool; only the gateway suppresses the others.
 
-        Two tools are offered and the prompt asks for both, but Converse
-        ``toolChoice: {"tool": {"name": ...}}`` plus the gateway's ``forced_tool``
-        filter mean only ``get_weather`` blocks may survive in the response.
+        Two tools are offered and the prompt asks for both. Upstream, ``tool`` only forces
+        the named tool to be used, so Claude may call ``get_time`` in the same turn. The
+        gateway sends Converse ``toolChoice: {"tool": {"name": ...}}`` and additionally
+        drops every ``tool_use`` block for another tool through its ``forced_tool`` filter,
+        so only ``get_weather`` blocks can survive there.
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools#forcing-tool-use
              https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
@@ -813,10 +818,14 @@ class TestAnthropicMessages:
         assert response.stop_reason == "tool_use"
         tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
         assert len(tool_use_blocks) >= 1
-        # Blocks for the other tool are filtered out by the forced-tool guard.
-        assert [b.name for b in tool_use_blocks] == ["get_weather"] * len(
-            tool_use_blocks
-        )
+        names = [b.name for b in tool_use_blocks]
+        assert "get_weather" in names, "the forced tool must be called"
+        if use_official_api:
+            # Upstream forces the named tool without forbidding the other ones.
+            assert set(names) <= {"get_weather", "get_time"}
+        else:
+            # Blocks for the other tool are filtered out by the forced-tool guard.
+            assert names == ["get_weather"] * len(names)
         assert all(b.id.startswith("toolu_") for b in tool_use_blocks)
 
     def test_tool_calling_streaming(

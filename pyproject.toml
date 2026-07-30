@@ -165,6 +165,7 @@ markers = [
     "slow: cheap but slow tests, skipped unless --slow is passed",
     "video: video generation tests, by far the costliest, skipped unless --video is passed",
     "local: tests the local implementation in-process, skipped with --server-url or --use-official-api",
+    "gateway: needs a stdapi.ai gateway for a capability the upstream vendors do not expose, skipped with --use-official-api",
     "xdist_group: group tests to run on the same xdist worker",
 ]
 filterwarnings = [

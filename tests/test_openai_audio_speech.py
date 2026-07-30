@@ -491,15 +491,18 @@ class TestAudioSpeech:
         )
 
     def test_invalid_voice_error(
-        self, openai_client: OpenAI, speech_standard_model: str
+        self, openai_client: OpenAI, speech_standard_model: str, use_official_api: bool
     ) -> None:
         """An unknown voice is rejected as an ``invalid_request_error``.
 
-        The voice is a free-form string (Polly voice IDs are accepted too), so
-        the rejection comes from Polly's ValidationException, which the
-        gateway rewrites into a 400 listing the engine's available voices.
+        OpenAI validates ``voice`` against its built-in enum, so the message
+        enumerates the accepted names and never repeats the rejected one. The
+        gateway takes a free-form string (Polly voice IDs are accepted too), so
+        the rejection comes from Polly's ValidationException, which the gateway
+        rewrites into a 400 quoting the offending name.
 
-        Ref: https://docs.aws.amazon.com/polly/latest/dg/available-voices.html
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             https://docs.aws.amazon.com/polly/latest/dg/available-voices.html
              stdapi/models/audio/amazon_polly.py:_handle_polly_error
         """
         with pytest.raises(BadRequestError) as exc_info:
@@ -520,9 +523,16 @@ class TestAudioSpeech:
             word in error_message
             for word in ["voice", "invalid", "supported", "input", "should"]
         )
-        assert "invalid_voice_name" in error_message, (
-            "the error must echo the rejected voice name"
-        )
+        if use_official_api:
+            # Enum validation: the accepted voices are listed, the input is not.
+            assert "alloy" in error_message, (
+                "the error must enumerate the accepted built-in voices"
+            )
+            assert "coral" in error_message
+        else:
+            assert "invalid_voice_name" in error_message, (
+                "the error must echo the rejected voice name"
+            )
 
     @pytest.mark.parametrize("speed", [0.0, -1.0, 10.0])
     def test_invalid_speed_error(
@@ -558,11 +568,17 @@ class TestAudioSpeech:
         assert "speed" in error_message, "the error must name the offending field"
 
     def test_invalid_response_format_error(
-        self, openai_client: OpenAI, speech_standard_model: str
+        self, openai_client: OpenAI, speech_standard_model: str, use_official_api: bool
     ) -> None:
-        """An unsupported ``response_format`` is rejected, listing the valid values.
+        """An unsupported ``response_format`` is rejected, naming the offending field.
+
+        OpenAI points at the field through ``param`` and tags the failure with
+        the ``unsupported_value`` code, its message staying terse. The gateway
+        surfaces the pydantic validation error instead: it enumerates the
+        accepted formats in the message but leaves ``param`` and ``code`` null.
 
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             https://developers.openai.com/api/docs/guides/error-codes
              stdapi/types/openai_audio.py:SpeechCreateParams
         """
         with pytest.raises(BadRequestError) as exc_info:
@@ -578,14 +594,19 @@ class TestAudioSpeech:
         error_body = error.body
         assert isinstance(error_body, dict)
         assert error_body["type"] == "invalid_request_error"
-        assert error_body["code"] is None
         error_message = str(error).lower()
-        assert any(
-            word in error_message
-            for word in ["format", "supported", "response", "input", "should"]
+        assert "response_format" in error_message, (
+            "the error must name the offending field"
         )
-        assert "mp3" in error_message, "the error must enumerate the accepted formats"
-        assert "pcm" in error_message
+        if use_official_api:
+            assert error_body["code"] == "unsupported_value"
+            assert error_body["param"] == "response_format"
+        else:
+            assert error_body["code"] is None
+            assert "mp3" in error_message, (
+                "the error must enumerate the accepted formats"
+            )
+            assert "pcm" in error_message
 
     def test_missing_required_parameters(
         self, openai_client: OpenAI, speech_standard_model: str
@@ -635,17 +656,24 @@ class TestAudioSpeech:
         assert "input" in str(error_body["message"]).lower()
 
     def test_stream_format_functionality(
-        self, openai_client: OpenAI, speech_standard_model: str
+        self, openai_client: OpenAI, speech_standard_model: str, use_official_api: bool
     ) -> None:
         """``stream_format`` selects between a raw audio body and SSE audio events.
 
         With ``sse`` the same mp3 bytes are delivered as base64
         ``speech.audio.delta`` events, closed by a single
-        ``speech.audio.done`` event carrying the usage totals.
+        ``speech.audio.done`` event carrying the usage totals. OpenAI restricts
+        that framing to its ``gpt-4o-mini-tts`` family, and silently returns an
+        ``audio/mpeg`` body for ``tts-1``.
 
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
              stdapi/routes/openai_audio_speech.py:_speech_audio_sse
         """
+        if use_official_api:
+            pytest.skip(
+                "CreateSpeechRequest: stream_format='sse' is not supported for tts-1"
+            )
+
         # Test default "audio" stream format
         response_audio = openai_client.audio.speech.create(
             model=speech_standard_model,

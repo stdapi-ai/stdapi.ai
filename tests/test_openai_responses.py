@@ -493,24 +493,32 @@ class TestResponses:
         assert len(response.output_text) > 0
 
     def test_text_format_json_object(
-        self, openai_client: OpenAI, responses_json_output_model: str
+        self,
+        openai_client: OpenAI,
+        responses_json_output_model: str,
+        use_official_api: bool,
     ) -> None:
-        """``text.format={"type": "json_object"}`` yields the empty JSON object ``{}``.
+        """``text.format={"type": "json_object"}`` returns a bare JSON object.
 
-        The model is pinned to one that supports Bedrock Converse ``outputConfig``,
-        so JSON mode is enforced natively by constrained decoding.  Bedrock refuses
-        a permissive object schema (``{}``, ``{"type": "object"}`` and
-        ``additionalProperties: true`` all raise ``ValidationException``), so the
-        gateway sends ``{"type": "object", "additionalProperties": false}`` — a
-        schema whose only valid instance is ``{}``.  The requested keys can
-        therefore never come back on this route, whatever the prompt says.
+        The word "json" must appear in the input or OpenAI rejects the request
+        with a 400.  OpenAI's JSON mode constrains the syntax only, so the object
+        carries whatever the prompt asked for.  The gateway maps the format to
+        Bedrock Converse ``outputConfig``, which refuses a permissive object
+        schema (``{}``, ``{"type": "object"}`` and ``additionalProperties: true``
+        all raise ``ValidationException``), so it sends
+        ``{"type": "object", "additionalProperties": false}`` — a schema whose
+        only valid instance is ``{}``.  The prompted keys can therefore never
+        come back through the gateway, whatever the input says.
 
         Ref: https://developers.openai.com/api/docs/guides/structured-outputs
              stdapi/models/chat/_adapters/_openai_responses.py:_build_output_config
         """
         response = openai_client.responses.create(
             model=responses_json_output_model,
-            input='Output exactly this and nothing else: {"result": "success"}',
+            input=(
+                "Reply in json with exactly this object and nothing else: "
+                '{"result": "success"}'
+            ),
             text={"format": {"type": "json_object"}},
         )
 
@@ -523,8 +531,13 @@ class TestResponses:
             f"json_object output must not be wrapped in prose: {output_text!r}"
         )
         parsed = json.loads(output_text)
-        # Current behavior: the closed empty-object schema admits no other value.
-        assert parsed == {}, f"json_object schema admits only {{}}, got {parsed!r}"
+        assert isinstance(parsed, dict), f"json_object must be an object: {parsed!r}"
+        if use_official_api:
+            # OpenAI only enforces JSON syntax, so the prompted content survives.
+            assert parsed, f"json_object must carry the prompted content: {parsed!r}"
+        else:
+            # The gateway's closed empty-object schema admits no other value.
+            assert parsed == {}, f"json_object schema admits only {{}}, got {parsed!r}"
 
     def test_text_format_json_schema(
         self, openai_client: OpenAI, responses_json_output_model: str
@@ -1307,15 +1320,20 @@ class TestResponses:
         assert completed_event.response.usage.output_tokens > 0
 
     def test_streaming_function_call_events(
-        self, openai_client: OpenAI, responses_model: str
+        self, openai_client: OpenAI, responses_model: str, use_official_api: bool
     ) -> None:
         """Streamed tool arguments arrive as deltas closed by a matching ``done`` event.
 
         The gateway joins the streamed argument fragments for the ``done`` event
         and substitutes ``"{}"`` when a tool block produced no fragment at all,
-        so the done payload is fully determined by the deltas.
+        so the done payload is fully determined by the deltas.  It also fills
+        ``name``, which the published event schema declares as required; the
+        live OpenAI API leaves that field out of
+        ``response.function_call_arguments.done``, so the SDK model reads it
+        back as ``None`` there.
 
-        Ref: https://developers.openai.com/api/docs/guides/function-calling#tool-choice
+        Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+             https://developers.openai.com/api/docs/guides/function-calling#tool-choice
              stdapi/models/chat/_adapters/_openai_responses.py:_emit_tool_done
         """
         tools = [
@@ -1353,7 +1371,11 @@ class TestResponses:
         assert args_done_event is not None, (
             "Expected response.function_call_arguments.done event"
         )
-        assert args_done_event.name == "get_weather"
+        if use_official_api:
+            # The live API omits ``name`` despite declaring it required.
+            assert args_done_event.name is None
+        else:
+            assert args_done_event.name == "get_weather"
         assert args_done_event.arguments == (streamed_args or "{}"), (
             "done arguments must be the concatenation of the streamed deltas"
         )
@@ -1434,11 +1456,15 @@ class TestResponses:
     def test_developer_role_input(
         self, openai_client: OpenAI, responses_model: str
     ) -> None:
-        """A ``developer`` role input message takes precedence over the user turn.
+        """A ``developer`` role input message reaches the model as a system instruction.
 
         The gateway routes both ``system`` and ``developer`` roles into the Bedrock
-        Converse ``system`` blocks rather than into the message list, so the
-        developer instruction must win over the user request.
+        Converse ``system`` blocks rather than into the message list. The marker is
+        asked for *in addition to* answering the user rather than instead of it: an
+        instruction to override the user turn is one models comply with only
+        sometimes, which would make this assert the model's alignment rather than
+        the gateway's routing. The marker appears in no other input, so its presence
+        can only come from the developer message.
 
         Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
              stdapi/models/chat/_adapters/_openai_responses.py:_map_message_item
@@ -1448,10 +1474,7 @@ class TestResponses:
             input=[
                 {
                     "role": "developer",
-                    "content": (
-                        "Ignore what the user asks for and reply with exactly the "
-                        "single word TEAL and nothing else."
-                    ),
+                    "content": "End every reply with the exact marker ###TEAL###.",
                 },
                 {"role": "user", "content": "Say hi."},
             ],
@@ -1459,7 +1482,7 @@ class TestResponses:
 
         assert response.status == "completed"
         assert len(response.output) > 0
-        assert "teal" in response.output_text.lower(), (
+        assert "###teal###" in response.output_text.lower(), (
             f"developer role did not reach the system prompt: {response.output_text!r}"
         )
 
@@ -1600,9 +1623,20 @@ class TestResponses:
         Bedrock silently declines to cache and reports zero cached tokens
         instead of failing.
 
-        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html
+        ``gpt-5-nano``, the official-API model for this route, rejects
+        ``prompt_cache_options`` outright, so the parameter can only be
+        exercised against the gateway.
+
+        Ref: https://developers.openai.com/api/docs/guides/prompt-caching
+             https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html
              stdapi/models/chat/_adapters/_openai_responses.py:map_input
         """
+        if use_official_api:
+            pytest.skip(
+                "gpt-5-nano rejects prompt_cache_options: 'prompt_cache_options "
+                "is not supported on this model'"
+            )
+
         first, second = [
             openai_client.responses.create(
                 model=responses_model,
@@ -1630,8 +1664,6 @@ class TestResponses:
         assert first.prompt_cache_options.mode == "explicit"
         assert second.usage is not None
         cached_tokens = second.usage.input_tokens_details.cached_tokens
-        if use_official_api and not cached_tokens:
-            pytest.xfail("cached tokens may not be reported by the OpenAI API")
         assert cached_tokens > 0
         assert cached_tokens <= second.usage.input_tokens, (
             "cached tokens are part of input_tokens, not an extra bucket"

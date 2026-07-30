@@ -282,18 +282,19 @@ class TestCompletions:
             assert finish_per_index[index] in _TERMINAL_REASONS
 
     def test_stop_sequences_truncate_generation(
-        self, openai_client: OpenAI, completion_model: str
+        self, openai_client: OpenAI, completion_model: str, use_official_api: bool
     ) -> None:
-        """A stop sequence halts generation at its first occurrence, which stays in the text.
+        """A stop sequence halts generation at its first occurrence.
 
         The prompt asks for several sentences within a generous token budget, so a
-        completion holding a single ``"."`` proves the model stopped on the sequence
-        rather than on ``max_tokens``.  Contrary to the OpenAI contract ("the returned
-        text will not contain the stop sequence"), Bedrock keeps the matched sequence in
-        the text and reports ``stopReason="end_turn"``, mapped to ``finish_reason``
-        ``"stop"``.
+        completion holding at most one ``"."`` proves the model stopped on the
+        sequence rather than on ``max_tokens``.  OpenAI honors its documented
+        contract and strips the matched sequence, so the returned text contains no
+        ``"."`` at all; Bedrock instead keeps the matched sequence in the text and
+        reports ``stopReason="end_turn"``, mapped to ``finish_reason`` ``"stop"``.
 
-        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+        Ref: https://developers.openai.com/api/reference/resources/completions/methods/create
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
              stdapi/types/openai_completions.py:CompletionCreateParams
              stdapi/models/chat/_adapters/_openai_completion.py:_map_finish_reason
         """
@@ -307,12 +308,16 @@ class TestCompletions:
         assert len(response.choices) == 1
         assert response.choices[0].finish_reason == "stop"
         text = response.choices[0].text
-        assert text.count(".") == 1, (
+        expected_occurrences = 0 if use_official_api else 1
+        assert text.count(".") == expected_occurrences, (
             f"generation must halt at the first stop sequence: {text!r}"
         )
-        assert text.endswith("."), (
-            f"Bedrock keeps the matched stop sequence in the text: {text!r}"
-        )
+        if use_official_api:
+            assert text, f"the truncated completion must still carry text: {text!r}"
+        else:
+            assert text.endswith("."), (
+                f"Bedrock keeps the matched stop sequence in the text: {text!r}"
+            )
         assert response.usage is not None
         assert response.usage.completion_tokens < 500
 

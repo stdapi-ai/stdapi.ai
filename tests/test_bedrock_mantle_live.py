@@ -33,7 +33,11 @@ from tests.conftest import logged_usage_entries
 
 #: The learned-routing caches are process-global, so these tests must not be split
 #: across xdist workers that would each learn a different routing surface.
-pytestmark = pytest.mark.xdist_group("mantle_live")
+#: Bedrock Mantle is an AWS capability reached through the gateway; the models it
+#: serves (Gemma, the Mantle-hosted OpenAI builds) do not exist upstream, so the
+#: whole module is meaningless against an official API but valid against a
+#: deployed gateway.
+pytestmark = [pytest.mark.xdist_group("mantle_live"), pytest.mark.gateway]
 
 if TYPE_CHECKING:
     from anthropic import Anthropic
