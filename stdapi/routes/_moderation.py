@@ -53,7 +53,7 @@ def apply_request_moderation(moderation: RequestModeration | None) -> None:
         {
             "guardrailIdentifier": identifier,
             "guardrailVersion": version,
-            "trace": "enabled",
+            "trace": "enabled_full",
         }
     )
     GUARDRAIL_TRACE_VAR.set({})

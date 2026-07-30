@@ -1990,6 +1990,10 @@ class ResponseFunctionToolCall(BaseModelResponse):
     name: str = Field(description="Function name.")
     type: Literal["function_call"] = Field(description="Function call type.")
     id: str | None = Field(default=None, description="Function call unique ID.")
+    caller: Caller = Field(
+        default=None,
+        description="Provenance of this tool call: direct or programmatic.",
+    )
     namespace: str | None = Field(default=None, description="Function namespace.")
     status: ResponseItemStatus | None = Field(
         default=None,
@@ -2554,6 +2558,10 @@ class ResponseCustomToolCall(BaseModelResponse):
     )
     id: str | None = Field(
         default=None, description="The unique ID of the custom tool call."
+    )
+    caller: Caller = Field(
+        default=None,
+        description="Provenance of this tool call: direct or programmatic.",
     )
     namespace: str | None = Field(
         default=None, description="The namespace of the custom tool being called."

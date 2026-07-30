@@ -21,6 +21,8 @@ from stdapi.models import ModelBase, ModelDetails
 from stdapi.models.chat._adapters import _openai_chat_completion as chat_adapter
 from stdapi.monitoring import REQUEST_LOG
 from stdapi.routes import openai_chat_completions, openai_responses
+from stdapi.routes._moderation import apply_request_moderation
+from stdapi.types.openai import RequestModeration
 from stdapi.types.openai_chat_completions import ChatCompletion
 from stdapi.types.openai_responses import (
     InputTokensDetails,
@@ -80,6 +82,33 @@ def configured_guardrail(monkeypatch: pytest.MonkeyPatch) -> None:
     """Configure a default server guardrail, as ``moderation: true`` requires."""
     monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_identifier", "gr123")
     monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_version", "1")
+
+
+@pytest.mark.usefixtures("configured_guardrail")
+class TestApplyRequestModerationTraceMode:
+    """apply_request_moderation requests the full guardrail trace.
+
+    ``trace: enabled`` only reports assessments for flagged categories, which
+    zeroes out every non-detected category's score once mapped by
+    ``map_guardrail_filters``; ``enabled_full`` is required to report real
+    confidence for every category, matching the ``/v1/moderations`` fix.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+         stdapi/routes/_moderation.py:apply_request_moderation
+    """
+
+    def test_guardrail_config_requests_full_trace(self) -> None:
+        """The guardrail config set on the request carries trace=enabled_full."""
+        config_token = GUARDRAIL_CONFIG_VAR.set({})
+        trace_token = GUARDRAIL_TRACE_VAR.set({})
+        try:
+            apply_request_moderation(RequestModeration(model="gr123"))
+            config = GUARDRAIL_CONFIG_VAR.get(None)
+        finally:
+            GUARDRAIL_CONFIG_VAR.reset(config_token)
+            GUARDRAIL_TRACE_VAR.reset(trace_token)
+        assert config is not None
+        assert config["trace"] == "enabled_full"
 
 
 class _StubChatBackend:
@@ -193,8 +222,9 @@ class TestChatModerationParam:
     ) -> None:
         """The guardrail config is applied and trace results are reported.
 
-        The Converse request must carry ``trace: enabled``, otherwise AWS returns
-        no assessments at all. Both directions are reported as
+        The Converse request must carry ``trace: enabled_full``, otherwise AWS
+        only reports assessments for flagged categories and every non-flagged
+        category score comes back zeroed. Both directions are reported as
         ``moderation_results`` sets even though Converse spells the input
         assessment as an object and the output ones as a list.
 
@@ -214,7 +244,7 @@ class TestChatModerationParam:
         assert config == {
             "guardrailIdentifier": "gr123",
             "guardrailVersion": "1",
-            "trace": "enabled",
+            "trace": "enabled_full",
         }
         body = response.json()
         assert body["choices"][0]["message"]["content"] == "hi", (
@@ -304,7 +334,7 @@ class TestChatModerationParam:
         (config,) = chat_backend.guardrail_configs
         assert config["guardrailIdentifier"] == "gr123"
         assert config["guardrailVersion"] == "1"
-        assert config["trace"] == "enabled"
+        assert config["trace"] == "enabled_full"
         moderation = response.json()["moderation"]
         assert moderation["input"]["model"] == "amazon.bedrock-runtime-guardrail"
         assert moderation["output"]["model"] == "amazon.bedrock-runtime-guardrail"
@@ -402,7 +432,7 @@ class TestResponsesModerationParam:
         assert config == {
             "guardrailIdentifier": "gr123",
             "guardrailVersion": "1",
-            "trace": "enabled",
+            "trace": "enabled_full",
         }
         moderation = response.json()["moderation"]
         assert moderation["input"]["model"] == "omni-moderation-latest"

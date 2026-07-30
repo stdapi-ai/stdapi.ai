@@ -28,7 +28,9 @@ from stdapi.types.openai_responses import (
     Mcp,
     Reasoning,
     ResponseCreateParams,
+    ResponseCustomToolCall,
     ResponseError,
+    ResponseFunctionToolCall,
     ResponseItemList,
     ResponseOutputItem,
 )
@@ -244,10 +246,17 @@ class TestResponseErrorCodeParity:
 
 
 class TestToolCallerParity:
-    """Tool-call items keep the `caller` provenance field when echoed as input.
+    """Tool-call items keep the `caller` provenance field, as input and as output.
+
+    Upstream declares `caller` on both directions of a tool call: the input
+    item echoed back from a previous response, and the output item the model
+    just produced. A field added only on the input side would silently drop
+    `caller` from every function/custom tool call in a fresh response.
 
     Ref: https://developers.openai.com/api/docs/guides/tools-programmatic-tool-calling
          stdapi/types/openai_responses.py:FunctionCallInput
+         stdapi/types/openai_responses.py:ResponseFunctionToolCall
+         stdapi/types/openai_responses.py:ResponseCustomToolCall
     """
 
     def test_function_call_input_accepts_program_caller(self) -> None:
@@ -257,6 +266,32 @@ class TestToolCallerParity:
             call_id="c1",
             name="f",
             type="function_call",
+            caller={"type": "program", "caller_id": "p1"},
+        )
+        assert item.caller is not None
+        assert item.caller.type == "program"
+        assert item.caller.caller_id == "p1"  # type: ignore[union-attr]
+
+    def test_response_function_tool_call_accepts_program_caller(self) -> None:
+        """A function_call output item retains a program caller instead of dropping it."""
+        item = ResponseFunctionToolCall(
+            arguments="{}",
+            call_id="c1",
+            name="f",
+            type="function_call",
+            caller={"type": "program", "caller_id": "p1"},
+        )
+        assert item.caller is not None
+        assert item.caller.type == "program"
+        assert item.caller.caller_id == "p1"  # type: ignore[union-attr]
+
+    def test_response_custom_tool_call_accepts_program_caller(self) -> None:
+        """A custom_tool_call output item retains a program caller instead of dropping it."""
+        item = ResponseCustomToolCall(
+            call_id="c1",
+            input="x",
+            name="f",
+            type="custom_tool_call",
             caller={"type": "program", "caller_id": "p1"},
         )
         assert item.caller is not None

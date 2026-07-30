@@ -645,7 +645,12 @@ class _ImageGenerationJob(ImageGenerationJobBase["ImageModel"]):
         amz_quality = get_amz_quality(self._quality)
         if amz_quality and "imageGenerationConfig" in request:
             request["imageGenerationConfig"]["quality"] = amz_quality
-            self._response_quality = "high" if amz_quality == "premium" else "medium"
+            if amz_quality == "premium":
+                self._response_quality = "high"
+            elif self._quality is not None and self._quality.lower() == "low":
+                self._response_quality = "low"
+            else:
+                self._response_quality = "medium"
 
         # Apply style if specified and supported by the task
         if self._style and task_params_key:

@@ -14,7 +14,11 @@ from stdapi.files import (
     create_multipart_session,
 )
 from stdapi.monitoring import log_request_params, log_response_params
-from stdapi.routes.openai_files import OPENAI_FILES_TAGS, _to_file_object
+from stdapi.routes.openai_files import (
+    OPENAI_FILES_TAGS,
+    _resolve_expires_after_seconds,
+    _to_file_object,
+)
 from stdapi.types import UPLOAD_ID_PATTERN
 from stdapi.types.openai_files import FileObject  # noqa: TC001
 from stdapi.types.openai_uploads import (
@@ -67,6 +71,9 @@ def _to_upload(
         "2. Upload file chunks with `openai_upload_part` (one call per chunk).\n"
         "3. Call `openai_upload_complete` with the ordered list of part IDs to assemble the final file.\n"
         "4. Optionally call `openai_upload_cancel` to abort a pending session.\n\n"
+        "**File expiry:** Files with `purpose=batch` expire after 30 days by default. "
+        "All other files persist until manually deleted. "
+        "Use `expires_after.seconds` (1 hour-30 days) to set a custom TTL.\n\n"
         "For small files, use `openai_file` instead — it uploads in a single request."
     ),
     response_description="The Upload object.",
@@ -98,7 +105,10 @@ async def create_upload_endpoint(
                 body.mime_type,
                 body.purpose,
                 body.bytes,
-                body.expires_after.seconds if body.expires_after else None,
+                _resolve_expires_after_seconds(
+                    body.purpose,
+                    body.expires_after.seconds if body.expires_after else None,
+                ),
             ),
             "pending",
         )

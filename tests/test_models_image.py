@@ -189,6 +189,63 @@ class TestTitanResponseQualityEcho:
         ), "Bedrock must receive the AWS bucket, not the OpenAI quality tier"
 
 
+class TestNovaCanvasResponseQualityEcho:
+    """The echoed response quality mirrors the requested tier, not the collapsed AWS bucket.
+
+    Nova Canvas only exposes two AWS quality tiers ("standard"/"premium"), so
+    without re-deriving the echo from the originally requested tier, a
+    ``low`` request would come back mislabeled as ``medium`` (both collapse
+    to "standard" on the AWS side).
+
+    Ref: stdapi/models/image/amazon_nova_canvas.py:_ImageGenerationJob._apply_quality_and_style
+         stdapi/models/image/amazon_titan_image_generator.py:AMZ_QUALITY_MAP
+         https://docs.aws.amazon.com/nova/latest/userguide/image-gen-access.html
+    """
+
+    @pytest.mark.parametrize(
+        ("requested", "expected", "amz_tier"),
+        [
+            ("low", "low", "standard"),
+            ("medium", "medium", "standard"),
+            ("high", "high", "premium"),
+            ("premium", "high", "premium"),
+        ],
+    )
+    def test_response_quality_matches_request(
+        self, requested: str, expected: str, amz_tier: str
+    ) -> None:
+        """``low`` and ``medium`` both collapse to AWS "standard" but echo distinctly.
+
+        The AWS-side tier written into the request must stay driven by
+        ``get_amz_quality`` alone; only the echoed ``response_quality`` is
+        re-derived from the originally requested tier.
+        """
+        job = nova_canvas._ImageGenerationJob(  # noqa: SLF001
+            model=cast("Any", None),
+            prompt="a cat",
+            count=1,
+            width=1024,
+            height=1024,
+            quality=requested,
+            style=None,
+            output_format=None,
+            output_compression=0,
+            extra_params={},
+        )
+        request = nova_canvas._Request(  # noqa: SLF001
+            taskType="TEXT_IMAGE",
+            textToImageParams=nova_canvas._TextToImageParams(text="a cat"),  # noqa: SLF001
+            imageGenerationConfig=nova_canvas._ImageGenerationConfig(  # noqa: SLF001
+                width=1024, height=1024, numberOfImages=1
+            ),
+        )
+        job._apply_quality_and_style(request, "textToImageParams")  # noqa: SLF001
+        assert job.quality == expected
+        assert request["imageGenerationConfig"]["quality"] == amz_tier, (
+            "Bedrock must receive the AWS bucket, not the OpenAI quality tier"
+        )
+
+
 def _b64_rgba_png(alpha: int) -> str:
     """Encode a 1x1 RGBA PNG with the given alpha as a base64 string."""
     buffer = BytesIO()
