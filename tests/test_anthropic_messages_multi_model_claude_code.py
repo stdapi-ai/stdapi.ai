@@ -21,8 +21,21 @@ Requirements:
 
 Task difficulty:
     All tasks are designed to require the model to navigate multiple files and make
-    ~10 tool calls, producing a representative agentic benchmark.  Each test asserts
-    a minimum turn count so that shallow single-read answers are rejected.
+    ~10 tool calls, producing a representative agentic benchmark.  The asserted turn
+    floor is deliberately much lower than that target (2, or 4 for the Glob-driven
+    override enumeration): it only rejects answers produced without touching the
+    codebase, because the weaker models under test legitimately vary in how many
+    turns they need.
+
+What every test in this module actually asserts:
+    - ``_run_claude``: the CLI exits 0 and emits parsable JSON.
+    - ``_assert_result``: no CLI-reported error, a result longer than 10 characters,
+      the required substring when one is given, and the turn floor.
+    - the per-test keyword check that follows it.
+    - ``_model_identity_check`` (autouse): every request the server attributed to
+      this test's session targeted the parametrized Bedrock model.
+    Content-quality failures on the models listed in ``_FLAKY_MODELS`` are downgraded
+    to ``xfail``; the same failure on any other model fails the test.
 
 Metrics collected per run (visible with ``pytest -s`` or on failure):
     ``CC-METRICS | <model> | <test> | turns=<N> | <Xs> | in=<N> out=<N>``
@@ -38,6 +51,11 @@ Security per test run:
       Claude Code session history.
     - The stdapi.ai source tree is mounted read-only via ``--add-dir``.
     - ``--max-budget-usd 10`` caps API spend per invocation to prevent runaway loops.
+
+Ref: https://platform.claude.com/docs/en/api/messages
+     stdapi/routes/anthropic_messages.py:create_message
+     stdapi/models/chat/_adapters/_anthropic_message.py:translate_request
+     stdapi/models/__init__.py:validate_model
 """
 
 import json
@@ -880,7 +898,11 @@ Document at least 5 model-specific files with real code quotes.
 @_SKIP_NO_CLAUDE
 @pytest.mark.parametrize("model_config", _MODEL_CONFIGS)
 class TestClaudeCodePipeline:
-    """Claude Code traces multi-file execution paths in the stdapi.ai codebase."""
+    """Claude Code drives multi-file exploration turns through the gateway's Messages route.
+
+    Ref: https://platform.claude.com/docs/en/api/messages
+         stdapi/routes/anthropic_messages.py:create_message
+    """
 
     def test_trace_request_pipeline(
         self,
@@ -890,10 +912,15 @@ class TestClaudeCodePipeline:
         claude_code_base_url: str,
         claude_code_api_key: str,
     ) -> None:
-        """Trace POST /v1/chat/completions from route handler to Bedrock converse().
+        """A multi-file source-tracing task completes over ≥2 tool-using turns and names ``converse``.
 
-        Requires multi-file exploration: route → handler → adapter → model → Bedrock.
-        Target: ~10 turns.
+        The prompt targets ~10 tool calls across route, handler, adapter and model layers;
+        the assertions are that the CLI finished without error, took at least 2 turns, and
+        that the answer mentions ``converse`` plus one of the pipeline's real function names
+        — evidence the tool-use round trips actually carried file contents back.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
+             stdapi/models/chat/_adapters/_anthropic_message.py:format_response
         """
         data = _run_claude(
             workdir=claude_workdir,
@@ -925,10 +952,14 @@ class TestClaudeCodePipeline:
         claude_code_base_url: str,
         claude_code_api_key: str,
     ) -> None:
-        """Trace the streaming code path from stream=True to SSE output.
+        """A streaming-path tracing task completes over ≥2 turns and reports streaming vocabulary.
 
-        Requires reading _default.py, SSE adapters, and generator code.
-        Target: ~8 turns.
+        The prompt requires reading ``_default.py``, the SSE adapters and the generator code;
+        the keyword check is deliberately broad (any of stream / sse / generator / event /
+        converse_stream) because the wording of the summary is model-dependent.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
+             stdapi/models/chat/_adapters/_anthropic_message.py:format_stream
         """
         data = _run_claude(
             workdir=claude_workdir,
@@ -959,7 +990,11 @@ class TestClaudeCodePipeline:
 @_SKIP_NO_CLAUDE
 @pytest.mark.parametrize("model_config", _MODEL_CONFIGS)
 class TestClaudeCodeAnalysis:
-    """Claude Code performs multi-file analysis tasks on the stdapi.ai codebase."""
+    """Claude Code sustains longer multi-file analysis sessions through the gateway.
+
+    Ref: https://platform.claude.com/docs/en/api/messages
+         stdapi/routes/anthropic_messages.py:create_message
+    """
 
     def test_audit_parameter_mapping(
         self,
@@ -969,10 +1004,15 @@ class TestClaudeCodeAnalysis:
         claude_code_base_url: str,
         claude_code_api_key: str,
     ) -> None:
-        """Audit the full OpenAI → Bedrock parameter translation across 3 source files.
+        """A three-file parameter-audit task completes over ≥2 turns and names real parameters.
 
-        Requires reading types, adapter, and _prepare_converse_request.
-        Target: ~12 turns.
+        The prompt targets ~12 tool calls over the OpenAI types file, the adapter and
+        ``_prepare_converse_request``; the answer must mention at least one of temperature /
+        max_tokens / inferenceConfig / messages, which only appear in the files the model had
+        to read.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:translate_request
         """
         data = _run_claude(
             workdir=claude_workdir,
@@ -1002,10 +1042,13 @@ class TestClaudeCodeAnalysis:
         claude_code_base_url: str,
         claude_code_api_key: str,
     ) -> None:
-        """Find and explain all model-specific override files in stdapi/models/chat/.
+        """A Glob-then-read enumeration of the model override files completes over ≥4 turns.
 
-        Requires Glob + reading 5+ files.
-        Target: ~10 turns.
+        This is the longest task in the module: a directory listing followed by five or more
+        file reads, hence the higher turn floor. The answer must name at least one Bedrock
+        model family that only appears in those files.
+
+        Ref: stdapi/models/chat/__init__.py:get_chat_model
         """
         data = _run_claude(
             workdir=claude_workdir,
@@ -1037,7 +1080,14 @@ class TestClaudeCodeAnalysis:
 @_SKIP_NO_CLAUDE
 @pytest.mark.parametrize("model_config", _MODEL_CONFIGS)
 class TestClaudeCodeEffortLevels:
-    """Effort-based reasoning levels work end-to-end via stdapi.ai."""
+    """Claude Code's ``--effort`` levels are accepted end-to-end by the gateway.
+
+    Only models advertising the ``effort`` capability through
+    ``ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES`` are exercised; the others skip.
+
+    Ref: stdapi/types/anthropic_messages.py:ThinkingEffort
+         stdapi/models/chat/_adapters/_anthropic_message.py:translate_request
+    """
 
     @pytest.mark.parametrize("effort", ["low", "high"])
     def test_effort_parameter_mapping(
@@ -1049,10 +1099,14 @@ class TestClaudeCodeEffortLevels:
         claude_code_base_url: str,
         claude_code_api_key: str,
     ) -> None:
-        """Parameter mapping task runs to completion at both low and high effort.
+        """The parameter-audit task completes at both low and high effort without changing model.
 
-        Uses the same multi-file parameter audit as TestClaudeCodeAnalysis to
-        produce comparable turn/duration metrics across effort levels.
+        Reuses ``TestClaudeCodeAnalysis``'s multi-file audit so the metrics are comparable
+        across effort levels. The assertions cover completion, the ≥2-turn floor, the
+        parameter-name keyword check and the autouse model-identity check; the effort value
+        itself is only asserted to be accepted, not to be forwarded to Bedrock.
+
+        Ref: stdapi/types/anthropic_messages.py:ThinkingEffort
         """
         if not model_config["supports_effort"]:
             pytest.skip(

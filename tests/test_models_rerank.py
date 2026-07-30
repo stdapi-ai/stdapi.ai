@@ -1,4 +1,9 @@
-"""Bedrock rerank models: dispatch, capabilities, Rerank API calls, usage."""
+"""Bedrock rerank models: dispatch, capabilities, Rerank API calls, usage.
+
+Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_Rerank.html
+     stdapi/models/rerank/bedrock_rerank.py:RerankModel
+     stdapi/models/rerank/__init__.py:get_rerank_model
+"""
 
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -18,6 +23,7 @@ from stdapi.models import (
     _advertised_output_modalities,
     _compute_model_capabilities,
 )
+from stdapi.models.capabilities import Capability
 from stdapi.models.rerank import bedrock_rerank, get_rerank_model
 from stdapi.models.rerank.bedrock_rerank import RerankModel
 from stdapi.monitoring import REQUEST_ID, REQUEST_LOG, EventLog
@@ -34,25 +40,53 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.local
 
 
+#: Both Bedrock rerank model families reachable through the Rerank API.
 RERANK_MODELS = ("amazon.rerank-v1:0", "cohere.rerank-v3-5:0")
 
 
 class TestRerankModelDispatch:
-    """Rerank model IDs must resolve to the Rerank API backend class."""
+    """Rerank model IDs must resolve to the Rerank API backend class.
+
+    Ref: stdapi/models/rerank/__init__.py:get_rerank_model
+         stdapi/models/rerank/bedrock_rerank.py:RerankModel
+    """
 
     @pytest.mark.parametrize("model_id", RERANK_MODELS)
     def test_matcher_dispatch(self, model_id: str) -> None:
-        """The registry resolves rerank IDs to the rerank backend class."""
-        assert type(get_rerank_model(model_id)) is RerankModel
+        """The registry resolves rerank IDs to a cached RERANK-capable backend.
+
+        ``RerankModel.MATCHER`` covers both the Amazon and Cohere rerank families,
+        and the registry caches one instance per model ID.
+
+        Ref: stdapi/models/rerank/bedrock_rerank.py:RerankModel
+        """
+        model = get_rerank_model(model_id)
+        assert type(model) is RerankModel
+        assert model.get_supported_operations() == Capability.RERANK
+        assert get_rerank_model(model_id) is model
 
     def test_non_rerank_model_is_rejected(self) -> None:
-        """Non-rerank model IDs have no rerank backend."""
-        with pytest.raises(UnsupportedModelError):
+        """A chat model ID has no rerank backend and raises a 404 model_not_found.
+
+        Ref: stdapi/api_errors.py:UnsupportedModelError
+             stdapi/models/rerank/__init__.py:get_rerank_model
+        """
+        with pytest.raises(UnsupportedModelError) as excinfo:
             get_rerank_model("anthropic.claude-3-5-haiku-20241022-v1:0")
+        assert excinfo.value.status == 404
+        assert excinfo.value.code == "model_not_found"
+        assert "anthropic.claude-3-5-haiku-20241022-v1:0" in str(excinfo.value)
 
 
 class TestRerankSupportedRoutes:
-    """Rerank models advertise the rerank route only; text models never do."""
+    """Rerank models advertise the rerank route only; text models never do.
+
+    Bedrock's ModelModality enum has no rerank value, so the gateway derives its
+    own RERANKING modality from the model ID.
+
+    Ref: stdapi/models/__init__.py:_advertised_output_modalities
+         stdapi/models/__init__.py:_compute_model_capabilities
+    """
 
     @staticmethod
     def _details(model_id: str, output_modalities: list[str]) -> ModelDetails:
@@ -67,34 +101,53 @@ class TestRerankSupportedRoutes:
 
     @pytest.mark.parametrize("model_id", RERANK_MODELS)
     def test_reranking_output_modality_advertised(self, model_id: str) -> None:
-        """The TEXT output modality from the Bedrock listing becomes RERANKING."""
+        """The TEXT output modality from the Bedrock listing becomes RERANKING.
+
+        Ref: stdapi/models/__init__.py:_advertised_output_modalities
+        """
         assert _advertised_output_modalities(model_id, ["TEXT"]) == [RERANKING_MODALITY]
 
     def test_text_models_keep_listed_output_modalities(self) -> None:
-        """Non-rerank models keep the modalities from the Bedrock listing."""
+        """Non-rerank models keep the modalities from the Bedrock listing.
+
+        Ref: stdapi/models/__init__.py:_advertised_output_modalities
+        """
         model_id = "anthropic.claude-3-5-haiku-20241022-v1:0"
         assert _advertised_output_modalities(model_id, ["TEXT"]) == ["TEXT"]
 
     @pytest.mark.parametrize("model_id", RERANK_MODELS)
     def test_rerank_route_advertised(self, model_id: str) -> None:
-        """supported_routes includes /v2/rerank and excludes text routes."""
+        """A RERANKING model advertises both rerank routes and nothing else.
+
+        A TEXT-in / RERANKING-out model matches exactly the two Cohere rerank
+        routes, so no chat, responses or messages route is advertised.
+
+        Ref: stdapi/routes/cohere_rerank.py:rerank
+             stdapi/routes/cohere_rerank_v1.py:rerank_v1
+        """
         routes, tools = _compute_model_capabilities(
             model_id, self._details(model_id, [RERANKING_MODALITY])
         )
-        assert any(route.endswith("/v2/rerank") for route in routes)
-        assert "cohere_rerank" in tools
-        assert not any("chat/completions" in route for route in routes)
-        assert not any("responses" in route for route in routes)
-        assert not any("messages" in route for route in routes)
-        assert "openai_chat_completion" not in tools
+        prefix = SETTINGS.cohere_routes_prefix
+        assert routes == [f"{prefix}/v1/rerank", f"{prefix}/v2/rerank"]
+        assert tools == ["cohere_rerank", "cohere_rerank_v1"]
 
     def test_text_models_do_not_advertise_rerank(self) -> None:
-        """A TEXT/TEXT model without the RERANK capability skips the route."""
+        """A TEXT/TEXT model without the RERANK capability skips both rerank routes.
+
+        The chat tools stay advertised, so the exclusion comes from the missing
+        RERANKING output modality and not from an empty capability computation.
+
+        Ref: stdapi/models/__init__.py:_compute_model_capabilities
+        """
         model_id = "anthropic.claude-3-5-haiku-20241022-v1:0"
-        _, tools = _compute_model_capabilities(
+        routes, tools = _compute_model_capabilities(
             model_id, self._details(model_id, ["TEXT"])
         )
         assert "cohere_rerank" not in tools
+        assert "cohere_rerank_v1" not in tools
+        assert not any(route.endswith("rerank") for route in routes)
+        assert "openai_chat_completion" in tools
 
 
 class _StubAgentRuntimeClient:
@@ -132,7 +185,14 @@ def _new_log() -> EventLog:
 
 
 class TestRerankCall:
-    """RerankModel.rerank: request building, pagination, usage recording."""
+    """RerankModel.rerank: request building, pagination, usage recording.
+
+    Rerank runs on bedrock-agent-runtime (POST /rerank), not bedrock-runtime, and
+    is billed per search unit rather than per token.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_Rerank.html
+         stdapi/models/rerank/bedrock_rerank.py:RerankModel
+    """
 
     @pytest.fixture(autouse=True)
     def _request_context(self) -> Generator[None]:
@@ -165,7 +225,15 @@ class TestRerankCall:
     async def test_rerank_maps_results_and_bills_one_unit(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Results map to (index, relevance_score) and one search unit is billed."""
+        """Results map to (index, relevance_score) and one search unit is billed.
+
+        The AWS request carries exactly one ``queries`` entry, one INLINE source per
+        document and the region-scoped foundation-model ARN; the camelCase
+        ``relevanceScore`` becomes the snake_case ``relevance_score``.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_Rerank.html
+             stdapi/usage.py:record_bedrock_usage
+        """
         client = _StubAgentRuntimeClient(
             [{"results": [{"index": 1, "relevanceScore": 0.9}]}]
         )
@@ -178,11 +246,16 @@ class TestRerankCall:
         assert [(r.index, r.relevance_score) for r in response.results] == [(1, 0.9)]
         assert response.search_units == 1
         (request,) = client.requests
+        assert "nextToken" not in request
         assert request["queries"] == [{"type": "TEXT", "textQuery": {"text": "query"}}]
+        assert [source["type"] for source in request["sources"]] == ["INLINE", "INLINE"]
         assert [
             source["inlineDocumentSource"]["textDocument"]["text"]
             for source in request["sources"]
         ] == ["a", "b"]
+        assert request["rerankingConfiguration"]["type"] == "BEDROCK_RERANKING_MODEL", (
+            "the reranking configuration must be discriminated for Bedrock models"
+        )
         configuration = request["rerankingConfiguration"][
             "bedrockRerankingConfiguration"
         ]
@@ -197,7 +270,15 @@ class TestRerankCall:
     async def test_top_n_caps_number_of_results(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """NumberOfResults is min(top_n, document count)."""
+        """NumberOfResults is min(top_n, document count).
+
+        Cohere's ``top_n`` merely limits the returned results and may exceed the
+        number of documents, so the gateway clamps it before sending it as
+        ``numberOfResults``.
+
+        Ref: https://docs.cohere.com/v2/reference/rerank
+             stdapi/models/rerank/bedrock_rerank.py:RerankModel
+        """
         client = _StubAgentRuntimeClient([{"results": []}, {"results": []}])
         self._patch_infra(monkeypatch, client)
         model = RerankModel(RERANK_MODELS[0])
@@ -216,7 +297,14 @@ class TestRerankCall:
     async def test_top_n_zero_requests_zero_results(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """top_n=0 is honoured literally; only None means all documents."""
+        """top_n=0 is honoured literally; only None means all documents.
+
+        Reachable only from internal callers: both Cohere request models constrain
+        ``top_n`` to ``>= 1``, and AWS's ``numberOfResults`` minimum is 1.
+
+        Ref: stdapi/types/cohere_rerank.py:RerankRequest
+             botocore/data/bedrock-agent-runtime/2023-07-26/service-2.json
+        """
         client = _StubAgentRuntimeClient([{"results": []}])
         self._patch_infra(monkeypatch, client)
 
@@ -232,7 +320,16 @@ class TestRerankCall:
     async def test_throttled_region_fails_over_via_no_retry_client(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A throttled region escalates to the next one through the no-retry client pool."""
+        """A throttled region escalates to the next one through the no-retry client pool.
+
+        With region routing enabled the failover budget belongs to
+        ``route_and_execute``, so the call must resolve the ``.no-retry``
+        bedrock-agent-runtime pool and bill usage against the serving region.
+
+        Ref: stdapi/models/__init__.py:route_and_execute
+             stdapi/aws.py:_NO_RETRY_SERVICES
+             stdapi/models/rerank/bedrock_rerank.py:agent_runtime_client
+        """
         regions = ["us-east-1", "us-west-2"]
         throttled = _StubAgentRuntimeClient([_throttling_error()])
         serving = _StubAgentRuntimeClient(
@@ -267,8 +364,10 @@ class TestRerankCall:
         )
 
         assert [(r.index, r.relevance_score) for r in response.results] == [(0, 0.7)]
+        assert response.search_units == 1
         assert len(throttled.requests) == 1
         assert len(serving.requests) == 1
+        assert throttled.requests[0]["sources"] == serving.requests[0]["sources"]
         (record,) = USAGE.get().values()
         assert record.region == "us-west-2"
         assert record.quantities == {Dimension.SEARCH_UNITS: 1}
@@ -276,7 +375,14 @@ class TestRerankCall:
     async def test_pagination_follows_next_token(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Paginated results are concatenated and billed once."""
+        """Paginated results are concatenated and billed once.
+
+        The Rerank API returns ``nextToken`` when the results do not fit in one
+        response; the follow-up call replays the same query and sources with the
+        token added, and billing stays per query, not per page.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_Rerank.html
+        """
         client = _StubAgentRuntimeClient(
             [
                 {
@@ -292,15 +398,29 @@ class TestRerankCall:
             "q", ["a", "b"], top_n=None, extra_params={}
         )
 
-        assert [r.index for r in response.results] == [0, 1]
+        assert [(r.index, r.relevance_score) for r in response.results] == [
+            (0, 0.8),
+            (1, 0.2),
+        ]
         assert "nextToken" not in client.requests[0]
         assert client.requests[1]["nextToken"] == "token"
-        assert len(list(USAGE.get().values())) == 1
+        assert client.requests[1]["queries"] == client.requests[0]["queries"]
+        assert client.requests[1]["sources"] == client.requests[0]["sources"]
+        assert response.search_units == 1
+        (record,) = USAGE.get().values()
+        assert record.quantities == {Dimension.SEARCH_UNITS: 1}
 
     async def test_search_units_scale_with_document_count(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """One search unit is billed per started batch of 100 documents."""
+        """One search unit is billed per started batch of 100 documents.
+
+        Billing is derived from the document count, not from the number of returned
+        results, so ``top_n=1`` over 150 documents still costs two units.
+
+        Ref: stdapi/models/rerank/bedrock_rerank.py:RerankModel
+             stdapi/usage.py:record_bedrock_usage
+        """
         client = _StubAgentRuntimeClient([{"results": []}])
         self._patch_infra(monkeypatch, client)
 
@@ -309,13 +429,27 @@ class TestRerankCall:
         )
 
         assert response.search_units == 2
+        assert len(client.requests[0]["sources"]) == 150
+        assert (
+            client.requests[0]["rerankingConfiguration"][
+                "bedrockRerankingConfiguration"
+            ]["numberOfResults"]
+            == 1
+        )
         records = list(USAGE.get().values())
         assert records[0].quantities == {Dimension.SEARCH_UNITS: 2}
 
     async def test_extra_params_forwarded_as_additional_fields(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Extra model parameters land in additionalModelRequestFields."""
+        """Extra model parameters land in additionalModelRequestFields.
+
+        The Rerank API exposes no per-model knobs of its own, so options such as
+        v2's ``max_tokens_per_doc`` travel alongside the model ARN inside
+        ``modelConfiguration``.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_Rerank.html
+        """
         client = _StubAgentRuntimeClient([{"results": []}])
         self._patch_infra(monkeypatch, client)
 
@@ -329,11 +463,20 @@ class TestRerankCall:
         assert configuration["additionalModelRequestFields"] == {
             "max_tokens_per_doc": 512
         }
+        assert configuration["modelArn"].endswith(
+            f"foundation-model/{RERANK_MODELS[1]}"
+        )
 
     async def test_single_key_text_object_uses_text_document_fast_path(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A {"text": ...} object document keeps the plain textDocument wire shape."""
+        """A ``{"text": ...}`` object document keeps the plain textDocument wire shape.
+
+        v1 lets clients wrap a single text in an object; unwrapping it keeps the
+        Bedrock request identical to the plain-string form.
+
+        Ref: stdapi/models/rerank/bedrock_rerank.py:_document_source
+        """
         client = _StubAgentRuntimeClient([{"results": []}])
         self._patch_infra(monkeypatch, client)
 
@@ -350,7 +493,11 @@ class TestRerankCall:
     async def test_multi_field_object_uses_json_document_source(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A multi-field object document is sent as a Bedrock jsonDocument source."""
+        """A multi-field object document is sent as a Bedrock jsonDocument source.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_Rerank.html
+             stdapi/models/rerank/bedrock_rerank.py:_document_source
+        """
         client = _StubAgentRuntimeClient([{"results": []}])
         self._patch_infra(monkeypatch, client)
         document = {"title": "Nevada", "body": "Carson City is its capital."}
@@ -368,7 +515,10 @@ class TestRerankCall:
     async def test_object_without_text_key_uses_json_document_source(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """An object document without a `text` key is sent as a jsonDocument source."""
+        """An object document without a ``text`` key is sent as a jsonDocument source.
+
+        Ref: stdapi/models/rerank/bedrock_rerank.py:_document_source
+        """
         client = _StubAgentRuntimeClient([{"results": []}])
         self._patch_infra(monkeypatch, client)
 
@@ -385,7 +535,13 @@ class TestRerankCall:
     async def test_mixed_string_and_object_documents(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """String and object documents in the same request build distinct sources."""
+        """String and object documents in the same request build distinct sources.
+
+        The source type is decided per document and the request order matches the
+        input order, which is what result ``index`` values refer to.
+
+        Ref: stdapi/models/rerank/bedrock_rerank.py:_document_source
+        """
         client = _StubAgentRuntimeClient([{"results": []}])
         self._patch_infra(monkeypatch, client)
 
@@ -404,7 +560,14 @@ class TestRerankCall:
     async def test_model_arn_uses_region_partition(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The model ARN partition follows the serving region."""
+        """The model ARN partition follows the serving region.
+
+        The European Sovereign Cloud lives in the ``aws-eusc`` partition, so a
+        hard-coded ``aws`` partition would make every rerank call fail there.
+
+        Ref: stdapi/pricing.py:partition_of_region
+             stdapi/models/rerank/bedrock_rerank.py:RerankModel
+        """
         client = _StubAgentRuntimeClient([{"results": []}])
         self._patch_infra(monkeypatch, client, region="eusc-de-east-1")
 
@@ -415,4 +578,6 @@ class TestRerankCall:
         arn = client.requests[0]["rerankingConfiguration"][
             "bedrockRerankingConfiguration"
         ]["modelConfiguration"]["modelArn"]
-        assert arn.startswith("arn:aws-eusc:bedrock:eusc-de-east-1::")
+        assert arn == (
+            f"arn:aws-eusc:bedrock:eusc-de-east-1::foundation-model/{RERANK_MODELS[1]}"
+        )

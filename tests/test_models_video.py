@@ -1,7 +1,18 @@
-"""Bedrock video generation models: dispatch, capabilities, async invoke, usage."""
+"""Bedrock video generation models: dispatch, capabilities, async invoke, usage.
+
+Video generation is a Bedrock async invocation: the job is addressed by its
+invocation ARN, its MP4 lands in the region's S3 bucket, and the effective
+duration and size are carried as invocation tags, so the gateway keeps no state
+of its own.
+
+Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_StartAsyncInvoke.html
+     https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_GetAsyncInvoke.html
+     https://stdapi.ai/api_openai_videos/
+     stdapi/models/video/__init__.py:VideoModelBase
+"""
 
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from botocore.exceptions import ClientError
@@ -25,7 +36,7 @@ from stdapi.pricing import Dimension
 from stdapi.usage import USAGE, init_model_state, init_usage
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Generator, Iterable
 
     from types_aiobotocore_bedrock.literals import RegionName
 
@@ -41,7 +52,10 @@ _ARN = "arn:aws:bedrock:us-east-1:000000000000:async-invoke/abc123xyz"
 
 
 class TestVideoModelDispatch:
-    """Video model IDs must resolve to their provider backend class."""
+    """Video model IDs must resolve to their provider backend class.
+
+    Ref: stdapi/models/video/__init__.py:get_video_model
+    """
 
     @pytest.mark.parametrize(
         ("model_id", "model_class"),
@@ -52,21 +66,49 @@ class TestVideoModelDispatch:
         ],
     )
     def test_matcher_dispatch(self, model_id: str, model_class: type) -> None:
-        """The registry resolves video model IDs to the provider class."""
+        """The registry resolves video model IDs to the provider class.
+
+        Both Nova Reel versions share one backend class; the version-specific
+        rules (multi-shot) come from the instance's model ID.
+
+        Ref: stdapi/models/video/amazon_nova_reel.py:VideoModel
+             stdapi/models/video/luma_ray.py:VideoModel
+        """
         assert type(get_video_model(model_id)) is model_class
 
     def test_non_video_model_is_rejected(self) -> None:
-        """Non-video model IDs have no video backend."""
-        with pytest.raises(UnsupportedModelError):
-            get_video_model("anthropic.claude-3-5-haiku-20241022-v1:0")
+        """A non-video model ID raises a 404 ``model_not_found``.
+
+        The video package registers no default class, so an unmatched model ID
+        cannot silently fall back to some video backend.
+
+        Ref: stdapi/models/__init__.py:get_model
+             stdapi/api_errors.py:UnsupportedModelError
+        """
+        model_id = "anthropic.claude-3-5-haiku-20241022-v1:0"
+        with pytest.raises(UnsupportedModelError) as exc_info:
+            get_video_model(model_id)
+        assert exc_info.value.status == 404
+        assert exc_info.value.code == "model_not_found"
+        assert model_id in str(exc_info.value)
 
 
 class TestVideoSupportedRoutes:
-    """Video models advertise the videos route only; text models never do."""
+    """Video models advertise the videos route only; text models never do.
+
+    Ref: stdapi/models/__init__.py:_compute_model_capabilities
+         stdapi/routes/openai_videos.py:register_route_capability
+    """
 
     @pytest.mark.parametrize("model_id", VIDEO_MODELS)
     def test_video_route_advertised(self, model_id: str) -> None:
-        """supported_routes includes /v1/videos and excludes text routes."""
+        """A VIDEO-output model advertises /v1/videos and nothing else.
+
+        The route is offered only for TEXT input, VIDEO output and a backend
+        class exposing the ``VIDEO_GENERATION`` capability.
+
+        Ref: stdapi/models/video/__init__.py:VideoModelBase.get_supported_operations
+        """
         details = ModelDetails(
             id=model_id,
             name=model_id,
@@ -76,13 +118,14 @@ class TestVideoSupportedRoutes:
             regions=["us-east-1"],
         )
         routes, tools = _compute_model_capabilities(model_id, details)
-        assert any(route.endswith("/v1/videos") for route in routes)
-        assert "openai_video_generation" in tools
-        assert not any("chat/completions" in route for route in routes)
-        assert not any("images" in route for route in routes)
+        assert routes == [f"{SETTINGS.openai_routes_prefix}/v1/videos"]
+        assert tools == ["openai_video_generation"]
 
     def test_text_models_do_not_advertise_videos(self) -> None:
-        """A model without VIDEO output modality skips the route."""
+        """A model without the VIDEO output modality advertises no route or tool.
+
+        Ref: stdapi/models/capabilities.py:register_route_capability
+        """
         model_id = "anthropic.claude-3-5-haiku-20241022-v1:0"
         details = ModelDetails(
             id=model_id,
@@ -92,12 +135,25 @@ class TestVideoSupportedRoutes:
             output_modalities=["TEXT"],
             regions=["us-east-1"],
         )
-        _, tools = _compute_model_capabilities(model_id, details)
+        routes, tools = _compute_model_capabilities(model_id, details)
         assert "openai_video_generation" not in tools
+        assert not any(route.endswith("/v1/videos") for route in routes)
+        assert any("chat/completions" in route for route in routes), (
+            "a text model must still advertise its own routes"
+        )
 
 
 class TestNovaReelInput:
-    """Nova Reel modelInput building and parameter validation."""
+    """Nova Reel modelInput building and parameter validation.
+
+    Nova Reel renders 1280x720 at 24 fps in 6-second increments up to 120 s;
+    anything longer than a single shot needs ``amazon.nova-reel-v1:1`` and a
+    MULTI_SHOT_AUTOMATED task.
+
+    Ref: https://docs.aws.amazon.com/nova/latest/userguide/video-generation.html
+         https://docs.aws.amazon.com/nova/latest/userguide/video-gen-access.html
+         stdapi/models/video/amazon_nova_reel.py:VideoModel.build_generation_input
+    """
 
     @staticmethod
     def _build(model_id: str = "amazon.nova-reel-v1:1", **kwargs: Any) -> Any:  # noqa: ANN401
@@ -111,7 +167,10 @@ class TestNovaReelInput:
         return NovaReelModel(model_id).build_generation_input("a cat", **params)
 
     def test_single_shot_text_to_video(self) -> None:
-        """A 6-second request builds a TEXT_VIDEO task."""
+        """A 6-second request builds a TEXT_VIDEO task at 24 fps.
+
+        Ref: https://docs.aws.amazon.com/nova/latest/userguide/video-gen-access.html
+        """
         body = self._build()
         assert body == {
             "taskType": "TEXT_VIDEO",
@@ -124,74 +183,144 @@ class TestNovaReelInput:
         }
 
     def test_multi_shot_for_longer_durations(self) -> None:
-        """Durations over 6 seconds build a MULTI_SHOT_AUTOMATED task."""
+        """Durations over 6 seconds build a MULTI_SHOT_AUTOMATED task.
+
+        The prompt moves from ``textToVideoParams`` to
+        ``multiShotAutomatedParams``, while fps and dimension stay fixed.
+
+        Ref: https://docs.aws.amazon.com/nova/latest/userguide/video-gen-code-examples2.html
+        """
         body = self._build(seconds=24)
         assert body["taskType"] == "MULTI_SHOT_AUTOMATED"
         assert body["multiShotAutomatedParams"] == {"text": "a cat"}
-        assert body["videoGenerationConfig"]["durationSeconds"] == 24
+        assert "textToVideoParams" not in body
+        assert body["videoGenerationConfig"] == {
+            "durationSeconds": 24,
+            "fps": 24,
+            "dimension": "1280x720",
+        }
 
     @pytest.mark.parametrize("seconds", [1, 7, 11, 126])
     def test_unsupported_durations_are_rejected(self, seconds: int) -> None:
-        """Durations that are not a multiple of 6 up to 120 are rejected."""
-        with pytest.raises(ApiError, match="multiple of 6"):
+        """Durations that are not a multiple of 6 up to 120 are rejected with a 400.
+
+        Ref: https://docs.aws.amazon.com/nova/latest/userguide/video-gen-code-examples2.html
+        """
+        with pytest.raises(ApiError, match="multiple of 6") as exc_info:
             self._build(seconds=seconds)
+        assert exc_info.value.status == 400
+        assert "between 6 and 120" in str(exc_info.value)
 
     def test_v1_0_single_shot_duration_is_accepted(self) -> None:
         """A 6-second request on v1:0 builds a TEXT_VIDEO task."""
         body = self._build(model_id="amazon.nova-reel-v1:0")
         assert body["taskType"] == "TEXT_VIDEO"
+        assert body["videoGenerationConfig"]["durationSeconds"] == 6
 
     def test_v1_0_multi_shot_duration_is_rejected(self) -> None:
-        """v1:0 has no multi-shot support; only 6-second videos are allowed."""
+        """v1:0 rejects any duration but 6 seconds with a 400 naming the model.
+
+        Multi-shot generation arrived with ``amazon.nova-reel-v1:1``, so the
+        model version is part of the rejection message.
+
+        Ref: https://docs.aws.amazon.com/nova/latest/userguide/video-generation.html
+        """
         with pytest.raises(
             ApiError, match=r"'seconds' must be 6 for model 'amazon\.nova-reel-v1:0'"
-        ):
+        ) as exc_info:
             self._build(model_id="amazon.nova-reel-v1:0", seconds=12)
+        assert exc_info.value.status == 400
 
     def test_v1_1_multi_shot_duration_is_accepted(self) -> None:
         """A 12-second request on v1:1 builds a MULTI_SHOT_AUTOMATED task."""
         body = self._build(seconds=12)
         assert body["taskType"] == "MULTI_SHOT_AUTOMATED"
+        assert body["videoGenerationConfig"]["durationSeconds"] == 12
 
     @pytest.mark.parametrize(
         "model_id", ["amazon.nova-reel-v1:0", "amazon.nova-reel-v1:1"]
     )
     def test_unsupported_size_is_rejected(self, model_id: str) -> None:
-        """Both versions reject any size other than 1280x720."""
-        with pytest.raises(ApiError, match="'size' must be '1280x720'"):
+        """Both versions reject any size other than 1280x720 with a 400.
+
+        Ref: https://docs.aws.amazon.com/nova/latest/userguide/video-generation.html
+        """
+        with pytest.raises(ApiError, match="'size' must be '1280x720'") as exc_info:
             self._build(model_id=model_id, size="1920x1080")
+        assert exc_info.value.status == 400
+        assert model_id in str(exc_info.value)
 
     @pytest.mark.parametrize(
         ("media_type", "image_format"), [("image/png", "png"), ("image/jpeg", "jpeg")]
     )
     def test_reference_image(self, media_type: str, image_format: str) -> None:
-        """A PNG or JPEG reference image becomes the starting keyframe."""
+        """A PNG or JPEG reference image becomes the starting keyframe.
+
+        Nova Reel takes the MIME subtype as its ``format`` and the base64
+        payload under ``source.bytes``.
+
+        Ref: https://docs.aws.amazon.com/nova/latest/userguide/video-gen-access.html
+        """
         body = self._build(reference_image=ReferenceImage(media_type, "aGVsbG8="))
-        assert body["textToVideoParams"]["images"] == [
-            {"format": image_format, "source": {"bytes": "aGVsbG8="}}
-        ]
+        assert body["taskType"] == "TEXT_VIDEO"
+        assert body["textToVideoParams"] == {
+            "text": "a cat",
+            "images": [{"format": image_format, "source": {"bytes": "aGVsbG8="}}],
+        }
 
     def test_unsupported_reference_image_format(self) -> None:
-        """Non PNG/JPEG reference images are rejected."""
-        with pytest.raises(ApiError, match="PNG or JPEG"):
+        """A non PNG/JPEG reference image is rejected with a 400.
+
+        Ref: https://docs.aws.amazon.com/nova/latest/userguide/video-gen-access.html
+        """
+        with pytest.raises(ApiError, match="PNG or JPEG") as exc_info:
             self._build(reference_image=ReferenceImage("image/webp", "aGVsbG8="))
+        assert exc_info.value.status == 400
+        assert "'input_reference'" in str(exc_info.value)
 
     def test_reference_image_rejected_for_multi_shot(self) -> None:
-        """A reference image cannot be combined with a multi-shot duration."""
-        with pytest.raises(ApiError, match="input_reference"):
+        """A reference image with a multi-shot duration is rejected with a 400.
+
+        The multi-shot task types take no reference image, so the gateway
+        rejects the combination instead of silently dropping the image.
+
+        Ref: https://docs.aws.amazon.com/nova/latest/userguide/video-gen-code-examples2.html
+        """
+        with pytest.raises(ApiError, match="'input_reference'") as exc_info:
             self._build(
                 seconds=12, reference_image=ReferenceImage("image/png", "aGVsbG8=")
             )
+        assert exc_info.value.status == 400
+        assert "6-second videos" in str(exc_info.value)
 
     def test_extra_params_extend_generation_config(self) -> None:
-        """Extra parameters land in videoGenerationConfig without overriding it."""
+        """Extra parameters land in videoGenerationConfig without overriding it.
+
+        Provider extras are merged with ``setdefault``, so a caller cannot
+        rewrite the duration the job is billed and tagged with.
+
+        Ref: https://stdapi.ai/api_openai_videos/
+             stdapi/models/video/amazon_nova_reel.py:VideoModel.build_generation_input
+        """
         body = self._build(extra_params={"seed": 7, "durationSeconds": 99})
-        assert body["videoGenerationConfig"]["seed"] == 7
-        assert body["videoGenerationConfig"]["durationSeconds"] == 6
+        assert body["videoGenerationConfig"] == {
+            "durationSeconds": 6,
+            "fps": 24,
+            "dimension": "1280x720",
+            "seed": 7,
+        }
 
 
 class TestLumaRayInput:
-    """Luma Ray modelInput building and parameter validation."""
+    """Luma Ray modelInput building and parameter validation.
+
+    Luma Ray takes string enums (``duration`` "5s"/"9s", ``resolution``
+    "540p"/"720p") plus an ``aspect_ratio`` instead of OpenAI's pixel ``size``,
+    so the gateway derives all three from the requested size.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-luma.html
+         stdapi/models/video/luma_ray.py:VideoModel.build_generation_input
+    """
 
     @staticmethod
     def _build(**kwargs: Any) -> Any:  # noqa: ANN401
@@ -217,7 +346,14 @@ class TestLumaRayInput:
     def test_size_maps_to_resolution_and_aspect_ratio(
         self, size: str, resolution: str, aspect_ratio: str
     ) -> None:
-        """The size selects the resolution and aspect ratio."""
+        """The size selects the resolution and aspect ratio, seconds the duration.
+
+        The smaller dimension picks the resolution name and the reduced
+        width:height fraction the aspect ratio, so 1680x720 (7:3) is Luma's
+        "21:9".
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-luma.html
+        """
         body = self._build(size=size, seconds=9)
         assert body == {
             "prompt": "a cat",
@@ -228,19 +364,38 @@ class TestLumaRayInput:
 
     @pytest.mark.parametrize("size", ["1024x1024", "640x480", "1920x1080"])
     def test_unsupported_sizes_are_rejected(self, size: str) -> None:
-        """Sizes without a matching resolution or aspect ratio are rejected."""
-        with pytest.raises(ApiError, match="'size'"):
+        """A size with no matching resolution or aspect ratio is rejected with a 400.
+
+        1024x1024 is a supported 1:1 ratio at an unsupported resolution, while
+        640x480 and 1920x1080 fail on both counts.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-luma.html
+        """
+        with pytest.raises(ApiError, match="is not supported by model") as exc_info:
             self._build(size=size)
+        assert exc_info.value.status == 400
+        assert f"'size' {size}" in str(exc_info.value)
 
     @pytest.mark.parametrize("seconds", [4, 6, 8, 12])
     def test_unsupported_durations_are_rejected(self, seconds: int) -> None:
-        """Durations other than 5 or 9 seconds are rejected."""
-        with pytest.raises(ApiError, match="'seconds'"):
+        """Durations other than 5 or 9 seconds are rejected with a 400.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-luma.html
+        """
+        with pytest.raises(ApiError, match="'seconds'") as exc_info:
             self._build(seconds=seconds)
+        assert exc_info.value.status == 400
+        assert "[5, 9]" in str(exc_info.value)
 
     @pytest.mark.parametrize("media_type", ["image/png", "image/jpeg"])
     def test_reference_image_becomes_first_keyframe(self, media_type: str) -> None:
-        """A PNG or JPEG reference image becomes the frame0 keyframe."""
+        """A PNG or JPEG reference image becomes the frame0 keyframe.
+
+        Luma keeps the full MIME type and takes the image as a base64 source,
+        unlike Nova Reel's subtype-only ``format``.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-luma.html
+        """
         body = self._build(reference_image=ReferenceImage(media_type, "aGVsbG8="))
         assert body["keyframes"] == {
             "frame0": {
@@ -254,15 +409,33 @@ class TestLumaRayInput:
         }
 
     def test_unsupported_reference_image_format(self) -> None:
-        """Non PNG/JPEG reference images are rejected."""
-        with pytest.raises(ApiError, match="PNG or JPEG"):
+        """A non PNG/JPEG reference image is rejected with a 400.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-luma.html
+        """
+        with pytest.raises(ApiError, match="PNG or JPEG") as exc_info:
             self._build(reference_image=ReferenceImage("image/webp", "aGVsbG8="))
+        assert exc_info.value.status == 400
+        assert "'input_reference'" in str(exc_info.value)
 
     def test_extra_params_extend_payload(self) -> None:
-        """Extra parameters land in the payload without overriding it."""
+        """Extra parameters land in the payload without overriding it.
+
+        ``loop`` is a Luma-native field with no OpenAI equivalent; the merge
+        uses ``setdefault``, so an extra ``duration`` cannot desynchronize the
+        payload from the billed duration.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-luma.html
+             stdapi/models/video/luma_ray.py:VideoModel.build_generation_input
+        """
         body = self._build(extra_params={"loop": True, "duration": "1h"})
-        assert body["loop"] is True
-        assert body["duration"] == "5s"
+        assert body == {
+            "prompt": "a cat",
+            "duration": "5s",
+            "resolution": "720p",
+            "aspect_ratio": "16:9",
+            "loop": True,
+        }
 
 
 class _StubRuntimeClient:
@@ -352,7 +525,15 @@ def _new_log() -> EventLog:
 
 
 class TestStartVideoGeneration:
-    """VideoModelBase.start_video_generation: async invoke request and usage."""
+    """VideoModelBase.start_video_generation: async invoke request and usage.
+
+    Usage is recorded at submission time (the job is billed once started), and
+    the effective duration/size are attached as invocation tags because the AWS
+    job state does not carry them.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_StartAsyncInvoke.html
+         stdapi/models/video/__init__.py:VideoModelBase.start_video_generation
+    """
 
     @pytest.fixture(autouse=True)
     def _request_context(self) -> Generator[None]:
@@ -389,7 +570,15 @@ class TestStartVideoGeneration:
     async def test_start_records_usage_and_targets_regional_bucket(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The job writes to the regional bucket and bills the video duration."""
+        """The job writes to the regional bucket, is tagged, and bills the duration.
+
+        Omitting seconds and size falls back to the model defaults (6 s,
+        1280x720 for Nova Reel); those effective values are what gets tagged on
+        the invocation and billed as output seconds.
+
+        Ref: https://docs.aws.amazon.com/nova/latest/userguide/video-generation.html
+             stdapi/models/video/__init__.py:VideoModelBase._start_in_region
+        """
         client = _StubRuntimeClient()
         self._patch_infra(monkeypatch, client)
 
@@ -403,6 +592,7 @@ class TestStartVideoGeneration:
         (request,) = client.requests
         assert request["modelId"] == "amazon.nova-reel-v1:0"
         assert request["modelInput"]["taskType"] == "TEXT_VIDEO"
+        assert request["modelInput"]["videoGenerationConfig"]["durationSeconds"] == 6
         assert request["outputDataConfig"] == {
             "s3OutputDataConfig": {
                 "s3Uri": f"s3://bucket/{SETTINGS.aws_s3_videos_prefix}"
@@ -417,7 +607,11 @@ class TestStartVideoGeneration:
         assert records[0].region == "us-east-1"
 
     async def test_luma_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Luma defaults to a 5-second 720p video and bills 5 seconds."""
+        """Luma defaults to a 5-second 720p video and bills 5 seconds.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-luma.html
+             stdapi/models/video/luma_ray.py:VideoModel
+        """
         client = _StubRuntimeClient()
         self._patch_infra(monkeypatch, client)
 
@@ -426,14 +620,25 @@ class TestStartVideoGeneration:
         )
 
         assert start.seconds == 5
+        assert start.size == "1280x720"
         assert client.requests[0]["modelInput"]["duration"] == "5s"
+        assert client.requests[0]["modelInput"]["resolution"] == "720p"
+        tags = {tag["key"]: tag["value"] for tag in client.requests[0]["tags"]}
+        assert (tags["stdapi-ai.seconds"], tags["stdapi-ai.size"]) == ("5", "1280x720")
         records = list(USAGE.get().values())
         assert records[0].quantities == {Dimension.OUTPUT_SECONDS: 5}
 
     async def test_luma_bad_reference_mime_rejected_before_invoke(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """An unsupported reference image MIME fails upfront; no invoke is sent."""
+        """An unsupported reference image MIME fails upfront: no invoke, no usage.
+
+        The model input is built before the async invocation, so a rejected
+        request never reaches Bedrock and records no billable seconds.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-luma.html
+             stdapi/models/video/__init__.py:VideoModelBase.start_video_generation
+        """
         client = _StubRuntimeClient()
         self._patch_infra(monkeypatch, client)
 
@@ -444,7 +649,7 @@ class TestStartVideoGeneration:
             async def to_base64(self) -> str:
                 return "aGVsbG8="
 
-        with pytest.raises(ApiError, match="PNG or JPEG"):
+        with pytest.raises(ApiError, match="PNG or JPEG") as exc_info:
             await get_video_model("luma.ray-v2:0").start_video_generation(
                 "a cat",
                 seconds=5,
@@ -452,12 +657,21 @@ class TestStartVideoGeneration:
                 reference_image=_Ref(),  # type: ignore[arg-type]
                 extra_params={},
             )
+        assert exc_info.value.status == 400
         assert client.requests == []
+        assert not USAGE.get(), "a rejected request must not be billed"
 
     async def test_luma_hd_size_records_the_hd_spec_bucket(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A 720p Luma job bills output_seconds under the "hd" spec bucket."""
+        """A 720p Luma job bills output_seconds under the "hd" spec bucket.
+
+        AWS prices Luma's HD resolution on its own row, so the usage record must
+        carry the spec bucket the price lookup keys on.
+
+        Ref: stdapi/models/video/luma_ray.py:VideoModel.output_seconds_spec
+             stdapi/usage.py:record_bedrock_usage
+        """
         client = _StubRuntimeClient()
         self._patch_infra(monkeypatch, client)
 
@@ -467,11 +681,15 @@ class TestStartVideoGeneration:
 
         record = next(iter(USAGE.get().values()))
         assert record.output_seconds_by_spec == {"hd": 5}
+        assert record.quantities[Dimension.OUTPUT_SECONDS] == 5
 
     async def test_luma_540p_size_records_no_spec_bucket(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A 540p Luma job bills output_seconds at the flat (undifferentiated) bucket."""
+        """A 540p Luma job bills output_seconds at the flat (undifferentiated) bucket.
+
+        Ref: stdapi/models/video/luma_ray.py:VideoModel.output_seconds_spec
+        """
         client = _StubRuntimeClient()
         self._patch_infra(monkeypatch, client)
 
@@ -486,7 +704,14 @@ class TestStartVideoGeneration:
     async def test_nova_reel_records_no_spec_bucket(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Nova Reel's fixed size bills output_seconds at the flat (undifferentiated) bucket."""
+        """Nova Reel's fixed size bills output_seconds at the flat bucket.
+
+        Nova Reel renders a single resolution, so its pricing has no
+        resolution-differentiated row to key on.
+
+        Ref: https://docs.aws.amazon.com/nova/latest/userguide/video-generation.html
+             stdapi/models/video/__init__.py:VideoModelBase.output_seconds_spec
+        """
         client = _StubRuntimeClient()
         self._patch_infra(monkeypatch, client)
 
@@ -496,10 +721,19 @@ class TestStartVideoGeneration:
 
         record = next(iter(USAGE.get().values()))
         assert record.output_seconds_by_spec == {}
+        assert record.quantities[Dimension.OUTPUT_SECONDS] == 6
 
 
 class TestVideoJobAccess:
-    """ARN-addressed job retrieval, content access, and output deletion."""
+    """ARN-addressed job retrieval, content access, and output deletion.
+
+    Every lookup is scoped to this server's configured region set and videos
+    bucket/prefix: anything else in the AWS account is reported as not found, so
+    the endpoints cannot be used as an existence oracle.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_GetAsyncInvoke.html
+         stdapi/models/video/__init__.py:get_video_job
+    """
 
     @pytest.fixture(autouse=True)
     def _regions(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -523,7 +757,14 @@ class TestVideoJobAccess:
     async def test_get_video_job_maps_response(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The Bedrock job state maps to a VideoJob."""
+        """A Completed Bedrock job state maps to a VideoJob with both timestamps.
+
+        The model ID comes from the ``modelArn`` suffix and the output location
+        from the S3 URI, while ``submitTime``/``endTime`` become Unix timestamps.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_GetAsyncInvoke.html
+             stdapi/models/video/__init__.py:_to_video_job
+        """
         client = _StubRuntimeClient(
             {
                 "invocationArn": _ARN,
@@ -542,8 +783,11 @@ class TestVideoJobAccess:
 
         job = await get_video_job(_ARN)
 
+        assert client.requests == [{"invocationArn": _ARN}]
+        assert job.invocation_arn == _ARN
         assert job.model_id == "amazon.nova-reel-v1:0"
         assert job.status == "completed"
+        assert job.failure_message is None
         assert job.created_at == int(datetime(2026, 7, 11, tzinfo=UTC).timestamp())
         assert job.completed_at == int(
             datetime(2026, 7, 11, 0, 2, tzinfo=UTC).timestamp()
@@ -567,7 +811,15 @@ class TestVideoJobAccess:
         failure_message: str | None,
         expected_status: str,
     ) -> None:
-        """InProgress/Failed/unknown Bedrock statuses map to the API job status."""
+        """InProgress/Failed/unknown Bedrock statuses map to the API job status.
+
+        AWS exposes only InProgress, Completed and Failed, and an unrecognized
+        (future) status is treated as still running rather than as a failure.
+        Without an ``endTime`` there is no completion timestamp.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_GetAsyncInvoke.html
+             stdapi/models/video/__init__.py:_JOB_STATUS
+        """
         state: dict[str, Any] = {
             "invocationArn": _ARN,
             "modelArn": (
@@ -602,10 +854,21 @@ class TestVideoJobAccess:
     async def test_invalid_invocation_arns_are_not_found(
         self, invocation_arn: str
     ) -> None:
-        """Malformed or unconfigured-region ARNs surface as 404."""
+        """Malformed or unconfigured-region ARNs surface as 404, echoing nothing.
+
+        The ARN is parsed locally and its region checked against the configured
+        Bedrock regions, so an ARN this server could not have produced never
+        reaches GetAsyncInvoke.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_StartAsyncInvoke.html
+             stdapi/models/video/__init__.py:_invocation_region
+        """
         with pytest.raises(ApiError, match="not found") as exc_info:
             await get_video_job(invocation_arn)
         assert exc_info.value.status == 404
+        assert invocation_arn not in str(exc_info.value), (
+            "the error must not echo the requested ARN back"
+        )
 
     @pytest.mark.parametrize(
         "error_code",
@@ -614,7 +877,15 @@ class TestVideoJobAccess:
     async def test_gone_or_foreign_invocations_are_not_found(
         self, monkeypatch: pytest.MonkeyPatch, error_code: str
     ) -> None:
-        """Aged-out, foreign-account, and deleted invocations surface as 404."""
+        """Aged-out, foreign-account, and deleted invocations surface as 404.
+
+        ValidationException, AccessDeniedException and ResourceNotFoundException
+        all collapse into the same not-found, and the AWS wording is dropped so
+        the answer cannot distinguish a foreign job from a missing one.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_GetAsyncInvoke.html
+             stdapi/models/video/__init__.py:_JOB_NOT_FOUND_ERRORS
+        """
         client = _StubRuntimeClient(
             get_error=ClientError(
                 {"Error": {"Code": error_code, "Message": "AWS wording"}},
@@ -626,26 +897,43 @@ class TestVideoJobAccess:
         with pytest.raises(ApiError, match="not found") as exc_info:
             await get_video_job(_ARN)
         assert exc_info.value.status == 404
+        assert "AWS wording" not in str(exc_info.value), (
+            "the AWS error text must not leak the real reason"
+        )
 
     async def test_get_video_job_throttling_propagates(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """AWS errors other than the not-found codes propagate unchanged."""
-        client = _StubRuntimeClient(
-            get_error=ClientError(
-                {"Error": {"Code": "ThrottlingException", "Message": "slow down"}},
-                "GetAsyncInvoke",
-            )
+        """AWS errors other than the not-found codes propagate unchanged.
+
+        A throttled lookup is transient, so it must not be reported to the client
+        as a missing video.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_GetAsyncInvoke.html
+             stdapi/models/video/__init__.py:get_video_job
+        """
+        error = ClientError(
+            {"Error": {"Code": "ThrottlingException", "Message": "slow down"}},
+            "GetAsyncInvoke",
         )
+        client = _StubRuntimeClient(get_error=error)
         monkeypatch.setattr(video, "get_client", lambda _service, _region: client)
 
-        with pytest.raises(ClientError, match="ThrottlingException"):
+        with pytest.raises(ClientError, match="ThrottlingException") as exc_info:
             await get_video_job(_ARN)
+        assert exc_info.value is error
+        assert exc_info.value.response["Error"]["Message"] == "slow down"
 
     async def test_foreign_job_output_is_not_found(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A job whose output lies outside this server's videos prefix is rejected."""
+        """A job whose output lies outside this server's videos prefix is rejected.
+
+        The invocation exists and is readable, but another application owns it,
+        so it must not be served through this server's endpoints.
+
+        Ref: stdapi/models/video/__init__.py:_region_videos_uri_prefix
+        """
         client = _StubRuntimeClient(
             {
                 "invocationArn": _ARN,
@@ -669,7 +957,13 @@ class TestVideoJobAccess:
     async def test_sibling_prefix_job_output_is_not_found(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A slash-less configured prefix must not false-accept a sibling prefix."""
+        """A slash-less configured prefix must not false-accept a sibling prefix.
+
+        The ownership check appends the missing "/", so the configured prefix
+        "videos" cannot match the unrelated folder "videos-other".
+
+        Ref: stdapi/models/video/__init__.py:_region_videos_uri_prefix
+        """
         monkeypatch.setattr(SETTINGS, "aws_s3_videos_prefix", "videos")
         client = _StubRuntimeClient(
             {
@@ -696,7 +990,14 @@ class TestVideoJobAccess:
     async def test_job_in_unconfigured_bucket_region_is_not_found(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A job in a region without a configured bucket is rejected outright."""
+        """A job in a region without a configured bucket is rejected outright.
+
+        With no bucket for the region there is no ownership prefix to compare
+        against, so the job cannot be proven to belong to this server.
+
+        Ref: stdapi/aws_s3.py:get_s3_bucket_for_region
+             stdapi/models/video/__init__.py:_region_videos_uri_prefix
+        """
         monkeypatch.setattr(SETTINGS, "aws_s3_regional_buckets", {})
         client = _StubRuntimeClient(
             {
@@ -720,20 +1021,32 @@ class TestVideoJobAccess:
     async def test_open_video_content_targets_output_file(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The MP4 is read from the job output folder."""
+        """The MP4 is read from ``output.mp4`` in the job folder and streamed as-is.
+
+        Nova writes ``manifest.json``, ``output.mp4`` and
+        ``generation-status.json`` per invocation; only the MP4 is served, and the
+        S3 body's chunk iterator is handed back without buffering.
+
+        Ref: https://docs.aws.amazon.com/nova/latest/userguide/video-gen-access.html
+             stdapi/models/video/__init__.py:open_video_content
+        """
         s3 = _StubS3Client()
         monkeypatch.setattr(video, "get_client", lambda _service, _region: s3)
 
-        await open_video_content(self._job())
+        content = await open_video_content(self._job())
 
         assert s3.requests == [
             ("get_object", {"Bucket": "bucket", "Key": "videos/abc123xyz/output.mp4"})
         ]
+        assert list(cast("Iterable[bytes]", content)) == [b"mp4-bytes"]
 
     async def test_open_video_content_missing_is_not_found(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A deleted output surfaces as 404."""
+        """A deleted output surfaces as 404.
+
+        Ref: stdapi/models/video/__init__.py:open_video_content
+        """
         s3 = _StubS3Client(missing=True)
         monkeypatch.setattr(video, "get_client", lambda _service, _region: s3)
 
@@ -744,7 +1057,14 @@ class TestVideoJobAccess:
     async def test_open_video_content_access_denied_is_not_found(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """AccessDenied (missing key under least-privilege IAM) maps to 404 + warning."""
+        """AccessDenied (missing key under least-privilege IAM) maps to 404 + warning.
+
+        Without ``s3:ListBucket`` S3 answers a missing key with AccessDenied, so
+        404 is the right client answer while the warning keeps a genuine
+        permission misconfiguration diagnosable.
+
+        Ref: stdapi/models/video/__init__.py:open_video_content
+        """
         s3 = _StubS3Client(
             get_error=ClientError(
                 {"Error": {"Code": "AccessDenied", "Message": "denied"}}, "GetObject"
@@ -766,26 +1086,46 @@ class TestVideoJobAccess:
     async def test_open_video_content_other_s3_error_propagates(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """S3 errors other than missing-key/AccessDenied propagate unchanged."""
-        s3 = _StubS3Client(
-            get_error=ClientError(
-                {"Error": {"Code": "SlowDown", "Message": "throttled"}}, "GetObject"
-            )
+        """S3 errors other than missing-key/AccessDenied propagate unchanged.
+
+        A throttled download is transient and must not be reported as a missing
+        video.
+
+        Ref: stdapi/models/video/__init__.py:open_video_content
+        """
+        error = ClientError(
+            {"Error": {"Code": "SlowDown", "Message": "throttled"}}, "GetObject"
         )
+        s3 = _StubS3Client(get_error=error)
         monkeypatch.setattr(video, "get_client", lambda _service, _region: s3)
 
-        with pytest.raises(ClientError, match="SlowDown"):
+        with pytest.raises(ClientError, match="SlowDown") as exc_info:
             await open_video_content(self._job())
+        assert exc_info.value is error
 
     async def test_video_expires_at_disabled_by_default(self) -> None:
-        """Without a retention setting no expiry is reported."""
+        """Without a retention setting no expiry is reported.
+
+        OpenAI always reports an ``expires_at``; here retention is a bucket
+        lifecycle setting, so the field stays null unless it is configured.
+
+        Ref: https://stdapi.ai/api_openai_videos/
+             stdapi/models/video/__init__.py:video_expires_at
+        """
         job = self._job().model_copy(update={"completed_at": 1000})
         assert video.video_expires_at(job) is None
 
     async def test_video_expires_at_from_completion(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The expiry is the completion time plus the configured retention."""
+        """The expiry is the completion time plus the configured retention.
+
+        An unfinished job has no completion time to count from, so it reports no
+        expiry even with retention configured.
+
+        Ref: stdapi/config.py:Settings.aws_s3_videos_expires_after
+             stdapi/models/video/__init__.py:video_expires_at
+        """
         monkeypatch.setattr(SETTINGS, "aws_s3_videos_expires_after", 3600)
         job = self._job().model_copy(update={"completed_at": 1000})
         assert video.video_expires_at(job) == 4600
@@ -794,7 +1134,14 @@ class TestVideoJobAccess:
     async def test_open_video_content_expired_is_not_found(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Content of an expired video surfaces as 404 without reaching S3."""
+        """Content of an expired video surfaces as 404 without reaching S3.
+
+        The retention window is checked before the download, so an expired video
+        is refused even while the S3 lifecycle rule has not run yet.
+
+        Ref: https://stdapi.ai/api_openai_videos/
+             stdapi/models/video/__init__.py:open_video_content
+        """
         monkeypatch.setattr(SETTINGS, "aws_s3_videos_expires_after", 3600)
         s3 = _StubS3Client()
         monkeypatch.setattr(video, "get_client", lambda _service, _region: s3)
@@ -808,7 +1155,15 @@ class TestVideoJobAccess:
     async def test_delete_video_output_removes_job_folder(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """All objects under the job folder are deleted."""
+        """All objects under the job folder are deleted in one batch.
+
+        Deletion targets the whole invocation folder (manifest, MP4 and status
+        file), and the prefix is closed with a "/" so a sibling folder cannot be
+        swept up.
+
+        Ref: https://docs.aws.amazon.com/nova/latest/userguide/video-gen-access.html
+             stdapi/models/video/__init__.py:delete_video_output
+        """
         s3 = _StubS3Client(
             keys=["videos/abc123xyz/output.mp4", "videos/abc123xyz/manifest.json"]
         )
@@ -836,7 +1191,13 @@ class TestVideoJobAccess:
     async def test_delete_video_output_with_no_objects(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """An already-empty job folder deletes nothing."""
+        """An already-empty job folder deletes nothing and still succeeds.
+
+        Deleting an already-deleted video is not an error, and no DeleteObjects
+        call is made with an empty key list (which S3 would reject).
+
+        Ref: stdapi/models/video/__init__.py:delete_video_output
+        """
         s3 = _StubS3Client()
         monkeypatch.setattr(video, "get_client", lambda _service, _region: s3)
 
@@ -847,7 +1208,14 @@ class TestVideoJobAccess:
     async def test_delete_video_output_follows_pagination(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The object listing follows ContinuationToken across pages."""
+        """The object listing follows ContinuationToken across pages.
+
+        Each page is deleted as it is listed, so a job folder larger than one
+        ListObjectsV2 page is still fully removed.
+
+        Ref: botocore/data/s3/2006-03-01/service-2.json:ListObjectsV2
+             stdapi/models/video/__init__.py:delete_video_output
+        """
         s3 = _StubS3Client(
             list_pages=[
                 {
@@ -875,7 +1243,15 @@ class TestVideoJobAccess:
     async def test_delete_video_output_warns_on_failed_keys(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Per-key deletion failures keep the delete succeeding, with a warning."""
+        """Per-key deletion failures keep the delete succeeding, with a warning.
+
+        DeleteObjects reports per-key failures in ``Errors`` instead of raising;
+        deletion stays best-effort because the bucket lifecycle expiry covers the
+        stragglers.
+
+        Ref: botocore/data/s3/2006-03-01/service-2.json:DeleteObjects
+             stdapi/models/video/__init__.py:delete_video_output
+        """
         s3 = _StubS3Client(
             keys=["videos/abc123xyz/output.mp4"],
             delete_response={
@@ -896,7 +1272,14 @@ class TestVideoJobAccess:
 
 
 class TestToVideoJob:
-    """_to_video_job: mapping of the Bedrock ``s3Uri`` into bucket/prefix."""
+    """_to_video_job: mapping of the Bedrock ``s3Uri`` into bucket/prefix.
+
+    The URI comes straight from the AWS job state, so every legal
+    ``s3://bucket[/prefix]`` form must split without raising.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_StartAsyncInvoke.html
+         stdapi/models/video/__init__.py:_to_video_job
+    """
 
     @staticmethod
     def _state(s3_uri: str) -> dict[str, Any]:
@@ -924,7 +1307,11 @@ class TestToVideoJob:
         assert job.output_prefix == ""
 
     def test_bucket_only_without_slash_yields_empty_prefix(self) -> None:
-        """A bucket-only URI with no trailing slash does not raise."""
+        """A bucket-only URI with no trailing slash yields an empty prefix.
+
+        ``partition`` finds no separator, which must not be mistaken for a
+        missing bucket.
+        """
         job = video._to_video_job(_ARN, self._state("s3://bucket"))  # noqa: SLF001
         assert job.output_bucket == "bucket"
         assert job.output_prefix == ""
@@ -991,7 +1378,16 @@ class _FailingListClient:
 
 
 class TestListVideoJobs:
-    """Cross-region job listing: filtering, ordering, cursor, and details."""
+    """Cross-region job listing: filtering, ordering, cursor, and details.
+
+    Listing scans Bedrock async invocations and keeps only those written under
+    this server's videos prefix; duration and size come from the invocation
+    tags, which AWS itself does not report in a job summary.
+
+    Ref: botocore/data/bedrock-runtime/2023-09-30/service-2.json:ListAsyncInvokes
+         https://stdapi.ai/api_openai_videos/
+         stdapi/models/video/__init__.py:list_video_jobs
+    """
 
     @pytest.fixture(autouse=True)
     def _regions(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1006,7 +1402,14 @@ class TestListVideoJobs:
     async def test_lists_own_jobs_with_tag_details(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Only jobs under the videos prefix are listed; tags set duration/size."""
+        """Only jobs under the videos prefix are listed; tags set duration/size.
+
+        A job written to another bucket is dropped, a tagged job reports its
+        tagged duration, and a job started before the tags existed falls back to
+        the model defaults instead of disappearing.
+
+        Ref: stdapi/models/video/__init__.py:_listing_details
+        """
         client = _StubListClient(
             [
                 {
@@ -1042,7 +1445,13 @@ class TestListVideoJobs:
     async def test_after_cursor_and_limit(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The page starts strictly after the cursor and respects the limit."""
+        """The page starts strictly after the cursor and respects the limit.
+
+        The cursor is an invocation ARN, and with the default descending order
+        the job after the newest one is the next older job.
+
+        Ref: stdapi/routes/openai_videos.py:list_videos
+        """
         summaries = [
             _summary(s, t) for s, t in (("aaa", 100), ("bbb", 200), ("ccc", 300))
         ]
@@ -1058,7 +1467,13 @@ class TestListVideoJobs:
     async def test_unknown_after_cursor_yields_empty_page(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """An unknown cursor returns an empty page instead of restarting."""
+        """An unknown cursor returns an empty page instead of restarting.
+
+        Silently restarting from the first job would make an SDK pager loop
+        forever over the same page.
+
+        Ref: stdapi/models/video/__init__.py:list_video_jobs
+        """
         self._patch_client(
             monkeypatch,
             _StubListClient([{"asyncInvokeSummaries": [_summary("aaa", 100)]}]),
@@ -1070,20 +1485,27 @@ class TestListVideoJobs:
         assert not has_more
 
     async def test_ascending_order(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """order=asc returns oldest jobs first."""
+        """order=asc returns oldest jobs first and asks AWS for Ascending order.
+
+        Ref: botocore/data/bedrock-runtime/2023-09-30/service-2.json:ListAsyncInvokes
+        """
         summaries = [_summary("aaa", 200), _summary("bbb", 100)]
-        self._patch_client(
-            monkeypatch, _StubListClient([{"asyncInvokeSummaries": summaries}])
-        )
+        client = _StubListClient([{"asyncInvokeSummaries": summaries}])
+        self._patch_client(monkeypatch, client)
 
         listings, _ = await video.list_video_jobs(order="asc")
 
         assert [listing.job.created_at for listing in listings] == [100, 200]
+        assert client.requests[0]["sortOrder"] == "Ascending"
+        assert client.requests[0]["sortBy"] == "SubmissionTime"
 
     async def test_scan_follows_pagination(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The region scan follows nextToken across pages."""
+        """The region scan follows nextToken across pages.
+
+        Ref: botocore/data/bedrock-runtime/2023-09-30/service-2.json:ListAsyncInvokes
+        """
         client = _StubListClient(
             [
                 {"asyncInvokeSummaries": [_summary("aaa", 100)], "nextToken": "page2"},
@@ -1100,7 +1522,13 @@ class TestListVideoJobs:
     async def test_scan_caps_examined_summaries_not_matches(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The scan stops after examining _LIST_SCAN_LIMIT summaries, even with zero matches."""
+        """The scan stops after examining _LIST_SCAN_LIMIT summaries, matches or not.
+
+        The cap counts examined invocations, not kept ones, so an account full of
+        other applications' invocations cannot make one listing scan forever.
+
+        Ref: stdapi/models/video/__init__.py:_scan_region_jobs
+        """
         monkeypatch.setattr(video, "_LIST_SCAN_LIMIT", 4)
         foreign_page = {
             "asyncInvokeSummaries": [
@@ -1122,7 +1550,13 @@ class TestListVideoJobs:
     async def test_unknown_model_without_tags_is_dropped(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Jobs from unknown models with no tags are dropped from the page."""
+        """Jobs from unknown models with no tags are dropped from the page.
+
+        Without tags the duration and size can only come from the model defaults,
+        which an unknown model cannot supply.
+
+        Ref: stdapi/models/video/__init__.py:_listing_details
+        """
         self._patch_client(
             monkeypatch,
             _StubListClient(
@@ -1140,10 +1574,11 @@ class TestListVideoJobs:
     ) -> None:
         """Unknown-model jobs interleaved in the scan must not shrink a full page.
 
-        Regression: has_more was computed before dropping unknown-model jobs,
-        so a page filled with unknown-model jobs returned empty with
-        has_more=True -- SDK pagers stop on an empty page, stranding every
-        job after it.
+        ``has_more`` is computed after unknown-model jobs are dropped: computing
+        it before would return an empty page with ``has_more=True``, and SDK
+        pagers stop on an empty page, stranding every job behind it.
+
+        Ref: stdapi/models/video/__init__.py:_resolve_listing_page
         """
         summaries = [
             _summary("aaa", 100, model="foo.bar-v9:0"),
@@ -1161,7 +1596,15 @@ class TestListVideoJobs:
 
 
 class TestListVideoJobsMultiRegion:
-    """Cross-region merge and per-region fault tolerance of the listing."""
+    """Cross-region merge and per-region fault tolerance of the listing.
+
+    Jobs live in the region that served the generation, so a listing must scan
+    every configured region; a region that cannot be reached is skipped rather
+    than failing the whole listing.
+
+    Ref: https://stdapi.ai/api_openai_videos/
+         stdapi/models/video/__init__.py:list_video_jobs
+    """
 
     REGIONS = ("us-east-1", "us-west-2")
 
@@ -1182,7 +1625,10 @@ class TestListVideoJobsMultiRegion:
     async def test_merges_jobs_across_regions(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Jobs from every configured region merge in creation-time order."""
+        """Jobs from every configured region merge in creation-time order.
+
+        Ref: stdapi/models/video/__init__.py:_scan_region_jobs
+        """
         clients = {
             "us-east-1": _StubListClient(
                 [{"asyncInvokeSummaries": [_summary("aaa", 100)]}]
@@ -1204,7 +1650,14 @@ class TestListVideoJobsMultiRegion:
     async def test_failed_region_is_skipped_with_warning(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A region failing with a ClientError is skipped and logged as a warning."""
+        """A region failing with a ClientError is skipped and logged as a warning.
+
+        A partial listing beats no listing, but the unreachable regions are named
+        in the request log so a silently region-scoped result is diagnosable.
+
+        Ref: stdapi/monitoring.py:log_error_details
+             stdapi/models/video/__init__.py:list_video_jobs
+        """
         clients = {
             "us-east-1": _FailingListClient(
                 ClientError(
@@ -1237,7 +1690,13 @@ class TestListVideoJobsMultiRegion:
     async def test_all_regions_failing_raises_first_error(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """When every region fails, the first region's error is raised."""
+        """When every region fails, the first region's error is raised.
+
+        With no region left to serve the request there is no partial result to
+        return, so the AWS error surfaces unchanged instead of an empty page.
+
+        Ref: stdapi/models/video/__init__.py:list_video_jobs
+        """
         first = ClientError(
             {"Error": {"Code": "ThrottlingException", "Message": "first"}},
             "ListAsyncInvokes",
@@ -1261,12 +1720,20 @@ class TestListVideoJobsMultiRegion:
     async def test_non_aws_error_propagates(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A non-AWS error in one region fails the listing outright."""
+        """A non-AWS error in one region fails the listing outright.
+
+        Only AWS errors are treated as a reachability problem; a bug in the scan
+        must not be masked by returning the other regions' jobs.
+
+        Ref: stdapi/models/video/__init__.py:list_video_jobs
+        """
+        error = RuntimeError("boom")
         clients = {
-            "us-east-1": _FailingListClient(RuntimeError("boom")),
+            "us-east-1": _FailingListClient(error),
             "us-west-2": _StubListClient([{"asyncInvokeSummaries": []}]),
         }
         self._patch_clients(monkeypatch, clients)
 
-        with pytest.raises(RuntimeError, match="boom"):
+        with pytest.raises(RuntimeError, match="boom") as exc_info:
             await video.list_video_jobs()
+        assert exc_info.value is error

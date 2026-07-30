@@ -1,31 +1,33 @@
-"""Tests for Anthropic system tools via the Anthropic /v1/messages route.
+"""Anthropic-defined tool types on Claude models through the Anthropic Messages route.
 
-Covers all Anthropic-defined system tools available on Claude models.  The
-reference behavior is the ``AnthropicBedrock`` SDK (AWS Bedrock direct) plus the
-official Anthropic documentation.  On Bedrock, system tools return ``tool_use``
-blocks (not ``server_tool_use``).
+Claude receives these tools in Anthropic native form: the gateway turns each one into
+a bare Bedrock ``toolSpec`` stub, then moves it into
+``additionalModelRequestFields["tools"]`` on the first turn and keeps the stub inside
+``toolConfig`` once the history carries a ``toolResult``.  Bedrock therefore answers
+with ordinary ``tool_use`` blocks — never ``server_tool_use`` — and the host
+application is responsible for executing the tool and returning a ``tool_result``.
 
-Tools and their Bedrock availability
--------------------------------------
-Supported on Bedrock (return ``tool_use`` blocks):
-  - Text editor  (``str_replace_based_edit_tool``, type ``text_editor_20250728``)
-  - Bash shell   (``bash``, type ``bash_20250124``)
-  - Memory store (``memory``, type ``memory_20250818``)
-  - Computer use (``computer``, type ``computer_20250124`` / ``computer_20251124``)
-  - Web search   (``web_search``, type ``web_search_20250305``) — on Nova Premier only;
-                 raises ``BadRequestError`` on Claude models
+Each tool ``type`` version dictates the ``name`` the request must use and the beta
+flag the gateway injects on its behalf:
 
-Not supported on Bedrock (raise ``BadRequestError``):
-  - Code execution (``code_execution``, type ``code_execution_20250522``)
-  - Web fetch      (``web_fetch``, type ``web_fetch_20250910``)
+- ``text_editor_20250728`` → ``str_replace_based_edit_tool``
+  (``text_editor_20250124`` and earlier use ``str_replace_editor``)
+- ``bash_20250124`` → ``bash``
+- ``memory_20250818`` → ``memory`` (``context-management-2025-06-27``)
+- ``computer_20250124`` → ``computer`` (``computer-use-2025-01-24``);
+  ``computer_20251124`` → ``computer`` (``computer-use-2025-11-24``)
+- ``web_search_20250305`` → ``web_search``: reachable only on Amazon Nova Premier,
+  where the gateway maps it to the Bedrock ``nova_grounding`` system tool
+- ``code_execution_20250522`` and ``web_fetch_20250910``: absent from Bedrock
 
-All tests that require actual model inference are marked ``@pytest.mark.expensive``.
-Run with::
+Every test needs the local gateway, so the autouse ``_skip_on_official_api`` fixture
+skips the module under ``--use-official-api``; the classes that additionally require
+the official Anthropic API are therefore always skipped.
 
-    pytest --expensive tests/test_anthropic_messages_anthropic_claude.py
-
-Tests that only validate error paths are not expensive because they do not
-complete a successful inference round-trip.
+Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
+     https://platform.claude.com/docs/en/build-with-claude/claude-on-amazon-bedrock-legacy
+     stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel._req_configure_tools
+     stdapi/models/chat/_adapters/_anthropic_message.py:_handle_system_tool
 """
 
 import base64
@@ -85,8 +87,7 @@ _BASH_TOOL: dict[str, object] = {"type": "bash_20250124", "name": "bash"}
 #: Memory tool — type ``memory_20250818``, canonical name ``memory``.
 _MEMORY_TOOL: dict[str, object] = {"type": "memory_20250818", "name": "memory"}
 
-#: Code execution tool — type ``code_execution_20250522``, canonical name ``code_execution``.
-#: Not supported on AWS Bedrock; tests skip when ``is_bedrock_direct=True``.
+#: Code execution tool — legacy Python-only type ``code_execution_20250522``, absent on Bedrock.
 _CODE_EXECUTION_TOOL: dict[str, object] = {
     "type": "code_execution_20250522",
     "name": "code_execution",
@@ -98,9 +99,14 @@ _WEB_SEARCH_TOOL: dict[str, object] = {
     "name": "web_search",
 }
 
-#: Web fetch tool — type ``web_fetch_20250910``, canonical name ``web_fetch``.
-#: Not supported on AWS Bedrock; tests skip when ``is_bedrock_direct=True``.
+#: Web fetch tool — type ``web_fetch_20250910``, canonical name ``web_fetch``, absent on Bedrock.
 _WEB_FETCH_TOOL: dict[str, object] = {"type": "web_fetch_20250910", "name": "web_fetch"}
+
+#: Anthropic ``stop_reason`` values a completed tool-enabled Claude turn can carry.
+_TURN_STOP_REASONS = frozenset({"end_turn", "max_tokens", "stop_sequence", "tool_use"})
+
+#: Commands of the ``text_editor_20250728`` tool (``undo_edit`` exists only up to ``20250124``).
+_TEXT_EDITOR_COMMANDS = frozenset({"view", "create", "str_replace", "insert"})
 
 # ---------------------------------------------------------------------------
 # Beta header constants
@@ -176,26 +182,16 @@ def anthropic_chat_model(
 
 @pytest.mark.parametrize("model_id", _CLAUDE_SYSTEM_TOOLS)
 class TestTextEditorTool:
-    """Tests for the ``str_replace_based_edit_tool`` (text editor) on Claude models.
+    """Text editor tool type ``text_editor_20250728`` on Claude models.
 
-    On Bedrock (reference behavior), system tools are returned as ``tool_use``
-    blocks.  The text editor host application receives the block, executes the
-    file operation, and returns a ``tool_result``.
+    The type version fixes the tool ``name`` to ``str_replace_based_edit_tool``, the
+    command set to ``view`` / ``create`` / ``str_replace`` / ``insert`` and is the
+    first version accepting ``max_characters``.  The gateway forwards the definition
+    to Claude natively and injects ``computer-use-2025-01-24`` for it, so the model
+    answers with a host-executed ``tool_use`` block.
 
-    Validated scenarios
-    -------------------
-    - Tool accepted without error
-    - ``view`` command: produces ``tool_use`` with ``command`` and ``path`` keys
-    - ``view`` of a directory path
-    - ``view`` with ``view_range`` lines hint
-    - Full multi-turn: view → tool_result → end_turn text response
-    - ``str_replace`` command shape after inspecting a broken file
-    - ``create`` command shape when writing a new file
-    - ``insert`` command shape when prepending a line
-    - Error result (``is_error=true``) accepted in multi-turn without crashing
-    - ``max_characters`` extra param accepted
-    - ``max_characters`` produces the same ``tool_use`` output shape
-    - ``max_characters`` multi-turn: Turn 1 → stub Turn 2
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
+         stdapi/models/chat/anthropic_claude.py:ChatModel
     """
 
     # --- acceptance ---
@@ -204,11 +200,10 @@ class TestTextEditorTool:
     def test_accepted(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """Text editor tool definition is accepted without error.
+        """A ``text_editor_20250728`` definition is accepted and inference still completes.
 
-        Validates:
-            - Request with ``text_editor_20250728`` does not raise
-            - Response is a valid message with at least one content block
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
+             stdapi/models/chat/_adapters/_anthropic_message.py:_handle_system_tool
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_model,
@@ -217,7 +212,11 @@ class TestTextEditorTool:
             tools=[_TEXT_EDITOR_TOOL],  # type: ignore[list-item]
         )
         assert response.type == "message"
+        assert response.role == "assistant"
+        assert response.id.startswith("msg_")
         assert len(response.content) >= 1
+        assert response.stop_reason in _TURN_STOP_REASONS
+        assert response.usage.output_tokens > 0
 
     # --- view command ---
 
@@ -225,15 +224,14 @@ class TestTextEditorTool:
     def test_view_file_triggers_tool_use(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """View command produces a ``tool_use`` block with ``command`` and ``path``.
+        """The ``view`` command is emitted as a ``tool_use`` block naming the requested file.
 
-        Forces tool use with ``tool_choice=any``.
+        ``tool_choice=any`` forces a tool call, so the model cannot answer in prose;
+        the block must carry the ``text_editor_20250728`` name and the ``command`` /
+        ``path`` arguments of that version's schema.
 
-        Validates:
-            - Exactly one ``tool_use`` block in the response
-            - ``block.name == "str_replace_based_edit_tool"``
-            - ``block.input["command"] == "view"``
-            - ``block.input["path"]`` is a non-empty string
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools#forcing-tool-use
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_tool_choice
         """
         response = anthropic_client.messages.create(  # type: ignore[call-overload]
             model=anthropic_chat_model,
@@ -250,16 +248,19 @@ class TestTextEditorTool:
         assert block.name == "str_replace_based_edit_tool"
         assert block.input.get("command") == "view"
         assert block.input.get("path")
+        assert "/etc/hostname" in str(block.input["path"])
+        assert response.stop_reason == "tool_use"
 
     @pytest.mark.expensive
     def test_view_directory_triggers_tool_use(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """Claude uses the view command when asked to list a directory.
+        """A directory listing request maps onto the ``view`` command with the directory path.
 
-        Validates:
-            - ``tool_use`` block emitted with ``command == "view"``
-            - ``path`` refers to the requested directory
+        The ``20250728`` schema has no dedicated list command: directories are read
+        through ``view``.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
         """
         response = anthropic_client.messages.create(  # type: ignore[call-overload]
             model=anthropic_chat_model,
@@ -273,18 +274,22 @@ class TestTextEditorTool:
         block = tool_blocks[0]
         assert isinstance(block, ToolUseBlock)
         assert block.id
+        assert block.name == "str_replace_based_edit_tool"
         assert block.input.get("command") == "view"
+        assert "tmp" in str(block.input.get("path", "")), (
+            f"view should target the requested directory, got {block.input}"
+        )
 
     @pytest.mark.expensive
     def test_view_file_with_range_emits_view_command(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """Claude uses the view command when asked to inspect specific lines.
+        """A line-range request stays a ``view`` command, optionally carrying ``view_range``.
 
-        ``view_range`` is optional; Claude may or may not include it.
+        ``view_range`` is an optional argument of the ``view`` command, so the test
+        validates its ``[start, end]`` shape only when the model includes it.
 
-        Validates:
-            - ``tool_use`` with ``command == "view"`` is emitted
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
         """
         response = anthropic_client.messages.create(  # type: ignore[call-overload]
             model=anthropic_chat_model,
@@ -298,17 +303,27 @@ class TestTextEditorTool:
         block = tool_blocks[0]
         assert isinstance(block, ToolUseBlock)
         assert block.id
+        assert block.name == "str_replace_based_edit_tool"
         assert block.input.get("command") == "view"
+        assert "/etc/hosts" in str(block.input.get("path", ""))
+        if (view_range := block.input.get("view_range")) is not None:
+            assert isinstance(view_range, list)
+            assert len(view_range) == 2
+            assert all(isinstance(bound, int) for bound in view_range)
 
     @pytest.mark.expensive
     def test_view_multiturn(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """View + tool_result → Turn 2 end_turn text response.
+        """A text-editor ``tool_result`` closes the turn with an ``end_turn`` text answer.
 
-        Validates:
-            - Turn 1: ``tool_use`` block with ``command == "view"``
-            - Turn 2: ``tool_result`` is accepted; response is ``end_turn`` with text
+        Turn 2 exercises the gateway's multi-turn stub mode: once the history holds a
+        ``toolResult``, the tool must stay a ``toolSpec`` entry in ``toolConfig``
+        instead of moving to ``additionalModelRequestFields``, otherwise Bedrock
+        rejects the request.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
+             stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel._req_configure_tools
         """
         tools = [_TEXT_EDITOR_TOOL]
         user_prompt = "View the file /etc/hostname"
@@ -325,6 +340,8 @@ class TestTextEditorTool:
         tool_block = tool_blocks[0]
         assert isinstance(tool_block, ToolUseBlock)
         assert tool_block.id
+        assert tool_block.name == "str_replace_based_edit_tool"
+        assert tool_block.input.get("command") == "view"
 
         resp2 = anthropic_client.messages.create(
             model=anthropic_chat_model,
@@ -347,6 +364,7 @@ class TestTextEditorTool:
         )
         assert resp2.stop_reason == "end_turn"
         assert any(b.type == "text" for b in resp2.content)
+        assert resp2.usage.output_tokens > 0
 
     # --- str_replace command ---
 
@@ -354,16 +372,17 @@ class TestTextEditorTool:
     def test_str_replace_command_shape(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """After receiving a file with a syntax error, Claude uses str_replace to fix it.
+        """An edit command round-trips with a replaced-text pair that differs from the original.
 
-        Multi-turn flow: Claude may view the file one or more times before editing.
-        Each view is answered with the file contents until Claude emits an edit command
-        (str_replace, create, or insert) or 5 turns are exhausted.  Forces tool use with
-        ``tool_choice=any``, so a text-only answer cannot end the flow.
+        Each ``view`` is answered with the file contents until an edit command appears
+        or 5 forced-tool turns are exhausted.  ``text_editor_20250728`` documents the
+        replaced-text arguments as ``old_str`` / ``new_str``, but the emitted key name
+        varies across Claude generations, so the assertion accepts the observed
+        ``old_str`` / ``old_text`` / ``old_string`` spellings and pairs each with its
+        ``new_*`` counterpart.
 
-        Validates:
-            - Edit block has ``command`` in ``("str_replace", "create", "insert")``
-            - str_replace: ``old_str`` and ``new_str`` are present and differ
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
+             stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel._req_configure_tools
         """
         tools = [_TEXT_EDITOR_TOOL]
         user_prompt = "Fix the syntax error in /tmp/primes.py"
@@ -398,6 +417,10 @@ class TestTextEditorTool:
                 assert isinstance(block, ToolUseBlock)
                 assert block.id
                 assert block.name == "str_replace_based_edit_tool"
+                assert block.input.get("command") in _TEXT_EDITOR_COMMANDS
+                assert block.input.get("path"), (
+                    f"every text editor command requires a path, got {block.input}"
+                )
                 if block.input.get("command") == "str_replace":
                     # Naming of the replaced text differs per model generation:
                     # old_str (classic), old_text or old_string.
@@ -444,12 +467,9 @@ class TestTextEditorTool:
     def test_create_command_shape(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """Claude uses the create command when asked to write a new file.
+        """The ``create`` command carries the target ``path`` and the new ``file_text``.
 
-        Validates:
-            - ``block.input["command"] == "create"``
-            - ``block.input["path"]`` is non-empty
-            - ``block.input["file_text"]`` is non-empty
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
         """
         response = anthropic_client.messages.create(  # type: ignore[call-overload]
             model=anthropic_chat_model,
@@ -468,9 +488,12 @@ class TestTextEditorTool:
         block = tool_blocks[0]
         assert isinstance(block, ToolUseBlock)
         assert block.id
+        assert block.name == "str_replace_based_edit_tool"
         assert block.input.get("command") == "create"
         assert block.input.get("path")
+        assert "hello" in str(block.input["path"]).lower()
         assert block.input.get("file_text")
+        assert "hello world" in str(block.input["file_text"]).lower()
 
     # --- insert command ---
 
@@ -478,14 +501,14 @@ class TestTextEditorTool:
     def test_insert_command_shape(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """Claude uses the insert command when asked to prepend a line to a file.
+        """The ``insert`` command carries an integer ``insert_line`` and the text to insert.
 
-        Two-turn flow: Claude views the file first, then inserts after receiving content.
-        Forces tool use with ``tool_choice=any``, so a text-only answer cannot end a turn.
+        The model usually reads the file before editing, so the flow answers a first
+        ``view`` with file contents and then accepts any of the version's write
+        commands; the ``insert``-specific argument shape is asserted whenever
+        ``insert`` is the command actually chosen.
 
-        Validates:
-            - An edit block is emitted with ``command`` in ``{insert, str_replace, create}``
-            - If ``insert``: ``insert_line`` is an integer and ``insert_text`` is non-empty
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
         """
         tools = [_TEXT_EDITOR_TOOL]
         user_prompt = "Add a module docstring at the top of /tmp/primes.py"
@@ -505,6 +528,7 @@ class TestTextEditorTool:
         ]
         if insert_direct:
             block = insert_direct[0]
+            assert block.name == "str_replace_based_edit_tool"
             assert isinstance(block.input.get("insert_line"), int)
             assert block.input.get("insert_text")
             return
@@ -542,7 +566,13 @@ class TestTextEditorTool:
         edit_blocks = [b for b in resp2.content if isinstance(b, ToolUseBlock)]
         assert edit_blocks, "Claude should emit an edit command"
         block = edit_blocks[0]
-        assert block.input.get("command") in ("insert", "str_replace", "create")
+        assert block.name == "str_replace_based_edit_tool"
+        command = block.input.get("command")
+        assert command in ("insert", "str_replace", "create")
+        assert block.input.get("path")
+        if command == "insert":
+            assert isinstance(block.input.get("insert_line"), int)
+            assert block.input.get("insert_text")
 
     # --- error result ---
 
@@ -550,13 +580,14 @@ class TestTextEditorTool:
     def test_error_tool_result_accepted(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """A ``tool_result`` with ``is_error=true`` is accepted and Claude handles it gracefully.
+        """A text-editor ``tool_result`` flagged ``is_error=true`` is accepted and answered.
 
-        Simulates a "file not found" error on the host side.
+        Anthropic signals a host-side tool failure with ``is_error`` on the
+        ``tool_result`` block; the gateway must map it to the Bedrock ``toolResult``
+        status instead of rejecting the message.
 
-        Validates:
-            - Turn 2 with ``is_error=true`` does not raise
-            - Claude responds (either retries with a different path or explains)
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
         """
         tools = [_TEXT_EDITOR_TOOL]
         user_prompt = "View the file /nonexistent/path.py"
@@ -574,6 +605,7 @@ class TestTextEditorTool:
         tool_block = tool_blocks[0]
         assert isinstance(tool_block, ToolUseBlock)
         assert tool_block.id
+        assert tool_block.name == "str_replace_based_edit_tool"
         resp2 = anthropic_client.messages.create(
             model=anthropic_chat_model,
             max_tokens=1024,
@@ -595,6 +627,9 @@ class TestTextEditorTool:
             tools=tools,  # type: ignore[arg-type]
         )
         assert resp2.type == "message"
+        assert resp2.role == "assistant"
+        assert resp2.stop_reason in _TURN_STOP_REASONS
+        assert resp2.usage.output_tokens > 0
 
     # --- max_characters ---
 
@@ -602,13 +637,14 @@ class TestTextEditorTool:
     def test_max_characters_accepted(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """Text editor with ``max_characters`` extra param is accepted.
+        """``max_characters`` is forwarded as an extra tool argument without being rejected.
 
-        ``max_characters=1000`` is an Anthropic-native tool parameter.
+        ``max_characters`` exists only from ``text_editor_20250728`` onwards; the
+        gateway keeps unknown-to-Bedrock tool arguments by serialising the whole tool
+        into ``additionalModelRequestFields["tools"]``.
 
-        Validates:
-            - Request with ``max_characters=1000`` does not raise
-            - Response is a valid message
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
+             stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel._req_configure_tools
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_model,
@@ -617,17 +653,23 @@ class TestTextEditorTool:
             tools=[{**_TEXT_EDITOR_TOOL, "max_characters": 1000}],  # type: ignore[list-item]
         )
         assert response.type == "message"
+        assert response.role == "assistant"
+        assert response.id.startswith("msg_")
         assert len(response.content) >= 1
+        assert response.stop_reason in _TURN_STOP_REASONS
+        assert response.usage.output_tokens > 0
 
     @pytest.mark.expensive
     def test_max_characters_triggers_tool_use(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """Text editor with ``max_characters`` returns the same ``tool_use`` output shape.
+        """``max_characters`` leaves the emitted ``tool_use`` block shape unchanged.
 
-        Validates:
-            - ``block.name == "str_replace_based_edit_tool"``
-            - ``"command"`` key present in ``block.input``
+        The extra argument constrains what the host returns, not what the model
+        requests, so the block still carries the version's name and one of its four
+        commands.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
         """
         response = anthropic_client.messages.create(  # type: ignore[call-overload]
             model=anthropic_chat_model,
@@ -643,16 +685,19 @@ class TestTextEditorTool:
         assert block.id
         assert block.name == "str_replace_based_edit_tool"
         assert "command" in block.input
+        assert block.input["command"] in _TEXT_EDITOR_COMMANDS
 
     @pytest.mark.expensive
     def test_max_characters_multiturn(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """``max_characters`` Turn 1 → tool_result in Turn 2 → end_turn.
+        """A ``max_characters`` text editor survives the multi-turn ``tool_result`` round trip.
 
-        Validates:
-            - Turn 1 produces a ``tool_use`` block
-            - Turn 2 with ``tool_result`` returns ``end_turn`` with a text block
+        Turn 2 keeps the same augmented tool definition, so the gateway has to accept
+        the extra argument in stub mode as well as in native mode.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
+             stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel._req_configure_tools
         """
         tools = [{**_TEXT_EDITOR_TOOL, "max_characters": 1000}]
         user_prompt = "View the file /etc/hostname"
@@ -669,6 +714,7 @@ class TestTextEditorTool:
         tool_block = tool_blocks[0]
         assert isinstance(tool_block, ToolUseBlock)
         assert tool_block.id
+        assert tool_block.name == "str_replace_based_edit_tool"
 
         resp2 = anthropic_client.messages.create(
             model=anthropic_chat_model,
@@ -691,6 +737,7 @@ class TestTextEditorTool:
         )
         assert resp2.stop_reason == "end_turn"
         assert any(b.type == "text" for b in resp2.content)
+        assert resp2.usage.output_tokens > 0
 
 
 # ===========================================================================
@@ -700,19 +747,16 @@ class TestTextEditorTool:
 
 @pytest.mark.parametrize("model_id", _CLAUDE_SYSTEM_TOOLS)
 class TestBashTool:
-    """Tests for the bash system tool (``bash_20250124``) on Claude models.
+    """Bash tool type ``bash_20250124`` (name ``bash``) on Claude models.
 
-    On Bedrock (reference behavior), bash returns a ``tool_use`` block containing
-    a shell command; the host executes it and returns stdout/stderr as a
-    ``tool_result``.
+    ``bash_20250124`` is the single GA version and needs no beta header upstream;
+    the gateway nevertheless injects ``computer-use-2025-01-24`` for it because
+    Bedrock keys the flag on the tool name.  Its inputs are ``command`` (required
+    unless ``restart``) and ``restart``, and the host runs the command and returns
+    stdout/stderr as a ``tool_result``.
 
-    Validated scenarios
-    -------------------
-    - Tool accepted without error
-    - Triggers ``tool_use`` with a non-empty command-like input
-    - Multi-turn: command → stdout → end_turn text response
-    - Error output (``is_error=true``) is accepted and Claude handles it
-    - A restart acknowledgement as tool_result is accepted
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/bash-tool
+         stdapi/models/chat/anthropic_claude.py:ChatModel
     """
 
     @pytest.mark.expensive
@@ -722,11 +766,10 @@ class TestBashTool:
         anthropic_chat_model: str,
         use_anthropic_api: bool,
     ) -> None:
-        """Bash tool definition is accepted without error.
+        """A ``bash_20250124`` definition is accepted and inference still completes.
 
-        Validates:
-            - Request with ``bash_20250124`` does not raise
-            - Response is a valid message
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/bash-tool
+             stdapi/models/chat/_adapters/_anthropic_message.py:_handle_system_tool
         """
         extra_headers = {"anthropic-beta": _BASH_BETA} if use_anthropic_api else {}
         response = anthropic_client.messages.create(
@@ -737,7 +780,11 @@ class TestBashTool:
             extra_headers=extra_headers,
         )
         assert response.type == "message"
+        assert response.role == "assistant"
+        assert response.id.startswith("msg_")
         assert len(response.content) >= 1
+        assert response.stop_reason in _TURN_STOP_REASONS
+        assert response.usage.output_tokens > 0
 
     @pytest.mark.expensive
     def test_triggers_tool_use(
@@ -746,14 +793,14 @@ class TestBashTool:
         anthropic_chat_model: str,
         use_anthropic_api: bool,
     ) -> None:
-        """Bash tool produces a ``tool_use`` block with a non-empty command input.
+        """The bash tool emits one ``tool_use`` block whose input carries the requested command.
 
-        Forces tool use with ``tool_choice=any`` and asks Claude to run a command.
+        ``tool_choice=any`` forces the call.  The prompt pins the command text, so the
+        assertion looks for it across the input values rather than under a fixed key:
+        the argument name of the shell command varies across Claude generations.
 
-        Validates:
-            - Response has exactly one ``tool_use`` block
-            - ``block.name == "bash"``
-            - ``block.input`` is non-empty (contains the shell command)
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/bash-tool
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_tool_choice
         """
         extra_headers = {"anthropic-beta": _BASH_BETA} if use_anthropic_api else {}
         response = anthropic_client.messages.create(  # type: ignore[call-overload]
@@ -771,6 +818,10 @@ class TestBashTool:
         assert block.id
         assert block.name == "bash"
         assert block.input  # non-empty; key name varies by model version
+        assert "hello_test" in " ".join(str(value) for value in block.input.values()), (
+            f"bash input should carry the requested command, got {block.input}"
+        )
+        assert response.stop_reason == "tool_use"
 
     @pytest.mark.expensive
     def test_multiturn(
@@ -779,11 +830,10 @@ class TestBashTool:
         anthropic_chat_model: str,
         use_anthropic_api: bool,
     ) -> None:
-        """Bash multi-turn: command in Turn 1, stdout tool_result in Turn 2.
+        """A bash ``tool_result`` carrying stdout closes the turn with ``end_turn`` text.
 
-        Validates:
-            - Turn 1: ``tool_use`` block for the bash command
-            - Turn 2: ``tool_result`` with stdout is accepted; response is ``end_turn`` text
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
+             stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel._req_configure_tools
         """
         extra_headers = {"anthropic-beta": _BASH_BETA} if use_anthropic_api else {}
         tools = [_BASH_TOOL]
@@ -802,6 +852,8 @@ class TestBashTool:
         bash_block = tool_blocks[0]
         assert isinstance(bash_block, ToolUseBlock)
         assert bash_block.id
+        assert bash_block.name == "bash"
+        assert bash_block.name == "bash"
 
         resp2 = anthropic_client.messages.create(
             model=anthropic_chat_model,
@@ -825,6 +877,7 @@ class TestBashTool:
         )
         assert resp2.stop_reason == "end_turn"
         assert any(b.type == "text" for b in resp2.content)
+        assert resp2.usage.output_tokens > 0
 
     @pytest.mark.expensive
     def test_command_error_output_accepted(
@@ -833,13 +886,10 @@ class TestBashTool:
         anthropic_chat_model: str,
         use_anthropic_api: bool,
     ) -> None:
-        """A tool_result with ``is_error=true`` and stderr content is accepted gracefully.
+        """A bash ``tool_result`` with ``is_error=true`` and stderr text is accepted and answered.
 
-        Simulates a command that fails with a non-zero exit code.
-
-        Validates:
-            - Turn 2 with ``is_error=true`` does not raise
-            - Claude responds (explains the error or suggests an alternative)
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
         """
         extra_headers = {"anthropic-beta": _BASH_BETA} if use_anthropic_api else {}
         tools = [_BASH_TOOL]
@@ -859,6 +909,7 @@ class TestBashTool:
         tool_block = tool_blocks[0]
         assert isinstance(tool_block, ToolUseBlock)
         assert tool_block.id
+        assert tool_block.name == "bash"
         resp2 = anthropic_client.messages.create(
             model=anthropic_chat_model,
             max_tokens=1024,
@@ -883,6 +934,9 @@ class TestBashTool:
             extra_headers=extra_headers,
         )
         assert resp2.type == "message"
+        assert resp2.role == "assistant"
+        assert resp2.stop_reason in _TURN_STOP_REASONS
+        assert resp2.usage.output_tokens > 0
 
     @pytest.mark.expensive
     def test_restart_tool_result_accepted(
@@ -891,13 +945,12 @@ class TestBashTool:
         anthropic_chat_model: str,
         use_anthropic_api: bool,
     ) -> None:
-        """A tool_result that acknowledges a session restart is accepted without error.
+        """A ``tool_result`` acknowledging a bash session restart is accepted and answered.
 
-        The client returns ``"Bash session restarted"`` as the tool output.
+        ``restart`` is a documented bash input, and its acknowledgement comes back as
+        an ordinary successful ``tool_result`` payload rather than an error.
 
-        Validates:
-            - Turn 2 with a restart acknowledgement content does not raise
-            - Claude responds as a valid message
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/bash-tool
         """
         extra_headers = {"anthropic-beta": _BASH_BETA} if use_anthropic_api else {}
         tools = [_BASH_TOOL]
@@ -917,6 +970,7 @@ class TestBashTool:
         tool_block = tool_blocks[0]
         assert isinstance(tool_block, ToolUseBlock)
         assert tool_block.id
+        assert tool_block.name == "bash"
         resp2 = anthropic_client.messages.create(
             model=anthropic_chat_model,
             max_tokens=1024,
@@ -938,6 +992,9 @@ class TestBashTool:
             extra_headers=extra_headers,
         )
         assert resp2.type == "message"
+        assert resp2.role == "assistant"
+        assert resp2.stop_reason in _TURN_STOP_REASONS
+        assert resp2.usage.output_tokens > 0
 
 
 # ===========================================================================
@@ -947,22 +1004,22 @@ class TestBashTool:
 
 @pytest.mark.parametrize("model_id", _CLAUDE_SYSTEM_TOOLS)
 class TestMemoryTool:
-    """Tests for the memory system tool (``memory_20250818``) on Claude models.
+    """Memory tool type ``memory_20250818`` (name ``memory``) on Claude models.
 
-    On Bedrock (reference behavior), the memory tool returns a ``tool_use`` block
-    with a file-operation command (``view``, ``create``, ``str_replace``, ``insert``,
-    ``delete``, ``rename``); the host applies it to the ``/memories`` directory.
+    The tool exposes file operations (``view``, ``create``, ``str_replace``,
+    ``insert``, ``delete``, ``rename``) scoped to the ``/memories`` directory, and its
+    hidden system prompt makes the model inspect that directory first.  The gateway
+    injects the required ``context-management-2025-06-27`` flag from
+    ``TOOL_BETA_FLAGS`` so callers need not send the beta header.
 
-    The Anthropic memory system prompt instructs Claude to always view
-    ``/memories`` as its first action before starting any task.
-
-    Validated scenarios
-    -------------------
-    - Tool accepted without error (beta flag required on official API)
-    - First action is a ``view`` of ``/memories``
-    - Triggers ``tool_use`` with non-empty input
-    - Multi-turn: view → directory listing tool_result → accepted response
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
+         stdapi/models/chat/anthropic_claude.py:ChatModel
     """
+
+    #: File operations the ``memory_20250818`` tool exposes over ``/memories``.
+    _MEMORY_COMMANDS = frozenset(
+        {"view", "create", "str_replace", "insert", "delete", "rename"}
+    )
 
     @pytest.mark.expensive
     def test_accepted(
@@ -971,14 +1028,13 @@ class TestMemoryTool:
         anthropic_chat_model: str,
         use_anthropic_api: bool,
     ) -> None:
-        """Memory tool definition is accepted without error.
+        """A ``memory_20250818`` definition is accepted without the caller sending the beta flag.
 
-        On the official API the ``context-management-2025-06-27`` beta flag is
-        required; the local gateway injects it automatically.
+        The gateway adds ``context-management-2025-06-27`` to ``anthropic_beta``
+        itself, so a request that omits the header must still be accepted by Bedrock.
 
-        Validates:
-            - Request with ``memory_20250818`` does not raise
-            - Response is a valid message
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
+             stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel._req_configure_tools
         """
         extra_headers = {"anthropic-beta": _MEMORY_BETA} if use_anthropic_api else {}
         response = anthropic_client.messages.create(
@@ -989,7 +1045,11 @@ class TestMemoryTool:
             extra_headers=extra_headers,
         )
         assert response.type == "message"
+        assert response.role == "assistant"
+        assert response.id.startswith("msg_")
         assert len(response.content) >= 1
+        assert response.stop_reason in _TURN_STOP_REASONS
+        assert response.usage.output_tokens > 0
 
     @pytest.mark.expensive
     def test_auto_views_directory_first(
@@ -998,15 +1058,14 @@ class TestMemoryTool:
         anthropic_chat_model: str,
         use_anthropic_api: bool,
     ) -> None:
-        """Claude always views ``/memories`` before starting a task.
+        """The first memory action is a ``view`` of ``/memories``.
 
-        The Anthropic memory system prompt instructs Claude to check its memory
-        directory as the very first action.
+        The tool's built-in system prompt makes directory inspection the opening
+        action, which also proves the gateway forwarded the tool in native form
+        (a bare Bedrock ``toolSpec`` stub carries no such instruction).
 
-        Validates:
-            - At least one ``tool_use`` block is emitted
-            - The first ``tool_use`` has ``command == "view"``
-            - Its ``path`` is ``"/memories"``
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
+             stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel._req_configure_tools
         """
         extra_headers = {"anthropic-beta": _MEMORY_BETA} if use_anthropic_api else {}
         response = anthropic_client.messages.create(  # type: ignore[call-overload]
@@ -1038,11 +1097,9 @@ class TestMemoryTool:
         anthropic_chat_model: str,
         use_anthropic_api: bool,
     ) -> None:
-        """Memory tool produces a ``tool_use`` block with non-empty input.
+        """A memory write request produces a ``memory`` ``tool_use`` block with a file command.
 
-        Validates:
-            - ``block.name == "memory"``
-            - ``block.input`` is non-empty
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
         """
         extra_headers = {"anthropic-beta": _MEMORY_BETA} if use_anthropic_api else {}
         response = anthropic_client.messages.create(  # type: ignore[call-overload]
@@ -1065,6 +1122,10 @@ class TestMemoryTool:
         assert block.id
         assert block.name == "memory"
         assert block.input
+        assert block.input.get("command") in self._MEMORY_COMMANDS, (
+            f"unexpected memory command in {block.input}"
+        )
+        assert response.stop_reason == "tool_use"
 
     @pytest.mark.expensive
     def test_multiturn(
@@ -1073,11 +1134,10 @@ class TestMemoryTool:
         anthropic_chat_model: str,
         use_anthropic_api: bool,
     ) -> None:
-        """Memory multi-turn: view → directory listing tool_result → accepted response.
+        """A ``/memories`` directory listing returned as ``tool_result`` is accepted and answered.
 
-        Validates:
-            - Turn 1: ``tool_use`` block (typically a view of ``/memories``)
-            - Turn 2: returning the directory listing is accepted without error
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
+             stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel._req_configure_tools
         """
         extra_headers = {"anthropic-beta": _MEMORY_BETA} if use_anthropic_api else {}
         tools = [_MEMORY_TOOL]
@@ -1096,6 +1156,7 @@ class TestMemoryTool:
         tool_block = tool_blocks[0]
         assert isinstance(tool_block, ToolUseBlock)
         assert tool_block.id
+        assert tool_block.name == "memory"
 
         resp2 = anthropic_client.messages.create(
             model=anthropic_chat_model,
@@ -1122,6 +1183,9 @@ class TestMemoryTool:
             extra_headers=extra_headers,
         )
         assert resp2.type == "message"
+        assert resp2.role == "assistant"
+        assert resp2.stop_reason in _TURN_STOP_REASONS
+        assert resp2.usage.output_tokens > 0
 
 
 # ===========================================================================
@@ -1131,22 +1195,17 @@ class TestMemoryTool:
 
 @pytest.mark.parametrize("model_id", _CLAUDE_ALL)
 class TestCodeExecutionTool:
-    """Tests for the code execution system tool (``code_execution_20250522``).
+    """Code execution tool type ``code_execution_20250522`` — Anthropic-only, never on Bedrock.
 
-    **Not supported on AWS Bedrock** — raises ``BadRequestError`` with an unknown
-    tool type error.  All tests in this class are skipped when ``is_bedrock_direct``
-    is ``True``.
+    ``code_execution_20250522`` is the legacy Python-only version; the API runs the
+    code itself and answers with ``server_tool_use`` plus ``code_execution_tool_result``
+    blocks, so no host round trip happens.  Bedrock exposes no equivalent, therefore
+    the whole class needs ``--use-official-api`` — which the module-level
+    ``_skip_on_official_api`` fixture also excludes, leaving these tests permanently
+    skipped in this suite.
 
-    On the official Anthropic API, code execution is server-executed: Claude emits
-    a ``server_tool_use`` block; the API executes the code and returns the output
-    automatically (no host round-trip needed).
-
-    Validated scenarios
-    -------------------
-    - Tool accepted without error (official API only)
-    - Triggers ``server_tool_use`` with a ``"code"`` key containing Python code
-    - Multi-turn: code → execution output → end_turn text that references the result
-    - Runtime error in tool_result (``is_error=true``) is accepted
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool
+         https://platform.claude.com/docs/en/build-with-claude/claude-on-amazon-bedrock-legacy
     """
 
     @pytest.fixture(autouse=True)
@@ -1169,11 +1228,12 @@ class TestCodeExecutionTool:
     def test_accepted(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """Code execution tool definition is accepted without error.
+        """A ``code_execution_20250522`` definition is accepted with no beta header.
 
-        Validates:
-            - Request with ``code_execution_20250522`` does not raise
-            - Response is a valid message
+        All GA code-execution versions are documented as needing no
+        ``anthropic-beta`` header.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_model,
@@ -1182,17 +1242,21 @@ class TestCodeExecutionTool:
             tools=[_CODE_EXECUTION_TOOL],  # type: ignore[list-item]
         )
         assert response.type == "message"
+        assert response.role == "assistant"
         assert len(response.content) >= 1
+        assert response.usage.output_tokens > 0
 
     @pytest.mark.expensive
     def test_triggers_tool_use(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """Code execution produces a ``server_tool_use`` block with a ``"code"`` key.
+        """Code execution is a server tool: the block is ``server_tool_use`` carrying ``code``.
 
-        Validates:
-            - ``block.name == "code_execution"``
-            - ``"code"`` key present in ``block.input`` (Python code to execute)
+        Server tools run on Anthropic infrastructure and their ids use the
+        ``srvtoolu_`` prefix, unlike the ``toolu_`` ids of host-executed tools.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool
+             https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
         """
         response = anthropic_client.messages.create(  # type: ignore[call-overload]
             model=anthropic_chat_model,
@@ -1206,19 +1270,21 @@ class TestCodeExecutionTool:
         block = tool_blocks[0]
         assert isinstance(block, ServerToolUseBlock)
         assert block.id
+        assert block.id.startswith("srvtoolu_")
         assert block.name == "code_execution"
         assert "code" in block.input
+        assert block.input["code"]
 
     @pytest.mark.expensive
     def test_multiturn_with_result(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """Code multi-turn: Python code in Turn 1, execution output in Turn 2.
+        """An execution result fed back as ``tool_result`` is reused in the final answer.
 
-        Validates:
-            - Turn 1: ``tool_use`` with ``"code"`` key
-            - Turn 2: providing the execution result is accepted
-            - Turn 2 response: ``end_turn`` text that incorporates the result
+        The prompt asks for ``2 ** 10`` and the stubbed result is ``1024``, so the
+        closing text must quote that value.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool
         """
         tools = [_CODE_EXECUTION_TOOL]
         user_prompt = "Compute 2 ** 10 using code."
@@ -1264,11 +1330,10 @@ class TestCodeExecutionTool:
     def test_runtime_error_result_accepted(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """A tool_result with a Python traceback and ``is_error=true`` is accepted.
+        """A ``tool_result`` carrying a Python traceback with ``is_error=true`` is accepted.
 
-        Validates:
-            - Turn 2 with traceback + ``is_error=true`` does not raise
-            - Claude responds gracefully (explains or retries)
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool
+             https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
         """
         tools = [_CODE_EXECUTION_TOOL]
         user_prompt = "Divide 1 by 0 using code."
@@ -1286,6 +1351,7 @@ class TestCodeExecutionTool:
         tool_block = tool_blocks[0]
         assert isinstance(tool_block, ServerToolUseBlock)
         assert tool_block.id
+        assert tool_block.name == "code_execution"
         resp2 = anthropic_client.messages.create(
             model=anthropic_chat_model,
             max_tokens=1024,
@@ -1307,6 +1373,8 @@ class TestCodeExecutionTool:
             tools=tools,  # type: ignore[arg-type]
         )
         assert resp2.type == "message"
+        assert resp2.role == "assistant"
+        assert resp2.usage.output_tokens > 0
 
 
 # ===========================================================================
@@ -1316,22 +1384,18 @@ class TestCodeExecutionTool:
 
 @pytest.mark.parametrize("model_id", _CLAUDE_SYSTEM_TOOLS)
 class TestComputerUseTool:
-    """Tests for the computer use system tool on Claude models.
+    """Computer use tool (name ``computer``) on the Claude models that still accept it.
 
-    Computer use requires the ``computer-use-*`` beta header.  On Bedrock
-    (reference behavior), Claude emits ``tool_use`` blocks with action types
-    such as ``screenshot``, ``left_click``, ``type``, ``key``, ``scroll``.
+    Computer use stays in beta and its beta flag is keyed on the tool ``type``, not on
+    the model: ``computer_20251124`` requires ``computer-use-2025-11-24`` while
+    ``computer_20250124`` requires ``computer-use-2025-01-24``.  Both carry
+    ``display_width_px`` / ``display_height_px``, and the model answers with
+    ``tool_use`` blocks whose ``action`` drives the host desktop.  Screenshots are
+    returned as a JPEG image ``tool_result``; ``tests/samples/desktop.jpg``
+    (1024x576) supplies a Windows desktop with a visible Firefox icon.
 
-    Screenshot results are sent as JPEG images matching the declared display
-    dimensions.  The sample ``tests/samples/desktop.jpg`` (1024x576) is used
-    as a realistic Windows desktop containing a visible Firefox icon.
-
-    Validated scenarios
-    -------------------
-    - Tool accepted with beta header
-    - First action is a ``screenshot``
-    - Multi-turn: ask for screenshot → provide desktop JPEG → Claude identifies apps
-    - Click Firefox: coordinate is within display bounds
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool
+         stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel._req_configure_tools
     """
 
     #: Display dimensions matching the sample desktop screenshot (desktop.jpg).
@@ -1349,7 +1413,7 @@ class TestComputerUseTool:
         """Base64-encoded JPEG of the sample Windows desktop screenshot.
 
         Returns:
-            Base64 string of ``tests/samples/desktop.jpg`` (1024x576, JPEG).
+            Base64 string of ``tests/samples/desktop.jpg``, sized to the declared display.
         """
         path = Path(__file__).parent / "samples" / "desktop.jpg"
         return base64.b64encode(path.read_bytes()).decode()
@@ -1436,11 +1500,13 @@ class TestComputerUseTool:
         anthropic_chat_model: str,
         use_anthropic_api: bool,
     ) -> None:
-        """Computer use tool definition is accepted with beta header.
+        """The model-appropriate ``computer`` tool type is accepted with its display params.
 
-        Validates:
-            - Request with the model-appropriate computer tool type + beta header does not raise
-            - Response is a valid message
+        Against the gateway no beta header is sent: the version-keyed flag is added
+        server-side from the tool ``type``.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool
+             stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel._req_configure_tools
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_model,
@@ -1450,7 +1516,11 @@ class TestComputerUseTool:
             extra_headers=self._beta_headers(anthropic_chat_model, use_anthropic_api),
         )
         assert response.type == "message"
+        assert response.role == "assistant"
+        assert response.id.startswith("msg_")
         assert len(response.content) >= 1
+        assert response.stop_reason in _TURN_STOP_REASONS
+        assert response.usage.output_tokens > 0
 
     @pytest.mark.expensive
     def test_screenshot_action_in_response(
@@ -1459,11 +1529,9 @@ class TestComputerUseTool:
         anthropic_chat_model: str,
         use_anthropic_api: bool,
     ) -> None:
-        """Claude requests a screenshot as its first computer use action.
+        """The opening computer action is ``screenshot``.
 
-        Validates:
-            - ``tool_use`` block with ``name == "computer"``
-            - ``block.input["action"] == "screenshot"``
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool
         """
         response = anthropic_client.messages.create(  # type: ignore[call-overload]
             model=anthropic_chat_model,
@@ -1480,6 +1548,7 @@ class TestComputerUseTool:
         assert block.id
         assert block.name == "computer"
         assert block.input.get("action") == "screenshot"
+        assert response.stop_reason == "tool_use"
 
     @pytest.mark.expensive
     def test_multiturn_with_desktop_screenshot(
@@ -1489,16 +1558,14 @@ class TestComputerUseTool:
         use_anthropic_api: bool,
         desktop_screenshot_b64: str,
     ) -> None:
-        """Multi-turn: screenshot request → desktop JPEG → Claude identifies apps.
+        """A JPEG screenshot returned as a ``tool_result`` image is accepted on the next turn.
 
-        Uses ``tests/samples/desktop.jpg`` (Windows desktop with Firefox, VLC, Notepad++,
-        etc.) as the screenshot result.  Claude should produce a meaningful response
-        about what it sees on the screen.
+        The image travels as a base64 ``image/jpeg`` block inside the ``tool_result``
+        content list, which the gateway has to translate into a Bedrock ``toolResult``
+        image block; the follow-up turn may either answer or request another action.
 
-        Validates:
-            - Turn 1: ``tool_use`` action (typically ``screenshot``)
-            - Turn 2: JPEG screenshot is accepted without error
-            - Turn 2 response: ``end_turn`` or next tool_use (both are valid)
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ContentBlock.html
         """
         tools = [self._computer_tool(anthropic_chat_model)]
         user_prompt = "What applications can you see on the desktop?"
@@ -1517,6 +1584,7 @@ class TestComputerUseTool:
         first_block = tool_blocks[0]
         assert isinstance(first_block, ToolUseBlock)
         assert first_block.id
+        assert first_block.name == "computer"
 
         resp2 = anthropic_client.messages.create(
             model=anthropic_chat_model,
@@ -1535,7 +1603,9 @@ class TestComputerUseTool:
             extra_headers=extra_headers,
         )
         assert resp2.type == "message"
+        assert resp2.role == "assistant"
         assert resp2.stop_reason in ("end_turn", "tool_use", "max_tokens")
+        assert resp2.usage.output_tokens > 0
 
     @pytest.mark.expensive
     def test_click_firefox_produces_coordinate(
@@ -1545,15 +1615,14 @@ class TestComputerUseTool:
         use_anthropic_api: bool,
         desktop_screenshot_b64: str,
     ) -> None:
-        """Claude emits a click action with coordinates when asked to open Firefox.
+        """A coordinate-bearing computer action stays inside the declared display bounds.
 
-        Provides the desktop screenshot on Turn 1 so Claude can identify the Firefox
-        icon position and emit a click or mouse_move action immediately.  The desktop
-        shows Firefox in the taskbar at the bottom-left area.
+        The desktop screenshot is supplied up front so the model can locate the Firefox
+        icon without a screenshot round trip.  Which action it picks is not
+        deterministic — it may still open with ``screenshot`` — so the bounds check
+        applies to whichever emitted action carries a ``coordinate``.
 
-        Validates:
-            - At least one ``tool_use`` with a click-like action
-            - ``coordinate`` is a 2-element list of integers within display bounds
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool
         """
         tools = [self._computer_tool(anthropic_chat_model)]
         extra_headers = self._beta_headers(anthropic_chat_model, use_anthropic_api)
@@ -1585,6 +1654,11 @@ class TestComputerUseTool:
         )
         tool_blocks = [b for b in resp.content if isinstance(b, ToolUseBlock)]
         assert tool_blocks, "Expected at least one tool_use block"
+        assert all(b.name == "computer" for b in tool_blocks)
+        actions = [b.input.get("action") for b in tool_blocks]
+        assert all(isinstance(action, str) and action for action in actions), (
+            f"every computer tool_use must name an action, got {actions}"
+        )
         # Any action with a coordinate (mouse_move, left_click, double_click, etc.)
         coord_blocks = [b for b in tool_blocks if b.input.get("coordinate") is not None]
         if coord_blocks:
@@ -1602,20 +1676,16 @@ class TestComputerUseTool:
 
 
 class TestWebSearchTool:
-    """Tests for the ``web_search`` system tool via the Anthropic Messages API.
+    """Web search tool type ``web_search_20250305`` on Nova Premier and on Claude.
 
-    On the local gateway, ``web_search`` is mapped to the Bedrock
-    ``nova_grounding`` system tool, which is only available on Amazon Nova
-    Premier.  On the official Anthropic API it is server-executed.
+    Web search does not exist on Amazon Bedrock as an Anthropic tool, so the gateway
+    can only honor it where a Bedrock system tool matches: on Amazon Nova Premier it
+    translates ``web_search`` into ``nova_grounding``, while on Claude the definition
+    is forwarded natively and rejected.
 
-    On both local and Bedrock, passing ``web_search`` to a Claude model
-    raises ``BadRequestError`` (Claude models don't support web search on Bedrock).
-
-    Validated scenarios
-    -------------------
-    - Basic search on Nova Premier returns a valid response (local gateway only)
-    - Streaming with web search on Nova Premier completes successfully (local only)
-    - Passing ``web_search`` to a Claude model raises ``BadRequestError`` (always)
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool
+         https://docs.aws.amazon.com/nova/latest/nova2-userguide/web-grounding.html
+         stdapi/models/chat/amazon_nova_premier.py:ChatModel
     """
 
     #: Nova Premier model identifier for local Bedrock web search tests.
@@ -1639,12 +1709,14 @@ class TestWebSearchTool:
 
     @pytest.mark.expensive
     def test_basic(self, anthropic_client: Anthropic) -> None:
-        """Basic web search on Nova Premier returns a valid response.
+        """Web search on Nova Premier resolves through the Bedrock ``nova_grounding`` tool.
 
-        Validates:
-            - Response type is ``"message"``
-            - Response role is ``"assistant"``
-            - At least one content block is present
+        Nova Premier is the only catalogue entry whose
+        ``CANONICAL_TO_BEDROCK_TOOL_MAP`` translates ``web_search``, and Bedrock runs
+        the grounding search itself.
+
+        Ref: https://docs.aws.amazon.com/nova/latest/nova2-userguide/web-grounding.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:_handle_system_tool
         """
         response = anthropic_client.messages.create(
             model=self.NOVA_PREMIER_MODEL,
@@ -1660,14 +1732,19 @@ class TestWebSearchTool:
         assert response.type == "message"
         assert response.role == "assistant"
         assert len(response.content) >= 1
+        assert response.stop_reason in _TURN_STOP_REASONS
+        assert response.usage.output_tokens > 0
 
     @pytest.mark.expensive
     def test_streaming(self, anthropic_client: Anthropic) -> None:
-        """Streaming with web search on Nova Premier completes without error.
+        """A web-search turn on Nova Premier streams to a complete final message.
 
-        Validates:
-            - Stream completes
-            - Collected text is non-empty
+        Bedrock performs the grounding search server-side, so the SSE stream still
+        terminates in an assistant message with text, a mapped ``stop_reason`` and
+        token usage.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
+             https://docs.aws.amazon.com/nova/latest/nova2-userguide/web-grounding.html
         """
         with anthropic_client.messages.stream(
             model=self.NOVA_PREMIER_MODEL,
@@ -1677,27 +1754,43 @@ class TestWebSearchTool:
             ],
             tools=[_WEB_SEARCH_TOOL],  # type: ignore[list-item]
         ) as stream:
+            final_message = stream.get_final_message()
             full_text = stream.get_final_text()
 
         assert len(full_text) > 0
+        assert final_message.type == "message"
+        assert final_message.role == "assistant"
+        assert final_message.stop_reason in _TURN_STOP_REASONS
+        assert final_message.usage.output_tokens > 0
 
     def test_unsupported_model_raises_error(self, anthropic_client: Anthropic) -> None:
-        """``web_search`` on a Claude model raises ``BadRequestError``.
+        """``web_search`` on a Claude model is refused as a 400 ``invalid_request_error``.
 
-        On Bedrock, web search is only available on Nova Premier.  Passing it to
-        a Claude model raises a ``BadRequestError`` both on the local gateway and
-        when using ``AnthropicBedrock`` directly.
+        Claude has no Bedrock system tool for web search, so the gateway forwards
+        ``web_search_20250305`` natively and Bedrock rejects the unknown tool type;
+        the Anthropic envelope labels any status outside its own table
+        ``invalid_request_error``.
 
-        Validates:
-            - ``BadRequestError`` is raised when a Claude model is given web_search
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool
+             https://platform.claude.com/docs/en/api/errors
+             stdapi/api_providers/anthropic.py:_format_error
         """
-        with pytest.raises(BadRequestError):
+        with pytest.raises(BadRequestError) as excinfo:
             anthropic_client.messages.create(
                 model="anthropic.claude-haiku-4-5-20251001-v1:0",
                 max_tokens=300,
                 messages=[{"role": "user", "content": "What is the weather today?"}],
                 tools=[_WEB_SEARCH_TOOL],  # type: ignore[list-item]
             )
+        error = excinfo.value
+        assert error.status_code == 400
+        assert error.type == "invalid_request_error"
+        body = error.body
+        assert isinstance(body, dict)
+        assert body["type"] == "error"
+        assert body["error"]["type"] == "invalid_request_error"
+        assert body["error"]["message"]
+        assert "request_id" in body
 
 
 # ===========================================================================
@@ -1707,23 +1800,15 @@ class TestWebSearchTool:
 
 @pytest.mark.parametrize("model_id", _CLAUDE_ALL)
 class TestWebFetchTool:
-    """Tests for the ``web_fetch`` system tool (``web_fetch_20250910``).
+    """Web fetch tool type ``web_fetch_20250910`` — Anthropic-only, never on Bedrock.
 
-    **Not supported on AWS Bedrock** (direct or via gateway) — raises
-    ``BadRequestError`` with an unknown tool type error.  All inference tests in
-    this class are skipped unless ``--use-official-api`` is set (ANTHROPIC_API_KEY
-    required).
+    Upstream, web fetch is server-executed and answers with a ``server_tool_use``
+    block carrying a ``url``.  Bedrock offers no equivalent, so the inference tests
+    require ``--use-official-api`` (which the module-level skip excludes) and only the
+    rejection test actually runs here.
 
-    On the official Anthropic API, ``web_fetch`` is server-executed: Claude emits
-    a ``server_tool_use`` block with a ``"url"`` key; the API fetches the URL and
-    returns the page content automatically.
-
-    Validated scenarios
-    -------------------
-    - Tool accepted without error (official API only)
-    - Claude emits a ``server_tool_use`` block with a ``"url"`` key
-    - Multi-turn: fetch request → page content → end_turn summary
-    - Unsupported on Bedrock (direct or via gateway): raises ``BadRequestError``
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
+         https://platform.claude.com/docs/en/build-with-claude/claude-on-amazon-bedrock-legacy
     """
 
     @pytest.fixture(autouse=True)
@@ -1755,11 +1840,9 @@ class TestWebFetchTool:
     def test_accepted(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """Web fetch tool definition is accepted without error (official API only).
+        """A ``web_fetch_20250910`` definition is accepted on the official Anthropic API.
 
-        Validates:
-            - Request with ``web_fetch_20250910`` does not raise
-            - Response is a valid message
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_model,
@@ -1768,17 +1851,18 @@ class TestWebFetchTool:
             tools=[_WEB_FETCH_TOOL],  # type: ignore[list-item]
         )
         assert response.type == "message"
+        assert response.role == "assistant"
         assert len(response.content) >= 1
+        assert response.usage.output_tokens > 0
 
     @pytest.mark.expensive
     def test_triggers_tool_use(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """Web fetch produces a ``server_tool_use`` block with a ``"url"`` key.
+        """Web fetch is a server tool: the block is ``server_tool_use`` carrying the ``url``.
 
-        Validates:
-            - ``block.name == "web_fetch"``
-            - ``"url"`` key present in ``block.input``
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
+             https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
         """
         response = anthropic_client.messages.create(  # type: ignore[call-overload]
             model=anthropic_chat_model,
@@ -1797,19 +1881,19 @@ class TestWebFetchTool:
         block = tool_blocks[0]
         assert isinstance(block, ServerToolUseBlock)
         assert block.id
+        assert block.id.startswith("srvtoolu_")
         assert block.name == "web_fetch"
         assert "url" in block.input
+        assert "example.com" in str(block.input["url"])
 
     @pytest.mark.expensive
     def test_multiturn_with_page_content(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """Web fetch multi-turn: fetch request → page content → end_turn summary.
+        """Page HTML returned as ``tool_result`` closes the turn with an ``end_turn`` summary.
 
-        Validates:
-            - Turn 1: ``server_tool_use`` block with ``"url"`` key
-            - Turn 2: providing page HTML as tool_result is accepted
-            - Turn 2 response: ``end_turn`` with a text summary
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
+             https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
         """
         tools = [_WEB_FETCH_TOOL]
         user_prompt = "Fetch https://example.com and summarize it."
@@ -1826,6 +1910,7 @@ class TestWebFetchTool:
         fetch_block = tool_blocks[0]
         assert isinstance(fetch_block, ServerToolUseBlock)
         assert fetch_block.id
+        assert fetch_block.name == "web_fetch"
 
         resp2 = anthropic_client.messages.create(
             model=anthropic_chat_model,
@@ -1853,6 +1938,7 @@ class TestWebFetchTool:
         )
         assert resp2.stop_reason == "end_turn"
         assert any(b.type == "text" for b in resp2.content)
+        assert resp2.usage.output_tokens > 0
 
     def test_unsupported_on_bedrock_raises_error(
         self,
@@ -1861,20 +1947,34 @@ class TestWebFetchTool:
         is_bedrock_direct: bool,
         use_anthropic_api: bool,
     ) -> None:
-        """``web_fetch`` raises ``BadRequestError`` on Bedrock (direct or via gateway).
+        """``web_fetch`` on a Bedrock-backed model is refused as a 400 ``invalid_request_error``.
 
-        Validates:
-            - ``BadRequestError`` is raised when the backend is Bedrock
+        The gateway has no Bedrock system tool to map ``web_fetch`` onto, so the
+        native tool definition reaches Bedrock and is rejected there; the Anthropic
+        envelope reports the resulting 400 as ``invalid_request_error``.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/claude-on-amazon-bedrock-legacy
+             https://platform.claude.com/docs/en/api/errors
+             stdapi/api_providers/anthropic.py:_format_error
         """
         if use_anthropic_api and not is_bedrock_direct:
             pytest.skip("Error path only applies when Bedrock is the backend")
-        with pytest.raises(BadRequestError):
+        with pytest.raises(BadRequestError) as excinfo:
             anthropic_client.messages.create(
                 model=anthropic_chat_model,
                 max_tokens=300,
                 messages=[{"role": "user", "content": "Fetch https://example.com"}],
                 tools=[_WEB_FETCH_TOOL],  # type: ignore[list-item]
             )
+        error = excinfo.value
+        assert error.status_code == 400
+        assert error.type == "invalid_request_error"
+        body = error.body
+        assert isinstance(body, dict)
+        assert body["type"] == "error"
+        assert body["error"]["type"] == "invalid_request_error"
+        assert body["error"]["message"]
+        assert "request_id" in body
 
 
 # ===========================================================================
@@ -1884,23 +1984,25 @@ class TestWebFetchTool:
 
 @pytest.mark.parametrize("model_id", _CLAUDE_SYSTEM_TOOLS)
 class TestMixedServerAndCustomTools:
-    """Tests combining Anthropic system tools with user-defined custom tools.
+    """Anthropic-defined tools combined with each other and with user-defined tools.
 
-    Validated scenarios
-    -------------------
-    - System tool (bash) alongside one custom tool: accepted
-    - Two system tools together (bash + text_editor): accepted
+    The two families travel by different routes: a custom tool stays a ``toolSpec``
+    entry in ``toolConfig`` while an Anthropic-defined tool moves into
+    ``additionalModelRequestFields["tools"]`` on the first turn, so a mixed request
+    exercises both branches of the same translation at once.
+
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
+         stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel._req_configure_tools
     """
 
     @pytest.mark.expensive
     def test_server_tool_with_custom_tool(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """System tool accepted alongside a custom ``toolSpec``.
+        """A bash tool and a custom ``get_time`` tool are usable in the same request.
 
-        Validates:
-            - Mixing ``bash_20250124`` with a user-defined tool does not raise
-            - Response is a valid message
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
+             stdapi/models/chat/_adapters/_anthropic_message.py:_build_tool_config
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_model,
@@ -1916,17 +2018,26 @@ class TestMixedServerAndCustomTools:
             ],
         )
         assert response.type == "message"
+        assert response.role == "assistant"
         assert len(response.content) >= 1
+        assert response.stop_reason in _TURN_STOP_REASONS
+        assert response.usage.output_tokens > 0
+        tool_names = {b.name for b in response.content if isinstance(b, ToolUseBlock)}
+        assert tool_names <= {"bash", "get_time"}, (
+            f"only the offered tools may be called, got {tool_names}"
+        )
 
     @pytest.mark.expensive
     def test_multiple_server_tools_together(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """Multiple system tools in a single request are accepted without error.
+        """``bash_20250124`` and ``text_editor_20250728`` are accepted in one request.
 
-        Validates:
-            - bash + text_editor together do not raise
-            - Response is a valid message
+        Both tools map to the same ``anthropic_beta`` flag, which the gateway must
+        deduplicate rather than send twice.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
+             stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel._req_configure_tools
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_model,
@@ -1935,4 +2046,11 @@ class TestMixedServerAndCustomTools:
             tools=[_BASH_TOOL, _TEXT_EDITOR_TOOL],  # type: ignore[list-item]
         )
         assert response.type == "message"
+        assert response.role == "assistant"
         assert len(response.content) >= 1
+        assert response.stop_reason in _TURN_STOP_REASONS
+        assert response.usage.output_tokens > 0
+        tool_names = {b.name for b in response.content if isinstance(b, ToolUseBlock)}
+        assert tool_names <= {"bash", "str_replace_based_edit_tool"}, (
+            f"only the offered tools may be called, got {tool_names}"
+        )

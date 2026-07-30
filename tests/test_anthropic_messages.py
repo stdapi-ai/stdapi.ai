@@ -1,7 +1,13 @@
-"""Tests for the Anthropic /v1/messages route.
+"""Anthropic Messages surface: POST /v1/messages and POST /v1/messages/count_tokens.
 
-Comprehensive test suite that validates all features of the Anthropic Messages API
-specification, ensuring compatibility with the official Anthropic API behavior.
+The gateway serves both routes from AWS Bedrock Converse (or Bedrock Mantle for
+Mantle-only models), so every test here pins Anthropic-compatible behavior that
+the gateway has to reconstruct from Bedrock primitives.
+
+Ref: https://platform.claude.com/docs/en/api/messages
+     https://platform.claude.com/docs/en/api/messages/count_tokens
+     stdapi/routes/anthropic_messages.py:create_message
+     stdapi/routes/anthropic_messages.py:count_tokens
 """
 
 import base64
@@ -14,6 +20,7 @@ from anthropic import (
     Anthropic,
     AnthropicBedrock,
     AnthropicError,
+    APIStatusError,
     BadRequestError,
     NotFoundError,
 )
@@ -29,19 +36,11 @@ NON_ANTHROPIC_THINKING = "amazon.nova-2-lite-v1:0"
 
 
 class TestAnthropicMessages:
-    """Test suite for the /v1/messages endpoint (Anthropic API).
+    """POST /v1/messages: request mapping, response shape, streaming, tools and errors.
 
-    Tests are designed to validate complete Anthropic Messages API compatibility including:
-    - Basic message creation and response validation
-    - Streaming behavior
-    - Tool calling capabilities
-    - System prompt handling
-    - Multi-turn conversations
-    - Extended thinking
-    - Image/multimodal inputs
-    - Parameter validation and error handling
-    - Stop sequences
-    - Temperature and sampling parameters
+    Ref: https://platform.claude.com/docs/en/api/messages
+         stdapi/models/chat/_adapters/_anthropic_message.py:translate_request
+         stdapi/models/chat/_adapters/_anthropic_message.py:format_response
     """
 
     # --- Basic functionality ---
@@ -49,13 +48,15 @@ class TestAnthropicMessages:
     def test_basic_message(
         self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
-        """Test fundamental message creation with default parameters.
+        """A minimal request returns an assistant ``message`` with text content and usage.
 
-        Validates:
-            - Response contains content with text
-            - Role is 'assistant'
-            - Usage information is included
-            - Response structure matches Anthropic specification
+        The gateway mints the response id as ``msg_{request_id}`` and rebuilds
+        ``usage`` from Bedrock's ``TokenUsage``, whose ``inputTokens`` excludes
+        cache tokens.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_TokenUsage.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:format_response
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_basic_model,
@@ -67,6 +68,7 @@ class TestAnthropicMessages:
         assert response.role == "assistant"
         assert response.id is not None
         assert len(response.id) > 0
+        assert response.id.startswith("msg_")
         assert response.model is not None
         assert len(response.content) >= 1
         assert response.content[0].type == "text"
@@ -80,12 +82,15 @@ class TestAnthropicMessages:
     def test_multi_turn_conversation(
         self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
-        """Test multi-turn conversation with alternating user/assistant messages.
+        """Earlier turns stay in context: the model answers from a prior user message.
 
-        Validates:
-            - Multi-turn messages are accepted
-            - Model responds coherently to conversation context
-            - Response structure is valid
+        Alternating user/assistant turns map 1:1 onto Bedrock Converse
+        ``messages``, so a fact stated in the first turn must still be
+        recoverable in the third.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_messages
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_basic_model,
@@ -106,68 +111,88 @@ class TestAnthropicMessages:
     def test_content_as_block_list(
         self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
-        """Test message with content provided as a list of content blocks.
+        """``content`` given as a ``TextBlockParam`` list behaves like the string shorthand.
 
-        Validates:
-            - Content blocks list format is accepted
-            - TextBlockParam works correctly
-            - Response is valid
+        Ref: https://platform.claude.com/docs/en/api/messages
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ContentBlock.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_messages
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_basic_model,
             max_tokens=100,
             messages=[
-                {"role": "user", "content": [{"type": "text", "text": "Say hi."}]}
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Reply with exactly the word TEAL and nothing else.",
+                        }
+                    ],
+                }
             ],
         )
 
         assert response.type == "message"
+        assert response.role == "assistant"
         assert len(response.content) >= 1
         assert response.content[0].type == "text"
+        assert "teal" in response.content[0].text.lower()
 
     # --- System prompt ---
 
     def test_system_prompt_string(
         self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
-        """Test system prompt provided as a plain string.
+        """A ``system`` string is honored: its instruction shapes the reply.
 
-        Validates:
-            - System prompt as string is accepted
-            - Model follows system instructions
+        Anthropic accepts ``system`` as a string; the gateway turns it into a
+        single Bedrock Converse ``system`` text block.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_system_blocks
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_basic_model,
             max_tokens=100,
-            system="You are a pirate. Always respond with 'Arrr!'.",
+            system="Whatever the user writes, reply with exactly the word TEAL and nothing else.",
             messages=[{"role": "user", "content": "Hello"}],
         )
 
         assert response.type == "message"
         assert len(response.content) >= 1
         assert response.content[0].type == "text"
+        assert "teal" in response.content[0].text.lower()
 
     def test_system_prompt_text_blocks(
         self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
-        """Test system prompt provided as a list of text blocks.
+        """Every block of a ``system`` block list reaches the model, not just the first.
 
-        Validates:
-            - System prompt as list of TextBlockParam is accepted
-            - Response is valid
+        ``system`` accepts an array of ``TextBlockParam``; the instruction that
+        pins the answer is in the second block, so a mapping that kept only one
+        block would fail here.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_system_blocks
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_basic_model,
             max_tokens=100,
             system=[
                 {"type": "text", "text": "You are a helpful assistant."},
-                {"type": "text", "text": "Be concise."},
+                {
+                    "type": "text",
+                    "text": "Whatever the user writes, reply with exactly the word TEAL and nothing else.",
+                },
             ],
             messages=[{"role": "user", "content": "Say hi."}],
         )
 
         assert response.type == "message"
         assert len(response.content) >= 1
+        assert response.content[0].type == "text"
+        assert "teal" in response.content[0].text.lower()
 
     def test_system_role_in_messages(
         self,
@@ -175,11 +200,14 @@ class TestAnthropicMessages:
         anthropic_chat_basic_model: str,
         use_official_api: bool,
     ) -> None:
-        """Test system prompt provided as a message with role='system'.
+        """A leading ``role: "system"`` message is hoisted into the system prompt.
 
-        Validates:
-            - A message with role='system' is extracted as the system prompt
-            - The response is valid and the system instruction is honoured
+        Bedrock Converse has no system role inside ``messages``, so the gateway
+        extracts such a turn into the Converse ``system`` blocks; the
+        instruction it carries must still reach the model.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             stdapi/models/chat/_adapters/_anthropic_message.py:_extract_system_messages
         """
         if use_official_api:
             pytest.skip("system-role messages in `messages` are a stdapi extension")
@@ -189,7 +217,7 @@ class TestAnthropicMessages:
             messages=[
                 {
                     "role": "system",
-                    "content": "You are a helpful assistant. Be concise.",
+                    "content": "Whatever the user writes, reply with exactly the word TEAL and nothing else.",
                 },
                 {"role": "user", "content": "Say hi."},
             ],
@@ -198,6 +226,7 @@ class TestAnthropicMessages:
         assert response.type == "message"
         assert len(response.content) >= 1
         assert response.content[0].type == "text"
+        assert "teal" in response.content[0].text.lower()
 
     def test_system_role_merged_with_system_field(
         self,
@@ -205,26 +234,31 @@ class TestAnthropicMessages:
         anthropic_chat_basic_model: str,
         use_official_api: bool,
     ) -> None:
-        """Test that system-role messages are merged with the top-level system field.
+        """A system-role message is appended after the top-level ``system`` field.
 
-        Validates:
-            - Content from both sources is accepted without error
-            - Response is valid
+        Both sources are merged into one Converse ``system`` block list, the
+        top-level field first; here each half of the instruction lives in a
+        different source, so dropping either one changes the answer.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             stdapi/models/chat/_adapters/_anthropic_message.py:_merge_system_content
         """
         if use_official_api:
             pytest.skip("system-role messages in `messages` are a stdapi extension")
         response = anthropic_client.messages.create(
             model=anthropic_chat_basic_model,
             max_tokens=100,
-            system="You are a helpful assistant.",
+            system="Whatever the user writes, reply with exactly one word and nothing else.",
             messages=[
-                {"role": "system", "content": "Be concise."},
+                {"role": "system", "content": "That word is TEAL."},
                 {"role": "user", "content": "Say hi."},
             ],
         )
 
         assert response.type == "message"
         assert len(response.content) >= 1
+        assert response.content[0].type == "text"
+        assert "teal" in response.content[0].text.lower()
 
     def test_system_role_list_content_in_messages(
         self,
@@ -232,12 +266,13 @@ class TestAnthropicMessages:
         anthropic_chat_basic_model: str,
         use_official_api: bool,
     ) -> None:
-        """Test system-role message with list-of-blocks content is extracted correctly.
+        """A system-role message whose ``content`` is a block list is hoisted block by block.
 
-        Validates:
-            - System message whose content is a list of TextBlockParams is accepted
-            - Non-TextBlockParam blocks in the list are silently dropped without error
-            - Response is valid
+        ``_extract_system_messages`` keeps the ``TextBlockParam`` entries of such
+        a list, so the instruction they carry must still reach the model.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             stdapi/models/chat/_adapters/_anthropic_message.py:_extract_system_messages
         """
         if use_official_api:
             pytest.skip("system-role messages in `messages` are a stdapi extension")
@@ -248,10 +283,11 @@ class TestAnthropicMessages:
                 {
                     "role": "system",
                     "content": [
+                        {"type": "text", "text": "You are a helpful assistant."},
                         {
                             "type": "text",
-                            "text": "You are a helpful assistant. Be concise.",
-                        }
+                            "text": "Whatever the user writes, reply with exactly the word TEAL and nothing else.",
+                        },
                     ],
                 },
                 {"role": "user", "content": "Say hi."},
@@ -261,6 +297,7 @@ class TestAnthropicMessages:
         assert response.type == "message"
         assert len(response.content) >= 1
         assert response.content[0].type == "text"
+        assert "teal" in response.content[0].text.lower()
 
     def test_system_role_passthrough_as_message(
         self,
@@ -268,15 +305,16 @@ class TestAnthropicMessages:
         anthropic_system_as_messages_model: str,
         use_official_api: bool,
     ) -> None:
-        """Test a trailing mid-conversation system message.
+        """A system-role message not followed by an assistant turn is folded into ``system``.
 
-        The first message must always be role='user'. A system-role message that is
-        not followed by an assistant turn is extracted into the system field, because
-        Bedrock rejects that placement; the request must still succeed.
+        Bedrock Converse requires the last turn to be a user one, so the
+        "ends the array" placement Anthropic allows is unreachable: the gateway
+        falls back to extracting the directive into the ``system`` blocks instead
+        of forwarding it, and the request must still be accepted.
 
-        Validates:
-            - A mid-conversation system message is accepted after the last user turn
-            - Response is valid (the instruction is applied as a system instruction)
+        Ref: https://platform.claude.com/docs/en/api/messages
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:_is_historical_directive
         """
         if use_official_api:
             pytest.skip("system-role messages in `messages` are a stdapi extension")
@@ -294,8 +332,12 @@ class TestAnthropicMessages:
         )
 
         assert response.type == "message"
+        assert response.role == "assistant"
         assert len(response.content) >= 1
-        assert any(c.type == "text" for c in response.content)
+        assert any(c.type == "text" and c.text.strip() for c in response.content), (
+            "folded system directive must still yield a text answer"
+        )
+        assert response.stop_reason in {"end_turn", "max_tokens"}
 
     def test_system_role_forwarded_between_user_and_assistant_turns(
         self,
@@ -303,15 +345,17 @@ class TestAnthropicMessages:
         anthropic_system_as_messages_model: str,
         use_official_api: bool,
     ) -> None:
-        """Test the placement Bedrock forwards natively: user -> system -> assistant.
+        """A user -> system -> assistant placement is forwarded to Bedrock as a system turn.
 
-        On a model with ``SYSTEM_MESSAGE_AS_MESSAGES_SUPPORTED`` the directive stays in
-        the message list and reaches Bedrock as a native ``role: "system"`` turn, so
-        this exercises the forwarding path end to end rather than the folding fallback.
+        On a model with ``SYSTEM_MESSAGE_AS_MESSAGES_SUPPORTED`` the directive
+        stays in the message list and reaches Bedrock as a native
+        ``role: "system"`` turn, so this exercises the forwarding path end to end
+        rather than the folding fallback; Bedrock rejects the turn if the
+        placement rules are not respected.
 
-        Validates:
-            - Bedrock accepts a forwarded mid-conversation system message
-            - Response is valid
+        Ref: https://platform.claude.com/docs/en/api/messages
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:_prepare_messages_and_system
         """
         if use_official_api:
             pytest.skip("system-role messages in `messages` are a stdapi extension")
@@ -327,20 +371,27 @@ class TestAnthropicMessages:
         )
 
         assert response.type == "message"
-        assert any(c.type == "text" for c in response.content)
+        assert response.role == "assistant"
+        assert any(c.type == "text" and c.text.strip() for c in response.content), (
+            "forwarded system turn must still yield a text answer"
+        )
+        assert response.stop_reason in {"end_turn", "max_tokens"}
 
     # --- Streaming ---
 
     def test_streaming_basic(
         self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
-        """Test basic streaming functionality.
+        """The SSE stream follows Anthropic's documented event order.
 
-        Validates:
-            - Streaming response produces events
-            - Events include message_start, content_block_start, content_block_delta,
-              content_block_stop, message_delta, message_stop
-            - Accumulated text forms a coherent response
+        Order is ``message_start`` -> per block ``content_block_start`` /
+        ``content_block_delta`` / ``content_block_stop`` -> ``message_delta`` ->
+        ``message_stop``, which the gateway reconstructs from the Bedrock
+        ``ConverseStream`` events.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ConverseStream.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:format_stream
         """
         event_types: list[str] = []
         accumulated_text = ""
@@ -364,15 +415,26 @@ class TestAnthropicMessages:
         assert "message_delta" in event_types
         assert "message_stop" in event_types
         assert len(accumulated_text) > 0
+        assert event_types[0] == "message_start"
+        assert event_types[-1] == "message_stop"
+        assert (
+            event_types.index("content_block_start")
+            < event_types.index("content_block_delta")
+            < event_types.index("content_block_stop")
+            < event_types.index("message_delta")
+        ), f"events out of documented order: {event_types}"
 
     def test_streaming_with_create(
         self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
-        """Test streaming using create() with stream=True.
+        """``stream=True`` on ``create`` yields raw events whose types are all documented.
 
-        Validates:
-            - stream=True returns an iterable of raw events
-            - Events can be iterated
+        Only the event names of Anthropic's streaming taxonomy may appear; the
+        stream is abandoned early, so this covers the opening frames rather than
+        the full message.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
+             stdapi/models/chat/_adapters/_anthropic_message.py:_make_message_start_event
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_basic_model,
@@ -389,18 +451,31 @@ class TestAnthropicMessages:
 
         assert len(event_types) > 0
         assert "message_start" in event_types
+        assert event_types[0] == "message_start"
+        assert set(event_types) <= {
+            "message_start",
+            "content_block_start",
+            "content_block_delta",
+            "content_block_stop",
+            "message_delta",
+            "message_stop",
+            "ping",
+        }, f"unexpected event names: {sorted(set(event_types))}"
 
     # --- Stop sequences ---
 
     def test_stop_sequences(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """Test stop sequences for controlling generation termination.
+        """A matched stop sequence ends the turn with ``stop_reason`` ``stop_sequence``.
 
-        Validates:
-            - Stop sequences cause generation to stop
-            - stop_reason reflects stop_sequence when triggered
-            - Content before stop sequence is returned
+        ``stop_sequences`` maps onto Converse ``inferenceConfig.stopSequences``;
+        Bedrock does not report which sequence matched, so the gateway leaves
+        ``stop_sequence`` null on Converse-served models.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_stop_reason
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_model,
@@ -423,12 +498,15 @@ class TestAnthropicMessages:
     def test_temperature_parameter(
         self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
-        """Test temperature parameter for controlling randomness.
+        """Both ends of the documented ``temperature`` range generate a normal message.
 
-        Validates:
-            - Temperature 0.0 is accepted (deterministic)
-            - Temperature 1.0 is accepted (maximum randomness)
-            - Response is valid in both cases
+        Anthropic restricts ``temperature`` to 0.0-1.0 and the gateway forwards
+        it as Converse ``inferenceConfig.temperature``; the sampling effect
+        itself is not observable, so only acceptance and a well-formed
+        completion are asserted.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
         """
         for temp in (0.0, 1.0):
             response = anthropic_client.messages.create(
@@ -439,15 +517,18 @@ class TestAnthropicMessages:
             )
             assert response.type == "message"
             assert len(response.content) >= 1
+            assert response.content[0].type == "text"
+            assert response.content[0].text.strip()
+            assert response.usage.output_tokens > 0
+            assert response.stop_reason in {"end_turn", "max_tokens"}
 
     def test_top_p_parameter(
         self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
-        """Test top_p nucleus sampling parameter.
+        """``top_p`` is accepted and generation still completes normally.
 
-        Validates:
-            - top_p parameter is accepted
-            - Response is valid
+        Ref: https://platform.claude.com/docs/en/api/messages
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_basic_model,
@@ -457,15 +538,22 @@ class TestAnthropicMessages:
         )
         assert response.type == "message"
         assert len(response.content) >= 1
+        assert response.content[0].type == "text"
+        assert response.content[0].text.strip()
+        assert response.usage.output_tokens > 0
 
     def test_top_k_parameter(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """Test top_k sampling parameter.
+        """``top_k`` is accepted even though Converse has no such field.
 
-        Validates:
-            - top_k parameter is accepted
-            - Response is valid
+        ``inferenceConfig`` has no ``top_k``, so the gateway passes it through
+        ``additionalModelRequestFields`` under the name the model expects; a
+        wrong field name would make Bedrock reject the request.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html
+             stdapi/types/anthropic_messages.py:MessageCreateParams
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_model,
@@ -475,18 +563,23 @@ class TestAnthropicMessages:
         )
         assert response.type == "message"
         assert len(response.content) >= 1
+        assert response.content[0].type == "text"
+        assert response.content[0].text.strip()
+        assert response.usage.output_tokens > 0
 
     # --- Tool calling ---
 
     def test_tool_calling_basic(
         self, anthropic_client: Anthropic, anthropic_chat_vision_model: str
     ) -> None:
-        """Test basic tool calling capabilities.
+        """A forced tool call returns ``stop_reason`` ``tool_use`` and a ``toolu_`` block.
 
-        Validates:
-            - Tool definitions are accepted
-            - Model can decide to call tools
-            - Tool use block structure is correct
+        Bedrock mints its own ``toolUseId``; the gateway rewrites it to
+        Anthropic's ``toolu_`` form and rebuilds ``input`` as a JSON object.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:format_response
         """
         tools = [
             {
@@ -521,15 +614,22 @@ class TestAnthropicMessages:
         assert tool_block.id.startswith("toolu_")
         assert isinstance(tool_block.input, dict)
         assert "location" in tool_block.input
+        location = str(tool_block.input["location"]).lower()
+        assert any(hint in location for hint in ("new york", "nyc")), (
+            f"tool input lost the requested location: {location!r}"
+        )
 
     def test_tool_calling_with_result(
         self, anthropic_client: Anthropic, anthropic_chat_vision_model: str
     ) -> None:
-        """Test full tool calling flow with tool result.
+        """A ``tool_result`` turn closes the tool loop and the answer uses its payload.
 
-        Validates:
-            - Tool call followed by tool result produces final response
-            - Model incorporates tool result in its response
+        The assistant turn is replayed verbatim (``tool_use`` block included) and
+        answered with ``{"type": "tool_result", "tool_use_id", "content"}``; the
+        gateway maps that onto a Bedrock ``toolResult`` block keyed by the same id.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_tool_result_to_bedrock
         """
         tools = [
             {
@@ -584,15 +684,24 @@ class TestAnthropicMessages:
         assert final.stop_reason == "end_turn"
         text_blocks = [b for b in final.content if b.type == "text"]
         assert len(text_blocks) >= 1
+        final_text = " ".join(b.text for b in text_blocks).lower()
+        assert any(hint in final_text for hint in ("22", "sunny")), (
+            f"answer ignored the tool result: {final_text!r}"
+        )
 
     def test_tool_choice_auto(
         self, anthropic_client: Anthropic, anthropic_chat_vision_model: str
     ) -> None:
-        """Test tool_choice auto - model decides whether to use tools.
+        """With ``tool_choice`` ``auto`` the model may skip the tool, and ``stop_reason`` follows.
 
-        Validates:
-            - tool_choice auto is accepted
-            - Model can choose not to use tools when unnecessary
+        ``auto`` maps to Converse ``toolChoice: {"auto": {}}``. Which branch the
+        model takes is its own decision, so the invariant asserted here is the
+        agreement between ``stop_reason`` and the presence of ``tool_use`` blocks,
+        plus the fact that only declared tools can be called.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools#forcing-tool-use
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_tool_choice
         """
         tools = [
             {
@@ -616,15 +725,25 @@ class TestAnthropicMessages:
 
         assert response.type == "message"
         assert response.stop_reason in ("end_turn", "tool_use")
+        tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
+        assert (response.stop_reason == "tool_use") == bool(tool_use_blocks), (
+            "stop_reason must agree with the presence of tool_use blocks"
+        )
+        assert all(b.name == "calculator" for b in tool_use_blocks)
+        assert all(b.type in ("text", "tool_use") for b in response.content)
 
     def test_tool_choice_specific_tool(
         self, anthropic_client: Anthropic, anthropic_chat_vision_model: str
     ) -> None:
-        """Test tool_choice forcing a specific tool.
+        """``tool_choice`` ``tool`` forces that tool and suppresses calls to any other.
 
-        Validates:
-            - tool_choice with type=tool and name forces that tool
-            - Model uses the specified tool
+        Two tools are offered and the prompt asks for both, but Converse
+        ``toolChoice: {"tool": {"name": ...}}`` plus the gateway's ``forced_tool``
+        filter mean only ``get_weather`` blocks may survive in the response.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools#forcing-tool-use
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:_is_suppressed_tool
         """
         tools = [
             {
@@ -658,20 +777,26 @@ class TestAnthropicMessages:
         )
 
         assert response.type == "message"
+        assert response.stop_reason == "tool_use"
         tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
         assert len(tool_use_blocks) >= 1
-        # The forced tool must be present (Bedrock may return extra tools)
-        assert tool_use_blocks[0].name == "get_weather"
+        # Blocks for the other tool are filtered out by the forced-tool guard.
+        assert [b.name for b in tool_use_blocks] == ["get_weather"] * len(
+            tool_use_blocks
+        )
+        assert all(b.id.startswith("toolu_") for b in tool_use_blocks)
 
     def test_tool_calling_streaming(
         self, anthropic_client: Anthropic, anthropic_chat_vision_model: str
     ) -> None:
-        """Test tool calling with streaming.
+        """A streamed tool call opens a ``tool_use`` block and ends with ``stop_reason`` ``tool_use``.
 
-        Validates:
-            - Tool calls are properly streamed
-            - Events include content_block_start with tool_use type
-            - Input JSON is streamed as deltas
+        The ``content_block_start`` frame carries the fully formed ``tool_use``
+        block (id and name), while the arguments arrive later as
+        ``input_json_delta`` fragments.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
+             stdapi/models/chat/_adapters/_anthropic_message.py:_handle_block_start
         """
         tools = [
             {
@@ -694,21 +819,38 @@ class TestAnthropicMessages:
             stream=True,
         )
 
-        event_types = [event.type for event in response]
+        events = list(response)
+        event_types = [event.type for event in events]
 
         assert "message_start" in event_types
         assert "content_block_start" in event_types
         assert "message_stop" in event_types
+        started_blocks = [
+            event.content_block
+            for event in events
+            if event.type == "content_block_start"
+        ]
+        tool_starts = [block for block in started_blocks if block.type == "tool_use"]
+        assert len(tool_starts) >= 1, f"no tool_use block was streamed: {event_types}"
+        assert tool_starts[0].name == "get_weather"
+        assert tool_starts[0].id.startswith("toolu_")
+        stop_reasons = [
+            event.delta.stop_reason for event in events if event.type == "message_delta"
+        ]
+        assert stop_reasons[-1:] == ["tool_use"]
 
     def test_extended_thinking_enabled(
         self, anthropic_client: Anthropic, anthropic_chat_reasoning_model: str
     ) -> None:
-        """Test extended thinking with enabled configuration.
+        """``thinking`` enabled with a 1,024-token budget yields a thinking block plus the answer.
 
-        Validates:
-            - Thinking config is accepted
-            - Response includes a thinking block
-            - Response includes text content with the answer
+        1,024 is the documented minimum ``budget_tokens`` and must stay below
+        ``max_tokens``; the gateway maps it onto Bedrock's ``reasoningConfig`` and
+        turns ``reasoningContent`` back into Anthropic ``thinking`` blocks.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ReasoningContentBlock.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:extract_reasoning
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_reasoning_model,
@@ -730,12 +872,15 @@ class TestAnthropicMessages:
     def test_extended_thinking_non_claude_enabled(
         self, anthropic_client: Anthropic, use_official_api: bool
     ) -> None:
-        """Test extended thinking with enabled configuration with a model that is not Claude.
+        """``thinking`` adaptive works on a non-Claude Bedrock model too.
 
-        Validates:
-            - Thinking config is accepted
-            - Response includes a thinking block
-            - Response includes text content with the answer
+        Adaptive thinking carries no ``budget_tokens``; the gateway translates it
+        into the reasoning configuration the target model expects, so a Nova model
+        answers with ``thinking`` blocks on the Anthropic route as well.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ReasoningContentBlock.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:extract_reasoning
         """
         if use_official_api:
             pytest.skip("Only Claude models are supported by official API")
@@ -760,12 +905,15 @@ class TestAnthropicMessages:
     def test_output_config_effort_without_thinking(
         self, anthropic_client: Anthropic, use_official_api: bool
     ) -> None:
-        """Test output_config with effort but without thinking field.
+        """``output_config.effort`` alone enables reasoning, with no ``thinking`` field.
 
-        Validates:
-            - output_config.effort is accepted without thinking field
-            - Response includes a thinking block
-            - Response includes text content with the answer
+        The gateway derives its reasoning configuration from either ``thinking`` or
+        ``output_config.effort``; the effort form is the one Anthropic moved to,
+        and it must produce thinking blocks on its own.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html
+             stdapi/types/anthropic_messages.py:OutputConfigParam
+             stdapi/models/chat/_adapters/_anthropic_message.py:extract_reasoning
         """
         if use_official_api:
             pytest.skip("Only Claude models are supported by official API")
@@ -790,11 +938,11 @@ class TestAnthropicMessages:
     def test_extended_thinking_streaming(
         self, anthropic_client: Anthropic, anthropic_chat_reasoning_model: str
     ) -> None:
-        """Test extended thinking with streaming.
+        """A streamed thinking turn emits ``thinking_delta`` frames before ``text_delta`` ones.
 
-        Validates:
-            - Thinking events are streamed
-            - Both thinking_delta and text_delta events are received
+        Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
+             https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_delta
         """
         events = list(
             anthropic_client.messages.create(
@@ -807,22 +955,25 @@ class TestAnthropicMessages:
         )
 
         event_types = [e.type for e in events]
-        delta_types = {e.delta.type for e in events if e.type == "content_block_delta"}
+        delta_types = [e.delta.type for e in events if e.type == "content_block_delta"]
 
         assert "message_start" in event_types
         assert "content_block_start" in event_types
         assert "message_stop" in event_types
         assert "thinking_delta" in delta_types
         assert "text_delta" in delta_types
+        assert delta_types.index("thinking_delta") < delta_types.index("text_delta"), (
+            "thinking must be streamed before the answer text"
+        )
 
     def test_extended_thinking_non_claude_streaming(
         self, anthropic_client: Anthropic, use_official_api: bool
     ) -> None:
-        """Test extended thinking with streaming with a model that is not Claude.
+        """Adaptive thinking streams ``thinking_delta`` and ``text_delta`` on a non-Claude model.
 
-        Validates:
-            - Thinking events are streamed
-            - Both thinking_delta and text_delta events are received
+        Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ConverseStream.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_delta
         """
         if use_official_api:
             pytest.skip("Only Claude models are supported by official API")
@@ -854,11 +1005,15 @@ class TestAnthropicMessages:
         anthropic_chat_vision_model: str,
         sample_image_file: bytes,
     ) -> None:
-        """Test image input via base64 encoding.
+        """A base64 ``image`` block is forwarded and billed as input tokens.
 
-        Validates:
-            - Base64 image content block is accepted
-            - Model can describe the image
+        The gateway decodes the source and rebuilds it as a Bedrock ``image``
+        content block. The fixture image is model-generated, so its subject is
+        not asserted — only that the vision model consumed it and answered.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ContentBlock.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_image_to_bedrock
         """
         b64_data = base64.b64encode(sample_image_file).decode("utf-8")
 
@@ -887,17 +1042,20 @@ class TestAnthropicMessages:
         assert len(response.content) >= 1
         assert response.content[0].type == "text"
         assert len(response.content[0].text) > 0
+        assert response.usage.input_tokens > 0, "image tokens must be counted"
 
     # --- Max tokens ---
 
     def test_max_tokens_limit(
         self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
-        """Test that max_tokens limits the response length.
+        """``max_tokens`` caps generation and the turn ends with ``stop_reason`` ``max_tokens``.
 
-        Validates:
-            - Small max_tokens produces short response
-            - stop_reason may be max_tokens
+        ``max_tokens`` becomes Converse ``inferenceConfig.maxTokens``; the margin
+        on the assertion absorbs providers that count the truncated token.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_stop_reason
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_basic_model,
@@ -912,17 +1070,21 @@ class TestAnthropicMessages:
 
         assert response.type == "message"
         assert response.usage.output_tokens <= 10  # Allow small margin
+        assert response.stop_reason == "max_tokens"
 
     # --- Metadata ---
 
     def test_metadata_user_id(
         self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
-        """Test metadata with user_id parameter.
+        """``metadata.user_id`` is accepted and does not reach the response.
 
-        Validates:
-            - Metadata with user_id is accepted
-            - Response is valid
+        Anthropic wants an opaque identifier there; the gateway only records it in
+        its request log, so the round trip is invisible to the client and the
+        request must simply succeed unchanged.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             stdapi/routes/anthropic_messages.py:create_message
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_basic_model,
@@ -933,47 +1095,77 @@ class TestAnthropicMessages:
 
         assert response.type == "message"
         assert len(response.content) >= 1
+        assert response.content[0].type == "text"
+        assert response.content[0].text.strip()
+        assert response.usage.output_tokens > 0
 
     # --- Error handling ---
 
     def test_empty_messages_error(
-        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
+        self,
+        anthropic_client: Anthropic,
+        anthropic_chat_basic_model: str,
+        use_anthropic_api: bool,
     ) -> None:
-        """Test that empty messages list produces an error.
+        """An empty ``messages`` array is rejected with HTTP 400.
 
-        Validates:
-            - Empty messages list is rejected
-            - Appropriate error is returned
+        Nothing in the gateway's own schema forbids the empty array, so the
+        rejection comes from Bedrock Converse and is re-dressed as Anthropic's
+        ``invalid_request_error`` envelope. The wording is AWS's, hence only the
+        status and the error type are pinned.
+
+        Ref: https://platform.claude.com/docs/en/api/errors
+             https://docs.aws.amazon.com/bedrock/latest/userguide/troubleshooting-api-error-codes.html
+             stdapi/api_providers/anthropic.py:_format_error
         """
-        with pytest.raises(BadRequestError):
+        with pytest.raises(BadRequestError) as excinfo:
             anthropic_client.messages.create(
                 model=anthropic_chat_basic_model, max_tokens=100, messages=[]
             )
 
-    def test_invalid_model_error(self, anthropic_client: Anthropic) -> None:
-        """Test that an invalid model name produces an error.
+        assert excinfo.value.status_code == 400
+        if not use_anthropic_api:
+            assert excinfo.value.type == "invalid_request_error"
 
-        Validates:
-            - Invalid model is rejected
-            - Appropriate error type is returned (BadRequestError on official API, NotFoundError on local)
+    def test_invalid_model_error(
+        self, anthropic_client: Anthropic, use_anthropic_api: bool
+    ) -> None:
+        """An unknown model id is rejected, as ``not_found_error`` on this gateway.
+
+        The gateway raises ``UnsupportedModelError`` (404 ``not_found_error``) and
+        names the rejected id in the message; the official endpoints answer 400 or
+        404 depending on the backend, so both statuses are accepted there.
+
+        Ref: https://platform.claude.com/docs/en/api/errors
+             stdapi/api_errors.py:UnsupportedModelError
+             stdapi/api_providers/anthropic.py:_STATUS
         """
-        with pytest.raises((BadRequestError, NotFoundError)):
+        with pytest.raises((BadRequestError, NotFoundError)) as excinfo:
             anthropic_client.messages.create(
                 model="nonexistent-model-xyz",
                 max_tokens=100,
                 messages=[{"role": "user", "content": "Hello"}],
             )
 
-    def test_invalid_temperature_error(
-        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
-    ) -> None:
-        """Test that invalid temperature values produce errors.
+        assert excinfo.value.status_code in (400, 404)
+        assert "nonexistent-model-xyz" in str(excinfo.value)
+        if not use_anthropic_api:
+            assert excinfo.value.status_code == 404
+            assert excinfo.value.type == "not_found_error"
 
-        Validates:
-            - Temperature > 1.0 is rejected
-            - Temperature < 0.0 is rejected
+    def test_invalid_temperature_error(
+        self,
+        anthropic_client: Anthropic,
+        anthropic_chat_basic_model: str,
+        use_anthropic_api: bool,
+    ) -> None:
+        """``temperature`` above the documented 1.0 ceiling is rejected with HTTP 400.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             https://platform.claude.com/docs/en/api/errors
+             stdapi/types/anthropic_messages.py:MessageCreateParams
         """
-        with pytest.raises(BadRequestError):
+        with pytest.raises(BadRequestError) as excinfo:
             anthropic_client.messages.create(
                 model=anthropic_chat_basic_model,
                 max_tokens=100,
@@ -981,35 +1173,54 @@ class TestAnthropicMessages:
                 temperature=2.0,
             )
 
+        assert excinfo.value.status_code == 400
+        assert "temperature" in str(excinfo.value).lower()
+        if not use_anthropic_api:
+            assert excinfo.value.type == "invalid_request_error"
+
     def test_invalid_max_tokens_error(
         self,
         anthropic_client: Anthropic,
         anthropic_chat_basic_model: str,
         use_official_api: bool,
     ) -> None:
-        """Test that invalid max_tokens value produces an error.
+        """``max_tokens: 0`` is rejected by this gateway with HTTP 400.
 
-        Validates:
-            - max_tokens of 0 is rejected
+        A deliberate divergence: Anthropic documents ``max_tokens: 0`` as valid
+        (it pre-warms the prompt cache without generating), but the gateway's
+        request model constrains the field to ``>= 1``, so Pydantic validation
+        turns it into an ``invalid_request_error``.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             stdapi/types/anthropic_messages.py:MessageCreateParams
+             stdapi/main.py:handle_validation_exception
         """
         if use_official_api:
             pytest.skip("the AWS-hosted official endpoint accepts max_tokens=0")
-        with pytest.raises(BadRequestError):
+        with pytest.raises(BadRequestError) as excinfo:
             anthropic_client.messages.create(
                 model=anthropic_chat_basic_model,
                 max_tokens=0,
                 messages=[{"role": "user", "content": "Hello"}],
             )
 
-    def test_invalid_top_p_error(
-        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
-    ) -> None:
-        """Test that invalid top_p values produce errors.
+        assert excinfo.value.status_code == 400
+        assert excinfo.value.type == "invalid_request_error"
+        assert "max_tokens" in str(excinfo.value)
 
-        Validates:
-            - top_p > 1.0 is rejected
+    def test_invalid_top_p_error(
+        self,
+        anthropic_client: Anthropic,
+        anthropic_chat_basic_model: str,
+        use_anthropic_api: bool,
+    ) -> None:
+        """``top_p`` above 1.0 is rejected with HTTP 400.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             https://platform.claude.com/docs/en/api/errors
+             stdapi/types/anthropic_messages.py:MessageCreateParams
         """
-        with pytest.raises(BadRequestError):
+        with pytest.raises(BadRequestError) as excinfo:
             anthropic_client.messages.create(
                 model=anthropic_chat_basic_model,
                 max_tokens=100,
@@ -1017,16 +1228,24 @@ class TestAnthropicMessages:
                 top_p=1.5,
             )
 
+        assert excinfo.value.status_code == 400
+        assert "top_p" in str(excinfo.value).lower()
+        if not use_anthropic_api:
+            assert excinfo.value.type == "invalid_request_error"
+
     # --- Multiple content blocks in response ---
 
     def test_tool_use_with_text_response(
         self, anthropic_client: Anthropic, anthropic_chat_vision_model: str
     ) -> None:
-        """Test that tool use responses can include both text and tool_use blocks.
+        """A turn may mix ``text`` and ``tool_use`` blocks, and nothing else.
 
-        Validates:
-            - Response may contain mixed content block types
-            - Both text and tool_use blocks are valid
+        Bedrock returns preamble text alongside a ``toolUse`` block; the gateway
+        preserves that order and maps each block to its Anthropic counterpart, so
+        no other block type may appear for a client-tool turn.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
+             stdapi/models/chat/_adapters/_anthropic_message.py:format_response
         """
         tools = [
             {
@@ -1059,18 +1278,28 @@ class TestAnthropicMessages:
         # All blocks should be valid types
         for block in response.content:
             assert block.type in ("text", "tool_use")
+        assert all(
+            b.name == "search" for b in response.content if b.type == "tool_use"
+        ), "only the declared tool may be called"
+        assert response.stop_reason in ("end_turn", "tool_use")
+        assert (response.stop_reason == "tool_use") == any(
+            b.type == "tool_use" for b in response.content
+        ), "stop_reason must agree with the presence of tool_use blocks"
 
     # --- Streaming message_start event ---
 
     def test_streaming_message_start_has_usage(
         self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
-        """Test that streaming message_start event includes usage info.
+        """``message_start`` carries an empty-content ``Message`` shell with a usage object.
 
-        Validates:
-            - message_start event contains message with usage
-            - input_tokens is a non-negative integer (may be 0 for Bedrock-backed
-              gateways where usage is reported only at message_delta)
+        Bedrock reports token usage only in its trailing metadata event, so the
+        gateway opens the stream with zeroed counters and fills them in on
+        ``message_delta``; the shell itself must already be a valid ``Message``.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ConverseStreamMetadataEvent.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:_make_message_start_event
         """
         message_start_event = None
 
@@ -1090,16 +1319,27 @@ class TestAnthropicMessages:
         assert hasattr(message_start_event, "message")
         assert hasattr(message_start_event.message, "usage")
         assert message_start_event.message.usage.input_tokens >= 0
+        message = message_start_event.message
+        assert message.type == "message"
+        assert message.role == "assistant"
+        assert message.content == [], "message_start must open with empty content"
+        assert message.stop_reason is None
+        assert message.id.startswith("msg_")
 
     def test_streaming_message_delta_has_usage(
         self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
-        """Test that streaming message_delta event includes output usage.
+        """``message_delta`` reports cumulative output usage.
 
-        Validates:
-            - message_delta event contains usage with output_tokens
+        Anthropic specifies the ``message_delta`` usage counters as cumulative
+        rather than incremental, so the values may only grow across events and the
+        last one is the total for the message.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
+             stdapi/models/chat/_adapters/_anthropic_message.py:_make_message_delta_event
         """
         message_delta_event = None
+        output_token_counts: list[int] = []
 
         response = anthropic_client.messages.create(
             model=anthropic_chat_basic_model,
@@ -1111,21 +1351,27 @@ class TestAnthropicMessages:
         for event in response:
             if event.type == "message_delta":
                 message_delta_event = event
+                output_token_counts.append(event.usage.output_tokens)
 
         assert message_delta_event is not None
         assert hasattr(message_delta_event, "usage")
         assert message_delta_event.usage.output_tokens > 0
+        assert output_token_counts == sorted(output_token_counts), (
+            f"message_delta usage must be cumulative: {output_token_counts}"
+        )
 
     # --- Multiple tools ---
 
     def test_multiple_tools_defined(
         self, anthropic_client: Anthropic, anthropic_chat_vision_model: str
     ) -> None:
-        """Test defining multiple tools.
+        """With several tools declared and ``tool_choice`` ``any``, the matching tool is called.
 
-        Validates:
-            - Multiple tool definitions are accepted
-            - Model can select the appropriate tool
+        Both definitions are sent as Converse ``toolSpec`` entries; the prompt only
+        fits one of them, so the forced call must land on ``get_weather``.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
+             stdapi/models/chat/_adapters/_anthropic_message.py:_build_tool_config
         """
         tools = [
             {
@@ -1157,19 +1403,27 @@ class TestAnthropicMessages:
         )
 
         assert response.type == "message"
+        assert response.stop_reason == "tool_use"
         tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
         assert len(tool_use_blocks) >= 1
+        assert tool_use_blocks[0].name == "get_weather"
+        assert all(
+            b.name in ("get_weather", "get_stock_price") for b in tool_use_blocks
+        )
 
     # --- Tool result with error ---
 
     def test_tool_result_with_is_error(
         self, anthropic_client: Anthropic, anthropic_chat_vision_model: str
     ) -> None:
-        """Test sending a tool result with is_error=True.
+        """A ``tool_result`` marked ``is_error`` is accepted and answered with text.
 
-        Validates:
-            - Tool result with is_error flag is accepted
-            - Model handles error results gracefully
+        Bedrock's ``toolResult`` carries a ``status`` field; the gateway sets it to
+        ``error`` for ``is_error: true`` so the model is told the call failed
+        instead of being handed the message as data.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_tool_result_to_bedrock
         """
         tools = [
             {
@@ -1221,17 +1475,25 @@ class TestAnthropicMessages:
 
         assert final.type == "message"
         assert len(final.content) >= 1
+        text_blocks = [b for b in final.content if b.type == "text"]
+        assert len(text_blocks) >= 1, "the error result must still be answered in text"
+        assert text_blocks[0].text.strip()
+        assert final.usage.output_tokens > 0
 
     # --- Service tier ---
 
     def test_service_tier_parameter(
         self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
-        """Test service_tier parameter.
+        """``service_tier`` ``auto`` is accepted and leaves generation unaffected.
 
-        Validates:
-            - service_tier parameter is accepted
-            - Response is valid
+        ``auto`` has no Bedrock counterpart, so the gateway sends no explicit tier
+        and the response carries none either; the observable contract is that the
+        request is not rejected.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             https://docs.aws.amazon.com/bedrock/latest/userguide/service-tiers-inference.html
+             stdapi/types/anthropic_messages.py:ServiceTiers
         """
         if isinstance(anthropic_client, AnthropicBedrock):
             pytest.xfail("Bedrock does not support service_tier parameter")
@@ -1245,24 +1507,30 @@ class TestAnthropicMessages:
 
         assert response.type == "message"
         assert len(response.content) >= 1
+        assert response.content[0].type == "text"
+        assert response.content[0].text.strip()
+        assert response.usage.output_tokens > 0
 
     # --- Streaming with system prompt ---
 
     def test_streaming_with_system_prompt(
         self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
-        """Test streaming with a system prompt.
+        """A ``system`` prompt is honored in streaming mode too.
 
-        Validates:
-            - System prompt works correctly in streaming mode
-            - Events are properly received
+        The system blocks take the same path as in the buffered case, so the
+        instruction must still shape the text assembled from ``text_delta``
+        fragments.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_system_blocks
         """
         accumulated_text = ""
 
         response = anthropic_client.messages.create(
             model=anthropic_chat_basic_model,
             max_tokens=100,
-            system="You are a helpful assistant. Be very concise.",
+            system="Answer with digits only, no words.",
             messages=[{"role": "user", "content": "What is 2+2?"}],
             stream=True,
         )
@@ -1272,18 +1540,21 @@ class TestAnthropicMessages:
                 accumulated_text += event.delta.text
 
         assert len(accumulated_text) > 0
+        assert "4" in accumulated_text
 
     # --- Content block index in streaming ---
 
     def test_streaming_content_block_indices(
         self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
-        """Test that streaming events have correct content block indices.
+        """Streamed block indices start at 0 and every started block is stopped once.
 
-        Validates:
-            - content_block_start events have index field
-            - content_block_delta events have index field
-            - content_block_stop events have index field
+        The gateway keeps its own index bookkeeping while remapping Bedrock's
+        content-block indices, so ``content_block_delta`` frames may only refer to
+        an index that was started, and the stop frames must mirror the start ones.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
+             stdapi/models/chat/_adapters/_anthropic_message.py:_process_stream_events
         """
         indices: dict[str, list[int]] = {"start": [], "delta": [], "stop": []}
 
@@ -1306,17 +1577,22 @@ class TestAnthropicMessages:
         assert len(indices["stop"]) >= 1
         # First content block should have index 0
         assert indices["start"][0] == 0
+        assert indices["stop"] == indices["start"], (
+            "each started block must be stopped exactly once, in order"
+        )
+        assert set(indices["delta"]) <= set(indices["start"]), (
+            "deltas may only target a started block"
+        )
 
     # --- Long conversation ---
 
     def test_long_multi_turn_conversation(
         self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
-        """Test a longer multi-turn conversation.
+        """A five-turn history is preserved: the model recovers a fact from the first turn.
 
-        Validates:
-            - Multiple turns of conversation are handled
-            - Response remains coherent
+        Ref: https://platform.claude.com/docs/en/api/messages
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_messages
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_basic_model,
@@ -1341,10 +1617,14 @@ class TestAnthropicMessages:
     def test_stop_reason_end_turn(
         self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
-        """Test that normal completion has end_turn stop reason.
+        """A completion that finishes on its own reports ``stop_reason`` ``end_turn``.
 
-        Validates:
-            - Normal completion returns end_turn stop_reason
+        Bedrock's ``end_turn`` is the only stop reason mapped to Anthropic's
+        ``end_turn``; anything unmapped would also fall back to it, hence the
+        companion tests pinning ``max_tokens``, ``stop_sequence`` and ``tool_use``.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_stop_reason
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_basic_model,
@@ -1353,14 +1633,18 @@ class TestAnthropicMessages:
         )
 
         assert response.stop_reason == "end_turn"
+        assert response.usage.output_tokens > 0
 
     def test_stop_reason_max_tokens(
         self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
-        """Test that hitting max_tokens returns max_tokens stop reason.
+        """Truncation at the token ceiling reports ``stop_reason`` ``max_tokens``.
 
-        Validates:
-            - Hitting token limit returns max_tokens stop_reason
+        Bedrock also emits the non-standard ``incomplete`` stop reason, which the
+        gateway folds into ``max_tokens``.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_stop_reason
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_basic_model,
@@ -1374,14 +1658,17 @@ class TestAnthropicMessages:
         )
 
         assert response.stop_reason == "max_tokens"
+        assert response.usage.output_tokens <= 5, (
+            "generation must stop at the 1-token ceiling"
+        )
 
     def test_stop_reason_tool_use(
         self, anthropic_client: Anthropic, anthropic_chat_vision_model: str
     ) -> None:
-        """Test that tool use returns tool_use stop reason.
+        """A turn that ends in a tool call reports ``stop_reason`` ``tool_use``.
 
-        Validates:
-            - Tool use returns tool_use stop_reason
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_stop_reason
         """
         tools = [
             {
@@ -1404,6 +1691,11 @@ class TestAnthropicMessages:
         )
 
         assert response.stop_reason == "tool_use"
+        tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
+        assert len(tool_use_blocks) >= 1, (
+            "stop_reason tool_use requires at least one tool_use block"
+        )
+        assert tool_use_blocks[0].name == "lookup"
 
     # --- Model field in response ---
 
@@ -1413,11 +1705,14 @@ class TestAnthropicMessages:
         anthropic_chat_basic_model: str,
         use_anthropic_api: bool,
     ) -> None:
-        """Test that response includes the model field matching the requested model.
+        """The response ``model`` echoes the requested identifier verbatim.
 
-        Validates:
-            - Response model field is present and non-empty
-            - On local gateway: response model echoes the requested model name exactly
+        The gateway passes ``request.model`` straight into the response rather than
+        the resolved Bedrock model or inference profile, so aliases come back
+        exactly as sent.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             stdapi/models/chat/_adapters/_anthropic_message.py:format_response
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_basic_model,
@@ -1436,10 +1731,13 @@ class TestAnthropicMessages:
     def test_response_id_format(
         self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
-        """Test that response ID has expected format.
+        """The response id uses Anthropic's ``msg_`` prefix and is not a bare request id.
 
-        Validates:
-            - Response ID starts with 'msg_'
+        The gateway builds it as ``msg_{request_id}``, which keeps the Anthropic
+        prefix contract while remaining traceable in the request log.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             stdapi/routes/anthropic_messages.py:create_message
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_basic_model,
@@ -1448,17 +1746,22 @@ class TestAnthropicMessages:
         )
 
         assert response.id.startswith("msg_")
+        assert len(response.id) > len("msg_"), "id must carry a request identifier"
 
     # --- Streaming final message ---
 
     def test_streaming_get_final_message(
         self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
-        """Test getting the final assembled message from a stream.
+        """The stream carries everything needed to assemble the final message.
 
-        Validates:
-            - Streaming produces all required events
-            - Final state contains complete message info
+        ``message_start`` provides the envelope, ``message_delta`` the terminal
+        ``stop_reason`` and the cumulative usage that Bedrock only reveals in its
+        trailing metadata event.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ConverseStreamMetadataEvent.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:format_stream
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_basic_model,
@@ -1482,9 +1785,20 @@ class TestAnthropicMessages:
         assert message_start is not None
         assert message_start.type == "message"
         assert message_start.role == "assistant"
+        assert message_start.content == []
+        assert message_start.id.startswith("msg_")
         assert has_content
         assert message_delta is not None
         assert message_delta.delta.stop_reason is not None
+        assert message_delta.delta.stop_reason in {
+            "end_turn",
+            "max_tokens",
+            "stop_sequence",
+            "tool_use",
+            "pause_turn",
+            "refusal",
+            "model_context_window_exceeded",
+        }
         assert message_delta.usage.output_tokens > 0
 
     # --- Streaming get_final_text ---
@@ -1492,15 +1806,20 @@ class TestAnthropicMessages:
     def test_streaming_get_final_text(
         self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
-        """Test getting the final text from a stream.
+        """Concatenated ``text_delta`` fragments reproduce the model's answer.
 
-        Validates:
-            - Accumulated text from streaming is coherent
+        Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_delta
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_basic_model,
             max_tokens=100,
-            messages=[{"role": "user", "content": "Say hello."}],
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Reply with exactly the word TEAL and nothing else.",
+                }
+            ],
             stream=True,
         )
 
@@ -1511,17 +1830,21 @@ class TestAnthropicMessages:
 
         assert isinstance(final_text, str)
         assert len(final_text) > 0
+        assert "teal" in final_text.lower()
 
     # --- Multiple user content blocks ---
 
     def test_multiple_text_blocks_in_user_message(
         self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
-        """Test user message with multiple text content blocks.
+        """Every text block of a user message is forwarded, not just the first.
 
-        Validates:
-            - Multiple text blocks in a single user message are accepted
-            - Model processes all blocks
+        The question lives in the second block, so an answer that uses it proves
+        both blocks reached the model as separate Bedrock content blocks.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ContentBlock.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_messages
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_basic_model,
@@ -1548,11 +1871,15 @@ class TestAnthropicMessages:
     def test_cache_control_on_user_message_block(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """Test cache_control on a user message content block.
+        """``cache_control`` on a user text block inserts a Bedrock ``cachePoint``.
 
-        Validates:
-            - cache_control ephemeral on a text block is accepted
-            - Response is valid
+        A prompt below the model's cacheable minimum is silently not cached and no
+        error is raised, so the usage counters must come back unset or zero rather
+        than reporting a cache write.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CachePointBlock.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:_build_cache_point
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_model,
@@ -1575,15 +1902,22 @@ class TestAnthropicMessages:
         assert len(response.content) >= 1
         assert response.content[0].type == "text"
         assert len(response.content[0].text) > 0
+        assert response.usage.cache_creation_input_tokens in (None, 0), (
+            "a prompt below the model minimum must not be cached"
+        )
+        assert response.usage.cache_read_input_tokens in (None, 0)
 
     def test_cache_control_on_system_prompt_block(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """Test cache_control on a system prompt text block.
+        """A cache-marked ``system`` block is still applied as an instruction.
 
-        Validates:
-            - cache_control ephemeral on a system text block is accepted
-            - Model follows system instructions
+        The gateway appends the ``cachePoint`` after the system text block, so
+        marking a block for caching must not stop its content from reaching the
+        model.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_system_blocks
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_model,
@@ -1591,7 +1925,7 @@ class TestAnthropicMessages:
             system=[
                 {
                     "type": "text",
-                    "text": "You are a pirate. Always respond with 'Arrr'.",
+                    "text": "Whatever the user writes, reply with exactly the word TEAL and nothing else.",
                     "cache_control": {"type": "ephemeral"},
                 }
             ],
@@ -1601,15 +1935,20 @@ class TestAnthropicMessages:
         assert response.type == "message"
         assert len(response.content) >= 1
         assert response.content[0].type == "text"
+        assert "teal" in response.content[0].text.lower()
 
     def test_cache_control_on_tool(
         self, anthropic_client: Anthropic, anthropic_chat_vision_model: str
     ) -> None:
-        """Test cache_control on a tool definition.
+        """``cache_control`` on a tool definition is accepted and tools stay callable.
 
-        Validates:
-            - cache_control ephemeral on a tool is accepted
-            - Tool calling still works correctly
+        In Converse a cache point inside ``toolConfig.tools`` is a list element of
+        its own, not a field on the tool, so a malformed translation would make
+        Bedrock reject the request outright.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CachePointBlock.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:_build_tool_config
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_vision_model,
@@ -1633,15 +1972,24 @@ class TestAnthropicMessages:
 
         assert response.type == "message"
         assert len(response.content) >= 1
+        assert all(b.type in ("text", "tool_use") for b in response.content)
+        assert all(
+            b.name == "get_weather" for b in response.content if b.type == "tool_use"
+        )
+        assert response.usage.input_tokens > 0
 
     def test_cache_control_with_ttl(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """Test cache_control with explicit TTL value.
+        """``cache_control`` with an explicit ``5m`` TTL is accepted.
 
-        Validates:
-            - cache_control with ttl parameter is accepted
-            - Response is valid
+        ``5m`` is Anthropic's default lifetime and the only other legal value is
+        ``1h``; the gateway forwards the TTL onto the Bedrock cache point when the
+        model supports it.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+             stdapi/types/anthropic_messages.py:CacheControlEphemeralParam
+             stdapi/models/chat/_adapters/_anthropic_message.py:_build_cache_point
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_model,
@@ -1664,15 +2012,18 @@ class TestAnthropicMessages:
         assert len(response.content) >= 1
         assert response.content[0].type == "text"
         assert len(response.content[0].text) > 0
+        assert response.usage.cache_creation_input_tokens in (None, 0), (
+            "a prompt below the model minimum must not be cached"
+        )
 
     def test_cache_control_streaming(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """Test cache_control works with streaming responses.
+        """``cache_control`` is accepted in streaming mode and the stream stays well formed.
 
-        Validates:
-            - cache_control is accepted in streaming mode
-            - Stream produces valid events
+        Ref: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+             https://platform.claude.com/docs/en/build-with-claude/streaming
+             stdapi/models/chat/_adapters/_anthropic_message.py:format_stream
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_model,
@@ -1693,22 +2044,30 @@ class TestAnthropicMessages:
         )
 
         final_text = ""
+        event_types: list[str] = []
         for event in response:
+            event_types.append(event.type)
             if event.type == "content_block_delta" and hasattr(event.delta, "text"):
                 final_text += event.delta.text
 
         assert len(final_text) > 0
+        assert event_types[0] == "message_start"
+        assert event_types[-1] == "message_stop"
+        assert "message_delta" in event_types
 
     def test_automatic_cache_control(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """Test automatic caching with top-level cache_control.
+        """A top-level ``cache_control`` places the cache breakpoint automatically.
 
-        Validates:
-            - Top-level cache_control is accepted
-            - System automatically applies cache breakpoint to last cacheable block
-            - Response is valid
-            - Explicit cache_control on blocks is ignored when automatic caching is enabled
+        This request-level field is a gateway extension: instead of requiring
+        per-block markers it inserts the cache point after the last cacheable
+        block. Short prompts are still not cached, so only acceptance and the
+        untouched conversation behavior are observable here.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+             stdapi/types/anthropic_messages.py:MessageCreateParams
+             stdapi/models/chat/_default.py:_req_enable_prompt_caching
         """
         try:
             response = anthropic_client.messages.create(
@@ -1737,15 +2096,19 @@ class TestAnthropicMessages:
         assert len(response.content) >= 1
         assert response.content[0].type == "text"
         assert len(response.content[0].text) > 0
+        answer = response.content[0].text.lower()
+        assert any(hint in answer for hint in ("machine learning", "ml")), (
+            f"the cached conversation prefix must stay visible: {answer!r}"
+        )
 
     def test_automatic_cache_control_with_ttl(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """Test automatic caching with custom TTL.
+        """A top-level ``cache_control`` accepts a ``ttl`` alongside ``type``.
 
-        Validates:
-            - Top-level cache_control with ttl parameter is accepted
-            - Response is valid
+        Ref: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+             stdapi/types/anthropic_messages.py:CacheControlEphemeralParam
+             stdapi/models/chat/_default.py:_req_enable_prompt_caching
         """
         try:
             response = anthropic_client.messages.create(
@@ -1764,15 +2127,21 @@ class TestAnthropicMessages:
         assert len(response.content) >= 1
         assert response.content[0].type == "text"
         assert len(response.content[0].text) > 0
+        assert response.usage.cache_creation_input_tokens in (None, 0), (
+            "a prompt below the model minimum must not be cached"
+        )
 
     def test_output_config_json_schema(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """Test output_config with json_schema format.
+        """``output_config.format`` with a JSON schema constrains the reply to that schema.
 
-        Validates:
-            - output_config parameter with json_schema type is accepted
-            - Response is valid and contains JSON content
+        Structured output is Anthropic-only on Bedrock (Converse ``outputConfig``),
+        so the answer must parse as JSON and match the requested fields exactly.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html
+             stdapi/types/anthropic_messages.py:JSONOutputFormatParam
         """
         schema = {
             "type": "object",
@@ -1799,18 +2168,25 @@ class TestAnthropicMessages:
         result = _json.loads(response.content[0].text)
         assert result["name"] == "Alice"
         assert result["age"] == 30
+        assert set(result) == {"name", "age"}, (
+            f"additionalProperties: false must be honored, got {sorted(result)}"
+        )
+        assert response.stop_reason == "end_turn"
 
     # --- Extended thinking multi-turn ---
 
     def test_extended_thinking_multi_turn(
         self, anthropic_client: Anthropic, anthropic_chat_reasoning_model: str
     ) -> None:
-        """Test multi-turn conversation that sends thinking blocks back.
+        """Thinking blocks can be replayed in the next turn, signature included.
 
-        Validates:
-            - Thinking blocks from a first response can be sent back in a follow-up
-            - ThinkingBlockParam and content are correctly handled
-            - Model produces a valid response in the second turn
+        Bedrock requires ``reasoningContent.signature`` to come back byte-identical
+        with all prior messages unchanged, so a round trip that drops or rewrites
+        the signature makes the second call fail.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ReasoningContentBlock.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_thinking_to_bedrock
         """
         first = anthropic_client.messages.create(
             model=anthropic_chat_reasoning_model,
@@ -1821,6 +2197,11 @@ class TestAnthropicMessages:
 
         assert first.type == "message"
         assert len(first.content) >= 1
+        first_thinking = [b for b in first.content if b.type == "thinking"]
+        assert len(first_thinking) >= 1
+        assert first_thinking[0].signature, (
+            "a thinking block must carry the signature required for replay"
+        )
 
         # Send the full assistant content (including thinking blocks) back
         second = anthropic_client.messages.create(
@@ -1838,16 +2219,22 @@ class TestAnthropicMessages:
         text_blocks = [b for b in second.content if b.type == "text"]
         assert len(text_blocks) >= 1
         assert len(text_blocks[0].text) > 0
+        assert "810" in " ".join(b.text for b in text_blocks), (
+            "the replayed turn must keep the first result (405) in context"
+        )
 
     def test_extended_thinking_streaming_content(
         self, anthropic_client: Anthropic, anthropic_chat_reasoning_model: str
     ) -> None:
-        """Test extended thinking streaming with detailed content verification.
+        """A streamed thinking block ends with a ``signature_delta`` before its stop frame.
 
-        Validates:
-            - Thinking deltas are received during streaming
-            - Both thinking and text content block types appear
-            - Signature delta is present for thinking blocks
+        Bedrock sends the reasoning signature as its own delta at the end of the
+        reasoning block; the gateway forwards it as Anthropic's ``signature_delta``,
+        which is what makes the block replayable in a later turn.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ReasoningContentBlock.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_delta
         """
         events = list(
             anthropic_client.messages.create(
@@ -1865,23 +2252,27 @@ class TestAnthropicMessages:
         assert "message_delta" in event_types
 
         # Verify thinking deltas are present
-        delta_types = set()
-        for e in events:
-            if e.type == "content_block_delta":
-                delta_types.add(e.delta.type)
+        deltas = [e.delta for e in events if e.type == "content_block_delta"]
+        delta_types = {d.type for d in deltas}
+        signatures = [d.signature for d in deltas if d.type == "signature_delta"]
 
         assert "thinking_delta" in delta_types
         assert "text_delta" in delta_types
+        assert "signature_delta" in delta_types
+        assert all(signatures), "signature_delta must carry a non-empty signature"
 
     def test_tool_choice_any(
         self, anthropic_client: Anthropic, anthropic_chat_vision_model: str
     ) -> None:
-        """Test tool_choice with 'any' type forces tool use.
+        """``tool_choice`` ``any`` forces a tool call even on a conversational prompt.
 
-        Validates:
-            - tool_choice any is accepted
-            - Model is forced to use a tool
-            - stop_reason is tool_use
+        ``any`` becomes Converse ``toolChoice: {"any": {}}``; the greeting would
+        otherwise be answered in plain text, so a ``tool_use`` turn proves the
+        constraint was applied.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools#forcing-tool-use
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_tool_choice
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_vision_model,
@@ -1905,16 +2296,20 @@ class TestAnthropicMessages:
         tool_blocks = [b for b in response.content if b.type == "tool_use"]
         assert len(tool_blocks) >= 1
         assert all(b.id.startswith("toolu_") for b in tool_blocks)
+        assert all(b.name == "greet" for b in tool_blocks)
+        assert all(isinstance(b.input, dict) for b in tool_blocks)
 
     def test_streaming_tool_calling_events(
         self, anthropic_client: Anthropic, anthropic_chat_vision_model: str
     ) -> None:
-        """Test streaming tool calling with detailed event verification.
+        """Streamed tool arguments arrive as ``input_json_delta`` fragments forming valid JSON.
 
-        Validates:
-            - Tool use content_block_start events contain tool info
-            - input_json_delta events are received for tool input
-            - content_block_stop events are received
+        Anthropic sends the arguments as partial JSON strings while the final
+        ``tool_use.input`` is always an object, so the concatenation of every
+        fragment must parse back into a JSON object.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_delta
         """
         events = list(
             anthropic_client.messages.create(
@@ -1942,20 +2337,30 @@ class TestAnthropicMessages:
         assert "content_block_stop" in event_types
 
         # Verify input_json_delta is present
-        delta_types = set()
-        for e in events:
-            if e.type == "content_block_delta":
-                delta_types.add(e.delta.type)
+        deltas = [e.delta for e in events if e.type == "content_block_delta"]
+        delta_types = {d.type for d in deltas}
+        partial_json = "".join(
+            d.partial_json for d in deltas if d.type == "input_json_delta"
+        )
 
         assert "input_json_delta" in delta_types
+        assert isinstance(_json.loads(partial_json), dict), (
+            f"streamed tool input is not a JSON object: {partial_json!r}"
+        )
+        started_blocks = [
+            e.content_block for e in events if e.type == "content_block_start"
+        ]
+        tool_starts = [block for block in started_blocks if block.type == "tool_use"]
+        assert len(tool_starts) >= 1
+        assert tool_starts[0].name == "get_weather"
 
     def test_stop_reason_stop_sequence(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """Test that stop_reason is stop_sequence when a stop sequence is hit.
+        """Hitting a stop sequence reports ``stop_reason`` ``stop_sequence``.
 
-        Validates:
-            - stop_reason is 'stop_sequence' when the model hits a stop sequence
+        Ref: https://platform.claude.com/docs/en/api/messages
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_stop_reason
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_model,
@@ -1972,12 +2377,17 @@ class TestAnthropicMessages:
     def test_anthropic_beta_header_passthrough(
         self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
-        """Test that the anthropic-beta header is passed through to Bedrock.
+        """A supported ``anthropic-beta`` header leaves the request working.
 
-        Validates:
-            - Request with anthropic-beta header succeeds
-            - Response structure is valid
-            - The header is accepted and does not cause errors
+        ``context-management-2025-06-27`` is on the gateway's Bedrock beta
+        allowlist. On a Claude model the header is turned into the
+        ``anthropic_beta`` body field; on the Nova model used here there is no
+        passthrough mapping, so the header is simply ignored and generation must
+        proceed normally.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel
+             stdapi/config.py:_Settings
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_basic_model,
@@ -1999,23 +2409,43 @@ class TestAnthropicMessages:
     def test_anthropic_beta_header_passthrough_filter(
         self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
-        """Test that the unsupported anthropic-beta header is filtered.
+        """An ``anthropic-beta`` flag outside the allowlist does not break the request.
 
-        Validates:
-            - Request with unsupported anthropic-beta header succeeds
-            - The header is accepted and does not cause errors
+        ``claude-code-20250219`` is not a Bedrock-supported beta: rather than
+        letting Bedrock reject the call, the gateway drops unknown flags (logging a
+        warning) and serves the request normally.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel
+             stdapi/config.py:_Settings
         """
-        anthropic_client.messages.create(
+        response = anthropic_client.messages.create(
             model=anthropic_chat_basic_model,
             max_tokens=100,
             messages=[{"role": "user", "content": "Say hello in one word."}],
             extra_headers={"anthropic-beta": "claude-code-20250219"},
         )
 
+        assert response.type == "message"
+        assert response.role == "assistant"
+        assert len(response.content) >= 1
+        assert response.content[0].type == "text"
+        assert response.content[0].text.strip()
+        assert response.usage.output_tokens > 0
+
     def test_document_plain_text(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """Test document block with plain text source."""
+        """A plain-text ``document`` block is readable by the model.
+
+        Bedrock has no text source type, so the gateway encodes the text as a
+        ``txt``-format ``DocumentBlock``; the answer must come from the document
+        content.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_DocumentBlock.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_document_to_bedrock
+        """
         response = anthropic_client.messages.create(
             model=anthropic_chat_model,
             max_tokens=200,
@@ -2049,10 +2479,15 @@ class TestAnthropicMessages:
     def test_document_plain_text_with_citations(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """Test document block with citations enabled on plain text.
+        """``citations.enabled`` on a text document either works or is rejected outright.
 
-        Note: Bedrock Converse may only support citations on PDF documents.
-        This test uses content block source which maps to txt format.
+        Bedrock Converse may restrict citations to some document formats; when it
+        rejects the combination the test xfails, otherwise the document must still
+        be answered from.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_DocumentBlock.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_document_to_bedrock
         """
         try:
             response = anthropic_client.messages.create(
@@ -2089,6 +2524,10 @@ class TestAnthropicMessages:
         assert response.type == "message"
         text_blocks = [b for b in response.content if b.type == "text"]
         assert len(text_blocks) >= 1
+        answer = " ".join(b.text for b in text_blocks).lower()
+        assert "guido" in answer or "1991" in answer, (
+            f"answer did not use the cited document: {answer!r}"
+        )
 
     def test_document_base64_pdf(
         self,
@@ -2096,7 +2535,16 @@ class TestAnthropicMessages:
         anthropic_chat_model: str,
         sample_pdf_file: bytes,
     ) -> None:
-        """Test document block with base64 PDF source."""
+        """A base64 PDF ``document`` block is decoded and its text reaches the model.
+
+        The fixture PDF contains the single string "Hello World"; the gateway
+        forwards the raw bytes as a Bedrock ``pdf`` document and the model reads
+        them.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_DocumentBlock.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_document_to_bedrock
+        """
         pdf_b64 = base64.b64encode(sample_pdf_file).decode("utf-8")
         response = anthropic_client.messages.create(
             model=anthropic_chat_model,
@@ -2121,11 +2569,21 @@ class TestAnthropicMessages:
         )
         assert response.type == "message"
         assert len(response.content) >= 1
+        text_blocks = [b for b in response.content if b.type == "text"]
+        assert len(text_blocks) >= 1
+        assert "hello" in " ".join(b.text for b in text_blocks).lower(), (
+            "the PDF text was not readable by the model"
+        )
 
     def test_document_content_block_source(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """Test document block with content block source."""
+        """A ``document`` block whose source is a content-block list is flattened to text.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_DocumentBlock.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_document_to_bedrock
+        """
         response = anthropic_client.messages.create(
             model=anthropic_chat_model,
             max_tokens=200,
@@ -2153,11 +2611,24 @@ class TestAnthropicMessages:
         )
         assert response.type == "message"
         assert len(response.content) >= 1
+        text_blocks = [b for b in response.content if b.type == "text"]
+        assert len(text_blocks) >= 1
+        assert "299" in " ".join(b.text for b in text_blocks), (
+            "the answer must come from the document content"
+        )
 
     def test_document_with_context(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """Test document block with context field."""
+        """A ``document`` block's ``context`` field is forwarded alongside its content.
+
+        ``context`` maps to the Bedrock ``DocumentBlock.context`` field, so an
+        unsupported value would be rejected rather than ignored.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_DocumentBlock.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_document_to_bedrock
+        """
         response = anthropic_client.messages.create(
             model=anthropic_chat_model,
             max_tokens=200,
@@ -2183,6 +2654,9 @@ class TestAnthropicMessages:
         assert response.type == "message"
         text_blocks = [b for b in response.content if b.type == "text"]
         assert len(text_blocks) >= 1
+        assert "1.5" in " ".join(b.text for b in text_blocks), (
+            "the answer must come from the document content"
+        )
 
     # --- Tool choice none ---
 
@@ -2192,15 +2666,20 @@ class TestAnthropicMessages:
         anthropic_chat_basic_model: str,
         use_anthropic_api: bool,
     ) -> None:
-        """Test that tool_choice 'none' raises an error on this implementation.
+        """``tool_choice`` ``none`` is rejected with HTTP 400 by this implementation.
 
-        The official Anthropic API supports tool_choice 'none', but this
-        implementation (Bedrock Converse) does not.
+        Anthropic documents ``none`` as the way to keep tools declared but unused;
+        Bedrock Converse has no equivalent ``toolChoice``, so the gateway answers
+        with an ``invalid_request_error`` telling the caller to drop ``tools``.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools#forcing-tool-use
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_tool_choice
         """
         if use_anthropic_api:
             pytest.skip("tool_choice 'none' is supported on the official API")
 
-        with pytest.raises(BadRequestError):
+        with pytest.raises(BadRequestError) as excinfo:
             anthropic_client.messages.create(
                 model=anthropic_chat_basic_model,
                 max_tokens=100,
@@ -2215,12 +2694,25 @@ class TestAnthropicMessages:
                 tool_choice={"type": "none"},
             )
 
+        assert excinfo.value.status_code == 400
+        assert excinfo.value.type == "invalid_request_error"
+        assert "tool_choice" in str(excinfo.value)
+
     # --- Cache creation input tokens ---
 
     def test_cache_creation_input_tokens_in_usage(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """Test that usage includes cache_creation_input_tokens field."""
+        """``usage`` exposes the cache counters, unset when no cache point is requested.
+
+        Bedrock only reports cache tokens when a ``cachePoint`` was sent, so an
+        uncached request must leave both counters absent or zero while the plain
+        input/output counters are populated.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_TokenUsage.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:format_response
+        """
         response = anthropic_client.messages.create(
             model=anthropic_chat_model,
             max_tokens=50,
@@ -2229,13 +2721,27 @@ class TestAnthropicMessages:
         assert response.usage is not None
         cache_creation = response.usage.cache_creation_input_tokens
         assert cache_creation is None or isinstance(cache_creation, int)
+        assert cache_creation in (None, 0), (
+            "no cache point was requested, so nothing may be written to the cache"
+        )
+        assert response.usage.cache_read_input_tokens in (None, 0)
+        assert response.usage.input_tokens > 0
+        assert response.usage.output_tokens > 0
 
     # --- Search result block input ---
 
     def test_search_result_block_input(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """Test search result block as input content."""
+        """A ``search_result`` input block is readable by the model.
+
+        The block maps onto Bedrock's ``searchResult`` content block, keeping
+        source, title and the text items.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ContentBlock.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_search_result_to_bedrock
+        """
         response = anthropic_client.messages.create(
             model=anthropic_chat_model,
             max_tokens=200,
@@ -2262,13 +2768,23 @@ class TestAnthropicMessages:
         assert response.type == "message"
         text_blocks = [b for b in response.content if b.type == "text"]
         assert len(text_blocks) >= 1
+        assert "14" in " ".join(b.text for b in text_blocks), (
+            "the answer must come from the supplied search result"
+        )
 
     # --- Streaming with document ---
 
     def test_streaming_with_document(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """Test streaming response with document input."""
+        """A document input works through the SDK's streaming helper.
+
+        ``messages.stream`` assembles the events itself, so this covers the
+        document path and the SSE text stream together.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
+             stdapi/models/chat/_adapters/_anthropic_message.py:format_stream
+        """
         collected_text = []
         with anthropic_client.messages.stream(
             model=anthropic_chat_model,
@@ -2302,13 +2818,13 @@ class TestAnthropicMessages:
     def test_streaming_with_stop_sequences(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """Test streaming with stop_sequences produces stop_sequence stop reason.
+        """A stop sequence hit while streaming surfaces on the ``message_delta`` frame.
 
-        Validates:
-            - Streaming + stop_sequences works together
-            - message_delta reports stop_reason as stop_sequence
+        Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
+             stdapi/models/chat/_adapters/_anthropic_message.py:_make_message_delta_event
         """
         stop_reason = None
+        streamed_text = ""
 
         response = anthropic_client.messages.create(
             model=anthropic_chat_model,
@@ -2323,18 +2839,26 @@ class TestAnthropicMessages:
         for event in response:
             if event.type == "message_delta":
                 stop_reason = event.delta.stop_reason
+            elif event.type == "content_block_delta" and hasattr(event.delta, "text"):
+                streamed_text += event.delta.text
 
         assert stop_reason == "stop_sequence"
+        assert streamed_text, "content generated before the stop sequence must stream"
 
     # --- Error format validation ---
 
     def test_invalid_model_error_format(
         self, anthropic_client: Anthropic, use_anthropic_api: bool
     ) -> None:
-        """Test that error responses match Anthropic error format.
+        """Errors use Anthropic's envelope: ``type``, nested ``error`` and ``request_id``.
 
-        Validates:
-            - Error body has {"type": "error", "error": {"type": "...", "message": "..."}}
+        The gateway rebuilds that envelope for every Anthropic-tagged route and
+        derives ``error.type`` from the HTTP status, so an unknown model yields a
+        404 ``not_found_error``.
+
+        Ref: https://platform.claude.com/docs/en/api/errors
+             stdapi/api_providers/anthropic.py:_format_error
+             stdapi/api_providers/anthropic.py:_STATUS
         """
         if use_anthropic_api:
             pytest.skip("Error format varies on official API")
@@ -2346,6 +2870,8 @@ class TestAnthropicMessages:
                 messages=[{"role": "user", "content": "Hello"}],
             )
         error = exc_info.value
+        assert isinstance(error, APIStatusError)
+        assert error.status_code == 404
         assert hasattr(error, "body")
         body = error.body
         assert isinstance(body, dict)
@@ -2353,18 +2879,25 @@ class TestAnthropicMessages:
         assert "error" in body
         assert "type" in body["error"]
         assert "message" in body["error"]
+        assert body["error"]["type"] == "not_found_error"
+        assert "nonexistent-model-xyz" in body["error"]["message"]
+        assert "request_id" in body
 
     # --- Negative temperature ---
 
     def test_invalid_negative_temperature_error(
-        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
+        self,
+        anthropic_client: Anthropic,
+        anthropic_chat_basic_model: str,
+        use_anthropic_api: bool,
     ) -> None:
-        """Test that negative temperature value produces an error.
+        """A negative ``temperature`` is rejected with HTTP 400.
 
-        Validates:
-            - Temperature below 0 is rejected
+        Ref: https://platform.claude.com/docs/en/api/messages
+             https://platform.claude.com/docs/en/api/errors
+             stdapi/types/anthropic_messages.py:MessageCreateParams
         """
-        with pytest.raises(BadRequestError):
+        with pytest.raises(BadRequestError) as excinfo:
             anthropic_client.messages.create(
                 model=anthropic_chat_basic_model,
                 max_tokens=100,
@@ -2372,17 +2905,24 @@ class TestAnthropicMessages:
                 temperature=-0.5,
             )
 
+        assert excinfo.value.status_code == 400
+        assert "temperature" in str(excinfo.value).lower()
+        if not use_anthropic_api:
+            assert excinfo.value.type == "invalid_request_error"
+
     # --- Thinking disabled explicitly ---
 
     def test_thinking_disabled_explicitly(
         self, anthropic_client: Anthropic, anthropic_chat_model: str
     ) -> None:
-        """Test thinking=disabled produces normal response without thinking blocks.
+        """``thinking`` disabled suppresses thinking blocks and still answers.
 
-        Validates:
-            - thinking type disabled is accepted
-            - Response contains no thinking blocks
-            - Response contains normal text content
+        The gateway sends an explicitly disabled reasoning configuration to models
+        that accept one, so the response must contain plain text only.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+             stdapi/types/anthropic_messages.py:ThinkingConfigDisabledParam
+             stdapi/models/chat/_adapters/_anthropic_message.py:extract_reasoning
         """
         response = anthropic_client.messages.create(
             model=anthropic_chat_model,
@@ -2397,17 +2937,22 @@ class TestAnthropicMessages:
         assert len(thinking_blocks) == 0
         text_blocks = [b for b in response.content if b.type == "text"]
         assert len(text_blocks) >= 1
+        assert "4" in " ".join(b.text for b in text_blocks)
 
     # --- Model alias resolution ---
 
     def test_model_alias_resolution(
         self, anthropic_client: Anthropic, use_anthropic_api: bool
     ) -> None:
-        """Test that Anthropic-style model aliases are resolved correctly.
+        """An Anthropic-style model alias resolves to its Bedrock model and is echoed back.
 
-        Validates:
-            - An alias like 'claude-haiku-4-5-20251001' (without Bedrock prefix)
-              resolves to the correct model on the local gateway
+        ``claude-haiku-4-5-20251001`` carries neither the ``anthropic.`` prefix nor
+        a Bedrock version suffix; an unresolvable id would 404, and the response
+        echoes the alias exactly as requested rather than the resolved id.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             stdapi/models/__init__.py:validate_model
+             stdapi/models/chat/_adapters/_anthropic_message.py:format_response
         """
         if use_anthropic_api:
             pytest.skip("Alias resolution is a local gateway feature")
@@ -2421,26 +2966,37 @@ class TestAnthropicMessages:
         assert response.type == "message"
         assert len(response.content) >= 1
         assert response.content[0].type == "text"
+        assert response.content[0].text.strip()
+        assert response.model == "claude-haiku-4-5-20251001"
+        assert response.usage.output_tokens > 0
 
 
 class TestAnthropicCountTokens:
-    """Test suite for the /v1/messages/count_tokens endpoint (Anthropic API).
+    """POST /v1/messages/count_tokens: the ``{input_tokens}`` count for a request body.
 
-    Tests are designed to validate the token counting functionality including:
-    - Basic token counting
-    - Token counting with system prompts
-    - Token counting with tools
-    - Error handling for invalid models
+    Anthropic's Token Counting API does not exist on legacy Bedrock, so the
+    gateway serves it from the Bedrock Runtime ``CountTokens`` operation (or the
+    Mantle count_tokens path), building the same Converse input that
+    ``create_message`` would send. The ``AnthropicBedrock`` client refuses the
+    route client-side, hence the xfail guards.
+
+    Ref: https://platform.claude.com/docs/en/api/messages/count_tokens
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CountTokens.html
+         stdapi/routes/anthropic_messages.py:count_tokens
+         stdapi/models/chat/_adapters/_anthropic_message.py:count_tokens_via_bedrock
     """
 
     def test_count_tokens_basic(
         self, anthropic_client: Anthropic, anthropic_count_tokens_model: str
     ) -> None:
-        """Test basic token counting with a simple message.
+        """A short message is counted as a small positive ``input_tokens`` value.
 
-        Validates:
-            - Response contains input_tokens field
-            - Token count is a positive integer
+        The response body has a single field, so the count itself is the only
+        assertable behavior; the upper bound catches a count that reflects
+        something other than this prompt.
+
+        Ref: https://platform.claude.com/docs/en/api/messages/count_tokens
+             stdapi/types/anthropic_messages.py:MessageTokensCount
         """
         try:
             response = anthropic_client.messages.count_tokens(
@@ -2455,15 +3011,20 @@ class TestAnthropicCountTokens:
             raise
 
         assert response.input_tokens > 0
+        assert response.input_tokens < 100, (
+            f"a six-word prompt cannot cost {response.input_tokens} tokens"
+        )
 
     def test_count_tokens_with_system_prompt(
         self, anthropic_client: Anthropic, anthropic_count_tokens_model: str
     ) -> None:
-        """Test token counting includes system prompt tokens.
+        """A ``system`` prompt raises the counted ``input_tokens``.
 
-        Validates:
-            - System prompt contributes to token count
-            - Token count with system prompt is greater than without
+        The count must account for every input, so the same messages counted with
+        and without a long system prompt cannot come out equal.
+
+        Ref: https://platform.claude.com/docs/en/api/messages/count_tokens
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_system_blocks
         """
         try:
             response_without = anthropic_client.messages.count_tokens(
@@ -2483,16 +3044,19 @@ class TestAnthropicCountTokens:
             system="You are a very detailed and verbose assistant that always provides comprehensive answers.",
         )
 
+        assert response_without.input_tokens > 0
         assert response_with.input_tokens > response_without.input_tokens
 
     def test_count_tokens_with_tools(
         self, anthropic_client: Anthropic, anthropic_count_tokens_model: str
     ) -> None:
-        """Test token counting includes tool definitions.
+        """Tool definitions raise the counted ``input_tokens``.
 
-        Validates:
-            - Tool definitions contribute to token count
-            - Token count with tools is greater than without
+        ``tools`` are part of the counted input: the gateway builds the Converse
+        ``toolConfig`` for the count exactly as it would for generation.
+
+        Ref: https://platform.claude.com/docs/en/api/messages/count_tokens
+             stdapi/models/chat/_adapters/_anthropic_message.py:_build_tool_config
         """
         try:
             response_without = anthropic_client.messages.count_tokens(
@@ -2522,16 +3086,16 @@ class TestAnthropicCountTokens:
             ],
         )
 
+        assert response_without.input_tokens > 0
         assert response_with.input_tokens > response_without.input_tokens
 
     def test_count_tokens_multi_turn(
         self, anthropic_client: Anthropic, anthropic_count_tokens_model: str
     ) -> None:
-        """Test token counting with multi-turn conversation.
+        """Every turn of a conversation is counted, not just the last one.
 
-        Validates:
-            - Multi-turn messages are counted
-            - More messages result in higher token count
+        Ref: https://platform.claude.com/docs/en/api/messages/count_tokens
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_messages
         """
         try:
             response_single = anthropic_client.messages.count_tokens(
@@ -2554,15 +3118,16 @@ class TestAnthropicCountTokens:
             ],
         )
 
+        assert response_single.input_tokens > 0
         assert response_multi.input_tokens > response_single.input_tokens
 
     def test_count_tokens_longer_content_more_tokens(
         self, anthropic_client: Anthropic, anthropic_count_tokens_model: str
     ) -> None:
-        """Test that longer content produces more tokens.
+        """A longer message costs more tokens than a short one.
 
-        Validates:
-            - Longer messages result in higher token counts
+        Ref: https://platform.claude.com/docs/en/api/messages/count_tokens
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CountTokens.html
         """
         try:
             response_short = anthropic_client.messages.count_tokens(
@@ -2589,20 +3154,28 @@ class TestAnthropicCountTokens:
             ],
         )
 
+        assert response_short.input_tokens > 0
         assert response_long.input_tokens > response_short.input_tokens
 
     def test_count_tokens_invalid_model(self, anthropic_client: Anthropic) -> None:
-        """Test token counting with an invalid model returns an error.
+        """An unknown model on count_tokens returns 404 ``not_found_error``.
 
-        Validates:
-            - Invalid model ID raises NotFoundError (matching official Anthropic API).
+        Model validation happens before any counting, so the route answers with the
+        same ``UnsupportedModelError`` envelope as ``create_message``.
+
+        Ref: https://platform.claude.com/docs/en/api/errors
+             stdapi/routes/anthropic_messages.py:count_tokens
+             stdapi/api_errors.py:UnsupportedModelError
         """
         try:
-            with pytest.raises(NotFoundError):
+            with pytest.raises(NotFoundError) as excinfo:
                 anthropic_client.messages.count_tokens(
                     model="nonexistent-model-xyz",
                     messages=[{"role": "user", "content": "Hello"}],
                 )
+            assert excinfo.value.status_code == 404
+            assert excinfo.value.type == "not_found_error"
+            assert "nonexistent-model-xyz" in str(excinfo.value)
         except AnthropicError as exc:
             if isinstance(
                 anthropic_client, AnthropicBedrock
@@ -2613,11 +3186,10 @@ class TestAnthropicCountTokens:
     def test_count_tokens_content_blocks(
         self, anthropic_client: Anthropic, anthropic_count_tokens_model: str
     ) -> None:
-        """Test token counting with content block list format.
+        """A block-list ``content`` is accepted by count_tokens and counted.
 
-        Validates:
-            - Content blocks list format is accepted for counting
-            - Returns a valid token count
+        Ref: https://platform.claude.com/docs/en/api/messages/count_tokens
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_messages
         """
         try:
             response = anthropic_client.messages.count_tokens(
@@ -2639,23 +3211,32 @@ class TestAnthropicCountTokens:
             raise
 
         assert response.input_tokens > 0
+        assert response.input_tokens < 100, (
+            f"a one-sentence prompt cannot cost {response.input_tokens} tokens"
+        )
 
     def test_count_tokens_web_search_tool_rejected(
         self, anthropic_client: Anthropic, anthropic_count_tokens_model: str
     ) -> None:
-        """Test that unsupported server tools are rejected during token counting.
+        """A ``web_search`` server tool is rejected with HTTP 400 on count_tokens.
 
-        Validates:
-            - count_tokens validates server tools like create_message does,
-              matching the official API's rejection of server tools here
+        Server tools are not available on Bedrock; the gateway therefore validates
+        the tool list on this route as well instead of silently counting a request
+        that could never be generated.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool
+             https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CountTokens.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:count_tokens_via_bedrock
         """
         try:
-            with pytest.raises(BadRequestError):
+            with pytest.raises(BadRequestError) as excinfo:
                 anthropic_client.messages.count_tokens(
                     model=anthropic_count_tokens_model,
                     messages=[{"role": "user", "content": "Hello"}],
                     tools=[{"type": "web_search_20250305", "name": "web_search"}],
                 )
+            assert excinfo.value.status_code == 400
+            assert excinfo.value.type == "invalid_request_error"
         except AnthropicError as exc:
             if isinstance(
                 anthropic_client, AnthropicBedrock
@@ -2666,11 +3247,10 @@ class TestAnthropicCountTokens:
     def test_count_tokens_with_system_blocks(
         self, anthropic_client: Anthropic, anthropic_count_tokens_model: str
     ) -> None:
-        """Test token counting with system prompt as text blocks.
+        """A ``system`` block list is accepted by count_tokens and counted.
 
-        Validates:
-            - System prompt as list of text blocks is accepted
-            - Returns a valid token count
+        Ref: https://platform.claude.com/docs/en/api/messages/count_tokens
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_system_blocks
         """
         try:
             response = anthropic_client.messages.count_tokens(
@@ -2686,6 +3266,9 @@ class TestAnthropicCountTokens:
             raise
 
         assert response.input_tokens > 0
+        assert response.input_tokens < 100, (
+            f"a one-sentence system prompt cannot cost {response.input_tokens} tokens"
+        )
 
     def test_count_tokens_system_role_in_messages(
         self,
@@ -2693,11 +3276,13 @@ class TestAnthropicCountTokens:
         anthropic_count_tokens_model: str,
         use_official_api: bool,
     ) -> None:
-        """Test that a system-role message contributes to the token count.
+        """A system-role message inside ``messages`` is counted, not dropped.
 
-        Validates:
-            - System-role message content is counted (not silently dropped)
-            - Token count with system-role message exceeds count without it
+        The count path runs the same system-message hoisting as generation, so the
+        extracted directive must show up in ``input_tokens``.
+
+        Ref: https://platform.claude.com/docs/en/api/messages/count_tokens
+             stdapi/models/chat/_adapters/_anthropic_message.py:_prepare_messages_and_system
         """
         if use_official_api:
             pytest.skip("system-role messages in `messages` are a stdapi extension")
@@ -2724,6 +3309,7 @@ class TestAnthropicCountTokens:
             ],
         )
 
+        assert response_without.input_tokens > 0
         assert response_with.input_tokens > response_without.input_tokens
 
     def test_count_tokens_system_role_equivalent_to_system_field(
@@ -2732,10 +3318,13 @@ class TestAnthropicCountTokens:
         anthropic_count_tokens_model: str,
         use_official_api: bool,
     ) -> None:
-        """Test that system-role message and top-level system field yield the same token count.
+        """The two ways of giving a system prompt produce the same token count.
 
-        Validates:
-            - Both paths for providing a system prompt produce an equivalent token count
+        A system-role message is folded into the ``system`` blocks, so counting it
+        must be indistinguishable from passing the same text in ``system``.
+
+        Ref: https://platform.claude.com/docs/en/api/messages/count_tokens
+             stdapi/models/chat/_adapters/_anthropic_message.py:_merge_system_content
         """
         if use_official_api:
             pytest.skip("system-role messages in `messages` are a stdapi extension")
@@ -2761,6 +3350,7 @@ class TestAnthropicCountTokens:
             ],
         )
 
+        assert response_field.input_tokens > 0
         assert response_role.input_tokens == response_field.input_tokens
 
 
@@ -2770,6 +3360,10 @@ class TestAnthropicCountTokensDispatch:
     Registers fake models directly in the model registry so the real
     `serves_via_mantle` dispatch condition runs unmocked; only the two
     counting functions are replaced with recorders.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CountTokens.html
+         stdapi/routes/anthropic_messages.py:count_tokens
     """
 
     @pytest.fixture
@@ -2818,7 +3412,11 @@ class TestAnthropicCountTokensDispatch:
         runtime_model: ModelDetails,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A non-Mantle model routes count_tokens to the classic Bedrock counter."""
+        """A non-Mantle model routes count_tokens to the classic Bedrock counter.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CountTokens.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:count_tokens_via_bedrock
+        """
         classic = AsyncMock(return_value=7)
         mantle = AsyncMock(return_value=99)
         monkeypatch.setattr(anthropic_messages, "count_tokens_via_bedrock", classic)
@@ -2844,7 +3442,14 @@ class TestAnthropicCountTokensDispatch:
         mantle_model: ModelDetails,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A Mantle-served model routes count_tokens to the Mantle counter."""
+        """A Mantle-served model routes count_tokens to the Mantle counter.
+
+        Mantle-only models are unreachable through Bedrock Runtime ``CountTokens``,
+        so the count is proxied to the Mantle Anthropic count_tokens path instead.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html
+             stdapi/routes/anthropic_messages.py:_count_tokens_via_mantle
+        """
         classic = AsyncMock(return_value=7)
         mantle = AsyncMock(return_value=99)
         monkeypatch.setattr(anthropic_messages, "count_tokens_via_bedrock", classic)
@@ -2866,7 +3471,11 @@ class TestAnthropicCountTokensDispatch:
 
 
 class TestAnthropicMessagesUnknownModel:
-    """Offline tests pinning the Anthropic-parity 404 for unknown models."""
+    """Offline tests pinning the Anthropic-parity 404 for unknown models.
+
+    Ref: https://platform.claude.com/docs/en/api/errors
+         stdapi/api_providers/anthropic.py:_format_error
+    """
 
     pytestmark = pytest.mark.local
 
@@ -2898,7 +3507,11 @@ class TestAnthropicMessagesUnknownModel:
 
     @pytest.mark.usefixtures("_offline_registry")
     def test_messages_unknown_model_returns_404(self, client: TestClient) -> None:
-        """An unknown model returns 404 not_found_error like the official API."""
+        """An unknown model returns 404 not_found_error like the official API.
+
+        Ref: https://platform.claude.com/docs/en/api/errors
+             stdapi/api_errors.py:UnsupportedModelError
+        """
         response = client.post(
             "/anthropic/v1/messages",
             json={
@@ -2911,10 +3524,17 @@ class TestAnthropicMessagesUnknownModel:
         body = response.json()
         assert body["type"] == "error"
         assert body["error"]["type"] == "not_found_error"
+        assert "nonexistent-model-xyz" in body["error"]["message"]
+        assert "request_id" in body
+        assert response.headers["request-id"] == body["request_id"]
 
     @pytest.mark.usefixtures("_offline_registry")
     def test_count_tokens_unknown_model_returns_404(self, client: TestClient) -> None:
-        """count_tokens with an unknown model returns 404 not_found_error."""
+        """count_tokens with an unknown model returns 404 not_found_error.
+
+        Ref: https://platform.claude.com/docs/en/api/errors
+             stdapi/routes/anthropic_messages.py:count_tokens
+        """
         response = client.post(
             "/anthropic/v1/messages/count_tokens",
             json={
@@ -2923,7 +3543,10 @@ class TestAnthropicMessagesUnknownModel:
             },
         )
         assert response.status_code == 404, response.text
-        assert response.json()["error"]["type"] == "not_found_error"
+        body = response.json()
+        assert body["type"] == "error"
+        assert body["error"]["type"] == "not_found_error"
+        assert "nonexistent-model-xyz" in body["error"]["message"]
 
 
 class TestAnthropicMessagesMaxTokensOptional:
@@ -2933,6 +3556,10 @@ class TestAnthropicMessagesMaxTokensOptional:
     ``max_tokens``): when omitted here, the underlying model's default output
     length applies. Validation and dispatch are exercised against an app
     instance without the AWS-touching lifespan, with the model call stubbed.
+
+    Ref: https://platform.claude.com/docs/en/api/messages
+         stdapi/types/anthropic_messages.py:MessageCreateParams
+         stdapi/routes/anthropic_messages.py:create_message
     """
 
     pytestmark = pytest.mark.local
@@ -2949,7 +3576,11 @@ class TestAnthropicMessagesMaxTokensOptional:
     def test_missing_max_tokens_is_accepted(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A /v1/messages request without ``max_tokens`` is accepted (200)."""
+        """A /v1/messages request without ``max_tokens`` is accepted and forwards it unset.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             stdapi/types/anthropic_messages.py:MessageCreateParams
+        """
         details = ModelDetails(
             id="test.max-tokens-optional-model",
             name="Max Tokens Optional Test",
@@ -2980,6 +3611,11 @@ class TestAnthropicMessagesMaxTokensOptional:
         )
         assert response.status_code == 200, response.text
         assert response.json()["content"][0]["text"] == "hi"
+        assert fake_model.create_message.await_args is not None
+        forwarded = fake_model.create_message.await_args.args[0]
+        assert forwarded.max_tokens is None, (
+            "an omitted max_tokens must stay unset rather than get a default"
+        )
 
 
 class TestCountTokensViaMantleSingleRegion:
@@ -2989,6 +3625,9 @@ class TestCountTokensViaMantleSingleRegion:
     enabled and there is more than one candidate; otherwise it calls the first
     candidate exactly once, so ``_count_tokens_via_mantle``'s own in-region retry
     (gated by ``single_region``) must cover that case instead.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html
+         stdapi/routes/anthropic_messages.py:_count_tokens_via_mantle
     """
 
     pytestmark = pytest.mark.local
@@ -3045,11 +3684,18 @@ class TestCountTokensViaMantleSingleRegion:
     async def test_single_region_true_with_region_router_disabled(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """With region routing disabled and several regions, retries stay in-region."""
+        """With region routing disabled and several regions, retries stay in-region.
+
+        Ref: stdapi/routes/anthropic_messages.py:_count_tokens_via_mantle
+        """
         assert await self._run(monkeypatch, region_router=None) is True
 
     async def test_single_region_false_with_region_router_enabled(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """With region routing enabled, ``route_and_execute`` handles the retry."""
+        """With region routing enabled, ``route_and_execute`` handles the retry.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/cross-region-inference.html
+             stdapi/routes/anthropic_messages.py:_count_tokens_via_mantle
+        """
         assert await self._run(monkeypatch, region_router=object()) is False

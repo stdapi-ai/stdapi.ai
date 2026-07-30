@@ -1,7 +1,13 @@
 """Tests for the OpenAI /v1/audio/translations route.
 
-Comprehensive test suite that validates all features of the OpenAI Audio Translations API
-specification, ensuring compatibility with the official OpenAI API behavior.
+With ``amazon.transcribe`` the route is an Amazon Transcribe batch job followed by
+Amazon Translate into English, so the accepted ``response_format`` set is OpenAI's
+``CreateTranslationRequest`` one (json, text, srt, verbose_json, vtt) and both AWS
+services are billed within a single request.
+
+Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+     https://stdapi.ai/api_openai_audio_translations/
+     stdapi/routes/openai_audio_translations.py:create_translation
 """
 
 import io
@@ -16,6 +22,7 @@ from stdapi.models.audio.amazon_transcribe import AudioModel
 from tests.conftest import logged_usage_entries
 
 if TYPE_CHECKING:
+    from openai.types.audio import Translation
     from starlette.testclient import TestClient as TestClientType
 
 #: Stubbed AWS Transcribe job result (English source, so translate() is a no-op).
@@ -56,69 +63,51 @@ def sample_audio_fr_file(openai_client: OpenAI, speech_standard_model: str) -> b
 
 
 class TestAudioTranslations:
-    """Test suite for the /v1/audio/translations endpoint.
+    """End-to-end behavior of /v1/audio/translations with the default STT model.
 
-    Tests are designed to validate complete OpenAI API compatibility including:
-    - All parameter combinations and validations
-    - All response formats and translation output validation
-    - Complete error scenario coverage with exact error matching
-    - Edge cases and boundary conditions
-    - Translation-specific functionality and language processing
-    - File format support and audio processing capabilities
+    The sample audio says "This is a test." in English, so content assertions stay
+    tolerant (a single expected word) rather than matching an exact transcript.
+
+    Ref: https://stdapi.ai/api_openai_audio_translations/
+         stdapi/models/audio/amazon_transcribe.py:AudioModel.stt_translate
     """
 
     @pytest.mark.slow
     def test_core_translation_functionality(
         self, openai_client: OpenAI, sample_audio_file: bytes, transcription_model: str
     ) -> None:
-        """Test core translation functionality with comprehensive parameter validation.
+        """A minimal translation request returns the English text as ``text``.
 
-        Efficiently validates the fundamental translation capabilities in a single
-        optimized API call, focusing on translation-specific features:
-        - Audio to English text conversion (core translation function)
-        - Parameter handling (temperature, prompt)
-        - JSON response format validation
-        - Translation-specific output validation
+        Neither ``prompt`` nor ``temperature`` is sent: ``amazon.transcribe``
+        rejects both with a 400 rather than ignoring them, so a default request is
+        the only shape valid for every model this fixture can resolve to.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            sample_audio_file: Audio file bytes for translation testing
-            transcription_model: Transcription model identifier
-
-        Validates:
-            - Response contains text attribute with translated English content
-            - Text output is string type and non-empty
-            - Temperature and prompt parameters are processed correctly
-            - Core translation workflow functions end-to-end
+        Ref: https://stdapi.ai/api_openai_audio_transcriptions/
+             stdapi/models/audio/__init__.py:AudioModelBase._validate_no_prompt
         """
         response = openai_client.audio.translations.create(
             file=("test.wav", io.BytesIO(sample_audio_file)), model=transcription_model
         )
 
-        # Validate core translation functionality
         assert hasattr(response, "text")
         assert isinstance(response.text, str)
         assert len(response.text.strip()) > 0
+        assert "test" in response.text.lower(), (
+            f"translation does not reflect the sample audio: {response.text!r}"
+        )
 
     @pytest.mark.slow
     def test_translation_specific_response_formats(
         self, openai_client: OpenAI, sample_audio_file: bytes, transcription_model: str
     ) -> None:
-        """Test translation-specific aspects of response formats.
+        """``text`` returns a bare string and ``verbose_json`` reports English output.
 
-        Focuses only on translation-specific format features, avoiding
-        redundant testing of generic format support already covered
-        in transcription tests. Optimized to test key formats efficiently.
+        The verbose translation object's ``language`` is the *output* language and is
+        always English — unlike the transcription surface, where it is the detected
+        source language.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            sample_audio_file: Audio file bytes for translation testing
-            transcription_model: Transcription model identifier
-
-        Validates:
-            - TEXT format returns plain English text string
-            - VERBOSE_JSON format includes translation-specific metadata
-            - Translation workflow works with different output formats
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/types/openai_audio.py:TranslationVerbose
         """
         # Test TEXT format for translation (efficient single call)
         text_response = openai_client.audio.translations.create(
@@ -128,6 +117,10 @@ class TestAudioTranslations:
         )
         assert isinstance(text_response, str)
         assert len(text_response.strip()) > 0
+        assert not text_response.lstrip().startswith(("{", '"')), (
+            f"text format must not be JSON-encoded: {text_response[:40]!r}"
+        )
+        assert "test" in text_response.lower()
 
         # Test VERBOSE_JSON for translation-specific metadata
         verbose_response = openai_client.audio.translations.create(
@@ -136,27 +129,25 @@ class TestAudioTranslations:
             response_format="verbose_json",
         )
         assert hasattr(verbose_response, "text")
-        assert hasattr(verbose_response, "language")  # Source language detected
+        assert hasattr(verbose_response, "language")
         assert hasattr(verbose_response, "duration")
         assert isinstance(verbose_response.duration, int | float)
         assert verbose_response.duration >= 0
+        assert verbose_response.language.lower() in {"english", "en"}, (
+            f"translation output language must be English: {verbose_response.language!r}"
+        )
+        assert "test" in verbose_response.text.lower()
 
     def test_invalid_model_error(
         self, openai_client: OpenAI, sample_audio_file: bytes
     ) -> None:
-        """Test error handling for invalid translation model specification.
+        """An unknown model is a 404 ``model_not_found`` naming the requested model.
 
-        Validates proper error response for non-existent model names.
+        Model resolution happens before the audio is staged in S3, so the file
+        content is irrelevant to this outcome.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            sample_audio_file: Audio file bytes for translation testing
-
-        Validates:
-            - Correct HTTP status code (404)
-            - Proper error type ("invalid_request_error") and code ("model_not_found")
-            - Error message identifies model as invalid
-            - Consistent error response structure
+        Ref: https://developers.openai.com/api/docs/guides/error-codes
+             stdapi/api_errors.py:UnsupportedModelError
         """
         with pytest.raises(NotFoundError) as exc_info:
             openai_client.audio.translations.create(
@@ -171,6 +162,9 @@ class TestAudioTranslations:
         assert error_body["type"] == "invalid_request_error"
         assert error_body["code"] == "model_not_found"
         error_message = str(error).lower()
+        assert "invalid-nonexistent-model" in error_message, (
+            f"error must name the rejected model: {error_message}"
+        )
         assert any(
             word in error_message for word in ["model", "invalid", "exist", "access"]
         )
@@ -178,20 +172,14 @@ class TestAudioTranslations:
     def test_empty_file_error(
         self, openai_client: OpenAI, transcription_model: str
     ) -> None:
-        """Test error handling for empty audio files.
+        """A zero-byte audio file is a 400 ``invalid_request_error`` with no error code.
 
-        Validates that the translation service properly handles empty files
-        and returns appropriate error responses.
+        There is no local media validation for ``amazon.transcribe``: the file is
+        staged in S3 and Transcribe's own ``BadRequestException`` is re-wrapped, which
+        yields the plain base error (``code`` null) rather than a typed one.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            transcription_model: Valid transcription model identifier
-
-        Validates:
-            - Correct HTTP status code (400)
-            - Proper error type ("invalid_request_error") and code (null)
-            - Error message mentions invalid file format
-            - Error response lists supported formats
+        Ref: https://docs.aws.amazon.com/transcribe/latest/dg/how-input.html
+             stdapi/models/audio/amazon_transcribe.py:_handle_transcription_error
         """
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.audio.translations.create(
@@ -203,6 +191,7 @@ class TestAudioTranslations:
         error_body = error.body
         assert isinstance(error_body, dict)
         assert error_body["type"] == "invalid_request_error"
+        assert error_body.get("code") is None
         error_message = str(error).lower()
         assert any(
             word in error_message for word in ["format", "supported", "invalid", "file"]
@@ -211,20 +200,14 @@ class TestAudioTranslations:
     def test_unsupported_file_format_error(
         self, openai_client: OpenAI, transcription_model: str
     ) -> None:
-        """Test error handling for unsupported file formats.
+        """A non-audio payload is a 400 ``invalid_request_error`` with no error code.
 
-        Validates that the translation service properly handles unsupported file
-        formats and returns appropriate error responses.
+        Amazon Transcribe batch accepts only AMR/FLAC/M4A/MP3/MP4/Ogg/WebM/WAV and
+        detects the media format itself, so a text file is rejected by the service,
+        not by a local extension check.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            transcription_model: Valid transcription model identifier
-
-        Validates:
-            - Correct HTTP status code (400)
-            - Proper error type ("invalid_request_error") and code (null)
-            - Error message mentions invalid file format
-            - Error response lists supported audio formats
+        Ref: https://docs.aws.amazon.com/transcribe/latest/dg/how-input.html
+             stdapi/models/audio/amazon_transcribe.py:_handle_transcription_error
         """
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.audio.translations.create(
@@ -237,6 +220,7 @@ class TestAudioTranslations:
         error_body = error.body
         assert isinstance(error_body, dict)
         assert error_body["type"] == "invalid_request_error"
+        assert error_body.get("code") is None
         error_message = str(error).lower()
         assert any(
             word in error_message
@@ -247,23 +231,15 @@ class TestAudioTranslations:
     def test_subtitle_format_translation(
         self, openai_client: OpenAI, sample_audio_file: bytes, transcription_model: str
     ) -> None:
-        """Test translation-specific subtitle format processing.
+        """srt/vtt translation keeps cue numbering, timings and the WEBVTT header.
 
-        Validates the translation-specific subtitle handling logic
-        that extracts text from subtitle formats and translates it while
-        preserving timing and structure. This functionality is unique to
-        the translation endpoint.
+        Only the cue text is replaced: the subtitle file produced by Transcribe's
+        Subtitles feature is re-emitted with each text block swapped for its
+        translation. Cue numbering starts at 1 because the gateway always sends
+        ``OutputStartIndex=1``, overriding Transcribe's AWS-specific default of 0.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            sample_audio_file: Audio file bytes for testing
-            transcription_model: Transcription model identifier
-
-        Validates:
-            - SRT format returns translated subtitle content with preserved structure
-            - VTT format returns translated subtitle content with preserved structure
-            - Subtitle translation processing works correctly for both formats
-            - Translation-specific subtitle handling functionality
+        Ref: https://docs.aws.amazon.com/transcribe/latest/dg/subtitles.html
+             stdapi/aws_translate.py:translate_subtitle
         """
         # Test SRT format translation
         srt_response = openai_client.audio.translations.create(
@@ -274,8 +250,11 @@ class TestAudioTranslations:
 
         assert isinstance(srt_response, str)
         assert len(srt_response.strip()) > 0
-        # For SRT format, should contain timing markers if subtitle content exists
-        # or translated text if no timing structure (fallback behavior)
+        assert "-->" in srt_response, f"SRT lost its cue timings: {srt_response!r}"
+        assert srt_response.strip().startswith("1"), (
+            f"SRT cue numbering must start at 1: {srt_response[:20]!r}"
+        )
+        assert "test" in srt_response.lower()
 
         # Test VTT format translation
         vtt_response = openai_client.audio.translations.create(
@@ -286,44 +265,49 @@ class TestAudioTranslations:
 
         assert isinstance(vtt_response, str)
         assert len(vtt_response.strip()) > 0
-        # For VTT format, should contain WEBVTT header if subtitle content exists
-        # or translated text if no timing structure (fallback behavior)
+        assert vtt_response.lstrip().startswith("WEBVTT"), (
+            f"VTT lost its header: {vtt_response[:20]!r}"
+        )
+        assert "-->" in vtt_response, f"VTT lost its cue timings: {vtt_response!r}"
+        assert "test" in vtt_response.lower()
 
     def test_empty_transcription_handling(
         self, openai_client: OpenAI, transcription_model: str
     ) -> None:
-        """Test translation handling of empty transcription results.
+        """Speechless audio yields either a ``text`` payload or a clean 400, never a 500.
 
-        Validates translation-specific logic for handling cases where
-        transcription produces no text content. This tests the translation
-        service's robustness in edge cases.
+        A header-only WAV carries no samples: Transcribe may reject the media
+        outright or complete with an empty transcript, and both outcomes must stay on
+        the caller-error side of the contract. AWS Translate is skipped either way
+        (empty or English text short-circuits it).
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            transcription_model: Transcription model identifier
-
-        Validates:
-            - Empty transcription is handled gracefully in translation flow
-            - Translation service returns appropriate response for empty input
-            - No crashes or unexpected errors occur
+        Ref: https://docs.aws.amazon.com/transcribe/latest/dg/how-input.html
+             stdapi/aws_translate.py:translate
         """
         # Create minimal audio content that might produce empty transcription
         minimal_audio = b"RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x80>\x00\x00\x00}\x00\x00\x02\x00\x10\x00data\x00\x00\x00\x00"
 
+        response: Translation | None = None
+        rejection: BadRequestError | None = None
         try:
             response = openai_client.audio.translations.create(
                 file=("minimal.wav", io.BytesIO(minimal_audio)),
                 model=transcription_model,
             )
+        except BadRequestError as error:
+            rejection = error
 
-            # Should handle empty transcription gracefully
-            assert hasattr(response, "text")
+        if rejection is not None:
+            assert rejection.status_code == 400
+            error_body = rejection.body
+            assert isinstance(error_body, dict)
+            assert error_body["type"] == "invalid_request_error"
+        else:
+            assert response is not None
             assert isinstance(response.text, str)
-            # Text may be empty but should not crash
-
-        except BadRequestError:
-            # Expected behavior for invalid/minimal audio - translation service should handle gracefully
-            pass
+            assert getattr(response, "duration", None) is None, (
+                "the default json format must not carry verbose_json fields"
+            )
 
     @pytest.mark.slow
     def test_translation_usage_logged(
@@ -333,7 +317,16 @@ class TestAudioTranslations:
         sample_audio_fr_file: bytes,
         capfd: pytest.CaptureFixture[str],
     ) -> None:
-        """Test that usage is logged for translation requests."""
+        """A translation request bills both Amazon Transcribe and Amazon Translate.
+
+        French audio is required: ``translate()`` short-circuits on an English source
+        and would never produce a Translate usage record. Transcribe is billed per
+        second with a 15-second per-request minimum, so the logged seconds are at
+        least 15 even for a short clip.
+
+        Ref: https://docs.aws.amazon.com/transcribe/latest/dg/what-is.html
+             stdapi/usage.py:record_translate_usage
+        """
         if test_client is None:
             pytest.skip("Requires local test server")
 
@@ -353,10 +346,9 @@ class TestAudioTranslations:
         assert isinstance(response_data.get("text"), str)
         assert len(response_data["text"].strip()) > 0
 
+        captured = capfd.readouterr().out
         translate_entries = logged_usage_entries(
-            capfd.readouterr().out,
-            service="translate",
-            operation="/v1/audio/translations",
+            captured, service="translate", operation="/v1/audio/translations"
         )
         assert translate_entries, "Expected translate service in usage"
         translate_entry = translate_entries[0]
@@ -365,12 +357,26 @@ class TestAudioTranslations:
         # Value depends on audio content
         assert translate_entry["input_characters"] > 0
 
+        transcribe_entries = logged_usage_entries(
+            captured, service="transcribe", operation="/v1/audio/translations"
+        )
+        assert transcribe_entries, "Expected transcribe service in usage"
+        transcribe_entry = transcribe_entries[0]
+        assert transcribe_entry["model"] == "amazon.transcribe"
+        assert transcribe_entry["input_seconds"] >= 15, (
+            "Transcribe bills a 15-second minimum per request"
+        )
+
 
 class TestAudioTranslationsJsonBody:
-    """Tests for POST /v1/audio/translations using an application/json body.
+    """POST /v1/audio/translations with an application/json body (gateway extension).
 
-    Verifies that the JSON body path (data URI, base64 string) is accepted and
-    routes correctly through the handler without requiring multipart form data.
+    The JSON path accepts the audio as a base64 string, data URI, HTTPS URL or S3
+    URI, and is the only path through which provider extra parameters such as AWS
+    Translate's ``Settings`` can be sent.
+
+    Ref: https://stdapi.ai/api_openai_audio_translations/
+         stdapi/types/openai_audio.py:AudioTranslationJsonBody
     """
 
     @pytest.fixture(autouse=True)
@@ -382,7 +388,15 @@ class TestAudioTranslationsJsonBody:
     def test_json_body_missing_file_returns_400(
         self, openai_client: OpenAI, transcription_model: str
     ) -> None:
-        """JSON body without the required file field returns 400."""
+        """JSON body without the required file field returns 400 naming the field.
+
+        The JSON path validates ``AudioTranslationJsonBody`` directly rather than the
+        route signature, so the reported location is ``file`` — not the ``body.file``
+        prefix that route-level (multipart) validation produces.
+
+        Ref: stdapi/main.py:handle_validation_exception
+             stdapi/routes/openai_audio_translations.py:AudioTranslationJsonBody
+        """
         http_client = openai_client._client  # noqa: SLF001
         response = http_client.post(
             f"{openai_client.base_url}audio/translations",
@@ -390,12 +404,21 @@ class TestAudioTranslationsJsonBody:
             headers={"Authorization": f"Bearer {openai_client.api_key}"},
         )
         assert response.status_code == 400
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        message = error["message"]
+        assert "file" in message, f"error must point at the missing field: {message}"
+        assert "required" in message.lower(), (
+            f"error must say the field is required: {message}"
+        )
 
     def test_json_body_invalid_model_returns_404(self, openai_client: OpenAI) -> None:
         """JSON body path reaches model validation — invalid model returns 404.
 
         Uses a dummy audio data URI to satisfy input validation; model lookup
         runs before any audio decoding so the file content is irrelevant.
+
+        Ref: stdapi/api_errors.py:UnsupportedModelError
         """
         http_client = openai_client._client  # noqa: SLF001
         response = http_client.post(
@@ -418,7 +441,10 @@ class TestAudioTranslationsJsonBody:
         sample_audio_file_base64: str,
         transcription_model: str,
     ) -> None:
-        """JSON body with audio data URI translates correctly."""
+        """JSON body with an audio data URI translates and returns the json payload.
+
+        Ref: stdapi/input_file.py:InputFile
+        """
         http_client = openai_client._client  # noqa: SLF001
         response = http_client.post(
             f"{openai_client.base_url}audio/translations",
@@ -429,6 +455,9 @@ class TestAudioTranslationsJsonBody:
         body = response.json()
         assert isinstance(body.get("text"), str)
         assert len(body["text"].strip()) > 0
+        assert "test" in body["text"].lower(), (
+            f"translation does not reflect the sample audio: {body['text']!r}"
+        )
 
     @pytest.mark.slow
     def test_json_body_translation_with_translate_settings(
@@ -441,7 +470,12 @@ class TestAudioTranslationsJsonBody:
 
         Non-English audio is required: ``translate()`` skips AWS Translate
         entirely for English source text, which would never exercise the
-        ``Settings`` plumbing.
+        ``Settings`` plumbing. English is not a formality-capable target language,
+        and Amazon Translate ignores ``Formality`` there instead of failing, so the
+        request must still succeed with a translated payload.
+
+        Ref: https://docs.aws.amazon.com/translate/latest/dg/customizing-translations-formality.html
+             stdapi/models/audio/amazon_transcribe.py:_pop_translate_extra_params
         """
         http_client = openai_client._client  # noqa: SLF001
         data_uri = f"data:audio/mpeg;base64,{b64encode(sample_audio_fr_file).decode()}"
@@ -458,11 +492,18 @@ class TestAudioTranslationsJsonBody:
         body = response.json()
         assert isinstance(body.get("text"), str)
         assert len(body["text"].strip()) > 0
+        assert any(word in body["text"].lower() for word in ("test", "simple")), (
+            f"French audio was not translated into English: {body['text']!r}"
+        )
 
 
 @pytest.mark.local
 class TestAudioTranslationsResponseFormatBugs:
-    """Local stub tests for response-format regressions (no AWS calls made)."""
+    """Local stub tests for response-format regressions (no AWS calls made).
+
+    Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+         stdapi/models/audio/amazon_transcribe.py:AudioModel._format_translation_response
+    """
 
     def test_text_format_returns_raw_plain_text(
         self,
@@ -470,7 +511,11 @@ class TestAudioTranslationsResponseFormatBugs:
         api_key: str,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """response_format=text returns raw text/plain, not a JSON-quoted string."""
+        """response_format=text returns raw text/plain, not a JSON-quoted string.
+
+        The stubbed transcript is English, so AWS Translate is skipped and the
+        returned body is exactly the concatenated transcript.
+        """
         if test_client is None:
             pytest.skip("Requires local test server")
 

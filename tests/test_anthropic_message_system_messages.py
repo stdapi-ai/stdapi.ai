@@ -1,4 +1,12 @@
-"""Unit tests for mid-conversation system message preparation (no AWS calls)."""
+"""Mid-conversation ``system``-role message hoisting into the ``system`` field (no AWS calls).
+
+Anthropic's ``system`` parameter is a string or a ``TextBlockParam`` array, so
+system-role entries inside ``messages`` are a gateway extension: they are either
+forwarded to Bedrock (models supporting them natively) or folded into ``system``.
+
+Ref: https://platform.claude.com/docs/en/api/messages
+     stdapi/models/chat/_adapters/_anthropic_message.py:_prepare_messages_and_system
+"""
 
 from __future__ import annotations
 
@@ -27,10 +35,18 @@ def _conversation() -> list[MessageParam]:
 
 
 class TestPrepareMessagesAndSystem:
-    """Placement-aware split between forwarded and folded system messages."""
+    """Placement-aware split between forwarded and folded system messages.
+
+    Ref: stdapi/models/chat/_adapters/_anthropic_message.py:_is_historical_directive
+         stdapi/models/chat/_adapters/_anthropic_message.py:_extract_system_messages
+    """
 
     def test_historical_directive_is_forwarded(self) -> None:
-        """A ``user -> system -> assistant`` directive stays in the message list."""
+        """A ``user -> system -> assistant`` directive stays in the message list.
+
+        Only that placement is accepted natively, so the trailing directive is still
+        folded, and it is appended after the top-level system prompt.
+        """
         messages, system = _prepare_messages_and_system(
             _conversation(), "Be helpful.", system_message_as_messages=True
         )
@@ -46,7 +62,11 @@ class TestPrepareMessagesAndSystem:
         ]
 
     def test_trailing_directive_is_folded(self) -> None:
-        """A directive not followed by an assistant turn folds into the system field."""
+        """A directive not followed by an assistant turn folds into the system field.
+
+        Bedrock Converse requires the last turn to be a user one, so the
+        "ends the array" placement Anthropic also allows is unreachable.
+        """
         messages, system = _prepare_messages_and_system(
             [
                 _message("user", "How are you?"),
@@ -74,7 +94,11 @@ class TestPrepareMessagesAndSystem:
         assert system == [TextBlockParam(type="text", text="Answer in one word.")]
 
     def test_unsupported_model_folds_every_directive(self) -> None:
-        """Without native support every system message merges into the system field."""
+        """Without native support every system message merges into the system field.
+
+        The merged order is the top-level prompt first, then the directives in
+        conversation order, so later instructions still win.
+        """
         messages, system = _prepare_messages_and_system(
             _conversation(), "Be helpful.", system_message_as_messages=False
         )
@@ -86,7 +110,11 @@ class TestPrepareMessagesAndSystem:
         ]
 
     def test_forwarded_directive_keeps_its_block_content(self) -> None:
-        """A forwarded directive is passed through untouched, blocks included."""
+        """A forwarded directive is passed through untouched, blocks included.
+
+        The very same object is kept, so block-level fields such as
+        ``cache_control`` reach the message mapper instead of being flattened.
+        """
         directive = MessageParam.model_validate(
             {
                 "role": "system",

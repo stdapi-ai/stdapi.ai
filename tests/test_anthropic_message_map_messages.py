@@ -1,4 +1,9 @@
-"""Unit tests for ``_map_messages``' ``allow_tool_caching`` behavior (no AWS calls)."""
+"""Anthropic messages → Bedrock Converse messages cache-point placement (no AWS calls).
+
+Ref: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+     https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CachePointBlock.html
+     stdapi/models/chat/_adapters/_anthropic_message.py:_map_messages
+"""
 
 from __future__ import annotations
 
@@ -59,10 +64,23 @@ def _text_message() -> MessageParam:
 
 
 class TestMapMessagesAllowToolCaching:
-    """``allow_tool_caching`` gates cache points on tool_use/tool_result blocks only."""
+    """``allow_tool_caching`` gates cache points on tool_use/tool_result blocks only.
+
+    Some Bedrock models reject a ``cachePoint`` in a turn that also carries
+    ``toolUse``/``toolResult`` blocks, so the gateway drops the breakpoint there
+    instead of failing the request; ``cache_control`` is silently ignored, which
+    upstream permits since caching never errors.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html
+         stdapi/models/chat/_adapters/_anthropic_message.py:_map_messages
+    """
 
     async def test_tool_caching_disallowed_skips_cache_point_on_tool_use(self) -> None:
-        """No cachePoint follows a cache-controlled tool_use block when disallowed."""
+        """No cachePoint follows a cache-controlled tool_use block when disallowed.
+
+        The ``toolu_`` prefix is stripped because Bedrock ``toolUseId`` values carry
+        no Anthropic prefix.
+        """
         result = await _map_messages(
             [_tool_use_message()], allow_explicit_caching=True, allow_tool_caching=False
         )
@@ -84,7 +102,11 @@ class TestMapMessagesAllowToolCaching:
         ]
 
     async def test_tool_caching_disallowed_keeps_cache_point_on_text(self) -> None:
-        """A cachePoint still follows a cache-controlled text block when tool caching is off."""
+        """A cachePoint still follows a cache-controlled text block when tool caching is off.
+
+        Only tool blocks are affected, so an ordinary text breakpoint survives and
+        becomes a ``cachePoint`` element after the block it terminates.
+        """
         result = await _map_messages(
             [_text_message()], allow_explicit_caching=True, allow_tool_caching=False
         )

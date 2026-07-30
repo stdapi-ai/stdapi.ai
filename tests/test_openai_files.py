@@ -1,8 +1,15 @@
-"""Tests for the OpenAI-compatible Files and Uploads API endpoints.
+"""Tests for the OpenAI-compatible ``/v1/files`` and ``/v1/uploads`` routes backed by S3.
 
-Tests cover upload, list, get, delete, content streaming, pagination,
-expiry enforcement, chat integration, and the full multipart upload
-lifecycle (create, add parts, complete, cancel, error cases).
+Files are plain S3 objects with no external database: the 32-char ID payload is
+``base32hex(uuid7_bytes + crc32(bucket))``, so IDs sort by creation time (which
+the listing order and the ``after`` cursor rely on) and any instance resolves
+any ID without shared state.
+
+Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+     https://stdapi.ai/api_openai_files/
+     stdapi/routes/openai_files.py
+     stdapi/routes/openai_uploads.py
+     stdapi/files/_core.py
 """
 
 import base64
@@ -14,7 +21,7 @@ from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import patch
 
 import pytest
-from openai import BadRequestError, OpenAI
+from openai import APIStatusError, BadRequestError, OpenAI
 from openai import NotFoundError as OpenAINotFoundError
 from openai.types import FileObject
 from starlette.testclient import TestClient
@@ -50,21 +57,42 @@ _PART_A: bytes = b"A" * _MIN_PART_SIZE
 _PART_B: bytes = b"B" * 1024
 
 
+def _error_envelope(error: APIStatusError, status: int) -> dict[str, Any]:
+    """Return the inner ``error`` object of *error* after checking status and type.
+
+    On the OpenAI client ``APIStatusError.body`` is already the inner envelope
+    (the client stores ``body.get("error", body)``), and both OpenAI and the
+    gateway report every 400/404 as ``invalid_request_error``.
+
+    Ref: https://developers.openai.com/api/docs/guides/error-codes
+         stdapi/api_providers/openai.py:_format_error
+    """
+    assert error.status_code == status
+    body = error.body
+    assert isinstance(body, dict), f"expected a JSON error envelope, got {body!r}"
+    assert body["type"] == "invalid_request_error", body
+    return body
+
+
 class TestOpenAIFiles:
-    """Test suite for the OpenAI-compatible /v1/files endpoints."""
+    """OpenAI ``/v1/files`` upload, retrieve, list, delete and content contract.
+
+    Ref: https://developers.openai.com/api/reference/resources/files
+         stdapi/routes/openai_files.py:upload
+         stdapi/files/_core.py:upload_file
+    """
 
     # --- Upload ---
 
     def test_upload_returns_file_object(self, openai_client: OpenAI) -> None:
-        """Upload a small file and assert all required fields are present with correct types.
+        """A small upload returns a File object carrying every required field.
 
-        Validates:
-            - Response is a FileObject with all mandatory fields
-            - id starts with 'file-'
-            - object is 'file'
-            - bytes equals the uploaded file size
-            - created_at is a positive integer (Unix timestamp)
-            - status is 'processed'
+        ``OpenAIFile`` requires id/object/bytes/created_at/filename/purpose/status.
+        ``status`` is deprecated upstream but still mandatory, and S3 has no
+        equivalent notion, so the gateway always reports ``processed``.
+
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/routes/openai_files.py:_to_file_object
         """
         content = _MINIMAL_PDF
         result = openai_client.files.create(
@@ -85,27 +113,39 @@ class TestOpenAIFiles:
             openai_client.files.delete(result.id)
 
     def test_upload_purpose_echoed(self, openai_client: OpenAI) -> None:
-        """Upload with purpose=user_data and assert the returned purpose matches.
+        """``purpose=user_data`` is stored with the object, not just echoed back.
 
-        Validates:
-            - purpose field in response matches the uploaded purpose
+        The response projection falls back to ``user_data`` when the stored
+        purpose is missing, so the echoed field alone cannot distinguish "stored"
+        from "defaulted"; the purpose-filtered listing reads the raw record and
+        does.
+
+        Ref: https://developers.openai.com/api/reference/resources/files
+             stdapi/files/_core.py:upload_file
+             stdapi/routes/openai_files.py:_to_file_object
         """
         result = openai_client.files.create(
             file=("data.txt", io.BytesIO(_TEXT_FILE), "text/plain"), purpose="user_data"
         )
         try:
             assert result.purpose == "user_data"
+            listed = openai_client.files.list(purpose="user_data", limit=100)
+            assert result.id in {f.id for f in listed.data}, (
+                "purpose must be persisted with the stored object, not defaulted"
+            )
         finally:
             openai_client.files.delete(result.id)
 
     def test_upload_with_expires_after(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Upload with expires_after and assert expires_at is set in the future.
+        """``expires_after`` anchors ``expires_at`` at ``created_at`` plus the requested TTL.
 
-        Validates:
-            - expires_at is set
-            - expires_at is greater than the current time
+        The gateway stores the absolute expiry in S3 user metadata and tags the
+        object for Lifecycle cleanup; expiry itself is enforced in code on read.
+
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/files/_core.py:upload_file
         """
         if use_official_api:
             pytest.skip("expires_after behavior may differ on official API")
@@ -117,17 +157,23 @@ class TestOpenAIFiles:
         try:
             assert result.expires_at is not None
             assert result.expires_at > int(time.time())
+            assert abs(result.expires_at - (result.created_at + 3600)) <= 60, (
+                f"expires_at {result.expires_at} is not created_at "
+                f"{result.created_at} plus the requested 3600s TTL"
+            )
         finally:
             openai_client.files.delete(result.id)
 
     def test_upload_batch_purpose_defaults_to_thirty_day_expiry(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Upload with purpose=batch and no expires_after defaults to a 30-day TTL.
+        """``purpose=batch`` with no ``expires_after`` defaults to a 30-day TTL.
 
-        Validates:
-            - expires_at is set without an explicit expires_after
-            - expires_at is close to 30 days (2 592 000 seconds) from now
+        30 days (2 592 000 s) is also the maximum accepted ``expires_after``
+        value, so the default is the upper bound rather than an arbitrary window.
+
+        Ref: https://stdapi.ai/api_openai_files/
+             stdapi/routes/openai_files.py:_resolve_expires_after_seconds
         """
         if use_official_api:
             pytest.skip("batch default-expiry behavior may differ on official API")
@@ -135,6 +181,7 @@ class TestOpenAIFiles:
             file=("batch.jsonl", io.BytesIO(_TEXT_FILE), "text/plain"), purpose="batch"
         )
         try:
+            assert result.purpose == "batch"
             assert result.expires_at is not None
             assert abs(result.expires_at - (int(time.time()) + 2_592_000)) < 60
         finally:
@@ -143,11 +190,14 @@ class TestOpenAIFiles:
     # --- Get metadata ---
 
     def test_get_metadata(self, openai_client: OpenAI) -> None:
-        """Upload a file then retrieve it by ID and assert metadata matches.
+        """Retrieving a file by ID returns the same metadata the upload reported.
 
-        Validates:
-            - Retrieved file id matches
-            - bytes, filename, purpose are consistent with upload
+        The gateway rebuilds the record from S3 ``HeadObject`` on every call, so
+        the filename (read back from ``Content-Disposition``), size, purpose and
+        creation time must survive the round trip unchanged.
+
+        Ref: https://developers.openai.com/api/reference/resources/files
+             stdapi/files/_core.py:_record_from_head
         """
         uploaded = openai_client.files.create(
             file=("meta.pdf", io.BytesIO(_MINIMAL_PDF), "application/pdf"),
@@ -159,17 +209,20 @@ class TestOpenAIFiles:
             assert retrieved.bytes == uploaded.bytes
             assert retrieved.filename == uploaded.filename
             assert retrieved.purpose == uploaded.purpose
+            assert retrieved.created_at == uploaded.created_at
         finally:
             openai_client.files.delete(uploaded.id)
 
     # --- List ---
 
     def test_list_files(self, openai_client: OpenAI) -> None:
-        """Upload two files and assert both appear in GET /files.
+        """``GET /files`` returns a paginated envelope containing both uploaded files.
 
-        Validates:
-            - Both uploaded file IDs appear in the list response
-            - has_more is a bool
+        The listing is assembled from ``ListObjectsV2`` pages across every
+        configured bucket, so ``has_more`` is always reported alongside the data.
+
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/routes/openai_files.py:list_files_endpoint
         """
         f1 = openai_client.files.create(
             file=("list1.txt", io.BytesIO(_TEXT_FILE), "text/plain"),
@@ -180,8 +233,9 @@ class TestOpenAIFiles:
             purpose="assistants",
         )
         try:
-            files = list(openai_client.files.list(limit=100))
-            ids = {f.id for f in files}
+            page = openai_client.files.list(limit=100)
+            assert page.has_more is not None, "the page must report has_more"
+            ids = {f.id for f in page.data}
             assert f1.id in ids
             assert f2.id in ids
         finally:
@@ -189,10 +243,17 @@ class TestOpenAIFiles:
             openai_client.files.delete(f2.id)
 
     def test_list_order_desc(self, openai_client: OpenAI) -> None:
-        """Assert that the default list order is descending (newest first).
+        """The default list order is newest first.
 
-        Validates:
-            - First file in list has created_at >= last file's created_at
+        ``order`` defaults to ``desc`` upstream; the gateway gets that ordering for
+        free from the UUIDv7 prefix of the S3 keys, reversed. The ordering key is
+        therefore the file ID, not ``created_at`` — the latter is the S3
+        ``LastModified`` timestamp and is only second-granular, so a page can hold
+        equal and even slightly inverted ``created_at`` values while still being
+        correctly ordered. The ID sequence is the property worth pinning.
+
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/files/_core.py:list_files
         """
         f1 = openai_client.files.create(
             file=("ord1.txt", io.BytesIO(_TEXT_FILE), "text/plain"),
@@ -205,8 +266,12 @@ class TestOpenAIFiles:
         try:
             files = list(openai_client.files.list(limit=10))
             assert len(files) >= 2
-            # Descending: newer files appear first
-            assert files[0].created_at >= files[-1].created_at
+            ids = [f.id for f in files]
+            assert ids == sorted(ids, reverse=True), (
+                f"the default page must be newest-first by file id, got {ids}"
+            )
+            # The two files just created are the newest, in reverse creation order.
+            assert ids.index(f2.id) < ids.index(f1.id)
         finally:
             openai_client.files.delete(f1.id)
             openai_client.files.delete(f2.id)
@@ -214,10 +279,14 @@ class TestOpenAIFiles:
     def test_list_order_asc(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Assert that order=asc returns oldest first.
+        """``order=asc`` returns the oldest files first.
 
-        Validates:
-            - First file in list has created_at <= last file's created_at
+        Ascending order without a purpose filter is the fast path: it pages S3
+        keys directly instead of scanning every key, so it is worth pinning
+        separately from the descending default.
+
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/files/_core.py:list_files
         """
         if use_official_api:
             pytest.skip(
@@ -234,7 +303,10 @@ class TestOpenAIFiles:
         try:
             files = list(openai_client.files.list(order="asc", limit=10))
             assert len(files) >= 2
-            assert files[0].created_at <= files[-1].created_at
+            timestamps = [f.created_at for f in files]
+            assert timestamps == sorted(timestamps), (
+                f"order=asc must return oldest-first, got {timestamps}"
+            )
         finally:
             openai_client.files.delete(f1.id)
             openai_client.files.delete(f2.id)
@@ -242,11 +314,14 @@ class TestOpenAIFiles:
     def test_list_cursor_pagination(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Upload several files and paginate with 'after' cursor; assert no overlap.
+        """The ``after`` cursor excludes the anchor and returns only later IDs.
 
-        Validates:
-            - Cursor excludes the anchor file
-            - Files created after the cursor appear on the next page
+        The cursor is passed to S3 as ``StartAfter`` on the object key, so
+        "after" is exact and exclusive rather than timestamp-based — files
+        created within the same second still page deterministically.
+
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/files/_core.py:list_files
         """
         if use_official_api:
             pytest.skip(
@@ -270,15 +345,21 @@ class TestOpenAIFiles:
             assert uploaded[0].id not in ids_after
             assert uploaded[1].id in ids_after
             assert uploaded[2].id in ids_after
+            assert all(f.id > uploaded[0].id for f in after_page), (
+                "every file on the page must sort strictly after the cursor"
+            )
         finally:
             for f in uploaded:
                 openai_client.files.delete(f.id)
 
     def test_list_purpose_filter(self, openai_client: OpenAI) -> None:
-        """Upload files with different purposes and filter by purpose.
+        """``purpose`` filters the listing to exactly the matching files.
 
-        Validates:
-            - Only files matching the purpose are returned
+        S3 keys carry no purpose, so filtering forces a ``HeadObject`` fan-out
+        over every key and an exact match on the stored metadata.
+
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/files/_core.py:list_files
         """
         fa = openai_client.files.create(
             file=("pf_a.txt", io.BytesIO(_TEXT_FILE), "text/plain"),
@@ -292,6 +373,9 @@ class TestOpenAIFiles:
             ids = {f.id for f in files}
             assert fb.id in ids
             assert fa.id not in ids
+            assert all(f.purpose == "user_data" for f in files), (
+                "the filter must apply to every returned file"
+            )
         finally:
             openai_client.files.delete(fa.id)
             openai_client.files.delete(fb.id)
@@ -299,29 +383,36 @@ class TestOpenAIFiles:
     # --- Delete ---
 
     def test_delete(self, openai_client: OpenAI) -> None:
-        """Upload then delete a file; assert 404 on subsequent get.
+        """Deleting a file confirms the deletion and leaves the ID unresolvable.
 
-        Validates:
-            - Delete response has deleted=True
-            - Follow-up retrieve raises 404
+        Ref: https://developers.openai.com/api/reference/resources/files
+             stdapi/routes/openai_files.py:delete_file_endpoint
         """
         f = openai_client.files.create(
             file=("del.txt", io.BytesIO(_TEXT_FILE), "text/plain"), purpose="assistants"
         )
         result = openai_client.files.delete(f.id)
         assert result.deleted is True
-        with pytest.raises(OpenAINotFoundError):
+        assert result.id == f.id
+        assert result.object == "file"
+        with pytest.raises(OpenAINotFoundError) as exc_info:
             openai_client.files.retrieve(f.id)
+        body = _error_envelope(exc_info.value, 404)
+        message = str(body["message"]).lower()
+        assert "not found" in message or "no such" in message, body
 
     # --- Content ---
 
     def test_download_content(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Upload bytes and download via /content; assert byte equality.
+        """``GET /files/{id}/content`` streams back the exact uploaded bytes and MIME type.
 
-        Validates:
-            - Downloaded content matches uploaded content exactly
+        The content type is not stored separately: it is the S3 object's own
+        ``ContentType``, replayed as the streaming response media type.
+
+        Ref: https://developers.openai.com/api/reference/resources/files
+             stdapi/routes/openai_files.py:get_content
         """
         if use_official_api:
             pytest.skip("Official OpenAI API restricts file downloads by purpose")
@@ -331,32 +422,49 @@ class TestOpenAIFiles:
             purpose="assistants",
         )
         try:
-            downloaded = openai_client.files.content(f.id).content
-            assert downloaded == content
+            downloaded = openai_client.files.content(f.id)
+            assert downloaded.content == content
+            assert downloaded.response.headers["content-type"].startswith("text/plain")
         finally:
             openai_client.files.delete(f.id)
 
     # --- Error cases ---
 
     def test_not_found(self, openai_client: OpenAI) -> None:
-        """Assert 404 error format for get/delete of non-existent file.
+        """Retrieving or deleting an unknown but well-formed file ID returns 404.
 
-        Validates:
-            - NotFoundError is raised for both retrieve and delete
+        The ID matches the route's ``file-<32 chars>`` pattern, so the request
+        reaches the store and fails on the missing S3 object — a 404, not the 400
+        an ill-formed ID would produce.
+
+        Ref: https://developers.openai.com/api/reference/resources/files
+             stdapi/files/_core.py:_get_file_impl
         """
         fake_id = "file-" + "a" * 32
-        with pytest.raises(OpenAINotFoundError):
+        with pytest.raises(OpenAINotFoundError) as retrieve_exc:
             openai_client.files.retrieve(fake_id)
-        with pytest.raises(OpenAINotFoundError):
+        retrieve_message = str(
+            _error_envelope(retrieve_exc.value, 404)["message"]
+        ).lower()
+        assert "not found" in retrieve_message or "no such" in retrieve_message
+
+        with pytest.raises(OpenAINotFoundError) as delete_exc:
             openai_client.files.delete(fake_id)
+        delete_message = str(_error_envelope(delete_exc.value, 404)["message"]).lower()
+        assert "not found" in delete_message or "no such" in delete_message
 
     def test_expired_file_returns_404(
         self, openai_client: OpenAI, test_client: TestClient | None
     ) -> None:
-        """Upload with short expires_after; mock time past expiry; assert 404.
+        """A file past its ``expires_at`` reads as ``not_found`` even though S3 still holds it.
 
-        Validates:
-            - Expired files return 404 as if they don't exist
+        S3 Lifecycle deletion is asynchronous, so expiry is enforced in code on
+        every read: the record is compared against the clock and the object is
+        queued for background deletion.  Advancing that clock is why this test is
+        local-only.
+
+        Ref: https://stdapi.ai/api_openai_files/
+             stdapi/files/_core.py:_get_file_impl
         """
         if test_client is None:
             pytest.skip("requires local time control")
@@ -369,8 +477,11 @@ class TestOpenAIFiles:
             future_ts = int(time.time()) + 7200  # 2 hours in the future
             with patch("stdapi.files._core.now_utc_timestamp") as mock_now:
                 mock_now.return_value = future_ts
-                with pytest.raises(OpenAINotFoundError):
+                with pytest.raises(OpenAINotFoundError) as exc_info:
                     openai_client.files.retrieve(f.id)
+            body = _error_envelope(exc_info.value, 404)
+            assert body["code"] == "not_found"
+            assert "expired" in str(body["message"]).lower(), body
         finally:
             with suppress(OpenAINotFoundError):
                 # File may already be gone via background deletion triggered by the expired retrieve
@@ -381,11 +492,14 @@ class TestOpenAIFiles:
     def test_file_in_chat_completion(
         self, openai_client: OpenAI, chat_vision_model: str, use_official_api: bool
     ) -> None:
-        """Upload a PDF file and reference it in a chat completion message.
+        """An uploaded PDF is usable in a chat message through a ``file.file_id`` part.
 
-        Validates:
-            - The API accepts a file reference in a chat completion message
-            - Response contains assistant content (local server only; official API may return empty)
+        The gateway resolves the file ID back to its S3 object and forwards the
+        bytes to Bedrock as a document content block, so a completion that
+        charges prompt tokens is the observable proof the reference resolved.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+             stdapi/models/chat/_adapters/_openai_chat_completion.py:_convert_content_part
         """
         f = openai_client.files.create(
             file=("doc.pdf", io.BytesIO(_MINIMAL_PDF), "application/pdf"),
@@ -409,8 +523,15 @@ class TestOpenAIFiles:
                 ],
             )
             assert len(response.choices) > 0
+            choice = response.choices[0]
+            assert choice.message.role == "assistant"
+            assert choice.finish_reason in {"stop", "length"}
+            assert response.usage is not None
+            assert response.usage.prompt_tokens > 0, (
+                "the referenced document must be billed as prompt tokens"
+            )
             if not use_official_api:
-                content = response.choices[0].message.content
+                content = choice.message.content
                 assert content is not None
                 assert len(content) > 0
         finally:
@@ -423,18 +544,15 @@ class TestOpenAIFiles:
         sample_image_file: bytes,
         use_official_api: bool,
     ) -> None:
-        """Reference an uploaded file via the ``file-id:`` URI scheme.
+        """``image_url.url`` accepts the project-local ``file-id:`` URI scheme.
 
-        Uploads a small PNG via the Files API, then passes
-        ``file-id:<file-id>`` as the ``image_url.url`` (string-overloaded
-        field) of a chat completion content part.  This exercises the
-        project-local ``file-id:`` resolver end-to-end without any
-        monkey-patching.
+        ``file-id:<id>`` is resolved by the shared input-file layer into the S3
+        object behind the Files API entry, so the scheme works anywhere the
+        gateway accepts a file input — including a field OpenAI defines as a
+        plain URL.
 
-        Validates:
-            - The string-overloaded ``image_url.url`` accepts ``file-id:``.
-            - The chat completion returns a non-empty assistant message
-              when run against the local server.
+        Ref: https://stdapi.ai/api_openai_files/
+             stdapi/input_file.py:InputFile._normalize_and_detect_origin
         """
         if use_official_api:
             pytest.skip("`file-id:` is a project-local URI scheme")
@@ -460,7 +578,14 @@ class TestOpenAIFiles:
                 ],
             )
             assert len(response.choices) > 0
-            content = response.choices[0].message.content
+            choice = response.choices[0]
+            assert choice.message.role == "assistant"
+            assert choice.finish_reason in {"stop", "length"}
+            assert response.usage is not None
+            assert response.usage.prompt_tokens > 0, (
+                "the resolved image must be billed as prompt tokens"
+            )
+            content = choice.message.content
             assert content is not None
             assert len(content) > 0
         finally:
@@ -469,10 +594,19 @@ class TestOpenAIFiles:
 
 @pytest.mark.local
 class TestRequireBucketUnit:
-    """Unit tests for the Files API S3 bucket gate."""
+    """The Files API S3 bucket gate (unit, no AWS).
+
+    Ref: stdapi/files/_core.py:_require_bucket
+    """
 
     def test_no_bucket_hides_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Without a bucket, the 503 hides settings and warns the administrator."""
+        """Without a bucket, the 503 hides settings and warns the administrator.
+
+        The client-facing message must not leak internal setting names; the
+        operator gets them through the error log instead.
+
+        Ref: stdapi/files/_core.py:_require_bucket
+        """
         monkeypatch.setattr(SETTINGS, "aws_s3_bucket", None)
         warnings: list[object] = []
         monkeypatch.setattr(
@@ -503,7 +637,15 @@ class _StubMultipartS3Client:
 
 @pytest.mark.local
 class TestCreateMultipartSessionUnit:
-    """Unit tests for expiry stamping in create_multipart_session (stubbed S3)."""
+    """Expiry stamping in ``create_multipart_session`` (unit, stubbed S3).
+
+    The expiry is stamped on the S3 multipart upload itself, so the assembled
+    object inherits both the ``expires-at`` metadata and the Lifecycle tag with
+    no extra call at completion time.
+
+    Ref: https://developers.openai.com/api/reference/resources/uploads
+         stdapi/files/_multipart.py:create_multipart_session
+    """
 
     @pytest.fixture
     def stub_s3(self, monkeypatch: pytest.MonkeyPatch) -> _StubMultipartS3Client:
@@ -516,7 +658,10 @@ class TestCreateMultipartSessionUnit:
     async def test_expires_after_stamps_metadata_and_tag(
         self, stub_s3: _StubMultipartS3Client
     ) -> None:
-        """expires_after sets the expires-at metadata and the Lifecycle expiry tag."""
+        """expires_after sets the expires-at metadata and the Lifecycle expiry tag.
+
+        Ref: stdapi/files/_multipart.py:create_multipart_session
+        """
         session = await _multipart.create_multipart_session(
             "f.bin", "a/b", "assistants", 1, 3600
         )
@@ -527,7 +672,10 @@ class TestCreateMultipartSessionUnit:
     async def test_no_expiry_leaves_metadata_empty(
         self, stub_s3: _StubMultipartS3Client
     ) -> None:
-        """Without expires_after the metadata stays empty and no expiry tag is set."""
+        """Without expires_after the metadata stays empty and no expiry tag is set.
+
+        Ref: stdapi/files/_multipart.py:create_multipart_session
+        """
         await _multipart.create_multipart_session("f.bin", "a/b", "assistants", 1)
         assert stub_s3.create_kwargs["Metadata"]["expires-at"] == ""
         assert "stdapi-ai.expires" not in stub_s3.create_kwargs["Tagging"]
@@ -573,12 +721,15 @@ class _StubCompleteS3Client:
 
 @pytest.mark.local
 class TestCompleteMultipartSessionOrderUnit:
-    """Unit tests for part-order validation in complete_multipart_session (stubbed S3).
+    """Part-order validation in ``complete_multipart_session`` (unit, stubbed S3).
 
     S3 cannot reassemble multipart parts out of order (part numbers are fixed
     at add time), so out-of-order ``part_ids`` must be rejected with a clean
     400 before any S3 call is made -- not surfaced as a 502 from S3's
     ``InvalidPartOrder``.
+
+    Ref: https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html
+         stdapi/files/_multipart.py:complete_multipart_session
     """
 
     @pytest.fixture
@@ -596,7 +747,10 @@ class TestCompleteMultipartSessionOrderUnit:
     async def test_complete_rejects_reversed_part_order(
         self, stub_s3: _StubCompleteS3Client
     ) -> None:
-        """part_ids listed in descending order are rejected with 400, mentioning order."""
+        """part_ids listed in descending order are rejected with 400, mentioning order.
+
+        Ref: stdapi/files/_multipart.py:complete_multipart_session
+        """
         session = await _multipart.create_multipart_session(
             "f.bin", "text/plain", "assistants", 2
         )
@@ -610,7 +764,11 @@ class TestCompleteMultipartSessionOrderUnit:
             )
 
         assert exc_info.value.status == 400
-        assert "order" in str(exc_info.value).lower()
+        message = str(exc_info.value)
+        assert "order" in message.lower()
+        assert part_1 in message, (
+            "the rejection must name the part that broke the ascending order"
+        )
         assert stub_s3.complete_called is False
 
 
@@ -626,12 +784,15 @@ class _StubAddPartS3Client(_StubCompleteS3Client):
 
 @pytest.mark.local
 class TestAddPartNumberingUnit:
-    """Unit tests for part numbering in add_part (stubbed S3).
+    """Part numbering in ``add_part`` (unit, stubbed S3).
 
     Part numbers must continue the parts S3 already holds: several server
     instances share one upload session through a load balancer, and a
     process-local counter would hand the same number to two parts, silently
     overwriting one of them in S3.
+
+    Ref: https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html
+         stdapi/files/_multipart.py:add_part
     """
 
     @pytest.fixture
@@ -648,7 +809,10 @@ class TestAddPartNumberingUnit:
     async def test_consecutive_parts_are_numbered_in_order(
         self, stub_s3: _StubAddPartS3Client
     ) -> None:
-        """Parts added one after another get consecutive numbers from 1."""
+        """Parts added one after another get consecutive numbers from 1.
+
+        Ref: stdapi/files/_multipart.py:_make_part_id
+        """
         session = await _multipart.create_multipart_session(
             "f.bin", "text/plain", "assistants", 8
         )
@@ -659,11 +823,17 @@ class TestAddPartNumberingUnit:
         extract = _multipart._extract_part_number  # noqa: SLF001
         assert extract(first, session.upload_id) == 1
         assert extract(second, session.upload_id) == 2
+        assert stub_s3.parts == {1: ("etag-1", 4), 2: ("etag-2", 4)}, (
+            "both parts must reach S3 under distinct part numbers"
+        )
 
     async def test_part_uploaded_by_another_instance_advances_the_number(
         self, stub_s3: _StubAddPartS3Client
     ) -> None:
-        """A part stored by another instance is counted, so its number is not reused."""
+        """A part stored by another instance is counted, so its number is not reused.
+
+        Ref: stdapi/files/_multipart.py:add_part
+        """
         session = await _multipart.create_multipart_session(
             "f.bin", "text/plain", "assistants", 8
         )
@@ -678,7 +848,11 @@ class TestAddPartNumberingUnit:
 
 @pytest.mark.local
 class TestOpenAIFilesMalformedJsonBody:
-    """POST /v1/files with a malformed JSON body (unit, no AWS)."""
+    """POST /v1/files with a malformed JSON body (unit, no AWS).
+
+    Ref: stdapi/routes/openai_files.py:upload
+         stdapi/utils.py:validation_error_handler
+    """
 
     @pytest.fixture
     def client(self, api_key: str) -> TestClient:
@@ -688,11 +862,21 @@ class TestOpenAIFilesMalformedJsonBody:
         return TestClient(app, headers={"Authorization": f"Bearer {api_key}"})
 
     def test_malformed_json_body_is_rejected(self, client: TestClient) -> None:
-        """A malformed JSON body is rejected with 400, not a 500."""
+        """A malformed JSON body is rejected with 400 and a JSON decode error, not a 500.
+
+        The body is read with ``Request.json()``, so the ``JSONDecodeError`` has
+        to be converted into a request-validation error to keep the OpenAI
+        envelope instead of bubbling up as a 500.
+
+        Ref: stdapi/utils.py:validation_error_handler
+        """
         response = client.post(
             "/v1/files", content=b"{", headers={"content-type": "application/json"}
         )
         assert response.status_code == 400, response.text
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "json" in error["message"].lower(), error
 
 
 @pytest.mark.local
@@ -703,6 +887,9 @@ class TestOpenAIFilesExpiresAfterBracketNotation:
     alias) only matches the unbracketed alias in practice; a manual fallback reads the
     raw bracket-notation value and must enforce the same 1 hour-30 day bounds (unit,
     no AWS -- the file never reaches S3 in the rejected cases).
+
+    Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+         stdapi/routes/openai_files.py:upload
     """
 
     @pytest.fixture
@@ -725,26 +912,45 @@ class TestOpenAIFilesExpiresAfterBracketNotation:
         )
 
     def test_bracket_seconds_below_minimum_rejected(self, client: TestClient) -> None:
-        """59 seconds (below the 3600s minimum) is rejected with 400, not accepted."""
+        """59 seconds (below the 3600s minimum) is rejected with 400, not accepted.
+
+        Ref: stdapi/routes/openai_files.py:upload
+        """
         response = self._upload(client, "59")
         assert response.status_code == 400, response.text
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "3600" in error["message"], error
 
     def test_bracket_seconds_above_maximum_rejected(self, client: TestClient) -> None:
-        """99999999 seconds (above the 2592000s maximum) is rejected with 400."""
+        """99999999 seconds (above the 2592000s maximum) is rejected with 400.
+
+        Ref: stdapi/routes/openai_files.py:upload
+        """
         response = self._upload(client, "99999999")
         assert response.status_code == 400, response.text
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "2592000" in error["message"], error
 
     def test_bracket_seconds_non_numeric_rejected(self, client: TestClient) -> None:
-        """A non-numeric value is rejected with 400 and a JSON error envelope, not a bare 500."""
+        """A non-numeric value is rejected with 400 and a JSON error envelope, not a bare 500.
+
+        Ref: stdapi/routes/openai_files.py:upload
+        """
         response = self._upload(client, "not_a_number")
         assert response.status_code == 400, response.text
-        body = response.json()
-        assert "error" in body
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "integer" in error["message"].lower(), error
 
     def test_bracket_seconds_valid_value_accepted(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A valid bracket-notation value (7200s) is still accepted (regression guard)."""
+        """A valid bracket-notation value (7200s) is still accepted (regression guard).
+
+        Ref: stdapi/routes/openai_files.py:upload
+        """
         captured: dict[str, Any] = {}
 
         async def fake_upload_file(
@@ -770,24 +976,38 @@ class TestOpenAIFilesExpiresAfterBracketNotation:
 
 
 class TestResolveExpiresAfterSecondsUnit:
-    """Unit tests for the ``purpose=batch`` default-expiry resolution helper."""
+    """The ``purpose=batch`` default-expiry resolution helper (unit, no AWS).
+
+    Ref: https://stdapi.ai/api_openai_files/
+         stdapi/routes/openai_files.py:_resolve_expires_after_seconds
+    """
 
     def test_batch_purpose_defaults_to_thirty_days(self) -> None:
-        """purpose=batch with no explicit TTL defaults to the 30-day maximum."""
+        """purpose=batch with no explicit TTL defaults to the 30-day maximum.
+
+        Ref: stdapi/routes/openai_files.py:_resolve_expires_after_seconds
+        """
         resolved = openai_files_routes._resolve_expires_after_seconds(  # noqa: SLF001
             "batch", None
         )
         assert resolved == openai_files_routes._EXPIRES_AFTER_SECONDS_MAX  # noqa: SLF001
+        assert resolved == 2_592_000
 
     def test_batch_purpose_explicit_ttl_not_overridden(self) -> None:
-        """An explicit TTL for purpose=batch is preserved, not replaced by the default."""
+        """An explicit TTL for purpose=batch is preserved, not replaced by the default.
+
+        Ref: stdapi/routes/openai_files.py:_resolve_expires_after_seconds
+        """
         resolved = openai_files_routes._resolve_expires_after_seconds(  # noqa: SLF001
             "batch", 3600
         )
         assert resolved == 3600
 
     def test_non_batch_purpose_has_no_default(self) -> None:
-        """Purposes other than batch persist forever unless a TTL is explicitly given."""
+        """Purposes other than batch persist forever unless a TTL is explicitly given.
+
+        Ref: stdapi/routes/openai_files.py:_resolve_expires_after_seconds
+        """
         resolved = openai_files_routes._resolve_expires_after_seconds(  # noqa: SLF001
             "assistants", None
         )
@@ -795,7 +1015,14 @@ class TestResolveExpiresAfterSecondsUnit:
 
 
 class TestOpenAIFilesBatchDefaultExpiry:
-    """POST /v1/files applies the documented 30-day default expiry for purpose=batch."""
+    """POST /v1/files applies the documented 30-day default expiry for purpose=batch.
+
+    ``upload_file`` is stubbed, so these tests pin the TTL the route computes for
+    each body form rather than S3 behavior.
+
+    Ref: https://stdapi.ai/api_openai_files/
+         stdapi/routes/openai_files.py:upload
+    """
 
     @pytest.fixture
     def client(self, api_key: str) -> TestClient:
@@ -828,7 +1055,10 @@ class TestOpenAIFilesBatchDefaultExpiry:
     def test_multipart_batch_purpose_gets_default_expiry(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A multipart upload with purpose=batch and no expires_after gets a 30-day TTL."""
+        """A multipart upload with purpose=batch and no expires_after gets a 30-day TTL.
+
+        Ref: stdapi/routes/openai_files.py:upload
+        """
         captured: dict[str, Any] = {}
         monkeypatch.setattr(
             openai_files_routes, "upload_file", self._fake_upload_file(captured)
@@ -847,7 +1077,13 @@ class TestOpenAIFilesBatchDefaultExpiry:
     def test_multipart_non_batch_purpose_has_no_default_expiry(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A multipart upload with purpose=assistants and no expires_after never expires."""
+        """A multipart upload with purpose=assistants and no expires_after never expires.
+
+        ``expires_at`` is omitted from the response entirely (the route is
+        declared ``response_model_exclude_none``) rather than sent as null.
+
+        Ref: stdapi/routes/openai_files.py:upload
+        """
         captured: dict[str, Any] = {}
         monkeypatch.setattr(
             openai_files_routes, "upload_file", self._fake_upload_file(captured)
@@ -864,7 +1100,10 @@ class TestOpenAIFilesBatchDefaultExpiry:
     def test_json_body_batch_purpose_gets_default_expiry(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A JSON-body upload with purpose=batch and no expires_after gets a 30-day TTL."""
+        """A JSON-body upload with purpose=batch and no expires_after gets a 30-day TTL.
+
+        Ref: stdapi/routes/openai_files.py:upload
+        """
         captured: dict[str, Any] = {}
         monkeypatch.setattr(
             openai_files_routes, "upload_file", self._fake_upload_file(captured)
@@ -880,12 +1119,28 @@ class TestOpenAIFilesBatchDefaultExpiry:
 
 
 class TestOpenAIUploads:
-    """Test suite for the OpenAI-compatible /v1/uploads endpoints."""
+    """OpenAI ``/v1/uploads`` create → add part → complete/cancel state machine on S3.
+
+    A session is an S3 native multipart upload plus a zero-byte marker object
+    holding the fields S3 does not expose for an in-progress upload; the upload ID
+    and the file it produces share one payload (``upload_X`` → ``file-X``).
+
+    Ref: https://developers.openai.com/api/reference/resources/uploads
+         https://stdapi.ai/api_openai_files/
+         stdapi/files/_multipart.py:MultipartSession
+    """
 
     # --- Create ---
 
     def test_create_returns_upload_object(self, openai_client: OpenAI) -> None:
-        """Creating an upload returns a pending Upload object with correct fields."""
+        """Creating an upload returns a pending Upload echoing the declared metadata.
+
+        ``file`` stays null until the upload completes, and ``expires_at`` is the
+        session's own cleanup window, not the final file's TTL.
+
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/routes/openai_uploads.py:_to_upload
+        """
         total = len(_PART_A) + len(_PART_B)
         upload = openai_client.uploads.create(
             bytes=total,
@@ -900,14 +1155,24 @@ class TestOpenAIUploads:
             assert upload.filename == "test.txt"
             assert upload.purpose == "assistants"
             assert upload.id.startswith("upload_")
+            assert upload.created_at > 0
             assert upload.expires_at > upload.created_at
+            assert upload.file is None, "a pending upload has produced no file yet"
         finally:
             openai_client.uploads.cancel(upload.id)
 
     def test_create_with_expires_after_file_expires(
         self, openai_client: OpenAI
     ) -> None:
-        """The file assembled from an upload with expires_after carries expires_at."""
+        """``expires_after`` on the upload lands on the assembled file's ``expires_at``.
+
+        The TTL is stamped on the S3 multipart upload at creation time, so the
+        assembled object inherits it; the anchor is the session's ``created_at``,
+        which is decoded from the UUIDv7 inside the upload ID.
+
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/files/_multipart.py:create_multipart_session
+        """
         upload = openai_client.uploads.create(
             bytes=len(_PART_A),
             filename="expire_upload.bin",
@@ -922,9 +1187,13 @@ class TestOpenAIUploads:
             upload_id=upload.id, part_ids=[part.id]
         )
         try:
+            assert completed.status == "completed"
             assert completed.file is not None
             assert completed.file.expires_at is not None
             assert completed.file.expires_at > int(time.time())
+            assert abs(completed.file.expires_at - (upload.created_at + 3600)) <= 60, (
+                "the file TTL must be anchored to the upload's creation time"
+            )
         finally:
             assert completed.file is not None
             openai_client.files.delete(completed.file.id)
@@ -932,8 +1201,12 @@ class TestOpenAIUploads:
     def test_create_expires_after_out_of_range_rejected(
         self, openai_client: OpenAI
     ) -> None:
-        """expires_after.seconds below 1 hour is rejected with a validation error."""
-        with pytest.raises(BadRequestError, match="seconds"):
+        """``expires_after.seconds`` below the 1 hour minimum is rejected with 400.
+
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/types/openai_uploads.py:UploadExpiresAfter
+        """
+        with pytest.raises(BadRequestError, match="seconds") as exc_info:
             openai_client.uploads.create(
                 bytes=1024,
                 filename="bad_expiry.bin",
@@ -941,12 +1214,18 @@ class TestOpenAIUploads:
                 purpose="assistants",
                 expires_after={"anchor": "created_at", "seconds": 60},
             )
+        message = str(_error_envelope(exc_info.value, 400)["message"])
+        assert "3600" in message or "hour" in message.lower(), message
 
     def test_create_expires_after_above_maximum_rejected(
         self, openai_client: OpenAI
     ) -> None:
-        """expires_after.seconds above 30 days is rejected with a validation error."""
-        with pytest.raises(BadRequestError, match="seconds"):
+        """``expires_after.seconds`` above the 30-day maximum is rejected with 400.
+
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/types/openai_uploads.py:UploadExpiresAfter
+        """
+        with pytest.raises(BadRequestError, match="seconds") as exc_info:
             openai_client.uploads.create(
                 bytes=1024,
                 filename="bad_expiry_max.bin",
@@ -954,12 +1233,18 @@ class TestOpenAIUploads:
                 purpose="assistants",
                 expires_after={"anchor": "created_at", "seconds": 2_592_001},
             )
+        message = str(_error_envelope(exc_info.value, 400)["message"])
+        assert "2592000" in message or "day" in message.lower(), message
 
     def test_create_expires_after_unsupported_anchor_rejected(
         self, openai_client: OpenAI
     ) -> None:
-        """expires_after.anchor other than 'created_at' is rejected with a validation error."""
-        with pytest.raises(BadRequestError, match="anchor"):
+        """``created_at`` is the only accepted ``expires_after.anchor``.
+
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/types/openai_uploads.py:UploadExpiresAfter
+        """
+        with pytest.raises(BadRequestError, match="anchor") as exc_info:
             openai_client.uploads.create(
                 bytes=1024,
                 filename="bad_anchor.bin",
@@ -967,11 +1252,21 @@ class TestOpenAIUploads:
                 purpose="assistants",
                 expires_after={"anchor": "updated_at", "seconds": 3600},  # type: ignore[arg-type]
             )
+        message = str(_error_envelope(exc_info.value, 400)["message"])
+        assert "created_at" in message or "updated_at" in message, message
 
     # --- Add parts ---
 
     def test_add_part_returns_upload_part(self, openai_client: OpenAI) -> None:
-        """Adding a part returns an UploadPart with the correct upload_id."""
+        """Adding a part returns an ``upload.part`` object bound to its session.
+
+        The part ID encodes the session fingerprint plus the 1-based S3 part
+        number, so completion can validate ownership and ordering without any
+        server-side state.
+
+        Ref: https://developers.openai.com/api/reference/resources/uploads
+             stdapi/files/_multipart.py:_make_part_id
+        """
         upload = openai_client.uploads.create(
             bytes=len(_PART_A),
             filename="part_test.bin",
@@ -985,13 +1280,22 @@ class TestOpenAIUploads:
             assert part.object == "upload.part"
             assert part.upload_id == upload.id
             assert part.id.startswith("part_")
+            assert part.created_at >= upload.created_at
         finally:
             openai_client.uploads.cancel(upload.id)
 
     # --- Complete ---
 
     def test_complete_produces_file(self, openai_client: OpenAI) -> None:
-        """Completing an upload returns a completed Upload with an embedded FileObject."""
+        """Completing an upload returns a ``completed`` Upload wrapping the assembled File.
+
+        S3 reassembles the parts in part-number order, and the resulting File
+        carries the size, filename and purpose declared when the session was
+        created -- none of which S3 exposes for an in-progress multipart upload.
+
+        Ref: https://developers.openai.com/api/reference/resources/uploads
+             stdapi/files/_multipart.py:complete_multipart_session
+        """
         content = _PART_A + _PART_B
         upload = openai_client.uploads.create(
             bytes=len(content),
@@ -1010,7 +1314,9 @@ class TestOpenAIUploads:
         )
         try:
             assert completed.status == "completed"
+            assert completed.id == upload.id
             assert completed.file is not None
+            assert completed.file.object == "file"
             assert completed.file.bytes == len(content)
             assert completed.file.filename == "complete_test.txt"
             assert completed.file.purpose == "assistants"
@@ -1021,7 +1327,14 @@ class TestOpenAIUploads:
     def test_complete_file_downloadable(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """The file produced by a completed upload can be downloaded."""
+        """The file produced by a completed upload is downloadable byte for byte.
+
+        A single part below the S3 5 MiB minimum is legal because the last part
+        is exempt from that limit.
+
+        Ref: https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html
+             stdapi/files/_multipart.py:complete_multipart_session
+        """
         if use_official_api:
             pytest.skip("Official OpenAI API restricts file downloads by purpose")
         payload = b"Multipart content for download test."
@@ -1039,6 +1352,7 @@ class TestOpenAIUploads:
         )
         try:
             assert completed.file is not None
+            assert completed.file.bytes == len(payload)
             downloaded = openai_client.files.content(completed.file.id).content
             assert downloaded == payload
         finally:
@@ -1048,7 +1362,15 @@ class TestOpenAIUploads:
     def test_complete_wrong_size_rejected(
         self, openai_client: OpenAI, use_official_api: bool
     ) -> None:
-        """Completing with parts whose total size mismatches the declared bytes is rejected."""
+        """Completing with parts that do not add up to the declared ``bytes`` is rejected.
+
+        The declared total is recorded on the session marker at creation and
+        compared against the summed S3 part sizes before
+        ``CompleteMultipartUpload`` is issued.
+
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/files/_multipart.py:complete_multipart_session
+        """
         if use_official_api:
             pytest.skip(
                 "official API rejects at add_part time (not complete time) when part exceeds declared bytes"
@@ -1062,12 +1384,22 @@ class TestOpenAIUploads:
         part = openai_client.uploads.parts.create(
             upload_id=upload.id, data=io.BytesIO(_PART_A)
         )
-        with pytest.raises(BadRequestError):
+        with pytest.raises(BadRequestError) as exc_info:
             openai_client.uploads.complete(upload_id=upload.id, part_ids=[part.id])
+        message = str(_error_envelope(exc_info.value, 400)["message"])
+        assert "999999" in message, message
+        assert str(len(_PART_A)) in message, message
         openai_client.uploads.cancel(upload.id)
 
     def test_complete_unknown_part_id_rejected(self, openai_client: OpenAI) -> None:
-        """Completing with a part ID that was never added is rejected."""
+        """Completing with a part ID that was never added is rejected with 400.
+
+        Part IDs embed the session fingerprint, so an ID from outside this upload
+        is refused without consulting S3 at all.
+
+        Ref: https://developers.openai.com/api/reference/resources/uploads
+             stdapi/files/_multipart.py:_extract_part_number
+        """
         upload = openai_client.uploads.create(
             bytes=len(_PART_A),
             filename="bad_part.bin",
@@ -1075,17 +1407,23 @@ class TestOpenAIUploads:
             purpose="assistants",
         )
         try:
-            with pytest.raises(BadRequestError):
+            with pytest.raises(BadRequestError) as exc_info:
                 openai_client.uploads.complete(
                     upload_id=upload.id, part_ids=["part_" + "a" * 32]
                 )
+            message = str(_error_envelope(exc_info.value, 400)["message"]).lower()
+            assert "part" in message, message
         finally:
             openai_client.uploads.cancel(upload.id)
 
     # --- Cancel ---
 
     def test_cancel_sets_status_cancelled(self, openai_client: OpenAI) -> None:
-        """Cancelling an upload returns an Upload with status 'cancelled'."""
+        """Cancelling a pending upload returns the same Upload with status ``cancelled``.
+
+        Ref: https://developers.openai.com/api/reference/resources/uploads
+             stdapi/files/_multipart.py:cancel_multipart_session
+        """
         upload = openai_client.uploads.create(
             bytes=len(_PART_A),
             filename="cancel_test.bin",
@@ -1094,9 +1432,21 @@ class TestOpenAIUploads:
         )
         cancelled = openai_client.uploads.cancel(upload.id)
         assert cancelled.status == "cancelled"
+        assert cancelled.id == upload.id
+        assert cancelled.object == "upload"
+        assert cancelled.bytes == upload.bytes
+        assert cancelled.filename == upload.filename
 
     def test_cancel_prevents_further_parts(self, openai_client: OpenAI) -> None:
-        """Adding parts to a cancelled upload is rejected (400 or 404 depending on marker cleanup timing)."""
+        """A cancelled upload accepts no further parts.
+
+        Cancelling aborts the S3 multipart upload and queues the session marker
+        for background deletion, so the follow-up part fails either as "not
+        pending" (400) or, once the marker is gone, as "not found" (404).
+
+        Ref: https://developers.openai.com/api/reference/resources/uploads
+             stdapi/files/_multipart.py:_check_not_pending
+        """
         upload = openai_client.uploads.create(
             bytes=len(_PART_A),
             filename="cancel_parts.bin",
@@ -1104,33 +1454,61 @@ class TestOpenAIUploads:
             purpose="assistants",
         )
         openai_client.uploads.cancel(upload.id)
-        with pytest.raises((BadRequestError, OpenAINotFoundError)):
+        with pytest.raises((BadRequestError, OpenAINotFoundError)) as exc_info:
             openai_client.uploads.parts.create(
                 upload_id=upload.id, data=io.BytesIO(_PART_A)
             )
+        assert exc_info.value.status_code in {400, 404}
+        body = exc_info.value.body
+        assert isinstance(body, dict), f"expected a JSON error envelope, got {body!r}"
+        assert body["type"] == "invalid_request_error", body
+        message = str(body["message"]).lower()
+        assert any(text in message for text in ("pending", "not found", "no such")), (
+            body
+        )
 
     # --- Error cases ---
 
     def test_not_found_upload(self, openai_client: OpenAI) -> None:
-        """Referencing a non-existent upload ID returns 404."""
+        """Cancelling an unknown but well-formed upload ID returns 404.
+
+        The session marker is what proves existence, so a missing marker is a
+        404 rather than the 400 used for a session that exists but is no longer
+        pending.
+
+        Ref: https://developers.openai.com/api/reference/resources/uploads
+             stdapi/files/_multipart.py:_load_multipart_session
+        """
         fake_id = "upload_" + "a" * 32
-        with pytest.raises(OpenAINotFoundError):
+        with pytest.raises(OpenAINotFoundError) as exc_info:
             openai_client.uploads.cancel(fake_id)
+        message = str(_error_envelope(exc_info.value, 404)["message"]).lower()
+        assert "not found" in message or "no such" in message, message
 
     def test_not_found_add_part(self, openai_client: OpenAI) -> None:
-        """Adding a part to a non-existent upload ID returns 404."""
+        """Adding a part to an unknown upload ID returns 404.
+
+        Ref: https://developers.openai.com/api/reference/resources/uploads
+             stdapi/files/_multipart.py:_check_not_pending
+        """
         fake_id = "upload_" + "a" * 32
-        with pytest.raises(OpenAINotFoundError):
+        with pytest.raises(OpenAINotFoundError) as exc_info:
             openai_client.uploads.parts.create(
                 upload_id=fake_id, data=io.BytesIO(_PART_A)
             )
+        message = str(_error_envelope(exc_info.value, 404)["message"]).lower()
+        assert "not found" in message or "no such" in message, message
 
 
 class TestOpenAIUploadsJsonBody:
-    """Tests for POST /v1/uploads/{upload_id}/parts using an application/json body.
+    """POST /v1/uploads/{upload_id}/parts with an ``application/json`` body.
 
-    Verifies that the JSON body path (base64, data URI) is accepted and allows
-    MCP agents to perform multipart uploads end-to-end without multipart/form-data.
+    The JSON form (base64, data URI, HTTPS URL, S3 URI) is a gateway extension so
+    that MCP agents unable to build multipart requests can still run the upload
+    flow end to end.
+
+    Ref: https://stdapi.ai/api_openai_files/
+         stdapi/routes/openai_uploads.py:add_upload_part
     """
 
     @pytest.fixture(autouse=True)
@@ -1140,7 +1518,10 @@ class TestOpenAIUploadsJsonBody:
             pytest.skip("JSON body input not supported by the official OpenAI API")
 
     def test_json_body_missing_data_returns_400(self, openai_client: OpenAI) -> None:
-        """JSON body without the required data field returns 400."""
+        """A JSON body without the required ``data`` field returns 400 naming the field.
+
+        Ref: stdapi/types/openai_uploads.py:AddUploadPartJsonBody
+        """
         http_client = openai_client._client  # noqa: SLF001
         upload = openai_client.uploads.create(
             bytes=len(_PART_A),
@@ -1154,12 +1535,19 @@ class TestOpenAIUploadsJsonBody:
                 json={},
                 headers={"Authorization": f"Bearer {openai_client.api_key}"},
             )
-            assert response.status_code == 400
+            assert response.status_code == 400, response.text
+            error = response.json()["error"]
+            assert error["type"] == "invalid_request_error"
+            assert "data" in error["message"], error
         finally:
             openai_client.uploads.cancel(upload.id)
 
     def test_json_body_part_upload_with_data_uri(self, openai_client: OpenAI) -> None:
-        """Full multipart upload workflow using JSON body for the parts endpoint."""
+        """A part sent as a data URI completes the upload exactly like a binary part.
+
+        Ref: https://stdapi.ai/api_openai_files/
+             stdapi/routes/openai_uploads.py:add_upload_part
+        """
         http_client = openai_client._client  # noqa: SLF001
         data_uri = (
             f"data:application/octet-stream;base64,{base64.b64encode(_PART_A).decode()}"
@@ -1187,16 +1575,23 @@ class TestOpenAIUploadsJsonBody:
             )
             assert completed.status == "completed"
             assert completed.file is not None
+            assert completed.file.bytes == len(_PART_A), (
+                "the base64 payload must be decoded before it reaches S3"
+            )
         finally:
             with suppress(OpenAINotFoundError, BadRequestError):
                 openai_client.uploads.cancel(upload.id)
 
 
 class TestOpenAIFilesJsonBody:
-    """Tests for POST /v1/files using an application/json body.
+    """POST /v1/files with an ``application/json`` body.
 
-    Verifies that the JSON body path (base64, data URI, URL) is accepted and
-    behaves identically to the multipart form upload.
+    The ``file`` field accepts a raw base64 string, a data URI, an HTTPS URL or an
+    S3 URI; the gateway detects the encoding and MIME type itself, so the result
+    is a File object identical to the multipart form upload.
+
+    Ref: https://stdapi.ai/api_openai_files/
+         stdapi/types/openai_files.py:FileUploadJsonBody
     """
 
     @pytest.fixture(autouse=True)
@@ -1206,17 +1601,30 @@ class TestOpenAIFilesJsonBody:
             pytest.skip("JSON body input not supported by the official OpenAI API")
 
     def test_json_body_missing_file_returns_400(self, openai_client: OpenAI) -> None:
-        """JSON body without the required file field returns 400."""
+        """A JSON body without the required ``file`` field returns 400 naming the field.
+
+        Ref: stdapi/types/openai_files.py:FileUploadJsonBody
+        """
         http_client = openai_client._client  # noqa: SLF001
         response = http_client.post(
             f"{openai_client.base_url}files",
             json={"purpose": "user_data"},
             headers={"Authorization": f"Bearer {openai_client.api_key}"},
         )
-        assert response.status_code == 400
+        assert response.status_code == 400, response.text
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "file" in error["message"], error
 
     def test_json_body_upload_with_data_uri(self, openai_client: OpenAI) -> None:
-        """Upload via JSON body with a data URI creates a FileObject."""
+        """A data URI in the JSON ``file`` field is decoded and stored as a File object.
+
+        The stored size proves the base64 payload was decoded rather than saved
+        verbatim: ``SGVsbG8gV29ybGQ=`` is 16 characters but 11 bytes.
+
+        Ref: https://stdapi.ai/api_openai_files/
+             stdapi/routes/openai_files.py:upload
+        """
         http_client = openai_client._client  # noqa: SLF001
         response = http_client.post(
             f"{openai_client.base_url}files",
@@ -1226,22 +1634,29 @@ class TestOpenAIFilesJsonBody:
             },
             headers={"Authorization": f"Bearer {openai_client.api_key}"},
         )
-        assert response.status_code == 200
+        assert response.status_code == 200, response.text
         body = response.json()
         assert body["id"].startswith("file-")
         assert body["object"] == "file"
         assert body["purpose"] == "user_data"
+        assert body["bytes"] == 11
         openai_client.files.delete(body["id"])
 
     def test_json_body_upload_with_raw_base64(self, openai_client: OpenAI) -> None:
-        """Upload via JSON body with a raw base64 string creates a FileObject."""
+        """A bare base64 string in the JSON ``file`` field is accepted like a data URI.
+
+        Ref: https://stdapi.ai/api_openai_files/
+             stdapi/input_file.py:InputFile._normalize_and_detect_origin
+        """
         http_client = openai_client._client  # noqa: SLF001
         response = http_client.post(
             f"{openai_client.base_url}files",
             json={"file": "SGVsbG8gV29ybGQ=", "purpose": "user_data"},
             headers={"Authorization": f"Bearer {openai_client.api_key}"},
         )
-        assert response.status_code == 200
+        assert response.status_code == 200, response.text
         body = response.json()
         assert body["id"].startswith("file-")
+        assert body["object"] == "file"
+        assert body["bytes"] == 11
         openai_client.files.delete(body["id"])

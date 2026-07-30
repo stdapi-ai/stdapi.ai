@@ -1,4 +1,13 @@
-"""Unit tests for AWS Transcribe: audio duration, region candidates, failover."""
+"""Unit tests for AWS Transcribe: audio duration, region candidates, failover.
+
+Transcription runs as a batch ``StartTranscriptionJob`` staged through S3, so a job is
+pinned to a (region, bucket) pair and every candidate region needs a co-located bucket.
+Several verbose_json fields have no AWS equivalent and are synthesized here, so tests
+covering them assert gateway behavior rather than an AWS contract.
+
+Ref: https://docs.aws.amazon.com/transcribe/latest/APIReference/API_StartTranscriptionJob.html
+     stdapi/models/audio/amazon_transcribe.py:AudioModel
+"""
 
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -30,7 +39,11 @@ from stdapi.models.audio.amazon_transcribe import (
     transcribe_job_candidates,
 )
 from stdapi.monitoring import REQUEST_ID, REQUEST_LOG, EventLog
-from stdapi.types.openai_audio import TranslationVerbose
+from stdapi.types.openai_audio import (
+    TranscriptionVerbose,
+    TranslationVerbose,
+    UsageDuration,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -53,7 +66,15 @@ def _new_log() -> EventLog:
 
 
 class TestGetAudioDuration:
-    """_get_audio_duration: the last segment's end time is the billed duration."""
+    """_get_audio_duration: the last segment's end time is the billed duration.
+
+    Amazon Transcribe reports no media duration on the job, so it is recovered from
+    the transcript's audio segments; a missing duration still bills the 15-second
+    per-request minimum, which is why it warns instead of failing.
+
+    Ref: https://docs.aws.amazon.com/transcribe/latest/dg/what-is.html
+         stdapi/models/audio/amazon_transcribe.py:_get_audio_duration
+    """
 
     def test_returns_last_segment_end_time(self) -> None:
         """The duration is the end time of the final audio segment."""
@@ -83,10 +104,19 @@ class TestGetAudioDuration:
         finally:
             REQUEST_LOG.reset(token)
         assert log["level"] == "warning"
+        assert any("15-second minimum" in str(d) for d in log["error_detail"])
 
 
 class TestTranscribeJobCandidates:
-    """transcribe_job_candidates: per-region bucket pairing rules."""
+    """transcribe_job_candidates: per-region bucket pairing rules.
+
+    Transcribe reads the media from S3 and writes its output there, and the bucket
+    must live in the job's region, so a region without a usable bucket can never be
+    a candidate.
+
+    Ref: https://docs.aws.amazon.com/transcribe/latest/APIReference/API_StartTranscriptionJob.html
+         stdapi/models/audio/amazon_transcribe.py:transcribe_job_candidates
+    """
 
     def test_explicit_region_uses_the_transcribe_bucket(
         self, monkeypatch: pytest.MonkeyPatch
@@ -179,7 +209,16 @@ def _client_error(code: str, message: str = "x") -> ClientError:
 
 
 class TestStartTranscriptionWithFailover:
-    """_start_transcription_with_failover: whole-job region failover."""
+    """_start_transcription_with_failover: whole-job region failover.
+
+    The media is uploaded once, to the first candidate's bucket; a later candidate
+    needs a server-side copy into its own region first. Caller errors must abort the
+    loop, and a region that may have accepted the job despite erroring gets a
+    best-effort deletion so it stops billing.
+
+    Ref: https://docs.aws.amazon.com/transcribe/latest/APIReference/API_StartTranscriptionJob.html
+         stdapi/aws.py:call_with_region_failover
+    """
 
     @pytest.fixture(autouse=True)
     def _request_context(self) -> Generator[None]:
@@ -269,7 +308,11 @@ class TestStartTranscriptionWithFailover:
     async def test_caller_error_is_not_retried(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A bad language code raises immediately without trying region 2."""
+        """A bad language code raises immediately without trying region 2.
+
+        Ref: https://docs.aws.amazon.com/transcribe/latest/dg/supported-languages.html
+             stdapi/models/audio/amazon_transcribe.py:_handle_transcription_error
+        """
         clients = {
             "us-east-1": _StubTranscribeClient(
                 _client_error("BadRequestException", "unsupported languageCode")
@@ -278,13 +321,18 @@ class TestStartTranscriptionWithFailover:
         }
         self._patch_infra(monkeypatch, clients)
 
-        with pytest.raises(InvalidLanguageFormatError):
+        with pytest.raises(InvalidLanguageFormatError) as excinfo:
             await _start_transcription_with_failover(
                 [("us-east-1", "us-bucket"), ("eu-west-1", "eu-bucket")],
                 "job1",
                 "xx",
                 "json",
             )
+        assert excinfo.value.status == 400
+        assert excinfo.value.code == "invalid_language_format"
+        assert "'xx'" in str(excinfo.value), (
+            "the error must name the rejected language code"
+        )
         assert clients["eu-west-1"].started == []
 
     async def test_last_region_error_propagates(
@@ -297,13 +345,14 @@ class TestStartTranscriptionWithFailover:
         }
         copies = self._patch_infra(monkeypatch, clients)
 
-        with pytest.raises(ClientError):
+        with pytest.raises(ClientError) as excinfo:
             await _start_transcription_with_failover(
                 [("us-east-1", "us-bucket"), ("eu-west-1", "eu-bucket")],
                 "job1",
                 None,
                 "json",
             )
+        assert excinfo.value.response["Error"]["Code"] == "ThrottlingException"
         # The input is still copied into the second region's bucket before
         # its (also failing) start attempt.
         assert copies == [("us-bucket", "eu-bucket", "eu-west-1")]
@@ -311,7 +360,15 @@ class TestStartTranscriptionWithFailover:
     async def test_botocore_param_validation_error_becomes_a_caller_error(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A client-side botocore rejection (e.g. MaxAlternatives<2) surfaces as ApiError, not a 500."""
+        """A client-side botocore rejection (e.g. MaxAlternatives<2) surfaces as ApiError, not a 500.
+
+        botocore, not Transcribe, rejects an out-of-range ``Settings`` value, so the
+        request never reaches AWS; the botocore report is kept verbatim as the
+        message of a plain 400 (no error ``code``).
+
+        Ref: botocore/data/transcribe/2017-10-26/service-2.json
+             stdapi/models/audio/amazon_transcribe.py:_handle_transcription_error
+        """
         clients = {
             "us-east-1": _StubTranscribeClient(
                 ParamValidationError(
@@ -321,10 +378,16 @@ class TestStartTranscriptionWithFailover:
         }
         self._patch_infra(monkeypatch, clients)
 
-        with pytest.raises(ApiError):
+        with pytest.raises(ApiError) as excinfo:
             await _start_transcription_with_failover(
                 [("us-east-1", "us-bucket")], "job1", None, "json"
             )
+
+        assert excinfo.value.status == 400, "a client-side rejection must not be a 500"
+        assert excinfo.value.code is None
+        assert "Settings.MaxAlternatives" in str(excinfo.value), (
+            "the botocore validation report must reach the caller"
+        )
 
     async def test_failed_region_job_is_deleted(
         self, monkeypatch: pytest.MonkeyPatch
@@ -357,13 +420,14 @@ class TestStartTranscriptionWithFailover:
         }
         self._patch_infra(monkeypatch, clients)
 
-        with pytest.raises(ClientError):
+        with pytest.raises(ClientError) as excinfo:
             await _start_transcription_with_failover(
                 [("us-east-1", "us-bucket"), ("eu-west-1", "eu-bucket")],
                 "job1",
                 None,
                 "json",
             )
+        assert excinfo.value.response["Error"]["Code"] == "RequestTimeout"
         assert clients["us-east-1"].deleted == ["job1"]
         assert clients["eu-west-1"].deleted == ["job1"]
 
@@ -380,12 +444,21 @@ class _FakeAudioContent:
 
 
 class TestSttDurationComputedOnce:
-    """stt: the audio duration is computed once and reused for usage and formatting."""
+    """stt: the audio duration is computed once and reused for usage and formatting.
+
+    Ref: stdapi/models/audio/amazon_transcribe.py:AudioModel.stt
+    """
 
     async def test_empty_segments_warn_exactly_once(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A transcript with no audio segments emits the missing-duration warning once."""
+        """A transcript with no audio segments emits the missing-duration warning once.
+
+        The same computed duration feeds the usage record and the verbose_json
+        payload, so a segment-less transcript must still yield a complete response
+        (duration 0.0, empty segment list, billed seconds from the usage helper)
+        with a single warning rather than one per consumer.
+        """
         transcript_data: dict[str, Any] = {
             "transcripts": [{"transcript": "hello"}],
             "audio_segments": [],
@@ -406,7 +479,7 @@ class TestSttDurationComputedOnce:
         log = _new_log()
         token = REQUEST_LOG.set(log)
         try:
-            await AudioModel(AWS_TRANSCRIBE_MODEL_ID).stt(
+            response = await AudioModel(AWS_TRANSCRIBE_MODEL_ID).stt(
                 _FakeAudioContent(),  # type: ignore[arg-type]
                 "verbose_json",
                 logprobs=False,
@@ -417,9 +490,25 @@ class TestSttDurationComputedOnce:
         warnings = [d for d in log["error_detail"] if "15-second minimum" in str(d)]
         assert len(warnings) == 1
 
+        assert isinstance(response, TranscriptionVerbose)
+        assert response.duration == 0.0
+        assert response.text == "hello"
+        assert response.language == "english"
+        assert response.segments == []
+        assert isinstance(response.usage, UsageDuration)
+        assert response.usage.seconds == 15
+
 
 class TestServedRegionStickiness:
-    """stt: polling, results, and usage stay in the region that started the job."""
+    """stt: polling, results, and usage stay in the region that started the job.
+
+    A Transcribe job only exists in the region that accepted it and writes its output
+    to that region's bucket, so polling, result fetching and billing must all follow
+    the served region rather than the first candidate.
+
+    Ref: https://docs.aws.amazon.com/transcribe/latest/dg/what-is.html
+         stdapi/models/audio/amazon_transcribe.py:_SERVED_REGION
+    """
 
     async def test_polling_and_usage_use_the_serving_region(
         self, monkeypatch: pytest.MonkeyPatch
@@ -493,7 +582,11 @@ class TestServedRegionStickiness:
 
 
 class TestTranscriptOutputKeys:
-    """_wait_for_transcription_completion: output keys come from the job description."""
+    """_wait_for_transcription_completion: output keys come from the job description.
+
+    Ref: https://docs.aws.amazon.com/transcribe/latest/APIReference/API_ContentRedaction.html
+         stdapi/models/audio/amazon_transcribe.py:_wait_for_transcription_completion
+    """
 
     @staticmethod
     def _client(transcript: dict[str, str], **extra: Any) -> Any:  # noqa: ANN401
@@ -517,7 +610,10 @@ class TestTranscriptOutputKeys:
 
         Transcribe prepends ``redacted-`` to the requested ``OutputKey`` file name and
         reports it as ``RedactedTranscriptFileUri``, so rebuilding the key from the job
-        ID would read a non-existent object.
+        ID would read a non-existent object. Only ``RedactionOutput=redacted`` is
+        supported, so there is no unredacted twin to fall back on.
+
+        Ref: https://docs.aws.amazon.com/transcribe/latest/dg/pii-redaction-output.html
         """
         client = self._client(
             {
@@ -538,7 +634,13 @@ class TestTranscriptOutputKeys:
         assert subtitle_key is None
 
     async def test_subtitle_uri_is_returned(self) -> None:
-        """A requested subtitle file is located from ``Subtitles.SubtitleFileUris``."""
+        """A requested subtitle file is located from ``Subtitles.SubtitleFileUris``.
+
+        Subtitle files land beside the transcript in the same S3 location, and the job
+        description is the only place their final names are reported.
+
+        Ref: https://docs.aws.amazon.com/transcribe/latest/dg/subtitles.html
+        """
         client = self._client(
             {
                 "TranscriptFileUri": "https://s3.eu-west-1.amazonaws.com/b/tmp/job/out.json"
@@ -562,7 +664,10 @@ class TestTranscriptOutputKeys:
 
 
 class TestNoCandidateRegions:
-    """No usable bucket anywhere: documented 404 on requests."""
+    """No usable bucket anywhere: documented 404 on requests.
+
+    Ref: stdapi/models/audio/amazon_transcribe.py:AudioModel._transcribe
+    """
 
     async def test_request_raises_documented_404(
         self, monkeypatch: pytest.MonkeyPatch
@@ -584,7 +689,10 @@ class TestNoCandidateRegions:
 
 
 class TestInitializeTranscribeModels:
-    """initialize_transcribe_models: regions metadata mirrors the candidates."""
+    """initialize_transcribe_models: regions metadata mirrors the candidates.
+
+    Ref: stdapi/models/audio/amazon_transcribe.py:initialize_transcribe_models
+    """
 
     @pytest.fixture(autouse=True)
     def _restore_extra_models(self) -> Generator[None]:
@@ -622,7 +730,13 @@ class TestInitializeTranscribeModels:
 
 
 class TestBucketToRegionMapping:
-    """_bucket_to_region: the Transcribe bucket resolves to the transcribe region."""
+    """_bucket_to_region: the Transcribe bucket resolves to the transcribe region.
+
+    Temporary object cleanup needs the region each bucket lives in, and the dedicated
+    Transcribe bucket may sit outside the Bedrock region set.
+
+    Ref: stdapi/aws_s3.py:_bucket_to_region
+    """
 
     def test_dedicated_transcribe_bucket_maps_to_the_transcribe_region(
         self, monkeypatch: pytest.MonkeyPatch
@@ -661,7 +775,15 @@ class TestBucketToRegionMapping:
 
 
 class TestFormatTranslationResponseVerboseJson:
-    """_format_translation_response: verbose_json segments are translated too."""
+    """_format_translation_response: verbose_json segments are translated too.
+
+    The top-level text comes from one TranslateText call over the whole transcript;
+    the per-segment texts need their own calls, which must carry the same Translate
+    ``Settings``/``TerminologyNames`` as the main one.
+
+    Ref: https://docs.aws.amazon.com/translate/latest/APIReference/API_TranslateText.html
+         stdapi/models/audio/amazon_transcribe.py:AudioModel._format_translation_response
+    """
 
     async def test_segments_are_translated_not_left_in_source_language(
         self, monkeypatch: pytest.MonkeyPatch
@@ -751,7 +873,14 @@ class TestFormatTranslationResponseVerboseJson:
 
 
 class TestPopTranslateExtraParams:
-    """_pop_translate_extra_params: split Translate's Settings/TerminologyNames out."""
+    """_pop_translate_extra_params: split Translate's Settings/TerminologyNames out.
+
+    On the translation route the extra-params bag is shared by two services, so
+    Translate's own keys must be removed before the rest is validated as
+    StartTranscriptionJob parameters.
+
+    Ref: stdapi/models/audio/amazon_transcribe.py:_pop_translate_extra_params
+    """
 
     def test_none_input_passes_through(self) -> None:
         """A missing extra_params dict stays None for all three outputs."""
@@ -788,7 +917,15 @@ class TestPopTranslateExtraParams:
 
 
 class TestTextCompressionRatio:
-    """_text_compression_ratio: a real, text-based repetition signal."""
+    """_text_compression_ratio: a real, text-based repetition signal.
+
+    Amazon Transcribe exposes no decoder-internal metric, so verbose_json's
+    ``compression_ratio`` is computed from the returned text here; the threshold
+    mirrors OpenAI's "above 2.4 suggests compression failed" wording.
+
+    Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+         stdapi/models/audio/amazon_transcribe.py:_text_compression_ratio
+    """
 
     def test_empty_text_is_zero(self) -> None:
         """An empty segment reports a ratio of 0.0, not a false-confident value."""
@@ -801,7 +938,15 @@ class TestTextCompressionRatio:
 
 
 class TestBuildTranscriptionSegment:
-    """_build_transcription_segment: derives confidence stats Transcribe lacks."""
+    """_build_transcription_segment: derives confidence stats Transcribe lacks.
+
+    ``avg_logprob`` and ``no_speech_prob`` have no AWS equivalent; they are set so
+    that OpenAI's documented silence signal (no_speech_prob at 1.0 together with
+    avg_logprob below -1) still fires on a segment with no text.
+
+    Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+         stdapi/models/audio/amazon_transcribe.py:_build_transcription_segment
+    """
 
     def test_segment_with_transcript_reports_confident_values(self) -> None:
         """A segment with text reports the confident (non-silent) defaults."""
@@ -837,7 +982,11 @@ class TestTranscribeExtraParamsValueConstraints:
     Amazon Transcribe already rejects an unsupported enum/range value with its
     own 400 error (surfaced via ``_handle_transcription_error``); duplicating
     that validation here would only reject clients AWS itself would accept
-    (e.g. a newly added PII entity type).
+    (e.g. a newly added PII entity type). Only field *names* and the redaction
+    output mode are validated locally.
+
+    Ref: https://docs.aws.amazon.com/transcribe/latest/APIReference/API_ContentRedaction.html
+         stdapi/models/audio/amazon_transcribe.py:_TranscribeExtraParams
     """
 
     def test_unknown_pii_entity_type_is_accepted(self) -> None:
@@ -851,14 +1000,22 @@ class TestTranscribeExtraParamsValueConstraints:
         assert extra.ContentRedaction.PiiEntityTypes == ["NOT_A_REAL_ENTITY"]  # type: ignore[union-attr]
 
     def test_redacted_and_unredacted_output_is_rejected(self) -> None:
-        """The dual-output redaction mode is rejected (no tracked-cleanup path yet)."""
-        with pytest.raises(ValidationError):
+        """The dual-output redaction mode is rejected (no tracked-cleanup path yet).
+
+        ``redacted_and_unredacted`` makes Transcribe write two objects, only one of
+        which the gateway tracks for cleanup, so the field is pinned to ``redacted``.
+        """
+        with pytest.raises(ValidationError) as excinfo:
             _TranscribeExtraParams(
                 ContentRedaction={
                     "RedactionType": "PII",
                     "RedactionOutput": "redacted_and_unredacted",
                 }
             )
+
+        errors = excinfo.value.errors()
+        assert [error["type"] for error in errors] == ["literal_error"]
+        assert "RedactionOutput" in errors[0]["loc"]
 
     def test_unknown_vocabulary_filter_method_is_accepted(self) -> None:
         """A VocabularyFilterMethod outside mask/remove/tag is forwarded as-is."""
@@ -874,9 +1031,17 @@ class TestTranscribeExtraParamsValueConstraints:
         assert _TranscribeExtraParams(MaxSpeakerLabels=31).MaxSpeakerLabels == 31
 
     def test_unknown_top_level_field_is_rejected(self) -> None:
-        """An unsupported field name (extra="forbid") fails validation."""
-        with pytest.raises(ValidationError):
+        """An unsupported field name (extra="forbid") fails validation.
+
+        Values are forwarded to AWS unchecked, so the field name is the only local
+        guard against a typo silently reaching StartTranscriptionJob.
+        """
+        with pytest.raises(ValidationError) as excinfo:
             _TranscribeExtraParams(NotARealField=True)  # type: ignore[call-arg]
+
+        errors = excinfo.value.errors()
+        assert [error["type"] for error in errors] == ["extra_forbidden"]
+        assert "NotARealField" in errors[0]["loc"]
 
     def test_documented_values_round_trip(self) -> None:
         """A fully populated, valid extra-params payload validates and dumps back."""
@@ -904,7 +1069,15 @@ class TestTranscribeExtraParamsValueConstraints:
 
 
 class TestBuildTranscriptionJobParamsExtra:
-    """_build_transcription_job_params: extra_params merge into StartTranscriptionJob."""
+    """_build_transcription_job_params: extra_params merge into StartTranscriptionJob.
+
+    AWS requires exactly one of LanguageCode / IdentifyLanguage /
+    IdentifyMultipleLanguages, and nests several of these fields under ``Settings``,
+    so the flat extra-params bag has to be redistributed rather than merged as-is.
+
+    Ref: https://docs.aws.amazon.com/transcribe/latest/APIReference/API_StartTranscriptionJob.html
+         stdapi/models/audio/amazon_transcribe.py:_build_transcription_job_params
+    """
 
     @pytest.fixture(autouse=True)
     def _request_context(self) -> Generator[None]:
@@ -983,12 +1156,24 @@ class TestBuildTranscriptionJobParamsExtra:
         assert params["LanguageOptions"] == ["en-US", "fr-FR"]  # type: ignore[typeddict-item]
 
     def test_channel_identification_conflicts_with_diarized_json(self) -> None:
-        """ChannelIdentification with diarized_json is rejected with a clean 400."""
+        """ChannelIdentification with diarized_json is rejected with a clean 400.
+
+        diarized_json forces ``ShowSpeakerLabels``, which AWS refuses to combine with
+        channel identification; the conflict is reported as the offending parameter
+        instead of being forwarded and failing the job.
+
+        Ref: https://docs.aws.amazon.com/transcribe/latest/dg/diarization.html
+        """
         extra = _TranscribeExtraParams(ChannelIdentification=True)
-        with pytest.raises(UnsupportedParameterError):
+        with pytest.raises(UnsupportedParameterError) as excinfo:
             _build_transcription_job_params(
                 "job1", "bucket", "en", "diarized_json", extra
             )
+
+        assert excinfo.value.status == 400
+        assert excinfo.value.code == "unsupported_parameter"
+        assert excinfo.value.param == "ChannelIdentification"
+        assert "ChannelIdentification" in str(excinfo.value)
 
     def test_channel_identification_alone_is_accepted(self) -> None:
         """ChannelIdentification without diarized_json is accepted normally."""

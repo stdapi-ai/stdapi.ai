@@ -1,4 +1,9 @@
-"""Unit tests for Polly multi-region voice initialization and failover routing."""
+"""Unit tests for Polly multi-region voice initialization and failover routing.
+
+Ref: https://docs.aws.amazon.com/polly/latest/APIReference/API_SynthesizeSpeech.html
+     https://docs.aws.amazon.com/polly/latest/dg/available-voices.html
+     stdapi/models/audio/amazon_polly.py
+"""
 
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -150,7 +155,16 @@ def _engines_warning(start_event: EventLog) -> Mapping[str, object]:
 
 
 class TestInitializePollyModels:
-    """initialize_polly_models: per-region engine discovery and registration."""
+    """initialize_polly_models: per-region engine discovery and registration.
+
+    Engine and voice availability is a per-Region table (long-form exists only
+    in us-east-1, generative in a subset), so the gateway must discover it with
+    DescribeVoices rather than derive it.
+
+    Ref: https://docs.aws.amazon.com/polly/latest/dg/available-voices.html
+         https://docs.aws.amazon.com/polly/latest/dg/long-form-voices.html
+         stdapi/models/audio/amazon_polly.py:initialize_polly_models
+    """
 
     async def test_engine_regions_follow_candidate_priority_order(
         self, monkeypatch: pytest.MonkeyPatch
@@ -207,7 +221,11 @@ class TestInitializePollyModels:
         await initialize_polly_models(start_event)
 
         assert EXTRA_MODELS["amazon.polly-neural"].regions == ["eu-west-1"]
-        assert list(_engines_warning(start_event)) == ["neural@us-east-1"]
+        warning = _engines_warning(start_event)
+        assert list(warning) == ["neural@us-east-1"]
+        assert "AccessDeniedException" in str(warning["neural@us-east-1"]), (
+            "the warning must carry the AWS error that made the region unusable"
+        )
 
     async def test_all_pairs_failing_still_completes(
         self, monkeypatch: pytest.MonkeyPatch
@@ -227,16 +245,32 @@ class TestInitializePollyModels:
         await initialize_polly_models(start_event)
 
         assert not any(m.startswith("amazon.polly-") for m in EXTRA_MODELS)
-        assert len(_engines_warning(start_event)) == 8
+        warning = _engines_warning(start_event)
+        assert sorted(warning) == sorted(
+            f"{engine}@{region}"
+            for engine in engines
+            for region in ("us-east-1", "eu-west-1")
+        )
+        assert all("AccessDeniedException" in str(cause) for cause in warning.values())
 
     async def test_non_aws_errors_propagate(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Programming errors are never swallowed as a region failure."""
-        _patch_voices(monkeypatch, {("neural", "us-east-1"): ValueError("bug")})
+        """Programming errors are never swallowed as a region failure.
 
-        with pytest.raises(ValueError, match="bug"):
-            await initialize_polly_models(_start_event())
+        Only ``ClientError`` / ``BotoCoreError`` are treated as an unavailable
+        (engine, region) pair, so a non-AWS exception aborts startup before any
+        model is registered and without being reported as a region warning.
+        """
+        _patch_voices(monkeypatch, {("neural", "us-east-1"): ValueError("bug")})
+        start_event = _start_event()
+
+        with pytest.raises(ValueError, match="bug") as excinfo:
+            await initialize_polly_models(start_event)
+
+        assert excinfo.value.args == ("bug",)
+        assert "server_warnings" not in start_event
+        assert not any(m.startswith("amazon.polly-") for m in EXTRA_MODELS)
 
     async def test_page_failure_discards_earlier_pages_metadata(
         self, monkeypatch: pytest.MonkeyPatch
@@ -334,7 +368,11 @@ class TestInitializePollyModels:
 
 
 class TestEngineVoiceRegions:
-    """_engine_voice_regions: synthesis routes to regions offering the voice."""
+    """_engine_voice_regions: synthesis routes to regions offering the voice.
+
+    Ref: https://docs.aws.amazon.com/polly/latest/dg/available-voices.html
+         stdapi/models/audio/amazon_polly.py:_engine_voice_regions
+    """
 
     @pytest.fixture(autouse=True)
     def _seed_engine_regions(self) -> None:
@@ -363,7 +401,14 @@ class TestEngineVoiceRegions:
 
 
 class TestSelectVoiceDeterminism:
-    """_select_voice: the detected language always outranks the en-US fallback."""
+    """_select_voice: the detected language always outranks the en-US fallback.
+
+    OpenAI voice names have no Polly equivalent: they are resolved to a Polly
+    voice of the same gender, in the detected language when one is available.
+
+    Ref: https://developers.openai.com/api/docs/guides/text-to-speech#voice-options
+         stdapi/models/audio/amazon_polly.py:_select_voice
+    """
 
     @pytest.fixture(autouse=True)
     def _seed_voice_tables(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -403,7 +448,11 @@ class TestSelectVoiceDeterminism:
 
 
 class TestPollyExtraParamsLexiconNames:
-    """_PollyExtraParams.LexiconNames: accepts and forwards the documented list form."""
+    """_PollyExtraParams.LexiconNames: accepts and forwards the documented list form.
+
+    Ref: https://docs.aws.amazon.com/polly/latest/dg/managing-lexicons.html
+         stdapi/models/audio/amazon_polly.py:_PollyExtraParams
+    """
 
     def test_list_value_is_accepted_and_dumps_as_a_list(self) -> None:
         """The documented ``["MyLexicon"]`` list form validates and round-trips."""
@@ -414,7 +463,12 @@ class TestPollyExtraParamsLexiconNames:
 
 
 class TestPollyExtraParamsSpeechMarkTypes:
-    """_PollyExtraParams.SpeechMarkTypes: forwarded to Polly verbatim, not value-constrained."""
+    """_PollyExtraParams.SpeechMarkTypes: forwarded to Polly verbatim, not value-constrained.
+
+    Ref: https://docs.aws.amazon.com/polly/latest/dg/speechmarks.html
+         https://docs.aws.amazon.com/polly/latest/APIReference/API_SynthesizeSpeech.html
+         stdapi/models/audio/amazon_polly.py:_PollyExtraParams
+    """
 
     def test_documented_mark_types_are_accepted_and_dump_as_a_list(self) -> None:
         """The four Polly mark types validate and round-trip unchanged."""
@@ -450,7 +504,12 @@ class _StubComprehendClient:
 
 
 class TestDetectLanguageFailover:
-    """_detect_language: Comprehend fails over across candidate regions."""
+    """_detect_language: Comprehend fails over across candidate regions.
+
+    Ref: https://docs.aws.amazon.com/comprehend/latest/dg/guidelines-and-limits.html
+         stdapi/models/audio/amazon_polly.py:_detect_language
+         stdapi/aws.py:call_with_region_failover
+    """
 
     async def test_failover_serves_and_records_the_second_region(
         self, monkeypatch: pytest.MonkeyPatch
@@ -519,7 +578,14 @@ class _StubPollyClient:
 
 
 class TestSynthesizeSpeechFailover:
-    """AudioModel.tts: end-to-end synthesis fails over across candidate regions."""
+    """AudioModel.tts: end-to-end synthesis fails over across candidate regions.
+
+    SynthesizeSpeech throttles at 8 TPS on the neural engine, so a throttled
+    Region must be retried elsewhere rather than surfaced to the caller.
+
+    Ref: https://docs.aws.amazon.com/polly/latest/dg/limits.html
+         stdapi/aws.py:call_with_region_failover
+    """
 
     async def test_failover_serves_audio_and_records_the_second_region(
         self, monkeypatch: pytest.MonkeyPatch
@@ -577,7 +643,15 @@ class TestSynthesizeSpeechFailover:
 
 
 class TestSynthesizeSpeechEncodedFormats:
-    """AudioModel.tts: wav/flac/aac are transcoded from lossless PCM, not Vorbis."""
+    """AudioModel.tts: wav/flac/aac are transcoded from lossless PCM, not Vorbis.
+
+    Polly's OutputFormat has no wav/flac/aac, so those OpenAI formats are
+    re-encoded in process; pcm is the lossless source, but it accepts only
+    8 kHz and 16 kHz, hence the Ogg Vorbis fallback above that cap.
+
+    Ref: https://docs.aws.amazon.com/polly/latest/APIReference/API_SynthesizeSpeech.html
+         stdapi/media.py:encode_audio_stream
+    """
 
     async def test_wav_request_synthesizes_from_pcm_by_default(
         self, monkeypatch: pytest.MonkeyPatch
@@ -684,7 +758,12 @@ class TestSynthesizeSpeechEncodedFormats:
 
 
 class TestSynthesizeSpeechPcmSampleRate:
-    """AudioModel.tts: default pcm output is forced to OpenAI's 24 kHz contract."""
+    """AudioModel.tts: default pcm output is forced to OpenAI's 24 kHz contract.
+
+    Ref: https://stdapi.ai/api_openai_audio_speech/
+         https://docs.aws.amazon.com/polly/latest/APIReference/API_SynthesizeSpeech.html
+         stdapi/models/audio/amazon_polly.py:AudioModel.tts
+    """
 
     async def test_pcm_request_synthesizes_from_16khz_and_resamples_to_24khz(
         self, monkeypatch: pytest.MonkeyPatch
@@ -758,7 +837,15 @@ class TestSynthesizeSpeechPcmSampleRate:
 
 
 class TestSynthesizeSpeechMarks:
-    """AudioModel.tts: SpeechMarkTypes switches Polly to its JSON marks output."""
+    """AudioModel.tts: SpeechMarkTypes switches Polly to its JSON marks output.
+
+    A json OutputFormat response is served as application/x-json-stream, so no
+    audio is generated and nothing is transcoded.
+
+    Ref: https://docs.aws.amazon.com/polly/latest/dg/speechmarks.html
+         https://docs.aws.amazon.com/polly/latest/APIReference/API_SynthesizeSpeech.html
+         stdapi/models/audio/amazon_polly.py:AudioModel.tts
+    """
 
     async def test_speech_marks_request_json_output_and_content_type(
         self, monkeypatch: pytest.MonkeyPatch

@@ -1,19 +1,19 @@
-"""Tests for Amazon Nova 2 via the Anthropic /v1/messages route.
+"""Amazon Nova 2 system tools exposed through the Anthropic /v1/messages route.
 
-Covers Nova 2 system tools surfaced through the Anthropic Messages API:
+Anthropic's server tools do not exist on Bedrock, so the gateway maps the canonical tool
+types onto Nova's Bedrock ``systemTool`` entries: ``code_execution`` →
+``nova_code_interpreter`` and ``web_search`` → ``nova_grounding``.  Bedrock runs both
+tools inside the invocation and answers with a ``toolUse`` (plus, for the code
+interpreter, a ``toolResult``) in the same turn, which the gateway republishes as
+``server_tool_use`` / ``code_execution_tool_result`` blocks carrying ``srvtoolu_`` ids.
 
-  - ``code_execution`` (``code_execution_20250522``) → mapped to
-    ``nova_code_interpreter``.  Bedrock executes the code internally and returns
-    both a ``toolUse`` and a ``toolResult`` block in the same turn; the gateway
-    must translate the result to a ``CodeExecutionToolResultBlock``.
+Inference tests run with ``pytest --expensive``.
 
-Nova 2 is only available on AWS Bedrock, so all tests skip when running against
-the official Anthropic API.
-
-All tests that require actual model inference are marked ``@pytest.mark.expensive``.
-Run with::
-
-    pytest --expensive tests/test_anthropic_messages_amazon_nova_2.py
+Ref: https://platform.claude.com/docs/en/api/messages
+     https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_SystemTool.html
+     https://docs.aws.amazon.com/nova/latest/nova2-userguide/using-tools.html
+     stdapi/routes/anthropic_messages.py:create_message
+     stdapi/models/chat/amazon_nova_2.py:ChatModel
 """
 
 from typing import TYPE_CHECKING
@@ -58,11 +58,15 @@ def _result_stdout(block: CodeExecutionToolResultBlock) -> str:
 
 
 class TestCodeExecutionTool:
-    """Tests for the ``code_execution`` tool on Amazon Nova 2.
+    """The ``code_execution`` server tool served by ``nova_code_interpreter``.
 
-    Nova 2 maps ``code_execution`` → ``nova_code_interpreter`` (Bedrock system
-    tool).  The gateway translates the Bedrock ``toolResult`` payload to
-    ``CodeExecutionToolResultBlock`` before returning the response to the client.
+    Bedrock returns the interpreter output as a ``toolResult`` whose first content item is
+    a JSON payload of ``stdOut`` / ``stdErr`` / ``exitCode`` / ``isError``; the gateway
+    converts it to a ``code_execution_tool_result`` block whose ``return_code`` is
+    ``exitCode or 1`` when ``isError`` is set and ``0`` otherwise.
+
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool
+         stdapi/models/chat/amazon_nova_2.py:ChatModel._build_code_execution_result
     """
 
     @pytest.mark.expensive
@@ -71,11 +75,12 @@ class TestCodeExecutionTool:
     ) -> None:
         """Successful code execution produces a ``CodeExecutionToolResultBlock``.
 
-        Validates:
-            - Response contains a ``server_tool_use`` block with ``name == "code_execution"``
-            - Response contains a ``code_execution_tool_result`` block
-            - ``tool_use_id`` in the result block matches the invocation block
-            - ``stdout`` in the result contains the expected output
+        The invocation and its result are correlated by id: the Bedrock ``toolUseId`` is
+        re-prefixed ``srvtoolu_`` on both blocks, so the result must point back at the
+        emitted ``server_tool_use`` rather than at the raw Bedrock id.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
+             stdapi/models/chat/amazon_nova_2.py:ChatModel._resp_map_tool_result
         """
         if use_official_api:
             pytest.skip("nova_code_interpreter is only available on AWS Bedrock")
@@ -99,6 +104,12 @@ class TestCodeExecutionTool:
         assert "code_execution_tool_result" in block_types, (
             f"Expected code_execution_tool_result block, got: {block_types}"
         )
+        assert "tool_use" not in block_types, (
+            f"nova_code_interpreter must not leak as a client tool_use: {block_types}"
+        )
+        assert response.stop_reason != "tool_use", (
+            "Bedrock executes the code itself, so the client is never asked to run a tool"
+        )
 
         invocation = next(b for b in response.content if b.type == "server_tool_use")
         assert invocation.name == "code_execution"
@@ -112,19 +123,29 @@ class TestCodeExecutionTool:
         assert isinstance(result_block, CodeExecutionToolResultBlock)
         assert result_block.tool_use_id == invocation.id
         assert isinstance(result_block.content, CodeExecutionResultBlock)
+        assert result_block.content.type == "code_execution_result"
         assert "1024" in result_block.content.stdout
+        assert result_block.content.return_code == 0, (
+            f"Successful execution must map to return_code 0, got: "
+            f"{result_block.content.return_code}"
+        )
+        assert response.model == _NOVA_2_LITE
+        assert response.usage.input_tokens > 0
+        assert response.usage.output_tokens > 0
 
     @pytest.mark.expensive
     def test_code_execution_multi_turn(
         self, anthropic_client: Anthropic, use_official_api: bool
     ) -> None:
-        """Multi-turn conversation with code_execution produces valid results each turn.
+        """A ``code_execution_tool_result`` can be replayed as assistant history.
 
-        Validates:
-            - Turn 1 response contains ``server_tool_use`` + ``code_execution_tool_result``
-            - Turn 2 request succeeds (no ValidationException from empty text blocks)
-            - Turn 2 response contains ``server_tool_use`` + ``code_execution_tool_result``
-            - ``srvtoolu_`` IDs are stable and consistent across turns
+        Turn 2 echoes the turn-1 blocks back, which forces the reverse mapping:
+        ``srvtoolu_`` ids become Bedrock ``tooluse_`` ids again and the result block is
+        rebuilt as a Bedrock ``toolResult`` with a ``status`` derived from
+        ``return_code``.  A broken round trip makes Converse reject the conversation.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+             stdapi/models/chat/amazon_nova_2.py:ChatModel._req_map_content_block
         """
         if use_official_api:
             pytest.skip("nova_code_interpreter is only available on AWS Bedrock")
@@ -190,17 +211,23 @@ class TestCodeExecutionTool:
         assert res2.tool_use_id == inv2.id
         assert isinstance(res2.content, CodeExecutionResultBlock)
         assert "823543" in res2.content.stdout
+        assert resp2.usage.input_tokens > 0, (
+            "Turn 2 must bill the replayed code-execution history"
+        )
 
     @pytest.mark.expensive
     def test_code_execution_stderr_and_nonzero_exit_preserved(
         self, anthropic_client: Anthropic, use_official_api: bool
     ) -> None:
-        """Stderr and a non-zero exit code are preserved in the result block.
+        """A failing snippet still returns a result block reporting the failure.
 
-        Validates:
-            - ``code_execution_tool_result`` block is present
-            - ``stderr`` is non-empty
-            - ``return_code`` is non-zero
+        Bedrock decides where the traceback lands: it may set ``isError`` (mapped to a
+        non-zero ``return_code``), fill ``stdErr``, or print the exception on ``stdOut``.
+        The block must therefore carry the failure through at least one of the three
+        channels rather than being dropped or replaced by an error envelope.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool
+             stdapi/models/chat/amazon_nova_2.py:ChatModel._build_code_execution_result
         """
         if use_official_api:
             pytest.skip("nova_code_interpreter is only available on AWS Bedrock")
@@ -226,6 +253,9 @@ class TestCodeExecutionTool:
             b for b in response.content if b.type == "code_execution_tool_result"
         )
         assert isinstance(result_block, CodeExecutionToolResultBlock)
+        assert result_block.tool_use_id.startswith("srvtoolu_"), (
+            f"Expected srvtoolu_ prefix, got: {result_block.tool_use_id!r}"
+        )
         assert isinstance(result_block.content, CodeExecutionResultBlock)
         assert (
             result_block.content.return_code != 0
@@ -235,13 +265,15 @@ class TestCodeExecutionTool:
 
 
 class TestCodeExecutionToolStreaming:
-    """Streaming tests for the ``code_execution`` tool on Amazon Nova 2.
+    """The ``code_execution`` server tool over the Anthropic SSE stream.
 
-    Verifies that the streaming path (``converse_stream``) correctly maps
-    ``nova_code_interpreter`` events to Anthropic SSE blocks, including:
-    - ``server_tool_use`` start events with ``srvtoolu_`` id
-    - ``code_execution_tool_result`` complete blocks
-    - No spurious empty text blocks
+    Bedrock streams the interpreter result as a ``toolResult`` block split over
+    ``contentBlockDelta`` events; the gateway buffers them and emits one complete
+    ``code_execution_tool_result`` in a single ``content_block_start``, because Anthropic
+    has no delta shape for that block type.
+
+    Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
+         stdapi/models/chat/amazon_nova_2.py:ChatModel._resp_stream_map_tool_result
     """
 
     @pytest.mark.expensive
@@ -250,11 +282,12 @@ class TestCodeExecutionToolStreaming:
     ) -> None:
         """Streaming response contains ``server_tool_use`` + ``code_execution_tool_result``.
 
-        Validates:
-            - Accumulated message has ``server_tool_use`` block with ``srvtoolu_`` id
-            - Accumulated message has ``code_execution_tool_result`` block
-            - ``tool_use_id`` in result matches the invocation id
-            - ``stdout`` contains the expected value
+        The result block arrives as exactly one ``content_block_start`` event with its
+        payload already complete, and its ``tool_use_id`` matches the ``srvtoolu_`` id of
+        the invocation block accumulated in the final message.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
+             stdapi/models/chat/_adapters/_anthropic_message.py:_process_content_block_stop
         """
         if use_official_api:
             pytest.skip("nova_code_interpreter is only available on AWS Bedrock")
@@ -285,6 +318,9 @@ class TestCodeExecutionToolStreaming:
         assert "code_execution_tool_result" in block_types, (
             f"Expected code_execution_tool_result block, got: {block_types}"
         )
+        assert "tool_use" not in block_types, (
+            f"nova_code_interpreter must not leak as a client tool_use: {block_types}"
+        )
 
         invocation = next(b for b in msg.content if b.type == "server_tool_use")
         assert invocation.name == "code_execution"
@@ -297,6 +333,8 @@ class TestCodeExecutionToolStreaming:
         assert isinstance(result_block, CodeExecutionToolResultBlock)
         assert result_block.tool_use_id == invocation.id
         assert "27" in _result_stdout(result_block)
+        assert msg.model == _NOVA_2_LITE
+        assert msg.usage.output_tokens > 0
 
     @pytest.mark.expensive
     def test_streaming_no_empty_text_blocks(
@@ -304,8 +342,12 @@ class TestCodeExecutionToolStreaming:
     ) -> None:
         """Streaming response does not surface Nova's empty preamble text block.
 
-        Validates that blocks with ``type="text"`` in the accumulated message
-        all have non-empty text content.
+        Nova opens a system-tool turn with a text block whose only delta is ``{"text":
+        ""}``.  Suppression is deferred until ``contentBlockStop``, so the block is
+        discarded while a block that later receives real text is still emitted.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
+             stdapi/models/chat/_adapters/_anthropic_message.py:_process_content_block_delta
         """
         if use_official_api:
             pytest.skip("nova_code_interpreter is only available on AWS Bedrock")
@@ -323,17 +365,19 @@ class TestCodeExecutionToolStreaming:
                 assert block.text, (
                     f"Empty text block found in streaming response: {block!r}"
                 )
+        assert msg.content, "Expected at least one content block in the final message"
 
     @pytest.mark.expensive
     def test_streaming_multi_turn(
         self, anthropic_client: Anthropic, use_official_api: bool
     ) -> None:
-        """Multi-turn streaming conversation with code_execution works end-to-end.
+        """Streamed code-execution blocks are accepted back as assistant history.
 
-        Validates:
-            - Turn 1 streaming produces ``server_tool_use`` + ``code_execution_tool_result``
-            - Turn 2 request succeeds (history reconstruction is correct)
-            - Turn 2 streaming also produces correct blocks
+        The blocks replayed in turn 2 are the ones rebuilt from buffered stream deltas, so
+        this covers the streaming half of the ``srvtoolu_`` ↔ ``tooluse_`` round trip.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
+             stdapi/models/chat/amazon_nova_2.py:ChatModel._req_map_content_block
         """
         if use_official_api:
             pytest.skip("nova_code_interpreter is only available on AWS Bedrock")
@@ -399,6 +443,9 @@ class TestCodeExecutionToolStreaming:
         assert isinstance(res2, CodeExecutionToolResultBlock)
         assert res2.tool_use_id == inv2.id
         assert "46656" in _result_stdout(res2)
+        assert resp2.usage.input_tokens > 0, (
+            "Turn 2 must bill the replayed code-execution history"
+        )
 
 
 # ===========================================================================
@@ -407,15 +454,17 @@ class TestCodeExecutionToolStreaming:
 
 
 class TestWebSearchTool:
-    """Tests for the ``web_search`` tool (nova_grounding) on Amazon Nova.
+    """The ``web_search`` server tool served by ``nova_grounding``.
 
-    Bedrock only accepts ``nova_grounding`` on a geo-scoped (``us.``) inference
-    profile; a ``global.`` profile returns a 400.  ``aws_bedrock_model_region_restrict``
-    pins Nova 2 Lite to us-east-1 in the test settings, which forces the ``us.`` profile.
+    Bedrock only accepts ``nova_grounding`` on a geo-scoped (``us.``) inference profile
+    and answers a ``global.`` profile with a 400, so ``conftest`` pins Nova 2 Lite to
+    us-east-1 through ``aws_bedrock_model_region_restrict``.  Bedrock searches inside the
+    invocation: the gateway republishes its ``toolUse`` as a ``server_tool_use`` block and
+    any ``searchResult`` block as a ``web_search_tool_result`` keyed by that block's id,
+    so no client-executable ``tool_use`` is ever emitted.
 
-    The gateway must translate the Bedrock ``toolUse`` response to a
-    ``ServerToolUseBlock(name="web_search", id="srvtoolu_...")`` and suppress the
-    empty Bedrock ``toolResult`` block.  No ``tool_use`` block should be emitted.
+    Ref: https://docs.aws.amazon.com/nova/latest/nova2-userguide/web-grounding.html
+         stdapi/models/chat/_default.py:ChatModel._resp_map_tool_use
     """
 
     @pytest.mark.expensive
@@ -424,11 +473,12 @@ class TestWebSearchTool:
     ) -> None:
         """Successful web search produces a ``server_tool_use`` block.
 
-        Validates:
-            - Response contains a ``server_tool_use`` block with ``name == "web_search"``
-            - ``id`` has the ``srvtoolu_`` prefix
-            - No plain ``tool_use`` block is present (nova_grounding not leaked)
-            - ``stop_reason`` is ``"end_turn"``
+        The block is renamed to Anthropic's canonical ``web_search`` by the inverse
+        lookup over ``CANONICAL_TO_BEDROCK_TOOL_MAP``, and the turn ends normally because
+        Bedrock has already consumed the search itself.
+
+        Ref: https://docs.aws.amazon.com/nova/latest/nova2-userguide/web-grounding.html
+             stdapi/models/chat/_default.py:ChatModel._canonical_name_for
         """
         if use_official_api:
             pytest.skip("nova_grounding is only available on AWS Bedrock")
@@ -465,7 +515,14 @@ class TestWebSearchTool:
                 assert block.tool_use_id == invocation.id, (
                     f"Expected tool_use_id={invocation.id!r}, got: {block.tool_use_id!r}"
                 )
+                assert isinstance(block.content, list), (
+                    "A Bedrock searchResult must be wrapped in a content list"
+                )
+                for result in block.content:
+                    assert result.type == "web_search_result"
         assert response.stop_reason == "end_turn"
+        assert response.model == _NOVA_2_LITE
+        assert response.usage.output_tokens > 0
 
     @pytest.mark.expensive
     def test_web_search_streaming_surfaces_server_tool_use_block(
@@ -473,12 +530,11 @@ class TestWebSearchTool:
     ) -> None:
         """Streaming web search produces a ``server_tool_use`` block.
 
-        Validates:
-            - At least one ``content_block_start`` event with type ``server_tool_use``
-              (the model may invoke the tool multiple times non-deterministically)
-            - ``name == "web_search"`` and ``srvtoolu_`` id prefix on each start event
-            - Accumulated final message also contains ``server_tool_use``
-            - No ``tool_use`` block in the accumulated message
+        Nova may ground an answer with several searches, so the number of start events is
+        not fixed; each one must still carry the canonical name and a ``srvtoolu_`` id.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
+             stdapi/models/chat/_default.py:ChatModel._resp_stream_map_tool_use
         """
         if use_official_api:
             pytest.skip("nova_grounding is only available on AWS Bedrock")
@@ -510,27 +566,27 @@ class TestWebSearchTool:
         assert len(server_tool_starts) >= 1, (
             f"Expected at least one server_tool_use start, got {len(server_tool_starts)}"
         )
-        start_block = server_tool_starts[0]
-        assert isinstance(start_block, ServerToolUseBlock)
-        assert start_block.name == "web_search", (
-            f"Expected name='web_search', got: {start_block.name!r}"
-        )
-        assert start_block.id.startswith("srvtoolu_"), (
-            f"Expected srvtoolu_ prefix, got: {start_block.id!r}"
-        )
+        for start in server_tool_starts:
+            assert isinstance(start, ServerToolUseBlock)
+            assert start.name == "web_search", (
+                f"Expected name='web_search', got: {start.name!r}"
+            )
+            assert start.id.startswith("srvtoolu_"), (
+                f"Expected srvtoolu_ prefix, got: {start.id!r}"
+            )
 
     @pytest.mark.expensive
     def test_web_search_multi_turn(
         self, anthropic_client: Anthropic, use_official_api: bool
     ) -> None:
-        """Multi-turn conversation with web_search works end-to-end.
+        """A ``server_tool_use`` block can be replayed as assistant history.
 
-        Validates:
-            - Turn 1: response has a ``server_tool_use`` block with ``srvtoolu_`` id
-            - Turn 2: passing Turn 1 content (which includes ``ServerToolUseBlock``)
-              as assistant history succeeds — gateway correctly remaps ``srvtoolu_``
-              ids back to ``nova_grounding`` toolUseIds for Bedrock
-            - Turn 2: response also has a ``server_tool_use`` block
+        ``_req_map_content_block`` turns the echoed block back into a Bedrock ``toolUse``
+        named ``nova_grounding`` with the ``srvtoolu_`` prefix swapped for ``tooluse_``;
+        without that rewrite Converse rejects the assistant turn as an unknown tool.
+
+        Ref: https://docs.aws.amazon.com/nova/latest/nova2-userguide/web-grounding.html
+             stdapi/models/chat/_default.py:ChatModel._req_map_content_block
         """
         if use_official_api:
             pytest.skip("nova_grounding is only available on AWS Bedrock")
@@ -572,19 +628,32 @@ class TestWebSearchTool:
         assert "server_tool_use" in block_types2, (
             f"Turn 2: expected server_tool_use, got: {block_types2}"
         )
+        assert "tool_use" not in block_types2, (
+            f"Turn 2: nova_grounding must not leak as tool_use, got: {block_types2}"
+        )
         inv2 = next(b for b in resp2.content if b.type == "server_tool_use")
         assert inv2.id.startswith("srvtoolu_"), (
             f"Turn 2: expected srvtoolu_ prefix, got: {inv2.id!r}"
         )
+        assert resp2.usage.input_tokens > 0, (
+            "Turn 2 must bill the replayed grounding history"
+        )
+        assert resp2.usage.output_tokens > 0
 
     def test_web_search_filters_are_rejected(
         self, anthropic_client: Anthropic, use_official_api: bool
     ) -> None:
         """Search filters nova_grounding cannot honor are rejected, not dropped.
 
-        Validates:
-            - ``allowed_domains`` on a system-tool web search returns 400
-            - The message names the unsupported field
+        Anthropic's ``web_search`` accepts ``allowed_domains`` / ``blocked_domains`` /
+        ``max_uses`` / ``user_location``, but a Bedrock ``systemTool`` takes no input, so
+        silently dropping them would return unfiltered results.  ``_handle_system_tool``
+        fails the request instead, and the gateway renders the 400 as an
+        ``invalid_request_error`` naming the offending fields.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool
+             stdapi/models/chat/_adapters/_anthropic_message.py:_handle_system_tool
+             stdapi/api_providers/anthropic.py:_format_error
         """
         if use_official_api:
             pytest.skip("nova_grounding is only available on AWS Bedrock")
@@ -597,4 +666,8 @@ class TestWebSearchTool:
                 tools=[{**_WEB_SEARCH_TOOL, "allowed_domains": ["python.org"]}],  # type: ignore[list-item]
             )
 
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.type == "invalid_request_error", (
+            f"Expected an invalid_request_error envelope, got: {exc_info.value.type!r}"
+        )
         assert "allowed_domains" in str(exc_info.value)

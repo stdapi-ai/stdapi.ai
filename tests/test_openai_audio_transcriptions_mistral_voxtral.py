@@ -1,4 +1,9 @@
-"""Basic tests for Mistral Voxtral audio transcription models via OpenAI-compatible API."""
+"""Tests for /v1/audio/transcriptions served by Mistral Voxtral on Bedrock.
+
+Ref: https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create
+     https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-voxtral-mini-3b-2507.html
+     stdapi/models/audio/mistral_voxtral.py:AudioModel
+"""
 
 from typing import TYPE_CHECKING
 
@@ -13,9 +18,20 @@ VOXTRAL_MINI = "mistral.voxtral-mini-3b-2507"
 VOXTRAL_ALL = (VOXTRAL_MINI,)
 VOXTRAL_SAMPLE = (VOXTRAL_MINI,)
 
+#: Words spoken by the ``sample_audio_mp3_file`` fixture ("This is a test.").
+_SAMPLE_AUDIO_WORDS = ("test", "this")
+
 
 class TestMistralVoxtralTranscriptions:
-    """Basic behavior checks for Mistral Voxtral transcription models."""
+    """Transcription behavior specific to the Mistral Voxtral models.
+
+    Voxtral is a Bedrock chat model driven through ``InvokeModel`` with a
+    messages body, so it is billed in tokens (not audio seconds) and supports only
+    the ``json`` and ``text`` response formats.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-voxtral-mini-3b-2507.html
+         stdapi/models/audio/mistral_voxtral.py:AudioModel
+    """
 
     @pytest.mark.parametrize("model_id", VOXTRAL_ALL)
     def test_basic_transcription_json(
@@ -25,7 +41,19 @@ class TestMistralVoxtralTranscriptions:
         sample_audio_mp3_file: bytes,
         model_id: str,
     ) -> None:
-        """Basic transcription returns JSON with text and usage tokens."""
+        """``response_format=json`` returns the transcript plus token usage.
+
+        Voxtral is billed per token, so the gateway emits the ``tokens`` usage variant
+        built from the Bedrock ``usage`` block. This path reports ``audio_tokens: 0``
+        and fills ``text_tokens`` from Bedrock's ``cached_tokens`` — inconsistent with
+        the streaming path, which attributes every input token to audio (issue #95).
+        Only the breakdown's consistency with ``input_tokens`` is asserted here so the
+        test does not enshrine either mapping as intended.
+
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/models/audio/mistral_voxtral.py:AudioModel.stt
+             https://github.com/stdapi-ai/stdapi.ai/issues/95
+        """
         if use_official_api:
             pytest.skip(
                 "Mistral Voxtral models are not available on the official OpenAI API"
@@ -37,31 +65,29 @@ class TestMistralVoxtralTranscriptions:
             response_format="json",
         )
 
-        assert hasattr(response, "text")
         assert isinstance(response.text, str)
-        assert len(response.text.strip()) > 0
-
-        # Validate usage information
-        assert hasattr(response, "usage")
-        assert response.usage is not None
-        assert hasattr(response.usage, "input_tokens")
-        assert hasattr(response.usage, "output_tokens")
-        assert hasattr(response.usage, "total_tokens")
-        assert response.usage.input_tokens > 0
-        assert response.usage.output_tokens > 0
-        assert (
-            response.usage.total_tokens
-            == response.usage.input_tokens + response.usage.output_tokens
+        text = response.text.strip()
+        assert text, "Transcription returned an empty transcript"
+        assert any(word in text.lower() for word in _SAMPLE_AUDIO_WORDS), (
+            f"Transcript does not match the sample audio: {text!r}"
         )
 
+        # Validate usage information
+        usage = response.usage
+        assert usage is not None
+        assert usage.type == "tokens", f"Unexpected usage variant: {usage!r}"
+        assert usage.input_tokens > 0
+        assert usage.output_tokens > 0
+        assert usage.total_tokens == usage.input_tokens + usage.output_tokens
+
         # Validate input token details
-        if (
-            hasattr(response.usage, "input_token_details")
-            and response.usage.input_token_details
-        ):
-            assert hasattr(response.usage.input_token_details, "audio_tokens")
-            audio_tokens = response.usage.input_token_details.audio_tokens
-            assert audio_tokens is not None
+        details = usage.input_token_details
+        assert details is not None, "Audio prompt token breakdown is missing"
+        assert details.audio_tokens is not None
+        assert details.text_tokens is not None
+        assert details.audio_tokens + details.text_tokens <= usage.input_tokens, (
+            f"Token breakdown exceeds the billed input tokens: {usage!r}"
+        )
 
     @pytest.mark.parametrize("model_id", VOXTRAL_ALL)
     def test_transcription_text_format(
@@ -71,7 +97,14 @@ class TestMistralVoxtralTranscriptions:
         sample_audio_mp3_file: bytes,
         model_id: str,
     ) -> None:
-        """Text format returns plain string without usage metadata."""
+        """``response_format=text`` returns the bare transcript as a string.
+
+        The model's message content is returned untouched for this format, so no
+        usage or metadata envelope is produced.
+
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/models/audio/mistral_voxtral.py:AudioModel.stt
+        """
         if use_official_api:
             pytest.skip(
                 "Mistral Voxtral models are not available on the official OpenAI API"
@@ -84,7 +117,11 @@ class TestMistralVoxtralTranscriptions:
         )
 
         assert isinstance(response, str)
-        assert len(response.strip()) > 0
+        text = response.strip()
+        assert text, "Transcription returned an empty transcript"
+        assert any(word in text.lower() for word in _SAMPLE_AUDIO_WORDS), (
+            f"Transcript does not match the sample audio: {text!r}"
+        )
 
     @pytest.mark.parametrize("model_id", VOXTRAL_SAMPLE)
     def test_transcription_with_temperature(
@@ -94,7 +131,14 @@ class TestMistralVoxtralTranscriptions:
         sample_audio_mp3_file: bytes,
         model_id: str,
     ) -> None:
-        """Temperature parameter is accepted and processed correctly."""
+        """``temperature`` is accepted and forwarded to the Bedrock request.
+
+        Unlike ``amazon.transcribe``, which rejects the parameter, Voxtral is a chat
+        model whose request body carries a ``temperature`` field (defaulting to 0.0).
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-voxtral-mini-3b-2507.html
+             stdapi/models/audio/mistral_voxtral.py:AudioModel._build_request
+        """
         if use_official_api:
             pytest.skip(
                 "Mistral Voxtral models are not available on the official OpenAI API"
@@ -107,9 +151,12 @@ class TestMistralVoxtralTranscriptions:
             temperature=0.7,
         )
 
-        assert hasattr(response, "text")
         assert isinstance(response.text, str)
-        assert len(response.text.strip()) > 0
+        assert response.text.strip(), "Transcription returned an empty transcript"
+        usage = response.usage
+        assert usage is not None
+        assert usage.type == "tokens"
+        assert usage.input_tokens > 0
 
     @pytest.mark.parametrize("model_id", VOXTRAL_SAMPLE)
     def test_transcription_with_prompt(
@@ -119,7 +166,18 @@ class TestMistralVoxtralTranscriptions:
         sample_audio_mp3_file: bytes,
         model_id: str,
     ) -> None:
-        """Prompt parameter guides transcription style."""
+        """``prompt`` is accepted and appended to the model's instruction text.
+
+        ``amazon.transcribe`` rejects ``prompt`` outright; Voxtral instead receives it
+        as extra text content after the built-in "Transcribe the audio." instruction.
+        The transcript content is deliberately NOT asserted: with a prompt prepended
+        Voxtral Mini frequently answers "The audio content is not available for
+        transcription." instead of transcribing, so only acceptance and billing are
+        stable enough to assert.
+
+        Ref: https://developers.openai.com/api/docs/guides/speech-to-text#prompting
+             stdapi/models/audio/__init__.py:AudioModelBase._built_prompt
+        """
         if use_official_api:
             pytest.skip(
                 "Mistral Voxtral models are not available on the official OpenAI API"
@@ -132,9 +190,14 @@ class TestMistralVoxtralTranscriptions:
             prompt="This is a test audio file for transcription.",
         )
 
-        assert hasattr(response, "text")
         assert isinstance(response.text, str)
-        assert len(response.text.strip()) > 0
+        assert response.text.strip(), "Transcription returned an empty transcript"
+        usage = response.usage
+        assert usage is not None
+        assert usage.type == "tokens"
+        assert usage.output_tokens > 0
+        # The prompt is billed on top of the audio, so the input is never audio-only.
+        assert usage.input_tokens > 0
 
     @pytest.mark.parametrize("model_id", VOXTRAL_SAMPLE)
     def test_transcription_with_language(
@@ -144,7 +207,15 @@ class TestMistralVoxtralTranscriptions:
         sample_audio_mp3_file: bytes,
         model_id: str,
     ) -> None:
-        """Language parameter specifies input audio language."""
+        """``language`` is accepted and expressed as a natural-language hint.
+
+        Voxtral has no language field: the gateway resolves the ISO-639-1 code to its
+        language name and adds "The audio is excepted to be english language." to the
+        prompt, so English audio still transcribes normally.
+
+        Ref: https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create
+             stdapi/models/audio/__init__.py:AudioModelBase._built_prompt
+        """
         if use_official_api:
             pytest.skip(
                 "Mistral Voxtral models are not available on the official OpenAI API"
@@ -157,9 +228,12 @@ class TestMistralVoxtralTranscriptions:
             language="en",
         )
 
-        assert hasattr(response, "text")
         assert isinstance(response.text, str)
-        assert len(response.text.strip()) > 0
+        text = response.text.strip()
+        assert text, "Transcription returned an empty transcript"
+        assert any(word in text.lower() for word in _SAMPLE_AUDIO_WORDS), (
+            f"Transcript does not match the sample audio: {text!r}"
+        )
 
     @pytest.mark.parametrize("model_id", VOXTRAL_SAMPLE)
     def test_transcription_all_parameters(
@@ -169,7 +243,15 @@ class TestMistralVoxtralTranscriptions:
         sample_audio_mp3_file: bytes,
         model_id: str,
     ) -> None:
-        """All supported parameters work together correctly."""
+        """``language``, ``prompt`` and ``temperature`` are accepted together.
+
+        All three land in the same single Bedrock request — the first two inside the
+        prompt text, the last as the sampling temperature — so combining them still
+        yields a token-billed transcription.
+
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/models/audio/mistral_voxtral.py:AudioModel._build_request
+        """
         if use_official_api:
             pytest.skip(
                 "Mistral Voxtral models are not available on the official OpenAI API"
@@ -184,11 +266,14 @@ class TestMistralVoxtralTranscriptions:
             temperature=0.5,
         )
 
-        assert hasattr(response, "text")
         assert isinstance(response.text, str)
-        assert len(response.text.strip()) > 0
-        assert hasattr(response, "usage")
-        assert response.usage is not None
+        assert response.text.strip(), "Transcription returned an empty transcript"
+        usage = response.usage
+        assert usage is not None
+        assert usage.type == "tokens", f"Unexpected usage variant: {usage!r}"
+        assert usage.input_tokens > 0
+        assert usage.output_tokens > 0
+        assert usage.total_tokens == usage.input_tokens + usage.output_tokens
 
     @pytest.mark.parametrize("model_id", VOXTRAL_ALL)
     def test_streaming_transcription(
@@ -198,7 +283,16 @@ class TestMistralVoxtralTranscriptions:
         sample_audio_mp3_file: bytes,
         model_id: str,
     ) -> None:
-        """Streaming produces delta and done events with usage tokens."""
+        """Streaming emits ``transcript.text.delta`` events then a final ``done`` event.
+
+        Voxtral streams real Bedrock chunks, so several deltas may arrive; the closing
+        ``transcript.text.done`` event repeats the concatenated deltas verbatim and is
+        the only event carrying usage, taken from
+        ``amazon-bedrock-invocationMetrics``.
+
+        Ref: https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create
+             stdapi/models/audio/mistral_voxtral.py:AudioModel.stt_stream
+        """
         if use_official_api:
             pytest.skip(
                 "Mistral Voxtral models are not available on the official OpenAI API"
@@ -212,6 +306,7 @@ class TestMistralVoxtralTranscriptions:
         accumulated_text = ""
         has_delta_events = False
         has_done_event = False
+        done_text = ""
 
         for chunk in response:
             chunks.append(chunk)
@@ -224,39 +319,60 @@ class TestMistralVoxtralTranscriptions:
 
             elif chunk.type == "transcript.text.done":
                 has_done_event = True
-                assert hasattr(chunk, "text")
-                assert hasattr(chunk, "usage")
+                done_text = chunk.text
 
-                if chunk.usage:
-                    assert hasattr(chunk.usage, "input_tokens")
-                    assert hasattr(chunk.usage, "output_tokens")
-                    assert chunk.usage.input_tokens > 0
-                    assert chunk.usage.output_tokens > 0
-                    assert hasattr(chunk.usage, "input_token_details")
-                    assert chunk.usage.input_token_details is not None
-                    assert hasattr(chunk.usage.input_token_details, "audio_tokens")
-                    assert chunk.usage.input_token_details.audio_tokens is not None
-                    assert chunk.usage.input_token_details.audio_tokens > 0
+                usage = chunk.usage
+                assert usage is not None, "Done event carries no usage"
+                assert usage.input_tokens > 0
+                assert usage.output_tokens > 0
+                assert usage.total_tokens == usage.input_tokens + usage.output_tokens
+                assert usage.input_token_details is not None
+                # The streaming path attributes every input token to audio, while the
+                # non-streaming path reports audio_tokens=0 (issue #95).
+                assert usage.input_token_details.audio_tokens == usage.input_tokens
+                assert usage.input_token_details.text_tokens == 0
 
         assert len(chunks) > 0
         assert has_delta_events
         assert has_done_event
+        assert chunks[-1].type == "transcript.text.done", (
+            f"Stream does not end with the done event: {chunks[-1].type}"
+        )
         assert accumulated_text.strip()
+        assert done_text == accumulated_text, (
+            "Done event text differs from the concatenated deltas: "
+            f"{done_text!r} != {accumulated_text!r}"
+        )
 
     @pytest.mark.parametrize("model_id", VOXTRAL_SAMPLE)
     def test_invalid_audio_file(
         self, openai_client: OpenAI, use_official_api: bool, model_id: str
     ) -> None:
-        """Non-audio file format raises BadRequestError."""
+        """A non-audio upload is rejected as a 400 ``invalid_request_error``.
+
+        The gateway does not sniff the media itself: the ``text/plain`` upload becomes
+        an ``input_audio`` block with format ``plain``, which Bedrock rejects with a
+        ``ValidationException`` mapped to 400.
+
+        Ref: stdapi/models/audio/mistral_voxtral.py:AudioModel._build_request
+             stdapi/aws_bedrock.py:AWS_ERROR_MAP
+        """
         if use_official_api:
             pytest.skip(
                 "Mistral Voxtral models are not available on the official OpenAI API"
             )
 
-        with pytest.raises(BadRequestError):
+        with pytest.raises(BadRequestError) as exc_info:
             openai_client.audio.transcriptions.create(
                 file=("test.txt", b"This is not an audio file"), model=model_id
             )
+
+        error = exc_info.value
+        assert error.status_code == 400
+        error_body = error.body
+        assert isinstance(error_body, dict)
+        assert error_body["type"] == "invalid_request_error"
+        assert error_body["message"].strip(), "Error envelope carries no message"
 
     @pytest.mark.parametrize("model_id", VOXTRAL_SAMPLE)
     def test_verbose_json_unsupported(
@@ -266,18 +382,36 @@ class TestMistralVoxtralTranscriptions:
         sample_audio_mp3_file: bytes,
         model_id: str,
     ) -> None:
-        """Verbose JSON format is not supported by Voxtral models."""
+        """``response_format=verbose_json`` is rejected with 400 for Voxtral.
+
+        Voxtral returns plain text with no timing information, so the model declares
+        only ``{"json", "text"}`` as supported formats and the request is refused
+        before Bedrock is called.
+
+        Ref: https://stdapi.ai/api_openai_audio_transcriptions/
+             stdapi/models/audio/__init__.py:AudioModelBase._validate_response_formats
+        """
         if use_official_api:
             pytest.skip(
                 "Mistral Voxtral models are not available on the official OpenAI API"
             )
 
-        with pytest.raises(BadRequestError):
+        with pytest.raises(BadRequestError) as exc_info:
             openai_client.audio.transcriptions.create(
                 file=("test.mp3", sample_audio_mp3_file),
                 model=model_id,
                 response_format="verbose_json",
             )
+
+        error = exc_info.value
+        assert error.status_code == 400
+        error_body = error.body
+        assert isinstance(error_body, dict)
+        assert error_body["type"] == "invalid_request_error"
+        assert "verbose_json" in error_body["message"], (
+            f"Error does not name the refused format: {error_body['message']!r}"
+        )
+        assert "not supported" in error_body["message"]
 
     @pytest.mark.parametrize("model_id", VOXTRAL_SAMPLE)
     def test_logprobs_accepted_but_not_populated(
@@ -287,7 +421,15 @@ class TestMistralVoxtralTranscriptions:
         sample_audio_mp3_file: bytes,
         model_id: str,
     ) -> None:
-        """include=["logprobs"] is accepted but the response never carries log probabilities."""
+        """``include=["logprobs"]`` is accepted but no log probabilities are returned.
+
+        ``amazon.transcribe`` rejects ``include`` outright; Voxtral accepts the request
+        and forwards it, but Bedrock reports ``logprobs: null`` for every choice, so
+        the field is always absent from the response.
+
+        Ref: https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create
+             stdapi/models/audio/mistral_voxtral.py:AudioModel.stt
+        """
         if use_official_api:
             pytest.skip(
                 "Mistral Voxtral models are not available on the official OpenAI API"
@@ -299,8 +441,8 @@ class TestMistralVoxtralTranscriptions:
             include=["logprobs"],
         )
 
-        assert response.text.strip()  # type: ignore[union-attr]
-        assert getattr(response, "logprobs", None) is None
+        assert response.text.strip()
+        assert response.logprobs is None
 
     @pytest.mark.parametrize("model_id", VOXTRAL_SAMPLE)
     def test_srt_format_unsupported(
@@ -310,15 +452,32 @@ class TestMistralVoxtralTranscriptions:
         sample_audio_mp3_file: bytes,
         model_id: str,
     ) -> None:
-        """SRT subtitle format is not supported by Voxtral models."""
+        """``response_format=srt`` is rejected with 400 for Voxtral.
+
+        Subtitles are an Amazon Transcribe batch-job feature; a Bedrock chat model has
+        no cue timings, so ``srt`` is outside Voxtral's supported format set.
+
+        Ref: https://docs.aws.amazon.com/transcribe/latest/dg/subtitles.html
+             stdapi/models/audio/__init__.py:AudioModelBase._validate_response_formats
+        """
         if use_official_api:
             pytest.skip(
                 "Mistral Voxtral models are not available on the official OpenAI API"
             )
 
-        with pytest.raises(BadRequestError):
+        with pytest.raises(BadRequestError) as exc_info:
             openai_client.audio.transcriptions.create(
                 file=("test.mp3", sample_audio_mp3_file),
                 model=model_id,
                 response_format="srt",
             )
+
+        error = exc_info.value
+        assert error.status_code == 400
+        error_body = error.body
+        assert isinstance(error_body, dict)
+        assert error_body["type"] == "invalid_request_error"
+        assert "srt" in error_body["message"], (
+            f"Error does not name the refused format: {error_body['message']!r}"
+        )
+        assert "not supported" in error_body["message"]

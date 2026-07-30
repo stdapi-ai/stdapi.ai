@@ -1,12 +1,15 @@
-"""Tests for the OpenAI /v1/audio/speech route.
+"""Tests for the OpenAI /v1/audio/speech route served by Amazon Polly.
 
-Comprehensive test suite that validates all features of the OpenAI Audio Speech API
-specification, ensuring compatibility with the official OpenAI API behavior.
+Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+     https://stdapi.ai/api_openai_audio_speech/
+     stdapi/routes/openai_audio_speech.py:create_speech
 """
 
 import json
+from base64 import b64decode
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from inspect import AGEN_CLOSED, getasyncgenstate
+from typing import TYPE_CHECKING, Any
 
 import magic
 import pytest
@@ -26,65 +29,69 @@ if TYPE_CHECKING:
     from starlette.testclient import TestClient
 
 
-class TestAudioSpeech:
-    """Test suite for the /v1/audio/speech endpoint.
+def _assert_is_mp3(audio: bytes) -> None:
+    """Assert the payload is a bare MPEG layer III elementary stream."""
+    signature = str(magic.from_buffer(audio))
+    assert "MPEG ADTS, layer III" in signature, f"not mp3 audio: {signature}"
 
-    Tests are designed to validate complete OpenAI API compatibility including:
-    - All parameter combinations and validations
-    - All response formats and audio output validation
-    - Complete error scenario coverage with exact error matching
-    - Edge cases and boundary conditions
-    - HTTP headers and streaming behavior
+
+def _flac_sample_rate(audio: bytes) -> int:
+    """Return the sample rate advertised by a FLAC stream's STREAMINFO block."""
+    assert audio.startswith(b"fLaC"), "not a FLAC stream"
+    # STREAMINFO starts at byte 8; its sample rate is the 20 bits at bit offset 80.
+    return (audio[18] << 12) | (audio[19] << 4) | (audio[20] >> 4)
+
+
+def _sse_events(body: bytes) -> list[dict[str, Any]]:
+    """Return the JSON payloads of the ``data:`` lines of an SSE body."""
+    return [
+        json.loads(line.removeprefix("data:"))
+        for line in body.decode().splitlines()
+        if line.startswith("data:")
+    ]
+
+
+class TestAudioSpeech:
+    """/v1/audio/speech: the OpenAI speech contract mapped onto Polly SynthesizeSpeech.
+
+    Ref: https://docs.aws.amazon.com/polly/latest/APIReference/API_SynthesizeSpeech.html
+         stdapi/models/audio/amazon_polly.py:AudioModel.tts
     """
 
     def test_basic_speech_generation(
         self, openai_client: OpenAI, speech_standard_model: str
     ) -> None:
-        """Test fundamental speech generation functionality with default parameters.
+        """Speech generated with only the required parameters is an mp3 stream.
 
-        Validates the core text-to-speech functionality using minimal parameters
-        to ensure the service can convert text to audio successfully.
+        ``response_format`` defaults to ``mp3``, which Polly synthesizes
+        natively, so the body is served straight through with the
+        ``audio/mpeg`` content type and no in-process re-encode.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            speech_standard_model: Standard speech model identifier
-
-        Validates:
-            - Response contains binary audio data
-            - Audio data is non-empty and properly formatted
-            - Content-Type header indicates MP3 format (default)
-            - Basic TTS conversion works with standard model and voice
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/routes/openai_audio_speech.py:create_speech
         """
         response = openai_client.audio.speech.create(
             model=speech_standard_model, voice="alloy", input="Test."
         )
 
-        # Check that we get audio data back
         audio_data = response.content
         assert isinstance(audio_data, bytes)
         assert len(audio_data) > 0
-
-        # Check response headers
         assert response.response.headers.get("content-type") == "audio/mpeg"
+        _assert_is_mp3(audio_data)
 
     def test_basic_speech_long_generation(
         self, openai_client: OpenAI, speech_standard_model: str
     ) -> None:
-        """Test speech generation with longer text input.
+        """A 3000-character input is synthesized as a single mp3 stream.
 
-        Validates text-to-speech functionality with extended input text
-        to ensure the service handles longer content without language detection errors.
+        3000 billed characters is Polly's SynthesizeSpeech maximum, and the
+        Latin sample exercises the language-detection path: Comprehend
+        detects a language with no Polly voice, so the en-US fallback voice
+        is used instead of failing the request.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            speech_standard_model: Standard speech model identifier
-
-        Validates:
-            - Response contains binary audio data for longer text
-            - Audio data is non-empty and properly formatted
-            - Content-Type header indicates MP3 format (default)
-            - TTS handles text samples within language detection limits
-            - Fallback to default en-US voice if language detection fails (Esperanto sample)
+        Ref: https://docs.aws.amazon.com/polly/latest/dg/limits.html
+             stdapi/models/audio/amazon_polly.py:_select_voice
         """
         with (SAMPLES_DIR / "lorem_ipsum.txt").open() as file:
             input_text = file.read(3000)  # SynthesizeSpeech characters limit
@@ -97,6 +104,7 @@ class TestAudioSpeech:
         assert isinstance(audio_data, bytes)
         assert len(audio_data) > 0
         assert response.response.headers.get("content-type") == "audio/mpeg"
+        _assert_is_mp3(audio_data)
 
     @pytest.mark.parametrize("sample_rate", ["8000", "24000"])
     def test_speech_with_extra_polly_sample_rate(
@@ -106,22 +114,15 @@ class TestAudioSpeech:
         use_official_api: bool,
         sample_rate: str,
     ) -> None:
-        """Test speech generation with extra Polly-specific parameters.
+        """The Polly ``SampleRate`` extra parameter sets the encoded output rate.
 
-        Validates that extra AWS Polly parameters are properly forwarded and applied,
-        specifically testing the SampleRate parameter to ensure provider-specific
-        parameters work as documented.
+        Polly has no FLAC output, so the gateway re-encodes with ffmpeg: at
+        8 kHz the source stays pcm, while 24 kHz exceeds Polly's 16 kHz pcm
+        cap and is synthesized as Ogg Vorbis instead. Either way the FLAC
+        STREAMINFO must advertise the requested rate.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            speech_standard_model: Standard speech model identifier
-            use_official_api: True is using official OpenAI API.
-            sample_rate: Saple rate of generated voice.
-
-        Validates:
-            - Extra Polly parameters are accepted and forwarded
-            - SampleRate parameter works correctly
-            - Audio is generated successfully with custom sample rate
+        Ref: https://docs.aws.amazon.com/polly/latest/APIReference/API_SynthesizeSpeech.html
+             stdapi/models/audio/amazon_polly.py:AudioModel.tts
         """
         if use_official_api:
             pytest.skip("Amazon Polly is not available on the official OpenAI API")
@@ -137,25 +138,19 @@ class TestAudioSpeech:
         assert isinstance(audio_data, bytes)
         assert len(audio_data) > 0
         assert response.response.headers.get("content-type") == "audio/flac"
+        assert _flac_sample_rate(audio_data) == int(sample_rate)
 
     def test_speech_pcm_default_resamples_to_24khz(
         self, openai_client: OpenAI, speech_standard_model: str, use_official_api: bool
     ) -> None:
-        """Test default pcm output follows OpenAI's 24 kHz contract, not Polly's 16 kHz.
+        """Default pcm output follows OpenAI's 24 kHz contract, not Polly's 16 kHz.
 
-        Validates against real Polly that omitting the `SampleRate` extra
-        parameter resamples pcm output server-side: its byte length scales
-        with 24 kHz, roughly 1.5x the length of Polly's native 16 kHz pcm
-        for the same synthesized text.
+        Polly pcm accepts only 8 kHz and 16 kHz, so the gateway resamples its
+        16 kHz output to 24 kHz with ffmpeg: the default body carries ~1.5x
+        the samples of the same text pinned to Polly's native rate.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            speech_standard_model: Standard speech model identifier
-            use_official_api: True is using official OpenAI API.
-
-        Validates:
-            - Default pcm output length scales with a 24 kHz sample rate
-            - An explicit Polly-native SampleRate still yields 16 kHz pcm
+        Ref: https://stdapi.ai/api_openai_audio_speech/
+             stdapi/models/audio/amazon_polly.py:AudioModel.tts
         """
         if use_official_api:
             pytest.skip("Amazon Polly is not available on the official OpenAI API")
@@ -180,24 +175,19 @@ class TestAudioSpeech:
         assert native_len > 0
         # 24 kHz output carries ~1.5x the samples of Polly's native 16 kHz output.
         assert 1.3 < default_len / native_len < 1.7
+        assert default_response.response.headers.get("content-type") == "audio/pcm"
 
     def test_speech_marks_returns_json_lines(
         self, openai_client: OpenAI, speech_standard_model: str, use_official_api: bool
     ) -> None:
-        """Test SpeechMarkTypes returns timing marks instead of audio.
+        """``SpeechMarkTypes`` returns ordered timing marks instead of audio.
 
-        Validates against real Polly that the `SpeechMarkTypes` extra
-        parameter switches the response to a JSON lines stream labeled
-        `application/x-json-stream`, bypassing audio synthesis entirely.
+        Polly generates no audio for a speech-marks request: the gateway
+        forwards ``OutputFormat=json`` and streams the JSON lines through
+        unchanged, labelled ``application/x-json-stream``.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            speech_standard_model: Standard speech model identifier
-            use_official_api: True is using official OpenAI API.
-
-        Validates:
-            - The response content type is `application/x-json-stream`
-            - Each line is a JSON object describing a word-timing mark
+        Ref: https://docs.aws.amazon.com/polly/latest/dg/speechmarks.html
+             stdapi/models/audio/amazon_polly.py:AudioModel.tts
         """
         if use_official_api:
             pytest.skip("Amazon Polly is not available on the official OpenAI API")
@@ -214,32 +204,33 @@ class TestAudioSpeech:
         )
         lines = [line for line in response.content.decode().splitlines() if line]
         assert lines
-        for line in lines:
-            mark = json.loads(line)
+        marks = [json.loads(line) for line in lines]
+        for mark in marks:
             assert mark["type"] == "word"
+            assert mark.keys() >= {"time", "type", "value"}
+        times = [mark["time"] for mark in marks]
+        assert times == sorted(times), "word marks must be ordered by time"
+        values = [str(mark["value"]).lower() for mark in marks]
+        assert "hello" in values
+        assert "you" in values
 
     def test_speech_with_extra_invalid_parameter(
         self, openai_client: OpenAI, speech_standard_model: str, use_official_api: bool
     ) -> None:
-        """Test speech generation with invalid extra Polly-specific parameters.
+        """Polly extra parameters are validated: bad type and unknown name are 400s.
 
-        Validates that invalid extra AWS Polly parameters are properly rejected
-        with appropriate validation errors.
+        Extra body fields are parsed by ``_PollyExtraParams``, which forbids
+        unknown keys, so both failures surface as the gateway's
+        ``invalid_request_error`` naming the offending field.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            speech_standard_model: Standard speech model identifier
-            use_official_api: True is using official OpenAI API.
-
-        Validates:
-            - Invalid extra Polly parameters are rejected
-            - Proper error response with validation details
-            - Error indicates the parameter validation failure
+        Ref: https://stdapi.ai/api_openai_audio_speech/
+             stdapi/models/audio/amazon_polly.py:_PollyExtraParams
+             stdapi/main.py:handle_validation_exception
         """
         if use_official_api:
             pytest.skip("Amazon Polly is not available on the official OpenAI API")
 
-        with pytest.raises(BadRequestError):
+        with pytest.raises(BadRequestError) as exc_info:
             openai_client.audio.speech.create(
                 model=speech_standard_model,
                 voice="alloy",
@@ -247,13 +238,29 @@ class TestAudioSpeech:
                 extra_body={"SampleRate": "invalid_value"},
             )
 
-        with pytest.raises(BadRequestError):
+        error_body = exc_info.value.body
+        assert exc_info.value.status_code == 400
+        assert isinstance(error_body, dict)
+        assert error_body["type"] == "invalid_request_error"
+        assert "SampleRate" in str(error_body["message"])
+        assert "integer" in str(error_body["message"]).lower()
+
+        with pytest.raises(BadRequestError) as exc_info:
             openai_client.audio.speech.create(
                 model=speech_standard_model,
                 voice="alloy",
                 input="Test.",
                 extra_body={"Invalid": "invalid_value"},
             )
+
+        error_body = exc_info.value.body
+        assert exc_info.value.status_code == 400
+        assert isinstance(error_body, dict)
+        assert error_body["type"] == "invalid_request_error"
+        assert "Invalid" in str(error_body["message"])
+        assert "permitted" in str(error_body["message"]), (
+            "unknown extra parameters must be rejected, not ignored"
+        )
 
     @pytest.mark.parametrize(
         "voice",
@@ -262,19 +269,14 @@ class TestAudioSpeech:
     def test_all_voices_compatibility(
         self, openai_client: OpenAI, speech_standard_model: str, voice: str
     ) -> None:
-        """Test all OpenAI voices work with different models.
+        """Every OpenAI built-in voice name resolves to a usable Polly voice.
 
-        Validates that all standard OpenAI voices work correctly.
+        Polly has no ``alloy``-style voices: the gateway maps each OpenAI name
+        to a Polly voice of the matching gender for the detected language, so
+        an unmapped name would be forwarded verbatim and rejected by Polly.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            speech_standard_model: Standard speech model identifier
-            voice: The voice to test
-
-        Validates:
-            - All voices produce valid audio output
-            - Voice selection works across model variations
-            - Response format and content type headers are correct
+        Ref: https://developers.openai.com/api/docs/guides/text-to-speech#voice-options
+             stdapi/models/audio/amazon_polly.py:_select_voice
         """
         response = openai_client.audio.speech.create(
             model=speech_standard_model, voice=voice, input="Test."
@@ -284,6 +286,7 @@ class TestAudioSpeech:
         assert isinstance(audio_data, bytes)
         assert len(audio_data) > 0
         assert response.response.headers.get("content-type") == "audio/mpeg"
+        _assert_is_mp3(audio_data)
 
     @pytest.mark.parametrize("voice", ["Amy", "amy"])
     def test_polly_voices_compatibility(
@@ -293,18 +296,14 @@ class TestAudioSpeech:
         voice: str,
         use_official_api: bool,
     ) -> None:
-        """Test Polly voices works.
+        """A native Polly voice ID is accepted case-insensitively.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            speech_standard_model: Standard speech model identifier
-            voice: The voice to test
-            use_official_api: True if using OpenAI API
+        Voices are indexed by lowercase name, so ``amy`` resolves to the
+        ``Amy`` voice ID; an unresolved name would reach Polly verbatim and
+        come back as a 400 invalid-voice error.
 
-        Validates:
-            - All voices produce valid audio output
-            - Voice selection works across model variations
-            - Response format and content type headers are correct
+        Ref: https://docs.aws.amazon.com/polly/latest/dg/available-voices.html
+             stdapi/models/audio/amazon_polly.py:_select_voice
         """
         if use_official_api:
             pytest.skip(
@@ -315,26 +314,24 @@ class TestAudioSpeech:
         )
 
         assert isinstance(response.content, bytes)
+        assert len(response.content) > 0
+        assert response.response.headers.get("content-type") == "audio/mpeg"
+        _assert_is_mp3(response.content)
 
     @pytest.mark.parametrize("speed", [0.25, 1.0, 2.0])
     def test_speed_parameter_validation(
         self, openai_client: OpenAI, speech_standard_model: str, speed: float
     ) -> None:
-        """Test speed parameter with valid boundary values.
+        """In-range ``speed`` values are accepted and still yield valid mp3 audio.
 
-        Validates speed parameter behavior at boundary values and common settings
-        according to OpenAI specification (0.25 to 4.0 range).
+        Polly has no speed parameter: any value other than 1.0 is applied by
+        wrapping the text in ``<speak><prosody rate="N%">``, so a malformed
+        rate would come back as Polly's InvalidSsmlException instead of audio.
+        The gateway accepts 0.2 to 2.0, narrower than OpenAI's 0.25 to 4.0,
+        because ``<prosody rate>`` is only partially supported per engine.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            speech_standard_model: Standard speech model identifier
-            speed: The speed value to test
-
-        Validates:
-            - Low speed (0.25) produces valid output
-            - High speed (4.0 for OpenAI, 2.0 for Polly) produces valid output
-            - 1.0 Speed
-            - Audio duration varies appropriately with speed
+        Ref: https://docs.aws.amazon.com/polly/latest/dg/supportedtags.html
+             stdapi/models/audio/amazon_polly.py:_prepare_text_for_speech
         """
         response = openai_client.audio.speech.create(
             model=speech_standard_model, voice="alloy", input="Test.", speed=speed
@@ -344,6 +341,7 @@ class TestAudioSpeech:
         assert isinstance(audio_data, bytes)
         assert len(audio_data) > 0
         assert response.response.headers.get("content-type") == "audio/mpeg"
+        _assert_is_mp3(audio_data)
 
     @pytest.mark.parametrize(
         ("format_name", "content_type", "signature_check"),
@@ -364,24 +362,14 @@ class TestAudioSpeech:
         content_type: str,
         signature_check: str | None,
     ) -> None:
-        """Test all OpenAI supported audio response formats.
+        """Each OpenAI response_format is returned with its own container and type.
 
-        Validates all audio formats specified in OpenAI API documentation:
-        mp3, opus, aac, flac, wav, pcm. Each format is tested for proper
-        content-type headers and valid audio format signatures.
+        Polly emits only mp3, ogg_vorbis, ogg_opus and pcm, so wav, flac and
+        aac are transcoded in-process from pcm; ``pcm`` itself is raw signed
+        16-bit mono little-endian with no container header.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            speech_standard_model: Standard speech model identifier
-            format_name: The audio format to test
-            content_type: Expected content type header
-            signature_check: Expected signature string in audio data (or None)
-
-        Validates:
-            - All format conversions work correctly
-            - Content-Type headers match requested formats exactly
-            - Audio data contains proper format signatures
-            - Response data is valid binary audio content
+        Ref: https://docs.aws.amazon.com/polly/latest/APIReference/API_SynthesizeSpeech.html
+             stdapi/media.py:encode_audio_stream
         """
         response = openai_client.audio.speech.create(
             model=speech_standard_model,
@@ -399,23 +387,23 @@ class TestAudioSpeech:
         if signature_check:
             magic_result = magic.from_buffer(audio_data)
             assert signature_check in str(magic_result)
+        else:
+            assert not audio_data.startswith((b"RIFF", b"fLaC", b"OggS", b"ID3")), (
+                "pcm must be raw samples, without a container header"
+            )
+            assert len(audio_data) % 2 == 0, "16-bit samples come in byte pairs"
 
     def test_text_length_boundaries(
         self, openai_client: OpenAI, speech_standard_model: str
     ) -> None:
-        """Test text input length at boundary conditions.
+        """Audio length scales with the input, down to a single character.
 
-        Validates behavior with minimum viable text (1 char) and maximum
-        allowed text (4096 chars according to OpenAI spec).
+        The long case must be real words: Polly renders a repeated single letter
+        ("A" * 128) as *less* audio than one "A" (1454 vs 2708 bytes), so a degenerate
+        input cannot demonstrate scaling.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            speech_standard_model: Standard speech model identifier
-
-        Validates:
-            - Single character input produces valid audio
-            - Longer length text is processed correctly
-            - Audio output length scales appropriately with input
+        Ref: https://docs.aws.amazon.com/polly/latest/dg/limits.html
+             stdapi/types/openai_audio.py:SpeechCreateParams
         """
         # Test minimum length (1 character)
         response = openai_client.audio.speech.create(
@@ -423,29 +411,36 @@ class TestAudioSpeech:
         )
         assert isinstance(response.content, bytes)
         assert len(response.content) > 0
+        shortest = response.content
+        _assert_is_mp3(shortest)
 
         # Test longer length
         response = openai_client.audio.speech.create(
-            model=speech_standard_model, voice="alloy", input="A" * 128
+            model=speech_standard_model,
+            voice="alloy",
+            input=(
+                "This is a considerably longer sentence, spoken aloud, so that the "
+                "synthesized audio is measurably longer than a single letter."
+            ),
         )
         assert isinstance(response.content, bytes)
         assert len(response.content) > 0
+        _assert_is_mp3(response.content)
+        assert len(response.content) > 2 * len(shortest), (
+            "a full sentence must synthesize measurably more audio than one letter"
+        )
 
     def test_empty_input_error(
         self, openai_client: OpenAI, speech_standard_model: str
     ) -> None:
-        """Test error handling for empty text input.
+        """An empty ``input`` is rejected as an ``invalid_request_error``.
 
-        Validates proper error response for empty input according to OpenAI specification.
+        ``input`` has a minimum length of one character, so the request never
+        reaches Polly: the failure comes from request validation and carries
+        no OpenAI error ``code``.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            speech_standard_model: Standard speech model identifier
-
-        Validates:
-            - Correct HTTP status code (400)
-            - Proper error type ("invalid_request_error") and code (null)
-            - Error response format matches OpenAI specification
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/types/openai_audio.py:SpeechCreateParams
         """
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.audio.speech.create(
@@ -464,20 +459,13 @@ class TestAudioSpeech:
             word in error_message
             for word in ["input", "required", "empty", "character"]
         )
+        assert "input" in error_message, "the error must name the offending field"
 
     def test_invalid_model_error(self, openai_client: OpenAI) -> None:
-        """Test error handling for invalid model specification.
+        """An unknown model is rejected as a 404 ``model_not_found``.
 
-        Validates proper error response for non-existent model names.
-
-        Args:
-            openai_client: OpenAI client instance for API calls
-
-        Validates:
-            - Correct HTTP status code (404)
-            - Proper error type ("invalid_request_error") and code ("model_not_found")
-            - Error message identifies model as invalid
-            - Consistent error response structure
+        Ref: https://developers.openai.com/api/docs/guides/error-codes
+             stdapi/api_errors.py:UnsupportedModelError
         """
         with pytest.raises(NotFoundError) as exc_info:
             openai_client.audio.speech.create(
@@ -495,23 +483,21 @@ class TestAudioSpeech:
             word in error_message
             for word in ["model", "invalid", "supported", "exist", "access"]
         )
+        assert "invalid-nonexistent-model" in error_message, (
+            "the error must echo the rejected model ID"
+        )
 
     def test_invalid_voice_error(
         self, openai_client: OpenAI, speech_standard_model: str
     ) -> None:
-        """Test error handling for invalid voice specification.
+        """An unknown voice is rejected as an ``invalid_request_error``.
 
-        Validates proper error response for non-existent voice names.
+        The voice is a free-form string (Polly voice IDs are accepted too), so
+        the rejection comes from Polly's ValidationException, which the
+        gateway rewrites into a 400 listing the engine's available voices.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            speech_standard_model: Standard speech model identifier
-
-        Validates:
-            - Correct HTTP status code (400)
-            - Proper error type ("invalid_request_error") and code (null)
-            - Error message identifies voice as invalid
-            - Error response includes available voice information
+        Ref: https://docs.aws.amazon.com/polly/latest/dg/available-voices.html
+             stdapi/models/audio/amazon_polly.py:_handle_polly_error
         """
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.audio.speech.create(
@@ -531,25 +517,21 @@ class TestAudioSpeech:
             word in error_message
             for word in ["voice", "invalid", "supported", "input", "should"]
         )
+        assert "invalid_voice_name" in error_message, (
+            "the error must echo the rejected voice name"
+        )
 
     @pytest.mark.parametrize("speed", [0.0, -1.0, 10.0])
     def test_invalid_speed_error(
         self, openai_client: OpenAI, speech_standard_model: str, speed: float
     ) -> None:
-        """Test error handling for invalid speed values.
+        """Out-of-range ``speed`` values are rejected as ``invalid_request_error``.
 
-        Validates proper error response for speed values outside the valid range (0.25-4.0).
+        The gateway bounds ``speed`` to 0.2 to 2.0, so all three values fail
+        request validation before any Polly call and carry no error ``code``.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            speech_standard_model: Standard speech model identifier
-            speed: The invalid speed value to test
-
-        Validates:
-            - Correct HTTP status code (400)
-            - Proper error type ("invalid_request_error") and code (null)
-            - Error message mentions speed validation
-            - All boundary violations are caught
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/types/openai_audio.py:SpeechCreateParams
         """
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.audio.speech.create(
@@ -570,23 +552,15 @@ class TestAudioSpeech:
             word in error_message
             for word in ["speed", "range", "0.25", "4.0", "greater", "less"]
         )
+        assert "speed" in error_message, "the error must name the offending field"
 
     def test_invalid_response_format_error(
         self, openai_client: OpenAI, speech_standard_model: str
     ) -> None:
-        """Test error handling for invalid response format specification.
+        """An unsupported ``response_format`` is rejected, listing the valid values.
 
-        Validates proper error response for unsupported audio formats.
-
-        Args:
-            openai_client: OpenAI client instance for API calls
-            speech_standard_model: Standard speech model identifier
-
-        Validates:
-            - Correct HTTP status code (400)
-            - Proper error type ("invalid_request_error") and code (null)
-            - Error message mentions format validation
-            - Lists supported formats in error response
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/types/openai_audio.py:SpeechCreateParams
         """
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.audio.speech.create(
@@ -607,64 +581,67 @@ class TestAudioSpeech:
             word in error_message
             for word in ["format", "supported", "response", "input", "should"]
         )
+        assert "mp3" in error_message, "the error must enumerate the accepted formats"
+        assert "pcm" in error_message
 
     def test_missing_required_parameters(
         self, openai_client: OpenAI, speech_standard_model: str
     ) -> None:
-        """Test error handling for missing required parameters.
+        """A null ``model``, ``voice`` or ``input`` fails validation naming that field.
 
-        Validates that all required parameters (model, voice, input) must be provided.
-
-        Args:
-            openai_client: OpenAI client instance for API calls
-            speech_standard_model: Standard speech model identifier
-
-        Validates:
-            - Missing parameters result in proper validation errors
-            - Error messages identify specific missing fields
-            - Consistent error response format
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/main.py:handle_validation_exception
         """
         # Test missing model
-        with pytest.raises(BadRequestError):
+        with pytest.raises(BadRequestError) as exc_info:
             openai_client.audio.speech.create(
                 voice="alloy",
                 input="Test message.",
                 model=None,  # type: ignore[arg-type]
             )
+        error_body = exc_info.value.body
+        assert exc_info.value.status_code == 400
+        assert isinstance(error_body, dict)
+        assert error_body["type"] == "invalid_request_error"
+        assert "model" in str(error_body["message"]).lower()
 
         # Test missing voice
-        with pytest.raises(BadRequestError):
+        with pytest.raises(BadRequestError) as exc_info:
             openai_client.audio.speech.create(
                 model=speech_standard_model,
                 input="Test message.",
                 voice=None,  # type: ignore[arg-type]
             )
+        error_body = exc_info.value.body
+        assert exc_info.value.status_code == 400
+        assert isinstance(error_body, dict)
+        assert error_body["type"] == "invalid_request_error"
+        assert "voice" in str(error_body["message"]).lower()
 
         # Test missing input
-        with pytest.raises(BadRequestError):
+        with pytest.raises(BadRequestError) as exc_info:
             openai_client.audio.speech.create(
                 model=speech_standard_model,
                 voice="alloy",
                 input=None,  # type: ignore[arg-type]
             )
+        error_body = exc_info.value.body
+        assert exc_info.value.status_code == 400
+        assert isinstance(error_body, dict)
+        assert error_body["type"] == "invalid_request_error"
+        assert "input" in str(error_body["message"]).lower()
 
     def test_stream_format_functionality(
         self, openai_client: OpenAI, speech_standard_model: str
     ) -> None:
-        """Test stream_format parameter with all supported formats.
+        """``stream_format`` selects between a raw audio body and SSE audio events.
 
-        Validates that the stream_format parameter works correctly with both
-        standard HTTP response ("audio") and Server-Sent Events ("sse") formats.
+        With ``sse`` the same mp3 bytes are delivered as base64
+        ``speech.audio.delta`` events, closed by a single
+        ``speech.audio.done`` event carrying the usage totals.
 
-        Args:
-            openai_client: OpenAI client instance for API calls
-            speech_standard_model: Standard speech model identifier
-
-        Validates:
-            - "audio" format returns standard HTTP response with complete audio
-            - "sse" format enables Server-Sent Events streaming
-            - Both formats produce valid audio output
-            - Response headers are appropriate for each format
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/routes/openai_audio_speech.py:_speech_audio_sse
         """
         # Test default "audio" stream format
         response_audio = openai_client.audio.speech.create(
@@ -677,6 +654,7 @@ class TestAudioSpeech:
         assert isinstance(response_audio.content, bytes)
         assert len(response_audio.content) > 0
         assert response_audio.response.headers.get("content-type") == "audio/mpeg"
+        _assert_is_mp3(response_audio.content)
 
         # Test "sse" stream format for Server-Sent Events
         response_sse = openai_client.audio.speech.create(
@@ -686,9 +664,20 @@ class TestAudioSpeech:
             stream_format="sse",
         )
 
-        # SSE response should still provide audio content but potentially with different streaming behavior
         assert isinstance(response_sse.content, bytes)
         assert len(response_sse.content) > 0
+        content_type = response_sse.response.headers.get("content-type", "")
+        assert content_type.startswith("text/event-stream")
+
+        events = _sse_events(response_sse.content)
+        deltas = [event for event in events if event["type"] == "speech.audio.delta"]
+        assert deltas, "sse streaming must emit speech.audio.delta events"
+        _assert_is_mp3(b"".join(b64decode(delta["audio"]) for delta in deltas))
+
+        (done,) = [event for event in events if event["type"] == "speech.audio.done"]
+        usage = done["usage"]
+        assert usage["input_tokens"] > 0
+        assert usage["total_tokens"] == usage["input_tokens"] + usage["output_tokens"]
 
     def test_speech_usage_logged(
         self,
@@ -697,7 +686,15 @@ class TestAudioSpeech:
         api_key: str,
         capfd: pytest.CaptureFixture[str],
     ) -> None:
-        """Test that usage is logged for TTS (speech) requests."""
+        """Synthesis logs Polly character usage plus the Comprehend detection call.
+
+        An OpenAI voice name has no Polly equivalent, so the gateway detects
+        the language with Comprehend first; that call is billed separately and
+        is charged a 3-unit minimum whatever the sample length.
+
+        Ref: stdapi/models/audio/amazon_polly.py:_detect_language
+             stdapi/usage.py:record_polly_usage
+        """
         if test_client is None:
             pytest.skip("Requires local test server")
 
@@ -737,26 +734,23 @@ class TestAudioSpeech:
 
 
 class TestAudioSpeechMCP:
-    """Test suite for MCP tool behavior of the /v1/audio/speech endpoint."""
+    """MCP tool behavior of the /v1/audio/speech endpoint.
+
+    Ref: https://stdapi.ai/api_openai_audio_speech/
+         stdapi/routes/openai_audio_speech.py:create_speech
+    """
 
     def test_mcp_default_uses_sse(
         self, test_client: TestClient, api_key: str, speech_standard_model: str
     ) -> None:
-        """Test MCP tool defaults to SSE streaming when stream_format not specified.
+        """An MCP tool call without ``stream_format`` streams SSE audio events.
 
-        Validates that when the speech endpoint is called as an MCP tool with
-        default parameters (no stream_format specified), it returns SSE format
-        for better MCP client compatibility.
+        Over HTTP the default is a binary audio body; MCP clients cannot
+        consume that, so the route switches to the SSE framing whenever
+        ``stream_format`` was not set explicitly by the caller.
 
-        Args:
-            test_client: Test client for HTTP requests
-            api_key: Authentication token
-            speech_standard_model: Standard speech model identifier
-
-        Validates:
-            - MCP tool call with default params returns SSE response
-            - Response contains speech.audio.delta events
-            - Response is properly formatted as Server-Sent Events
+        Ref: stdapi/routes/openai_audio_speech.py:create_speech
+             stdapi/mcp.py:is_mcp
         """
         if test_client is None:
             pytest.skip("Local only")
@@ -809,6 +803,10 @@ class TestAudioSpeechMCP:
         # For MCP calls without explicit stream_format, should return SSE
         response_text = response.text
         assert "speech.audio.delta" in response_text
+        assert "speech.audio.done" in response_text
+        assert "total_tokens" in response_text, (
+            "the terminating done event must carry the usage totals"
+        )
 
 
 async def _byte_stream(*chunks: bytes) -> AsyncGenerator[bytes]:
@@ -830,7 +828,11 @@ class _StubSpeechModel:
 
 @pytest.mark.local
 class TestAudioSpeechContentType:
-    """create_speech: the model's content type override wins over response_format."""
+    """create_speech: the model's content type override wins over response_format.
+
+    Ref: https://stdapi.ai/api_openai_audio_speech/
+         stdapi/routes/openai_audio_speech.py:create_speech
+    """
 
     @pytest.fixture(autouse=True)
     def _request_context(self) -> Generator[None]:
@@ -882,7 +884,14 @@ class TestAudioSpeechContentType:
     async def test_content_type_override_labels_the_stream(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A JSON speech marks payload is served as-is with its own content type."""
+        """A JSON speech marks payload is served as-is with its own content type.
+
+        ``response_format="mp3"`` is ignored for a non-audio payload, and no
+        download filename is attached since the body is not an audio file.
+
+        Ref: https://docs.aws.amazon.com/polly/latest/dg/speechmarks.html
+             stdapi/routes/openai_audio_speech.py:create_speech
+        """
         marks = b'{"time":0,"type":"word","value":"Hello"}\n'
         self._patch_model(
             monkeypatch,
@@ -911,18 +920,26 @@ class TestAudioSpeechContentType:
     async def test_content_type_override_rejects_sse(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """SSE audio events cannot carry a non-audio payload, so it is rejected."""
+        """SSE audio events cannot carry a non-audio payload, so it is rejected.
+
+        The route fails with a 400 before streaming anything and closes the
+        backend stream, so no Polly response is left dangling.
+
+        Ref: https://stdapi.ai/api_openai_audio_speech/
+             stdapi/routes/openai_audio_speech.py:create_speech
+        """
+        stream = _byte_stream(b"{}\n")
         self._patch_model(
             monkeypatch,
             TTSResponse(
-                audio_stream=_byte_stream(b"{}\n"),
+                audio_stream=stream,
                 input_tokens=5,
                 output_tokens=0,
                 content_type="application/x-json-stream",
             ),
         )
 
-        with pytest.raises(ApiError, match="sse"):
+        with pytest.raises(ApiError, match="sse") as exc_info:
             await openai_audio_speech.create_speech(
                 SpeechCreateParams(
                     model="amazon.polly-neural",
@@ -932,10 +949,22 @@ class TestAudioSpeechContentType:
                 )
             )
 
+        error = exc_info.value
+        assert error.status == 400
+        assert error.code is None
+        assert "speech marks" in str(error)
+        assert getasyncgenstate(stream) == AGEN_CLOSED, (
+            "the rejected stream must be closed"
+        )
+
     async def test_without_override_the_response_format_still_wins(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """An audio response keeps its response_format derived content type."""
+        """An audio response keeps its response_format derived content type.
+
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/routes/openai_audio_speech.py:create_speech
+        """
         self._patch_model(
             monkeypatch,
             TTSResponse(

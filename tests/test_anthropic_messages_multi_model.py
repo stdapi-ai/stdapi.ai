@@ -1,32 +1,28 @@
-"""Multi-model parametrized tests for the Anthropic /v1/messages route.
+"""Anthropic /v1/messages exercised across one model per Bedrock provider family.
 
-Covers representative "real-world" usage across one model per provider family
-available on AWS Bedrock, including:
+Every family is funnelled through the same Converse adapter, so this module is the
+cross-model regression net for the shared envelope: the ``Message`` shape, the Bedrock
+``stopReason`` → ``stop_reason`` map, usage accounting, the SSE event sequence, tool-use
+plumbing, native reasoning blocks, Nova prompt caching and image input.  Only
+vendor-neutral behavior is asserted, because live model text is not reproducible;
+per-family specifics live in the dedicated modules.
 
-  - Basic text generation and usage tokens
-  - Streaming SSE event sequence and no-empty-text-block regression (ISSUE-1 fix)
-  - Multi-turn context retention
-  - Single-turn tool calling with stop_reason validation
-  - Tool-result continuation (two-turn tool use cycle)
-  - Streaming tool calling
-  - Full agentic loop with real local tool execution (multi-turn, multi-tool)
-  - Native thinking/reasoning blocks on native-reasoning models
-  - Prompt caching on Nova models
+A Claude model heads every parametrize list as the reference baseline, and the narrower
+lists reflect Bedrock capabilities (Mistral 7B and Llama 3.3 70B reject streaming with
+tools; Llama 3.3 70B emits raw JSON instead of ``toolUse`` blocks).  Where Bedrock refuses
+a combination outright the test skips rather than fails, so the report distinguishes a
+missing capability from a broken mapping.
 
-All tests require actual Bedrock access.  Tool-use and reasoning matrices are
-marked ``@pytest.mark.expensive``; the cheap but latency-bound matrices (basics,
-vision, structured output, caching) are marked ``@pytest.mark.slow``.  The
-markers are conjunctive, so run the whole file with::
+Tool-use and reasoning matrices are marked ``expensive``; the latency-bound matrices
+(basics, vision, structured output, caching) are marked ``slow``.  The markers are
+conjunctive, so the whole file needs::
 
     pytest --expensive --slow tests/test_anthropic_messages_multi_model.py
 
-A ``Claude`` model is included in every parametrized list as the reference
-baseline.  Feature-gated tests (streaming+tools, reasoning blocks, caching)
-carry narrower parametrize lists reflecting known Bedrock capabilities.
-
-If a model does not support a specific feature (e.g. Mistral or Llama3 cannot
-use tools in streaming mode), the test calls ``pytest.skip()`` so the result
-is recorded as *skipped* — not as a failure — in the report.
+Ref: https://platform.claude.com/docs/en/api/messages
+     https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+     stdapi/routes/anthropic_messages.py:create_message
+     stdapi/models/chat/_adapters/_anthropic_message.py:format_response
 """
 
 import base64
@@ -196,6 +192,22 @@ _TOOLS: list[dict[str, object]] = [
     },
 ]
 
+#: Declared tool names; a model may only ever call one of these.
+_TOOL_NAMES = frozenset({"list_directory", "read_file"})
+
+#: ``stop_reason`` values the Anthropic Messages reference defines.
+_STOP_REASONS = frozenset(
+    {
+        "end_turn",
+        "max_tokens",
+        "stop_sequence",
+        "tool_use",
+        "pause_turn",
+        "refusal",
+        "model_context_window_exceeded",
+    }
+)
+
 _PROJECT_ROOT = "/var/opt/projects/stdapi.ai"
 
 
@@ -242,21 +254,26 @@ def _text_from(msg: Message) -> str:
 
 
 class TestMultiModelBasics:
-    """Basic functionality across all supported model families."""
+    """Text generation, streaming and multi-turn history across all model families.
+
+    Ref: https://platform.claude.com/docs/en/api/messages
+         stdapi/models/chat/_default.py:ChatModel.create_message
+    """
 
     @pytest.mark.slow
     @_BASIC_MODELS
     def test_basic_text_generation(
         self, model: str, anthropic_client: Anthropic, use_official_api: bool
     ) -> None:
-        """Non-streaming response has text content and populated usage.
+        """Every family answers with the same ``message`` envelope and billed usage.
 
-        Validates:
-            - ``response.type == "message"``
-            - ``response.role == "assistant"``
-            - At least one content block with non-empty text
-            - ``stop_reason`` is set
-            - ``usage.input_tokens > 0`` and ``usage.output_tokens > 0``
+        The ``msg_`` id prefix, the ``message`` / ``assistant`` literals, the echoed model
+        id and the ``stop_reason`` vocabulary come from the gateway rather than the model,
+        so they must hold identically for every family.  The prompt is pinned to one word
+        so the text can be checked without depending on style.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             stdapi/models/chat/_adapters/_anthropic_message.py:format_response
         """
         if use_official_api:
             pytest.skip("Multi-model tests only run against the local server")
@@ -273,14 +290,22 @@ class TestMultiModelBasics:
 
         assert response.type == "message"
         assert response.role == "assistant"
+        assert response.id.startswith("msg_"), f"Unexpected id: {response.id!r}"
+        assert response.model == model, "The requested model id must be echoed back"
         assert len(response.content) >= 1
         assert response.stop_reason is not None
+        assert response.stop_reason in _STOP_REASONS, (
+            f"Unexpected stop_reason for {model!r}: {response.stop_reason!r}"
+        )
         assert response.usage.input_tokens > 0
         assert response.usage.output_tokens > 0
 
         text = _text_from(response)
         assert text, (
             f"Expected non-empty text, got content types: {[b.type for b in response.content]}"
+        )
+        assert "hello" in text.lower(), (
+            f"Expected the pinned word for {model!r}, got: {text[:200]!r}"
         )
 
     @pytest.mark.slow
@@ -290,17 +315,14 @@ class TestMultiModelBasics:
     ) -> None:
         """Streaming response emits the required SSE event sequence.
 
-        Regression test for ISSUE-1: DeepSeek V3 and Google Gemma previously
-        produced only 3 events (message_start/delta/stop) with empty text because
-        the server permanently suppressed blocks starting with an empty delta.
+        Anthropic's taxonomy is ``message_start`` → per block ``content_block_start`` /
+        deltas / ``content_block_stop`` → ``message_delta`` → ``message_stop``.  Bedrock
+        sends no ``contentBlockStart`` for plain text and several families open with an
+        empty delta, so the gateway has to synthesize the start event; families that only
+        ever emitted ``message_start``/``delta``/``stop`` were losing their whole answer.
 
-        Validates:
-            - ``message_start`` event is present
-            - At least one ``content_block_start`` event is present
-            - At least one ``content_block_stop`` event is present
-            - ``message_delta`` event is present
-            - ``message_stop`` event is present
-            - Final message has non-empty text (for non-reasoning-only responses)
+        Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
+             stdapi/models/chat/_adapters/_anthropic_message.py:format_stream
         """
         if use_official_api:
             pytest.skip("Multi-model tests only run against the local server")
@@ -331,6 +353,19 @@ class TestMultiModelBasics:
         assert "message_stop" in event_types, (
             f"Missing message_stop; got: {event_types}"
         )
+        assert event_types[0] == "message_start", (
+            f"Stream must open with message_start; got: {event_types[:3]}"
+        )
+        assert event_types[-1] == "message_stop", (
+            f"Stream must end with message_stop; got: {event_types[-3:]}"
+        )
+        assert event_types.index("content_block_start") < event_types.index(
+            "content_block_stop"
+        ), f"Block events out of order; got: {event_types}"
+        assert event_types.index("message_delta") < event_types.index("message_stop"), (
+            f"message_delta must precede message_stop; got: {event_types}"
+        )
+        assert final.model == model, "The requested model id must be echoed back"
 
         block_types = [b.type for b in final.content]
         if block_types == ["thinking"]:
@@ -346,12 +381,13 @@ class TestMultiModelBasics:
     ) -> None:
         """Streaming response never surfaces a text block with empty content.
 
-        Regression test for ISSUE-1: the deferred-suppression fix in
-        ``_process_content_block_delta`` must not leak empty text blocks for
-        any model (e.g. Nova's preamble blocks must still be discarded).
+        Suppression of an empty first delta is deferred to ``contentBlockStop``: a block
+        that only ever carried ``{"text": ""}`` (Nova's preamble) is dropped, while a block
+        that later receives real text is emitted.  Both halves are checked here — no empty
+        text block, and still a text block for a model that answers in text.
 
-        Validates:
-            - Every ``text`` block in the accumulated final message has non-empty text
+        Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
+             stdapi/models/chat/_adapters/_anthropic_message.py:_process_content_block_delta
         """
         if use_official_api:
             pytest.skip("Multi-model tests only run against the local server")
@@ -368,16 +404,24 @@ class TestMultiModelBasics:
                 assert block.text, (
                     f"Empty text block in final message for {model!r}: {block!r}"
                 )
+        block_types = [b.type for b in final.content]
+        assert "text" in block_types or block_types == ["thinking"], (
+            f"Expected a text block for {model!r}; content: {block_types}"
+        )
 
     @pytest.mark.slow
     @_BASIC_MODELS
     def test_multi_turn_context_retention(
         self, model: str, anthropic_client: Anthropic, use_official_api: bool
     ) -> None:
-        """Model correctly uses conversation history in multi-turn dialogue.
+        """Prior turns reach the model, so a first-turn identifier can be recalled.
 
-        Validates:
-            - Third turn response references information shared in the first turn
+        ``_prepare_messages_and_system`` translates the alternating user/assistant history
+        into Bedrock ``messages``; a dropped, reordered or merged-away turn would leave the
+        model unable to echo ``ZEBRA99``.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:translate_request
         """
         if use_official_api:
             pytest.skip("Multi-model tests only run against the local server")
@@ -401,6 +445,10 @@ class TestMultiModelBasics:
             ],
         )
 
+        assert response.usage.input_tokens > 0, "The replayed history must be billed"
+        assert response.stop_reason in _STOP_REASONS, (
+            f"Unexpected stop_reason for {model!r}: {response.stop_reason!r}"
+        )
         text = _text_from(response)
         assert text, "Expected non-empty response"
         assert "ZEBRA99" in text, (
@@ -414,20 +462,26 @@ class TestMultiModelBasics:
 
 
 class TestMultiModelToolUse:
-    """Tool-calling functionality across tool-capable model families."""
+    """Tool-calling functionality across tool-capable model families.
+
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
+         stdapi/models/chat/_adapters/_anthropic_message.py:_build_tool_config
+    """
 
     @pytest.mark.expensive
     @_TOOL_MODELS
     def test_tool_call_single_turn(
         self, model: str, anthropic_client: Anthropic, use_official_api: bool
     ) -> None:
-        """Model invokes a tool when asked to perform a task requiring it.
+        """A Bedrock ``toolUse`` answer becomes a ``tool_use`` block and ``stop_reason``.
 
-        Validates:
-            - ``stop_reason == "tool_use"``
-            - At least one ``tool_use`` block in content
-            - Tool name matches a defined tool
-            - Tool input contains expected keys
+        The Bedrock ``tool_use`` stop reason maps onto Anthropic's, the ``toolUseId`` is
+        re-prefixed ``toolu_`` and the structured ``input`` is passed through as an object —
+        all three come from the gateway, so they hold for every tool-capable family.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
+             stdapi/models/chat/_adapters/_anthropic_message.py:format_response
         """
         if use_official_api:
             pytest.skip("Multi-model tests only run against the local server")
@@ -449,20 +503,29 @@ class TestMultiModelToolUse:
         assert len(tool_blocks) >= 1, "Expected at least one tool_use block"
 
         tool = tool_blocks[0]
-        tool_names = {t["name"] for t in _TOOLS}
-        assert tool.name in tool_names, f"Unexpected tool name: {tool.name!r}"
+        assert tool.name in _TOOL_NAMES, f"Unexpected tool name: {tool.name!r}"
+        assert tool.id.startswith("toolu_"), (
+            f"Expected a toolu_ prefixed id derived from the Bedrock toolUseId, "
+            f"got: {tool.id!r}"
+        )
+        assert isinstance(tool.input, dict), (
+            f"Expected a JSON object as tool input, got: {tool.input!r}"
+        )
 
     @pytest.mark.expensive
     @_TOOL_MODELS
     def test_tool_result_continuation(
         self, model: str, anthropic_client: Anthropic, use_official_api: bool
     ) -> None:
-        """Two-turn tool-use cycle: model calls tool, receives result, gives answer.
+        """A ``tool_result`` message closes the tool cycle and the model answers from it.
 
-        Validates:
-            - First turn: ``stop_reason == "tool_use"``
-            - Second turn (after injecting tool result): ``stop_reason == "end_turn"``
-            - Second turn response contains non-empty text
+        The second request replays the assistant ``tool_use`` block and a user
+        ``tool_result`` keyed by ``tool_use_id``; ``_map_tool_result_to_bedrock`` strips the
+        ``toolu_`` prefix again, and Converse rejects the conversation if that pairing is
+        lost.  A model that answers without calling the tool is skipped, not failed.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_tool_result_to_bedrock
         """
         if use_official_api:
             pytest.skip("Multi-model tests only run against the local server")
@@ -491,6 +554,12 @@ class TestMultiModelToolUse:
         tool_blocks = [b for b in resp1.content if b.type == "tool_use"]
         assert tool_blocks, "Turn 1: no tool_use block found"
         tool_block = tool_blocks[0]
+        assert tool_block.name in _TOOL_NAMES, (
+            f"Turn 1: unexpected tool name: {tool_block.name!r}"
+        )
+        assert tool_block.id.startswith("toolu_"), (
+            f"Turn 1: expected toolu_ prefix, got: {tool_block.id!r}"
+        )
 
         # Execute the tool locally
         tool_result = _run_tool(tool_block.name, tool_block.input)
@@ -521,18 +590,26 @@ class TestMultiModelToolUse:
         )
         text = _text_from(resp2)
         assert text, "Turn 2: expected non-empty text in final response"
+        assert not [b for b in resp2.content if b.type == "tool_use"], (
+            "Turn 2: expected no further tool_use block after end_turn"
+        )
+        assert resp2.usage.input_tokens > 0, "Turn 2 must bill the replayed tool result"
 
     @pytest.mark.expensive
     @_STREAMING_TOOL_MODELS
     def test_streaming_tool_call(
         self, model: str, anthropic_client: Anthropic, use_official_api: bool
     ) -> None:
-        """Streaming response correctly emits ``content_block_start`` for tool_use.
+        """Streaming a tool call emits a ``content_block_start`` carrying id and name.
 
-        Validates:
-            - At least one ``content_block_start`` event with ``type == "tool_use"``
-            - Accumulated final message has ``stop_reason == "tool_use"``
-            - Tool_use block has name and id
+        Bedrock puts the ``toolUseId`` and name in ``contentBlockStart`` and streams the
+        arguments as ``input_json_delta`` fragments, so the start event must already be
+        fully identified.  Bedrock refuses streaming with tools on some models (400
+        mentioning streaming mode) and truncates the first JSON fragment on others, which
+        breaks the SDK accumulator — both are recorded as skip/xfail, not failures.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
+             stdapi/models/chat/_adapters/_anthropic_message.py:_process_content_block_start
         """
         if use_official_api:
             pytest.skip("Multi-model tests only run against the local server")
@@ -575,20 +652,35 @@ class TestMultiModelToolUse:
         assert final.stop_reason == "tool_use", (
             f"Expected stop_reason='tool_use', got {final.stop_reason!r}"
         )
+        first_start = tool_starts[0]
+        assert first_start.name in _TOOL_NAMES, (
+            f"First tool_use start must name a declared tool, got: {first_start.name!r}"
+        )
+        assert first_start.id.startswith("toolu_"), (
+            f"First tool_use start must carry the mapped call id, got: {first_start.id!r}"
+        )
+        final_tool_blocks = [b for b in final.content if b.type == "tool_use"]
+        assert final_tool_blocks, "Accumulated message must contain the tool_use block"
+        assert isinstance(final_tool_blocks[0].input, dict), (
+            f"Streamed tool input must accumulate to an object, got: "
+            f"{final_tool_blocks[0].input!r}"
+        )
 
     @pytest.mark.expensive
     @_AGENTIC_MODELS
     def test_agentic_loop_directory_and_file(
         self, model: str, anthropic_client: Anthropic, use_official_api: bool
     ) -> None:
-        """Full agentic loop: model lists directory then reads pyproject.toml.
+        """A multi-turn loop with two distinct tools reaches a grounded final answer.
 
-        Simulates a realistic "code assistant" workflow where the model must
-        use two different tools across multiple turns to answer a question.
+        Every iteration replays the whole growing history — assistant ``tool_use`` blocks
+        interleaved with user ``tool_result`` blocks — so this is the cross-model check that
+        repeated tool round-trips stay acceptable to Converse.  ``read_file`` must be among
+        the calls: the project name lives in ``pyproject.toml`` and a directory listing
+        alone would let a model guess it from the path.
 
-        Validates:
-            - Model calls at least two tools in the loop
-            - Final answer (``stop_reason == "end_turn"``) contains the project name
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
+             stdapi/models/chat/_adapters/_anthropic_message.py:translate_request
         """
         if use_official_api:
             pytest.skip("Multi-model tests only run against the local server")
@@ -638,6 +730,9 @@ class TestMultiModelToolUse:
         assert len(tools_used) >= 2, (
             f"Expected ≥2 tool calls in agentic loop, got: {tools_used}"
         )
+        assert "read_file" in tools_used, (
+            f"Expected the model to read pyproject.toml, tools used: {tools_used}"
+        )
         assert final_text, "Expected non-empty final answer from model"
         assert "stdapi" in final_text.lower(), (
             f"Expected project name 'stdapi' in final answer, got: {final_text[:300]!r}"
@@ -650,7 +745,15 @@ class TestMultiModelToolUse:
 
 
 class TestNativeReasoning:
-    """Reasoning models produce native thinking blocks without the thinking param."""
+    """Reasoning models produce native thinking blocks without the thinking param.
+
+    Bedrock does not accept Anthropic's ``thinking`` parameter for non-Claude models, yet
+    these models always emit a reasoning trace; the gateway turns each Bedrock
+    ``reasoningContent`` block into an Anthropic ``thinking`` block.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ReasoningContentBlock.html
+         stdapi/models/chat/_adapters/_anthropic_message.py:_map_content_block_from_bedrock
+    """
 
     @pytest.mark.expensive
     @_REASONING_MODELS
@@ -659,13 +762,13 @@ class TestNativeReasoning:
     ) -> None:
         """Native-reasoning models return at least one ``thinking`` block.
 
-        DeepSeek R1 and MiniMax M2.5 always generate an internal reasoning
-        trace regardless of whether the ``thinking`` API parameter is sent.
-        The server must expose this as a ``thinking`` content block.
+        No ``thinking`` parameter is sent — the trace is the model's own — so a missing
+        block means the ``reasoningContent`` mapping was lost rather than the model staying
+        silent.  The answer text may be absent when the budget is spent on reasoning, which
+        Bedrock reports as ``max_tokens``.
 
-        Validates:
-            - At least one ``thinking`` block with non-empty text
-            - Also has at least one ``text`` block with the final answer
+        Ref: https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+             stdapi/models/chat/_adapters/_anthropic_message.py:format_response
         """
         if use_official_api:
             pytest.skip("Multi-model tests only run against the local server")
@@ -698,11 +801,14 @@ class TestNativeReasoning:
     def test_streaming_native_thinking_blocks(
         self, model: str, anthropic_client: Anthropic, use_official_api: bool
     ) -> None:
-        """Streaming native-reasoning model emits thinking content_block_start events.
+        """Streaming a native-reasoning model emits ``thinking`` block start events.
 
-        Validates:
-            - At least one ``content_block_start`` with type ``thinking``
-            - Accumulated final message has at least one ``thinking`` block
+        Bedrock streams the trace as ``reasoningContent`` deltas; the gateway opens a
+        ``thinking`` block for them and feeds ``thinking_delta`` events, so the accumulated
+        message must end up with a populated thinking block.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_delta
         """
         if use_official_api:
             pytest.skip("Multi-model tests only run against the local server")
@@ -728,6 +834,9 @@ class TestNativeReasoning:
         assert thinking_blocks, (
             f"Expected thinking block in final message for {model!r}"
         )
+        assert thinking_blocks[0].thinking, (
+            "Accumulated thinking block must carry the streamed reasoning text"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -736,12 +845,17 @@ class TestNativeReasoning:
 
 
 class TestPromptCaching:
-    """Prompt caching validation on Amazon Nova models.
+    """Prompt caching on Amazon Nova models via ``cache_control`` on a system block.
 
-    Nova uses *implicit* caching: ``cache_creation_input_tokens`` is always 0
-    in the response (writes are not reported), but ``cache_read_input_tokens``
-    is non-zero on cache hits.  The cache key is based on the content hash,
-    so sending the same large prompt twice should trigger a read on the second call.
+    ``_build_cache_point`` turns the ephemeral ``cache_control`` into a Bedrock
+    ``cachePoint``.  Nova then reports a hit in one of two ways: the documented
+    ``cache_read_input_tokens`` counter, or — with hash-based implicit caching — a silently
+    reduced ``input_tokens`` with no cache counter at all.  Below a model's minimum
+    cacheable length nothing is cached and no error is raised.
+
+    Ref: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+         https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html
+         stdapi/models/chat/_adapters/_anthropic_message.py:_build_cache_point
     """
 
     @pytest.mark.slow
@@ -749,11 +863,13 @@ class TestPromptCaching:
     def test_cache_read_on_second_call(
         self, model: str, anthropic_client: Anthropic, use_official_api: bool
     ) -> None:
-        """Second call with identical large prompt reports cache_read_input_tokens > 0.
+        """Repeating a cached system prompt is served from the cache on the second call.
 
-        Validates:
-            - Both calls succeed (status 200)
-            - Second call (or subsequent) reports ``cache_read_input_tokens > 0``
+        The system block is ~800 tokens so it can clear Nova's minimum cacheable length;
+        both hit signals are accepted because which one Bedrock uses is model-dependent.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_TokenUsage.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_system_blocks
         """
         if use_official_api:
             pytest.skip("Nova caching is only available on AWS Bedrock")
@@ -777,6 +893,8 @@ class TestPromptCaching:
 
         assert resp1.type == "message"
         assert resp2.type == "message"
+        assert resp1.usage.input_tokens > 0
+        assert resp2.usage.input_tokens > 0
 
         # At least one of the calls after the first must observe a cache hit.
         # For explicit caching (Claude with cache_control): cache_read_input_tokens > 0.
@@ -803,7 +921,11 @@ class TestPromptCaching:
 
 
 class TestStructuredOutput:
-    """Models can reliably produce JSON-structured output when asked."""
+    """Models can reliably produce JSON-structured output when asked.
+
+    Ref: https://platform.claude.com/docs/en/api/messages
+         stdapi/models/chat/_adapters/_anthropic_message.py:format_response
+    """
 
     @pytest.mark.slow
     @pytest.mark.parametrize(
@@ -819,11 +941,15 @@ class TestStructuredOutput:
     def test_json_output_parseable(
         self, model: str, anthropic_client: Anthropic, use_official_api: bool
     ) -> None:
-        """Model produces valid JSON when the system prompt requests it.
+        """Prompted JSON output round-trips through the gateway unaltered.
 
-        Validates:
-            - Response text can be parsed as JSON
-            - JSON object contains the expected keys
+        No ``output_config`` is sent: the JSON contract is prompt-only, which is the
+        fallback for families whose Bedrock profile has no constrained decoding.  The point
+        is that the adapter returns the model text verbatim — the Markdown fences some
+        models add are their own, so they are stripped before parsing.
+
+        Ref: https://platform.claude.com/docs/en/api/messages
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_content_block_from_bedrock
         """
         if use_official_api:
             pytest.skip("Multi-model tests only run against the local server")
@@ -859,6 +985,12 @@ class TestStructuredOutput:
         assert isinstance(data, dict), f"Expected JSON object, got {type(data)}"
         assert "language" in data or "version" in data, (
             f"Expected 'language' or 'version' key in JSON, got: {data}"
+        )
+        assert str(data.get("language", "Python")).lower() == "python", (
+            f"Expected the pinned 'language' value for {model!r}, got: {data}"
+        )
+        assert response.stop_reason in _STOP_REASONS, (
+            f"Unexpected stop_reason for {model!r}: {response.stop_reason!r}"
         )
 
 
@@ -896,20 +1028,26 @@ _VISION_MODELS = pytest.mark.parametrize(
 
 
 class TestVision:
-    """Vision-capable models correctly identify the color of a simple image."""
+    """Vision-capable models correctly identify the color of a simple image.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ContentBlock.html
+         stdapi/models/chat/_adapters/_anthropic_message.py:_map_image_to_bedrock
+    """
 
     @pytest.mark.slow
     @_VISION_MODELS
     def test_image_color_recognition(
         self, model: str, anthropic_client: Anthropic, use_official_api: bool
     ) -> None:
-        """Vision model identifies the color of a 1x1 red PNG image.
+        """A base64 image source reaches vision models as a Bedrock ``image`` block.
 
-        Uses a locally generated minimal PNG to avoid external dependencies.
+        ``_map_image_to_bedrock`` resolves the source and derives the Bedrock image format
+        from ``media_type``; the picture is a locally built 1x1 red PNG so the expected
+        answer needs no fixture.  Nova rescales inputs, and models disagree on naming a
+        single saturated pixel, so "orange" is accepted too.
 
-        Validates:
-            - Response contains non-empty text
-            - Response correctly identifies "red" as the image color
+        Ref: https://docs.aws.amazon.com/nova/latest/userguide/modalities-image.html
+             stdapi/models/chat/_adapters/_anthropic_message.py:_map_image_to_bedrock
         """
         if use_official_api:
             pytest.skip("Multi-model tests only run against the local server")
@@ -938,6 +1076,9 @@ class TestVision:
             ],
         )
 
+        assert response.usage.input_tokens > 0, (
+            "image input must be billed as input tokens"
+        )
         text = _text_from(response)
         assert text, f"Expected non-empty response from {model!r}"
         assert any(color in text.lower() for color in ("red", "orange")), (
