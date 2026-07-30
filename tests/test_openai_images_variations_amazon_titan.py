@@ -7,21 +7,30 @@ Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan
      stdapi/models/image/amazon_titan_image_generator.py:_ImageGenerationJob._create_image_variations
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
 from openai import BadRequestError
+
+from tests.conftest import smallest_image_size
 
 #: Every test in this module is reported as skipped: the model is deprecated.
 pytestmark = pytest.mark.skip(reason="Amazon Titan Image Generator is deprecated")
 
 if TYPE_CHECKING:
+    from typing import Literal
+
     from openai import OpenAI
 
 TITAN_V2 = "amazon.titan-image-generator-v2:0"
 
 TITAN_ALL = (TITAN_V2,)
 TITAN_SAMPLE = (TITAN_V2,)
+
+#: Cheapest size accepted by Titan, typed as the variations client expects it.
+TITAN_SIZE = cast(
+    'Literal["256x256", "512x512", "1024x1024"]', smallest_image_size(TITAN_V2)
+)
 
 
 @pytest.fixture(autouse=True)
@@ -57,7 +66,7 @@ class TestAmazonTitanVariations:
         response = openai_client.images.create_variation(
             image=sample_image_file,
             model=model_id,
-            size="512x512",
+            size=TITAN_SIZE,
             response_format="b64_json",
         )
 
@@ -91,7 +100,7 @@ class TestAmazonTitanVariations:
         response = openai_client.images.create_variation(
             image=sample_image_file,
             model=model_id,
-            size="512x512",
+            size=TITAN_SIZE,
             n=1,
             response_format="b64_json",
             extra_body={"taskType": "TEXT_IMAGE"},
@@ -101,7 +110,7 @@ class TestAmazonTitanVariations:
         assert response.data is not None
         assert len(response.data) == 1
         assert response.data[0].b64_json is not None
-        assert response.size == "512x512"  # type: ignore[comparison-overlap]
+        assert response.size == TITAN_SIZE
 
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
@@ -119,7 +128,7 @@ class TestAmazonTitanVariations:
         response = openai_client.images.create_variation(
             image=sample_image_file,
             model=model_id,
-            size="512x512",
+            size=TITAN_SIZE,
             n=1,
             response_format="b64_json",
             extra_body={
@@ -134,7 +143,7 @@ class TestAmazonTitanVariations:
         assert response.data is not None
         assert len(response.data) == 1
         assert response.data[0].b64_json is not None
-        assert response.size == "512x512"  # type: ignore[comparison-overlap]
+        assert response.size == TITAN_SIZE
 
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
     def test_variation_with_invalid_task_type(
@@ -148,7 +157,7 @@ class TestAmazonTitanVariations:
             openai_client.images.create_variation(
                 image=sample_image_file,
                 model=model_id,
-                size="512x512",
+                size=TITAN_SIZE,
                 extra_body={"taskType": "INVALID_TASK_TYPE"},
             )
 
@@ -176,7 +185,7 @@ class TestAmazonTitanVariations:
             openai_client.images.create_variation(
                 image=sample_image_file,
                 model=model_id,
-                size="512x512",
+                size=TITAN_SIZE,
                 extra_body={
                     "taskType": "COLOR_GUIDED_GENERATION",
                     "colorGuidedGenerationParams": {},

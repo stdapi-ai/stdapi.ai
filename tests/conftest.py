@@ -330,12 +330,94 @@ MODEL_MAPPINGS = {
         "responses_web_search": "gpt-5-nano",
         "responses_code_interpreter": "gpt-5-nano",
         "input_tokens": "gpt-4o-mini",
-        "image_generation": "dall-e-2",  # Cheapest/default model
-        "image_generation_hd": "dall-e-3",  # For HD & style quality features
-        "image_generation_stream": "gpt-image-1",  # For streaming features
+        # OpenAI retired the whole DALL-E family: a request naming dall-e-2 or
+        # dall-e-3 is refused with "The model ... does not exist" before any other
+        # parameter is read. gpt-image-1 is the remaining image model, and it has
+        # no ``style`` parameter, so that feature is no longer observable upstream.
+        "image_generation": "gpt-image-1",
+        "image_generation_hd": "gpt-image-1",
+        "image_generation_stream": "gpt-image-1",
         "video_generation": "sora-2",  # Cheapest video model
     },
 }
+#: Smallest image size each model accepts, within its cheapest billing tier.
+#:
+#: Bedrock image models bill per resolution tier -- Titan's low tier is anything up
+#: to 512px, Nova Canvas tiers at 1024/2048/4096 -- so asking for the smallest size
+#: a model supports is the cheapest way to exercise it. Keeping the size next to the
+#: model also means repointing ``MODEL_MAPPINGS`` at a different model does not
+#: require editing the size in every test that uses it.
+#:
+#: Ref: stdapi/models/image/amazon_titan_image_generator.py:image_spec
+IMAGE_MODEL_SIZES: dict[str, str] = {
+    # Sizes are converted to the nearest supported aspect ratio and billed flat.
+    "stability.stable-image-core-v1:1": "1024x1024",
+    "stability.stable-image-inpaint-v1:0": "1024x1024",
+    # 320-4096 divisible by 16; 512 is well inside the cheapest (<=1024) tier.
+    "amazon.nova-canvas-v1:0": "512x512",
+    # 512 is both the default and the top of the low pricing tier.
+    "amazon.titan-image-generator-v1": "512x512",
+    "amazon.titan-image-generator-v2:0": "512x512",
+    # The only sizes gpt-image-1 accepts are 1024x1024, 1024x1536 and 1536x1024.
+    "gpt-image-1": "1024x1024",
+}
+
+#: Size used for a model absent from :data:`IMAGE_MODEL_SIZES`.
+_DEFAULT_IMAGE_SIZE = "1024x1024"
+
+#: Image models that always answer with base64 and reject ``response_format``.
+_B64_ONLY_IMAGE_MODELS = frozenset({"gpt-image-1"})
+
+#: Sizes accepted by models that only take a fixed set. A model absent from this
+#: table accepts arbitrary ``WIDTHxHEIGHT`` values -- the Bedrock backends map them
+#: onto their own resolutions or aspect ratios.
+IMAGE_MODEL_ACCEPTED_SIZES: dict[str, frozenset[str]] = {
+    "gpt-image-1": frozenset({"1024x1024", "1024x1536", "1536x1024"})
+}
+
+
+def image_size_supported(model: str, size: str) -> bool:
+    """True when *model* accepts *size*.
+
+    Args:
+        model: Image model ID, as resolved for the current target.
+        size: A ``"<width>x<height>"`` size.
+
+    Returns:
+        True unless the model enumerates its sizes and *size* is not among them.
+    """
+    accepted = IMAGE_MODEL_ACCEPTED_SIZES.get(model)
+    return accepted is None or size in accepted
+
+
+def image_returns_base64_only(model: str) -> bool:
+    """True when *model* always answers with base64 and never a URL.
+
+    ``gpt-image-1`` has no ``response_format`` parameter and only returns
+    ``b64_json``, so a test asserting a URL has to branch on this.
+
+    Args:
+        model: Image model ID, as resolved for the current target.
+
+    Returns:
+        Whether the model's responses only ever carry base64 data.
+    """
+    return model in _B64_ONLY_IMAGE_MODELS
+
+
+def smallest_image_size(model: str) -> str:
+    """Return the cheapest image size to request from *model*.
+
+    Args:
+        model: Image model ID, as resolved for the current target.
+
+    Returns:
+        A ``"<width>x<height>"`` size, defaulting to 1024x1024 for an unlisted
+        model since every backend in use accepts it.
+    """
+    return IMAGE_MODEL_SIZES.get(model, _DEFAULT_IMAGE_SIZE)
+
+
 _CACHE_DIR = Path(__file__).parent / ".cache"
 #: Repository checkout root, for tests that must reference real source paths.
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -577,6 +659,24 @@ def image_generation_stream_model(models: dict[str, str]) -> str:
 
 
 @pytest.fixture(scope="session")
+def image_generation_size(image_generation_model: str) -> str:
+    """Cheapest size accepted by ``image_generation_model``."""
+    return smallest_image_size(image_generation_model)
+
+
+@pytest.fixture(scope="session")
+def image_generation_hd_size(image_generation_hd_model: str) -> str:
+    """Cheapest size accepted by ``image_generation_hd_model``."""
+    return smallest_image_size(image_generation_hd_model)
+
+
+@pytest.fixture(scope="session")
+def image_generation_stream_size(image_generation_stream_model: str) -> str:
+    """Cheapest size accepted by ``image_generation_stream_model``."""
+    return smallest_image_size(image_generation_stream_model)
+
+
+@pytest.fixture(scope="session")
 def video_generation_model(models: dict[str, str]) -> str:
     """Cheapest non-legacy video generation model."""
     return models["video_generation"]
@@ -738,23 +838,35 @@ def sample_audio_mp3_file_base64(sample_audio_mp3_file: bytes) -> str:
 
 
 @pytest.fixture(scope="session")
-def sample_image_file(openai_client: OpenAI, image_generation_model: str) -> bytes:
-    """512x512 PNG produced once by the Images API and cached on disk.
+def sample_image_file(
+    openai_client: OpenAI, image_generation_model: str, image_generation_size: str
+) -> bytes:
+    """PNG produced once by the Images API at the model's cheapest size, cached on disk.
 
-    ``b64_json`` is requested so the fixture never has to fetch a presigned URL.
+    Base64 is requested rather than a URL so the fixture never has to fetch a
+    presigned link. ``response_format`` is only sent to models that accept it:
+    ``gpt-image-1`` always answers with base64 and rejects the parameter outright.
     """
     image_file = _CACHE_DIR / "image.png"
     if image_file.exists():
         with image_file.open("rb") as file:
             return file.read()
 
-    response = openai_client.images.generate(
-        prompt="A rainbow llama",
-        model=image_generation_model,
-        n=1,
-        size="512x512",
-        response_format="b64_json",
-    )
+    if image_generation_model in _B64_ONLY_IMAGE_MODELS:
+        response = openai_client.images.generate(
+            prompt="A rainbow llama",
+            model=image_generation_model,
+            n=1,
+            size=image_generation_size,
+        )
+    else:
+        response = openai_client.images.generate(
+            prompt="A rainbow llama",
+            model=image_generation_model,
+            n=1,
+            size=image_generation_size,
+            response_format="b64_json",
+        )
     # Extract and decode base64 image
     data_list = response.data or []
     assert len(data_list) >= 1

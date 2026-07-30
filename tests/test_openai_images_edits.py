@@ -127,7 +127,11 @@ class TestImagesEditsBasic:
         assert response.output_format == image_format
 
     def test_invalid_model(
-        self, openai_client: OpenAI, sample_image_file: bytes, use_official_api: bool
+        self,
+        openai_client: OpenAI,
+        sample_image_file: bytes,
+        image_generation_size: str,
+        use_official_api: bool,
     ) -> None:
         """An unknown model id is rejected with a 400 naming the requested model.
 
@@ -149,7 +153,7 @@ class TestImagesEditsBasic:
                 image=sample_image_file,
                 prompt="A test image",
                 model="invalid-model-name",
-                size="512x512",
+                size=image_generation_size,
             )
         validate_error_response(
             exc_info.value,
@@ -193,7 +197,11 @@ class TestImagesEditsBasic:
         assert body["message"], "error envelope must carry a message"
 
     def test_image_array_notation_accepted(
-        self, openai_client: OpenAI, sample_image_file: bytes, use_official_api: bool
+        self,
+        openai_client: OpenAI,
+        sample_image_file: bytes,
+        image_generation_size: str,
+        use_official_api: bool,
     ) -> None:
         """The multipart ``image[]`` field name is merged into the image list.
 
@@ -211,7 +219,11 @@ class TestImagesEditsBasic:
         response = http_client.post(
             f"{openai_client.base_url}images/edits",
             files={"image[]": ("image.png", sample_image_file, "image/png")},
-            data={"prompt": "test", "model": "invalid-model-name", "size": "512x512"},
+            data={
+                "prompt": "test",
+                "model": "invalid-model-name",
+                "size": image_generation_size,
+            },
             headers={"Authorization": f"Bearer {openai_client.api_key}"},
         )
         # image[] was parsed → error is about the model, not missing image
@@ -226,7 +238,7 @@ class TestImagesEditsBasic:
         assert "invalid-model-name" in error["message"]
 
     def test_image_array_notation_invalid_type(
-        self, openai_client: OpenAI, use_official_api: bool
+        self, openai_client: OpenAI, image_generation_size: str, use_official_api: bool
     ) -> None:
         """A non-file value under ``image[]`` is a validation error on ``body.image[]``.
 
@@ -246,7 +258,7 @@ class TestImagesEditsBasic:
             data={
                 "prompt": "test",
                 "model": "stability.stable-image-inpaint-v1:0",
-                "size": "512x512",
+                "size": image_generation_size,
                 "image[]": "not_a_file",
             },
             headers={"Authorization": f"Bearer {openai_client.api_key}"},

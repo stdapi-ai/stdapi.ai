@@ -10,6 +10,8 @@ import pytest
 from openai import BadRequestError, OpenAI
 from pybase64 import b64decode
 
+from tests.conftest import smallest_image_size
+
 STABILITY_CORE = "stability.stable-image-core-v1:1"
 STABILITY_SD35 = "stability.sd3-5-large-v1:0"
 STABILITY_ULTRA = "stability.stable-image-ultra-v1:1"
@@ -96,7 +98,7 @@ class TestStabilityImages:
             model=model_id,
             prompt="A siamese cat.",
             response_format="b64_json",
-            size="1024x1024",
+            size=smallest_image_size(model_id),
             output_format="webp",
         )
         assert response.created > 0

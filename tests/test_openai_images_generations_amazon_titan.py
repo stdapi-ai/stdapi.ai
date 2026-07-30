@@ -12,10 +12,15 @@ Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
 import pytest
 from openai import BadRequestError, OpenAI
 
+from tests.conftest import smallest_image_size
+
 TITAN_V2 = "amazon.titan-image-generator-v2:0"
 
 TITAN_ALL = (TITAN_V2,)
 TITAN_SAMPLE = (TITAN_V2,)
+
+#: Cheapest size accepted by Titan, requested wherever the size is incidental.
+TITAN_SIZE = smallest_image_size(TITAN_V2)
 
 
 #: Every test in this module is reported as skipped: the model is deprecated.
@@ -51,10 +56,10 @@ class TestAmazonTitanImageGenerator:
             model=model_id,
             prompt="A simple watercolor of a mountain.",
             response_format="b64_json",
-            size="512x512",
+            size=TITAN_SIZE,
         )
         assert response.created > 0
-        assert response.size == "512x512"  # type: ignore[comparison-overlap]
+        assert response.size == TITAN_SIZE
         assert response.output_format == "png"
         assert response.quality == "medium"
         assert response.data is not None
@@ -80,7 +85,7 @@ class TestAmazonTitanImageGenerator:
             model=model_id,
             prompt="A watercolor of a mountain.",
             response_format="b64_json",
-            size="512x512",
+            size=TITAN_SIZE,
             extra_body={"imageGenerationConfig": {"cfgScale": 7.5}},
         )
         assert response.data is not None
@@ -104,11 +109,11 @@ class TestAmazonTitanImageGenerator:
             prompt="Three variations of a sunset over the ocean.",
             response_format="b64_json",
             n=2,
-            size="512x512",
+            size=TITAN_SIZE,
         )
         assert response.data is not None
         assert len(response.data) == 2
-        assert response.size == "512x512"  # type: ignore[comparison-overlap]
+        assert response.size == TITAN_SIZE
         for item in response.data:
             assert item.b64_json is not None
             assert item.url is None
@@ -157,7 +162,7 @@ class TestAmazonTitanImageGenerator:
             model=model_id,
             prompt="A vibrant sunset with these specific colors",
             response_format="b64_json",
-            size="512x512",
+            size=TITAN_SIZE,
             extra_body={
                 "taskType": "COLOR_GUIDED_GENERATION",
                 "colorGuidedGenerationParams": {
@@ -173,7 +178,7 @@ class TestAmazonTitanImageGenerator:
         assert response.data[0].b64_json is not None
         assert response.data[0].url is None
         assert response.output_format == "png"
-        assert response.size == "512x512"  # type: ignore[comparison-overlap]
+        assert response.size == TITAN_SIZE
 
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
     def test_generate_with_invalid_task_type(
@@ -193,7 +198,7 @@ class TestAmazonTitanImageGenerator:
                 model=model_id,
                 prompt="A test prompt",
                 response_format="b64_json",
-                size="512x512",
+                size=TITAN_SIZE,
                 extra_body={"taskType": "INVALID_TASK_TYPE"},
             )
 
@@ -224,7 +229,7 @@ class TestAmazonTitanImageGenerator:
                 model=model_id,
                 prompt="A test prompt",
                 response_format="b64_json",
-                size="512x512",
+                size=TITAN_SIZE,
                 extra_body={"taskType": "COLOR_GUIDED_GENERATION"},
             )
 

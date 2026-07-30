@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 import pytest
 from openai import BadRequestError
 
-from tests.conftest import OUTPUT_DIR, SAMPLES_DIR
+from tests.conftest import OUTPUT_DIR, SAMPLES_DIR, smallest_image_size
 
 #: Every test in this module is reported as skipped: the model is deprecated.
 pytestmark = pytest.mark.skip(reason="Amazon Nova Canvas is deprecated")
@@ -29,6 +29,9 @@ NOVA_CANVAS_V1 = "amazon.nova-canvas-v1:0"
 
 NOVA_CANVAS_ALL = (NOVA_CANVAS_V1,)
 NOVA_CANVAS_SAMPLE = (NOVA_CANVAS_V1,)
+
+#: Cheapest size accepted by Nova Canvas, requested wherever the size is incidental.
+NOVA_CANVAS_SIZE = smallest_image_size(NOVA_CANVAS_V1)
 
 
 def _decoded_png(b64_json: str | None) -> bytes:
@@ -84,7 +87,7 @@ class TestAmazonNovaCanvasEditing:
             mask=sample_mask_file,
             prompt="A blue circle in the center",
             model=model_id,
-            size="512x512",
+            size=NOVA_CANVAS_SIZE,
             n=1,
             response_format="b64_json",
             extra_body={
@@ -98,7 +101,7 @@ class TestAmazonNovaCanvasEditing:
         assert len(response.data) == 1
         _decoded_png(response.data[0].b64_json)
         assert response.data[0].url is None
-        assert response.size == "512x512"  # type: ignore[comparison-overlap]
+        assert response.size == NOVA_CANVAS_SIZE
         assert response.output_format == "png"
         assert response.background == "opaque"
 
@@ -126,12 +129,12 @@ class TestAmazonNovaCanvasEditing:
             mask=sample_mask_file,
             prompt="A green square",
             model=model_id,
-            size="512x512",
+            size=NOVA_CANVAS_SIZE,
             response_format="b64_json",
         )
 
         assert response.created > 0
-        assert response.size == "512x512"  # type: ignore[comparison-overlap]
+        assert response.size == NOVA_CANVAS_SIZE
         assert response.output_format == "png"
         assert response.background == "opaque"
         assert response.data is not None
@@ -177,12 +180,12 @@ class TestAmazonNovaCanvasEditing:
             image=sample_image_file,
             prompt="A green square",
             model=model_id,
-            size="512x512",
+            size=NOVA_CANVAS_SIZE,
             response_format="b64_json",
         )
 
         assert response.created > 0
-        assert response.size == "512x512"  # type: ignore[comparison-overlap]
+        assert response.size == NOVA_CANVAS_SIZE
         assert response.output_format == "png"
         assert response.data is not None
         assert len(response.data) == 1
@@ -227,7 +230,7 @@ class TestAmazonNovaCanvasEditing:
             mask=sample_mask_file,
             prompt="Extend the scene with mountains in the background",
             model=model_id,
-            size="512x512",
+            size=NOVA_CANVAS_SIZE,
             n=1,
             response_format="b64_json",
             extra_body={"taskType": "OUTPAINTING"},
@@ -238,7 +241,7 @@ class TestAmazonNovaCanvasEditing:
         assert len(response.data) == 1
         _decoded_png(response.data[0].b64_json)
         assert response.data[0].url is None
-        assert response.size == "512x512"  # type: ignore[comparison-overlap]
+        assert response.size == NOVA_CANVAS_SIZE
         assert response.output_format == "png"
 
     @pytest.mark.expensive
@@ -267,7 +270,7 @@ class TestAmazonNovaCanvasEditing:
             mask=sample_alpha_mask_file,
             prompt="Extend the scene with mountains in the background",
             model=model_id,
-            size="512x512",
+            size=NOVA_CANVAS_SIZE,
             n=1,
             response_format="b64_json",
             extra_body={"taskType": "OUTPAINTING"},
@@ -278,7 +281,7 @@ class TestAmazonNovaCanvasEditing:
         assert len(response.data) == 1
         _decoded_png(response.data[0].b64_json)
         assert response.data[0].url is None
-        assert response.size == "512x512"  # type: ignore[comparison-overlap]
+        assert response.size == NOVA_CANVAS_SIZE
         assert response.output_format == "png"
         assert response.usage is not None
         assert response.usage.input_tokens_details.image_tokens <= 2, (
@@ -302,7 +305,7 @@ class TestAmazonNovaCanvasEditing:
             image=sample_image_file,
             prompt="Remove the background",
             model=model_id,
-            size="512x512",
+            size=NOVA_CANVAS_SIZE,
             n=1,
             response_format="b64_json",
             extra_body={"taskType": "BACKGROUND_REMOVAL"},
@@ -313,7 +316,7 @@ class TestAmazonNovaCanvasEditing:
         assert len(response.data) == 1
         _decoded_png(response.data[0].b64_json)
         assert response.data[0].url is None
-        assert response.size == "512x512"  # type: ignore[comparison-overlap]
+        assert response.size == NOVA_CANVAS_SIZE
         assert response.output_format == "png"
 
     @pytest.mark.expensive
@@ -382,7 +385,7 @@ class TestAmazonNovaCanvasEditing:
             mask=reference_image,
             prompt=prompt,
             model=model_id,
-            size="1024x1024",
+            size=NOVA_CANVAS_SIZE,
             n=1,
             response_format="b64_json",
             extra_body=extra_body,
@@ -393,7 +396,7 @@ class TestAmazonNovaCanvasEditing:
         assert len(response.data) == 1
         assert response.data[0].b64_json is not None
         assert response.data[0].url is None
-        assert response.size == "1024x1024"
+        assert response.size == NOVA_CANVAS_SIZE
         assert response.output_format == "png"
 
         # Save the output image for manual inspection
@@ -456,7 +459,7 @@ class TestAmazonNovaCanvasEditing:
             image=sample_image_file,
             prompt="A red circle in the center",
             model=model_id,
-            size="512x512",
+            size=NOVA_CANVAS_SIZE,
             n=1,
             response_format="b64_json",
             extra_body={
@@ -470,7 +473,7 @@ class TestAmazonNovaCanvasEditing:
         assert len(response.data) == 1
         _decoded_png(response.data[0].b64_json)
         assert response.data[0].url is None
-        assert response.size == "512x512"  # type: ignore[comparison-overlap]
+        assert response.size == NOVA_CANVAS_SIZE
         assert response.output_format == "png"
 
     @pytest.mark.expensive
@@ -489,7 +492,7 @@ class TestAmazonNovaCanvasEditing:
             image=sample_image_file,
             prompt="Extend with mountains",
             model=model_id,
-            size="512x512",
+            size=NOVA_CANVAS_SIZE,
             n=1,
             response_format="b64_json",
             extra_body={
@@ -503,7 +506,7 @@ class TestAmazonNovaCanvasEditing:
         assert len(response.data) == 1
         _decoded_png(response.data[0].b64_json)
         assert response.data[0].url is None
-        assert response.size == "512x512"  # type: ignore[comparison-overlap]
+        assert response.size == NOVA_CANVAS_SIZE
         assert response.output_format == "png"
 
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_SAMPLE)
@@ -529,7 +532,7 @@ class TestAmazonNovaCanvasEditing:
                 mask=sample_mask_file,
                 prompt="A test prompt",
                 model=model_id,
-                size="512x512",
+                size=NOVA_CANVAS_SIZE,
                 extra_body={"taskType": "INVALID_TASK_TYPE"},
             )
 
@@ -564,7 +567,7 @@ class TestAmazonNovaCanvasEditing:
                 mask=reference_image,
                 prompt="test",
                 model=model_id,
-                size="1024x1024",
+                size=NOVA_CANVAS_SIZE,
                 extra_body={
                     "taskType": "VIRTUAL_TRY_ON",
                     "virtualTryOnParams": {"maskType": "INVALID_MASK_TYPE"},

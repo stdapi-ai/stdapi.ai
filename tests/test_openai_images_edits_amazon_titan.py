@@ -1,8 +1,8 @@
 """``/v1/images/edits`` backed by Amazon Titan Image Generator V2.
 
 Titan caps ``text``/``negativeText`` at 512 characters and inputs at 1408 px on
-the longer side, which is why the tests stay at 512x512. The whole module is
-skipped: the model is deprecated.
+the longer side, which is why the tests stay at the model's cheapest size. The
+whole module is skipped: the model is deprecated.
 
 Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
      https://stdapi.ai/api_openai_images_edits/
@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING
 import pytest
 from openai import BadRequestError
 
+from tests.conftest import smallest_image_size
+
 #: Every test in this module is reported as skipped: the model is deprecated.
 pytestmark = pytest.mark.skip(reason="Amazon Titan Image Generator is deprecated")
 
@@ -26,6 +28,9 @@ TITAN_V2 = "amazon.titan-image-generator-v2:0"
 
 TITAN_ALL = (TITAN_V2,)
 TITAN_SAMPLE = (TITAN_V2,)
+
+#: Cheapest size accepted by Titan, requested wherever the size is incidental.
+TITAN_SIZE = smallest_image_size(TITAN_V2)
 
 
 def _decoded_png(b64_json: str | None) -> bytes:
@@ -85,7 +90,7 @@ class TestAmazonTitanEditing:
             mask=sample_mask_file,
             prompt="A blue circle in the center",
             model=model_id,
-            size="512x512",
+            size=TITAN_SIZE,
             n=1,
             response_format="b64_json",
             extra_body={
@@ -99,7 +104,7 @@ class TestAmazonTitanEditing:
         assert len(response.data) == 1
         _decoded_png(response.data[0].b64_json)
         assert response.data[0].url is None
-        assert response.size == "512x512"  # type: ignore[comparison-overlap]
+        assert response.size == TITAN_SIZE
         assert response.output_format == "png"
         assert response.background == "opaque"
         assert response.quality == "medium"
@@ -128,12 +133,12 @@ class TestAmazonTitanEditing:
             mask=sample_mask_file,
             prompt="A green square",
             model=model_id,
-            size="512x512",
+            size=TITAN_SIZE,
             response_format="b64_json",
         )
 
         assert response.created > 0
-        assert response.size == "512x512"  # type: ignore[comparison-overlap]
+        assert response.size == TITAN_SIZE
         assert response.output_format == "png"
         assert response.background == "opaque"
         assert response.data is not None
@@ -183,7 +188,7 @@ class TestAmazonTitanEditing:
             mask=sample_mask_file,
             prompt="Extend the scene with a forest",
             model=model_id,
-            size="512x512",
+            size=TITAN_SIZE,
             n=1,
             response_format="b64_json",
             extra_body={"taskType": "OUTPAINTING"},
@@ -194,7 +199,7 @@ class TestAmazonTitanEditing:
         assert len(response.data) == 1
         _decoded_png(response.data[0].b64_json)
         assert response.data[0].url is None
-        assert response.size == "512x512"  # type: ignore[comparison-overlap]
+        assert response.size == TITAN_SIZE
         assert response.output_format == "png"
 
     @pytest.mark.expensive
@@ -223,7 +228,7 @@ class TestAmazonTitanEditing:
             mask=sample_alpha_mask_file,
             prompt="Extend the scene with a forest",
             model=model_id,
-            size="512x512",
+            size=TITAN_SIZE,
             n=1,
             response_format="b64_json",
             extra_body={"taskType": "OUTPAINTING"},
@@ -234,7 +239,7 @@ class TestAmazonTitanEditing:
         assert len(response.data) == 1
         _decoded_png(response.data[0].b64_json)
         assert response.data[0].url is None
-        assert response.size == "512x512"  # type: ignore[comparison-overlap]
+        assert response.size == TITAN_SIZE
         assert response.output_format == "png"
         assert response.usage is not None
         assert response.usage.input_tokens_details.image_tokens <= 2, (
@@ -259,7 +264,7 @@ class TestAmazonTitanEditing:
             image=sample_image_file,
             prompt="Remove background",
             model=model_id,
-            size="512x512",
+            size=TITAN_SIZE,
             n=1,
             response_format="b64_json",
             extra_body={"taskType": "BACKGROUND_REMOVAL"},
@@ -270,7 +275,7 @@ class TestAmazonTitanEditing:
         assert len(response.data) == 1
         _decoded_png(response.data[0].b64_json)
         assert response.data[0].url is None
-        assert response.size == "512x512"  # type: ignore[comparison-overlap]
+        assert response.size == TITAN_SIZE
         assert response.output_format == "png"
 
     @pytest.mark.expensive
@@ -289,7 +294,7 @@ class TestAmazonTitanEditing:
             image=sample_image_file,
             prompt="A blue square in the center",
             model=model_id,
-            size="512x512",
+            size=TITAN_SIZE,
             n=1,
             response_format="b64_json",
             extra_body={
@@ -303,7 +308,7 @@ class TestAmazonTitanEditing:
         assert len(response.data) == 1
         _decoded_png(response.data[0].b64_json)
         assert response.data[0].url is None
-        assert response.size == "512x512"  # type: ignore[comparison-overlap]
+        assert response.size == TITAN_SIZE
         assert response.output_format == "png"
 
     @pytest.mark.expensive
@@ -322,7 +327,7 @@ class TestAmazonTitanEditing:
             image=sample_image_file,
             prompt="Extend with ocean view",
             model=model_id,
-            size="512x512",
+            size=TITAN_SIZE,
             n=1,
             response_format="b64_json",
             extra_body={
@@ -336,7 +341,7 @@ class TestAmazonTitanEditing:
         assert len(response.data) == 1
         _decoded_png(response.data[0].b64_json)
         assert response.data[0].url is None
-        assert response.size == "512x512"  # type: ignore[comparison-overlap]
+        assert response.size == TITAN_SIZE
         assert response.output_format == "png"
 
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
@@ -362,7 +367,7 @@ class TestAmazonTitanEditing:
                 mask=sample_mask_file,
                 prompt="A test prompt",
                 model=model_id,
-                size="512x512",
+                size=TITAN_SIZE,
                 extra_body={"taskType": "INVALID_TASK_TYPE"},
             )
 

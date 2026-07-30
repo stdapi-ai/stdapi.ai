@@ -25,7 +25,11 @@ from stdapi.routes import openai_images_generations
 from stdapi.routes._images_common import build_images_response
 from stdapi.routes.openai_images_generations import stream_generator
 from stdapi.types.openai_images import ImageEditParams, ImageGenerateParams
-from tests.conftest import logged_usage_entries
+from tests.conftest import (
+    image_returns_base64_only,
+    image_size_supported,
+    logged_usage_entries,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Iterable
@@ -162,6 +166,9 @@ def validate_error_response(
 #: OpenAI image models that have been retired upstream. A request naming one is
 #: refused before any other parameter is looked at, so nothing else is observable.
 _RETIRED_OFFICIAL_IMAGE_MODELS = frozenset({"dall-e-2", "dall-e-3"})
+
+#: OpenAI image models that reject ``stream``; every other one streams.
+_NON_STREAMING_OFFICIAL_IMAGE_MODELS = frozenset({"dall-e-2", "dall-e-3"})
 
 
 def _skip_retired_official_image_model(
@@ -304,7 +311,10 @@ class TestImageGeneration:
 
     @pytest.mark.expensive
     def test_image_generation_default_response_format_is_url(
-        self, openai_client: OpenAI, image_generation_model: str
+        self,
+        openai_client: OpenAI,
+        image_generation_model: str,
+        image_generation_size: str,
     ) -> None:
         """A text prompt returns a single image referenced by URL.
 
@@ -317,7 +327,7 @@ class TestImageGeneration:
             prompt="A beautiful sunset over mountains",
             model=image_generation_model,
             n=1,
-            size="512x512",
+            size=image_generation_size,
         )
 
         assert response.created is not None
@@ -332,7 +342,10 @@ class TestImageGeneration:
 
     @pytest.mark.expensive
     def test_image_generation_with_user_parameter(
-        self, openai_client: OpenAI, image_generation_model: str
+        self,
+        openai_client: OpenAI,
+        image_generation_model: str,
+        image_generation_size: str,
     ) -> None:
         """``user`` is accepted for attribution and leaves the response unchanged.
 
@@ -347,7 +360,7 @@ class TestImageGeneration:
             prompt="A beautiful landscape",
             model=image_generation_model,
             n=1,
-            size="512x512",
+            size=image_generation_size,
             user="test-user-123",
         )
 
@@ -361,7 +374,10 @@ class TestImageGeneration:
 
     @pytest.mark.expensive
     def test_multiple_images_generation(
-        self, openai_client: OpenAI, image_generation_model: str
+        self,
+        openai_client: OpenAI,
+        image_generation_model: str,
+        image_generation_size: str,
     ) -> None:
         """``n=2`` returns two separately addressable images.
 
@@ -374,7 +390,7 @@ class TestImageGeneration:
             prompt="A cute cat playing",
             model=image_generation_model,
             n=2,
-            size="512x512",
+            size=image_generation_size,
         )
 
         assert response.created is not None
@@ -393,7 +409,10 @@ class TestImageGeneration:
 
     @pytest.mark.expensive
     def test_response_format_url(
-        self, openai_client: OpenAI, image_generation_model: str
+        self,
+        openai_client: OpenAI,
+        image_generation_model: str,
+        image_generation_size: str,
     ) -> None:
         """``response_format="url"`` returns a URL and no inline base64 payload.
 
@@ -407,7 +426,7 @@ class TestImageGeneration:
             prompt="A landscape painting",
             model=image_generation_model,
             n=1,
-            size="512x512",
+            size=image_generation_size,
             response_format="url",
         )
 
@@ -423,7 +442,10 @@ class TestImageGeneration:
 
     @pytest.mark.expensive
     def test_response_format_b64_json(
-        self, openai_client: OpenAI, image_generation_model: str
+        self,
+        openai_client: OpenAI,
+        image_generation_model: str,
+        image_generation_size: str,
     ) -> None:
         """``response_format="b64_json"`` inlines decodable image bytes and no URL.
 
@@ -433,7 +455,7 @@ class TestImageGeneration:
             prompt="A simple drawing",
             model=image_generation_model,
             n=1,
-            size="512x512",
+            size=image_generation_size,
             response_format="b64_json",
         )
 
@@ -466,11 +488,16 @@ class TestImageGeneration:
         The response's ``size`` is the size the model actually produced, not the
         requested one: backends such as Stability translate ``WIDTHxHEIGHT`` into
         an aspect ratio and pick their own resolution, so it is deliberately not
-        asserted to equal the request.
+        asserted to equal the request. A model that enumerates its sizes rather
+        than mapping arbitrary ones -- ``gpt-image-1`` takes only 1024x1024,
+        1024x1536 and 1536x1024 -- skips the sizes it cannot accept.
 
         Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase.width
              stdapi/models/image/_stability.py:_get_aspect_ratio
+             tests/conftest.py:IMAGE_MODEL_ACCEPTED_SIZES
         """
+        if not image_size_supported(image_generation_model, size):
+            pytest.skip(f"{image_generation_model} does not accept size {size}")
         response = openai_client.images.generate(
             prompt="A geometric shape", model=image_generation_model, n=1, size=size
         )
@@ -491,6 +518,7 @@ class TestImageGeneration:
         self,
         openai_client: OpenAI,
         image_generation_hd_model: str,
+        image_generation_hd_size: str,
         use_official_api: bool,
     ) -> None:
         """A top-tier ``quality`` request is echoed back as ``high``.
@@ -506,27 +534,34 @@ class TestImageGeneration:
             prompt="A detailed portrait",
             model=image_generation_hd_model,
             n=1,
-            size="1024x1024",
-            quality="hd" if use_official_api else "premium",  # type: ignore[call-overload]
+            size=image_generation_hd_size,
+            # "hd" was dall-e-3's vocabulary; gpt-image-1 takes auto/low/medium/high.
+            quality="high" if use_official_api else "premium",  # type: ignore[call-overload]
         )
 
         assert response.created is not None
         validate_timestamp(response.created)
         assert response.data is not None
         assert len(response.data) == 1
-        assert response.data[0].url is not None
-        validate_url_format(response.data[0].url)
+        if image_returns_base64_only(image_generation_hd_model):
+            # gpt-image-1 has no response_format and never returns a URL.
+            assert response.data[0].b64_json is not None
+            validate_base64_image(response.data[0].b64_json)
+        else:
+            assert response.data[0].url is not None
+            validate_url_format(response.data[0].url)
         if not use_official_api:
             assert response.quality == "high", (
                 "the Bedrock premium tier must be reported as OpenAI quality 'high'"
             )
 
     @pytest.mark.expensive
+    @pytest.mark.gateway
     def test_style_parameter(
         self,
         openai_client: OpenAI,
         image_generation_hd_model: str,
-        use_official_api: bool,
+        image_generation_hd_size: str,
     ) -> None:
         """A model-specific ``style`` is forwarded and accepted by the backend.
 
@@ -535,6 +570,10 @@ class TestImageGeneration:
         carries no style echo, so a generated image is the proof the value was
         accepted -- an unknown style comes back as a 400 instead.
 
+        Gateway-only: ``dall-e-3`` was the sole OpenAI model with a ``style``
+        parameter and it has been retired, so ``gpt-image-1`` answers 400
+        ``unknown_parameter`` for ``style`` whatever the value.
+
         Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
              stdapi/types/openai_images.py:ImageGenerateParams
         """
@@ -542,8 +581,8 @@ class TestImageGeneration:
             prompt="An abstract artwork",
             model=image_generation_hd_model,
             n=1,
-            size="1024x1024",
-            style="vivid" if use_official_api else "PHOTOREALISM",  # type: ignore[call-overload]
+            size=image_generation_hd_size,
+            style="PHOTOREALISM",  # type: ignore[call-overload]
         )
 
         assert response.created is not None
@@ -555,7 +594,10 @@ class TestImageGeneration:
 
     @pytest.mark.expensive
     def test_stream_parameter(
-        self, openai_client: OpenAI, image_generation_stream_model: str
+        self,
+        openai_client: OpenAI,
+        image_generation_stream_model: str,
+        image_generation_stream_size: str,
     ) -> None:
         """``stream=True`` yields SSE events ending in one completed event per image.
 
@@ -566,7 +608,7 @@ class TestImageGeneration:
             prompt="A test image",
             model=image_generation_stream_model,
             n=1,
-            size="1024x1024",
+            size=image_generation_stream_size,
             stream=True,
         )
 
@@ -584,6 +626,7 @@ class TestImageGeneration:
         self,
         openai_client: OpenAI,
         image_generation_stream_model: str,
+        image_generation_stream_size: str,
         partial_images_value: int,
     ) -> None:
         """Every legal ``partial_images`` value still ends the stream with one completed event.
@@ -599,7 +642,7 @@ class TestImageGeneration:
             prompt=f"A test image with partial_images={partial_images_value}",
             model=image_generation_stream_model,
             n=1,
-            size="1024x1024",
+            size=image_generation_stream_size,
             stream=True,
             partial_images=partial_images_value,
         )
@@ -612,7 +655,11 @@ class TestImageGeneration:
         )
 
     def test_empty_prompt_error(
-        self, openai_client: OpenAI, image_generation_model: str, use_official_api: bool
+        self,
+        openai_client: OpenAI,
+        image_generation_model: str,
+        image_generation_size: str,
+        use_official_api: bool,
     ) -> None:
         """An empty ``prompt`` is rejected as an ``invalid_request_error``.
 
@@ -629,7 +676,7 @@ class TestImageGeneration:
 
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.images.generate(
-                prompt="", model=image_generation_model, n=1, size="512x512"
+                prompt="", model=image_generation_model, n=1, size=image_generation_size
             )
 
         validate_error_response(
@@ -639,7 +686,7 @@ class TestImageGeneration:
         )
 
     def test_invalid_model_error(
-        self, openai_client: OpenAI, use_official_api: bool
+        self, openai_client: OpenAI, image_generation_size: str, use_official_api: bool
     ) -> None:
         """An unknown ``model`` is rejected as a 400 naming ``model``.
 
@@ -657,7 +704,10 @@ class TestImageGeneration:
         """
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.images.generate(
-                prompt="A test image", model="invalid-model-name", n=1, size="512x512"
+                prompt="A test image",
+                model="invalid-model-name",
+                n=1,
+                size=image_generation_size,
             )
 
         validate_error_response(
@@ -676,6 +726,7 @@ class TestImageGeneration:
         self,
         openai_client: OpenAI,
         image_generation_model: str,
+        image_generation_size: str,
         invalid_n: int,
         use_official_api: bool,
     ) -> None:
@@ -696,7 +747,7 @@ class TestImageGeneration:
                 prompt="A test image",
                 model=image_generation_model,
                 n=invalid_n,
-                size="512x512",
+                size=image_generation_size,
             )
 
         validate_error_response(
@@ -708,9 +759,11 @@ class TestImageGeneration:
     ) -> None:
         """A ``size`` that is neither ``auto`` nor ``WIDTHxHEIGHT`` is rejected.
 
-        The gateway rejects it in schema validation as an
-        ``invalid_request_error``; OpenAI rejects it after model resolution as
-        an ``image_generation_user_error``/``invalid_value`` on ``size``.
+        The two targets label that 400 differently, so the expected envelope
+        follows the selected lane: the gateway rejects it in schema validation
+        as an ``invalid_request_error``, while OpenAI rejects it after model
+        resolution as an ``image_generation_user_error``/``invalid_value``.
+        Both must name ``size``.
 
         Ref: stdapi/types/openai_images.py:_ImageBaseParams
              stdapi/main.py:handle_validation_exception
@@ -728,11 +781,21 @@ class TestImageGeneration:
             )
 
         validate_error_response(
-            exc_info.value, expected_type="invalid_request_error", expected_param="size"
+            exc_info.value,
+            expected_type=(
+                "image_generation_user_error"
+                if use_official_api
+                else "invalid_request_error"
+            ),
+            expected_code="invalid_value" if use_official_api else None,
+            expected_param="size",
         )
 
     def test_invalid_response_format_error(
-        self, openai_client: OpenAI, image_generation_model: str
+        self,
+        openai_client: OpenAI,
+        image_generation_model: str,
+        image_generation_size: str,
     ) -> None:
         """``response_format`` outside ``url``/``b64_json`` is rejected.
 
@@ -744,7 +807,7 @@ class TestImageGeneration:
                 prompt="A test image",
                 model=image_generation_model,
                 n=1,
-                size="512x512",
+                size=image_generation_size,
                 response_format="invalid-format",
             )
 
@@ -755,7 +818,11 @@ class TestImageGeneration:
         )
 
     def test_invalid_quality_error(
-        self, openai_client: OpenAI, image_generation_model: str, use_official_api: bool
+        self,
+        openai_client: OpenAI,
+        image_generation_model: str,
+        image_generation_size: str,
+        use_official_api: bool,
     ) -> None:
         """A ``quality`` the model cannot honor is rejected as a 400 naming ``quality``.
 
@@ -776,7 +843,7 @@ class TestImageGeneration:
                 prompt="A test image",
                 model=image_generation_model,
                 n=1,
-                size="512x512",
+                size=image_generation_size,
                 quality="invalid-quality",
             )
 
@@ -787,12 +854,18 @@ class TestImageGeneration:
         )
 
     def test_invalid_style_error(
-        self, openai_client: OpenAI, image_generation_model: str
+        self,
+        openai_client: OpenAI,
+        image_generation_model: str,
+        image_generation_size: str,
     ) -> None:
         """A ``style`` the model cannot honor is rejected as a 400 naming ``style``.
 
         Like ``quality``, ``style`` is model-dependent and free-form on the
-        gateway, so the rejection comes from the backend job.
+        gateway, so the rejection comes from the backend job. Both lanes are
+        asserted: OpenAI reaches the same envelope by another route, since
+        ``gpt-image-1`` has no ``style`` parameter at all and answers
+        ``unknown_parameter`` on ``style``.
 
         Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase._validate_no_style
              stdapi/api_providers/openai.py:_format_error
@@ -802,7 +875,7 @@ class TestImageGeneration:
                 prompt="A test image",
                 model=image_generation_model,
                 n=1,
-                size="512x512",
+                size=image_generation_size,
                 style="invalid-style",
             )
 
@@ -813,7 +886,11 @@ class TestImageGeneration:
         )
 
     def test_stream_parameter_error_with_unsupported_models(
-        self, openai_client: OpenAI, image_generation_model: str, use_official_api: bool
+        self,
+        openai_client: OpenAI,
+        image_generation_model: str,
+        image_generation_size: str,
+        use_official_api: bool,
     ) -> None:
         """Upstream rejects ``stream`` on the DALL-E models as ``unknown_parameter``.
 
@@ -821,7 +898,10 @@ class TestImageGeneration:
         image model instead, so this is exercised against the official API only.
 
         The claim is currently unobservable on both targets: OpenAI has retired
-        the DALL-E family, and every remaining official image model streams.
+        the DALL-E family, and every remaining official image model streams. The
+        skip is model-conditional either way, so mapping a non-streaming image
+        model back in restores the coverage instead of silently billing a
+        successful generation.
 
         Ref: https://developers.openai.com/api/docs/guides/image-generation
              stdapi/routes/openai_images_generations.py:stream_generator
@@ -829,6 +909,11 @@ class TestImageGeneration:
         if not use_official_api:
             pytest.skip(
                 "Streaming supported on all Bedrock models in this implementation"
+            )
+        if image_generation_model not in _NON_STREAMING_OFFICIAL_IMAGE_MODELS:
+            pytest.skip(
+                f"'{image_generation_model}' supports streaming: only the "
+                f"DALL-E models rejected 'stream'"
             )
         _skip_retired_official_image_model(
             use_official_api, image_generation_model, "stream"
@@ -839,7 +924,7 @@ class TestImageGeneration:
                 prompt="A test image",
                 model=image_generation_model,
                 n=1,
-                size="512x512",
+                size=image_generation_size,
                 stream=True,
             )
 
@@ -851,14 +936,20 @@ class TestImageGeneration:
         )
 
     def test_partial_images_without_stream_error(
-        self, openai_client: OpenAI, image_generation_model: str, use_official_api: bool
+        self,
+        openai_client: OpenAI,
+        image_generation_model: str,
+        image_generation_size: str,
+        use_official_api: bool,
     ) -> None:
         """``partial_images`` without ``stream=True`` is rejected as a 400.
 
-        The incompatibility is caught by a model-level validator, so the gateway
-        envelope names ``partial_images`` in the message and carries no
-        ``param``. OpenAI rejects it as an ``image_generation_user_error``
-        (code ``unsupported_parameter``, ``param`` ``input``) instead.
+        The expected envelope follows the selected lane. The incompatibility is
+        caught by a model-level validator on the gateway, whose envelope is an
+        ``invalid_request_error`` naming ``partial_images`` in the message and
+        carrying no ``param``. OpenAI answers an ``image_generation_user_error``
+        (code ``unsupported_parameter``) that blames the whole ``input``, so the
+        field name never appears in its envelope.
 
         Ref: stdapi/types/openai_images.py:ImageGenerateParams._unsupported
              stdapi/main.py:handle_validation_exception
@@ -872,14 +963,19 @@ class TestImageGeneration:
                 prompt="A test image",
                 model=image_generation_model,
                 n=1,
-                size="512x512",
+                size=image_generation_size,
                 partial_images=1,
             )
 
         validate_error_response(
             exc_info.value,
-            expected_type="invalid_request_error",
-            expected_param="partial_images",
+            expected_type=(
+                "image_generation_user_error"
+                if use_official_api
+                else "invalid_request_error"
+            ),
+            expected_code="unsupported_parameter" if use_official_api else None,
+            expected_param="input" if use_official_api else "partial_images",
         )
 
     def test_model_not_supporting_text_to_image(
@@ -926,6 +1022,7 @@ class TestImageGenerationUsage:
         self,
         test_client: TestClientType | None,
         image_generation_model: str,
+        image_generation_size: str,
         api_key: str,
         capfd: pytest.CaptureFixture[str],
     ) -> None:
@@ -947,7 +1044,7 @@ class TestImageGenerationUsage:
                 "model": image_generation_model,
                 "prompt": "A red circle on a white background",
                 "n": 1,
-                "size": "512x512",
+                "size": image_generation_size,
             },
             headers={"Authorization": f"Bearer {api_key}"},
         )

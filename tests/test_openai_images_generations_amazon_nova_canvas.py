@@ -11,10 +11,15 @@ Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
 import pytest
 from openai import BadRequestError, OpenAI
 
+from tests.conftest import smallest_image_size
+
 NOVA_CANVAS_V1 = "amazon.nova-canvas-v1:0"
 
 NOVA_CANVAS_ALL = (NOVA_CANVAS_V1,)
 NOVA_CANVAS_SAMPLE = (NOVA_CANVAS_V1,)
+
+#: Cheapest size accepted by Nova Canvas, requested wherever the size is incidental.
+NOVA_CANVAS_SIZE = smallest_image_size(NOVA_CANVAS_V1)
 
 
 #: Every test in this module is reported as skipped: the model is deprecated.
@@ -50,7 +55,7 @@ class TestAmazonNovaCanvas:
             model=model_id,
             prompt="A watercolor of a red fox in a forest, soft digital painting.",
             response_format="b64_json",
-            size="1024x1024",
+            size=NOVA_CANVAS_SIZE,
             extra_body={
                 "textToImageParams": {"negativeText": "blurry"},
                 "imageGenerationConfig": {"seed": 12},
@@ -60,7 +65,7 @@ class TestAmazonNovaCanvas:
         assert len(response.data) == 1
         assert response.data[0].b64_json is not None
         assert response.data[0].url is None
-        assert response.size == "1024x1024"
+        assert response.size == NOVA_CANVAS_SIZE
 
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_ALL)
@@ -79,10 +84,10 @@ class TestAmazonNovaCanvas:
             model=model_id,
             prompt="A watercolor of a red fox in a forest, soft digital painting.",
             response_format="b64_json",
-            size="1024x1024",
+            size=NOVA_CANVAS_SIZE,
         )
         assert response.created > 0
-        assert response.size == "1024x1024"
+        assert response.size == NOVA_CANVAS_SIZE
         assert response.output_format == "png"
         assert response.quality == "medium"
         assert response.data is not None
@@ -109,7 +114,7 @@ class TestAmazonNovaCanvas:
             prompt="Logo concept of a lighthouse.",
             response_format="url",
             n=2,
-            size="512x512",
+            size=NOVA_CANVAS_SIZE,
         )
         assert response.data is not None
         assert len(response.data) == 2
@@ -137,7 +142,7 @@ class TestAmazonNovaCanvas:
             model=model_id,
             prompt="A photorealistic portrait of a golden retriever.",
             response_format="b64_json",
-            size="1024x1024",
+            size=NOVA_CANVAS_SIZE,
             quality="high",
         )
         assert response.data is not None
@@ -162,7 +167,7 @@ class TestAmazonNovaCanvas:
                 model=model_id,
                 prompt="A logo of a tree.",
                 response_format="b64_json",
-                size="512x512",
+                size=NOVA_CANVAS_SIZE,
                 style="vivid",
             )
 
@@ -192,7 +197,7 @@ class TestAmazonNovaCanvas:
             model=model_id,
             prompt="A beautiful landscape with sunset tones",
             response_format="b64_json",
-            size="1024x1024",
+            size=NOVA_CANVAS_SIZE,
             extra_body={
                 "taskType": "COLOR_GUIDED_GENERATION",
                 "colorGuidedGenerationParams": {
@@ -208,7 +213,7 @@ class TestAmazonNovaCanvas:
         assert response.data[0].b64_json is not None
         assert response.data[0].url is None
         assert response.output_format == "png"
-        assert response.size == "1024x1024"
+        assert response.size == NOVA_CANVAS_SIZE
 
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_SAMPLE)
     def test_generate_with_invalid_task_type(
@@ -228,7 +233,7 @@ class TestAmazonNovaCanvas:
                 model=model_id,
                 prompt="A test prompt",
                 response_format="b64_json",
-                size="1024x1024",
+                size=NOVA_CANVAS_SIZE,
                 extra_body={"taskType": "INVALID_TASK_TYPE"},
             )
 
@@ -259,7 +264,7 @@ class TestAmazonNovaCanvas:
                 model=model_id,
                 prompt="A test prompt",
                 response_format="b64_json",
-                size="1024x1024",
+                size=NOVA_CANVAS_SIZE,
                 extra_body={"taskType": "COLOR_GUIDED_GENERATION"},
             )
 
