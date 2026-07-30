@@ -914,12 +914,13 @@ class Reasoning(BaseModelRequest):
     )
     context: Literal["auto", "current_turn", "all_turns"] | None = Field(
         default=None,
-        description="Reasoning context scope. Accepted for compatibility and ignored.",
+        description="Reasoning context scope. Ignored on Bedrock Converse-served "
+        "models; forwarded verbatim to Bedrock Mantle native models.",
     )
     mode: str | None = Field(
         default=None,
-        description="Reasoning mode, such as `standard` or `pro`. Accepted for "
-        "compatibility and ignored.",
+        description="Reasoning mode, such as `standard` or `pro`. Ignored on Bedrock "
+        "Converse-served models; forwarded verbatim to Bedrock Mantle native models.",
     )
 
 

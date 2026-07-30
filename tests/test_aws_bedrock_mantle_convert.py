@@ -2923,6 +2923,28 @@ class TestResponsesPayloadBuilder:
         payload, _region = await mantle_convert.responses_payload(request, "model-id")
         assert payload["tool_choice"] == {"type": "function", "name": "get_weather"}
 
+    async def test_reasoning_mode_forwarded_verbatim(self) -> None:
+        """``reasoning.mode`` reaches the upstream payload unchanged.
+
+        The type documents ``mode`` as "accepted for compatibility and ignored", but
+        ``responses_payload`` dumps the request with ``exclude_unset=True`` and only
+        strips ``_RESPONSES_EXTENSION_FIELDS`` (``moderation``), so ``mode`` is not
+        actually dropped on the Mantle passthrough path: it reaches the upstream
+        ``reasoning`` object like every other unrecognized field.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:responses_payload
+             stdapi/types/openai_responses.py:Reasoning.mode
+        """
+        request = ResponseCreateParams.model_validate(
+            {
+                "model": "ignored",
+                "input": "hi",
+                "reasoning": {"effort": "medium", "mode": "pro"},
+            }
+        )
+        payload, _region = await mantle_convert.responses_payload(request, "model-id")
+        assert payload["reasoning"] == {"effort": "medium", "mode": "pro"}
+
 
 class TestEnableStreamUsage:
     """Forcing streaming with usage reporting on upstream request payloads.
