@@ -1,4 +1,15 @@
-"""OpenAI-compatible tests for Amazon Nova Canvas image editing."""
+"""``/v1/images/edits`` backed by Amazon Nova Canvas.
+
+Nova Canvas is the only Bedrock image backend offering ``VIRTUAL_TRY_ON`` and a
+quality/style mapping. The whole module is skipped: the model reaches end of
+life on 2026-09-30.
+
+Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+     https://stdapi.ai/api_openai_images_edits/
+     https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
+     stdapi/routes/openai_images_edits.py:edit_images
+     https://github.com/stdapi-ai/stdapi.ai/issues/93
+"""
 
 import base64
 from typing import TYPE_CHECKING
@@ -17,10 +28,26 @@ NOVA_CANVAS_ALL = (NOVA_CANVAS_V1,)
 NOVA_CANVAS_SAMPLE = (NOVA_CANVAS_V1,)
 
 
-class TestAmazonNovaCanvasEditing:
-    """Model-specific tests for Amazon Nova Canvas image editing.
+def _decoded_png(b64_json: str | None) -> bytes:
+    """Decode a base64 image payload and assert it carries a PNG signature.
 
-    Focus on Nova Canvas-specific parameters and features unique to this provider.
+    Args:
+        b64_json: Base64-encoded image data from an ``ImagesResponse``.
+
+    Returns:
+        The decoded image bytes.
+    """
+    assert b64_json is not None
+    data = base64.b64decode(b64_json, validate=True)
+    assert data.startswith(b"\x89PNG\r\n\x1a\n"), "expected a PNG image payload"
+    return data
+
+
+class TestAmazonNovaCanvasEditing:
+    """Nova Canvas ``taskType`` dispatch and provider extras on the edits route.
+
+    Ref: stdapi/models/image/amazon_nova_canvas.py:_ImageGenerationJob._edit_image
+         stdapi/routes/_images_common.py:build_images_response
     """
 
     @pytest.mark.expensive
@@ -33,7 +60,16 @@ class TestAmazonNovaCanvasEditing:
         sample_mask_file: bytes,
         model_id: str,
     ) -> None:
-        """Test editing with Nova Canvas-specific negativeText parameter."""
+        """Provider extras are merged into the ``taskType``'s own parameter block.
+
+        ``negativeText`` and ``seed`` have no OpenAI equivalent. Bedrock rejects
+        the invocation with a ``ValidationException`` when they are not nested
+        under ``inPaintingParams`` / ``imageGenerationConfig``, so a successful
+        image is the observable proof that the merge happened.
+
+        Ref: stdapi/models/image/amazon_nova_canvas.py:_ImageGenerationJob._apply_extra_params
+             stdapi/aws_bedrock.py:get_extra_model_parameters
+        """
         if use_official_api:
             pytest.skip(
                 "Amazon Nova Canvas is not available on the official OpenAI API"
@@ -56,8 +92,11 @@ class TestAmazonNovaCanvasEditing:
         assert response.created > 0
         assert response.data is not None
         assert len(response.data) == 1
-        assert response.data[0].b64_json is not None
+        _decoded_png(response.data[0].b64_json)
+        assert response.data[0].url is None
         assert response.size == "512x512"  # type: ignore[comparison-overlap]
+        assert response.output_format == "png"
+        assert response.background == "opaque"
 
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_ALL)
@@ -69,7 +108,16 @@ class TestAmazonNovaCanvasEditing:
         sample_mask_file: bytes,
         model_id: str,
     ) -> None:
-        """Test basic editing with base64 response format."""
+        """A masked edit returns one base64 PNG, no URL, and a split token usage.
+
+        Supplying a mask selects the ``INPAINTING`` task type. The fixture mask
+        is a plain black/white PNG with no alpha channel, so it reaches Bedrock
+        unchanged. Both the source image and the mask count as input images, so
+        at most two of the input tokens are attributed to images.
+
+        Ref: stdapi/utils.py:alpha_mask_to_bw
+             https://docs.aws.amazon.com/nova/latest/userguide/image-gen-access.html
+        """
         if use_official_api:
             pytest.skip(
                 "Amazon Nova Canvas is not available on the official OpenAI API"
@@ -85,18 +133,33 @@ class TestAmazonNovaCanvasEditing:
         )
 
         assert response.created > 0
-        assert response.size is not None
+        assert response.size == "512x512"  # type: ignore[comparison-overlap]
+        assert response.output_format == "png"
+        assert response.background == "opaque"
         assert response.data is not None
         assert len(response.data) == 1
         img = response.data[0]
         assert img.b64_json is not None
         assert img.url is None
+        _decoded_png(img.b64_json)
 
         assert response.usage is not None
         assert response.usage.input_tokens > 0
         assert response.usage.input_tokens_details.image_tokens > 0
+        assert response.usage.input_tokens_details.image_tokens <= 2, (
+            "only the source image and the mask are input images"
+        )
         assert response.usage.input_tokens_details.text_tokens >= 0
+        assert (
+            response.usage.input_tokens_details.image_tokens
+            + response.usage.input_tokens_details.text_tokens
+            == response.usage.input_tokens
+        )
         assert response.usage.output_tokens == 1
+        assert (
+            response.usage.total_tokens
+            == response.usage.input_tokens + response.usage.output_tokens
+        )
 
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_ALL)
@@ -107,7 +170,15 @@ class TestAmazonNovaCanvasEditing:
         sample_image_file: bytes,
         model_id: str,
     ) -> None:
-        """Test basic editing with base64 response format."""
+        """A mask-less edit still returns one base64 PNG, with a single input image.
+
+        Nova Canvas defaults to ``INPAINTING`` only when a mask is supplied;
+        without one the source image is sent as ``textToImageParams``'
+        ``conditionImage``. With no mask uploaded, only one input image is
+        accounted for in the usage split.
+
+        Ref: stdapi/models/image/amazon_nova_canvas.py:_ImageGenerationJob._edit_image
+        """
         if use_official_api:
             pytest.skip(
                 "Amazon Nova Canvas is not available on the official OpenAI API"
@@ -122,17 +193,27 @@ class TestAmazonNovaCanvasEditing:
         )
 
         assert response.created > 0
-        assert response.size is not None
+        assert response.size == "512x512"  # type: ignore[comparison-overlap]
+        assert response.output_format == "png"
         assert response.data is not None
         assert len(response.data) == 1
         img = response.data[0]
         assert img.b64_json is not None
         assert img.url is None
+        _decoded_png(img.b64_json)
 
         assert response.usage is not None
         assert response.usage.input_tokens > 0
         assert response.usage.input_tokens_details.image_tokens > 0
+        assert response.usage.input_tokens_details.image_tokens == 1, (
+            "the source image is the only input image"
+        )
         assert response.usage.input_tokens_details.text_tokens >= 0
+        assert (
+            response.usage.input_tokens_details.image_tokens
+            + response.usage.input_tokens_details.text_tokens
+            == response.usage.input_tokens
+        )
         assert response.usage.output_tokens == 1
 
     @pytest.mark.expensive
@@ -145,7 +226,14 @@ class TestAmazonNovaCanvasEditing:
         sample_mask_file: bytes,
         model_id: str,
     ) -> None:
-        """Test editing with OUTPAINTING taskType."""
+        """An explicit ``OUTPAINTING`` task type overrides the mask-driven default.
+
+        The fixture mask is already a pure black/white PNG, so it is forwarded
+        verbatim; outpainting regenerates the white pixels where inpainting
+        would have regenerated the black ones.
+
+        Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-access.html
+        """
         if use_official_api:
             pytest.skip(
                 "Amazon Nova Canvas is not available on the official OpenAI API"
@@ -165,8 +253,10 @@ class TestAmazonNovaCanvasEditing:
         assert response.created > 0
         assert response.data is not None
         assert len(response.data) == 1
-        assert response.data[0].b64_json is not None
+        _decoded_png(response.data[0].b64_json)
+        assert response.data[0].url is None
         assert response.size == "512x512"  # type: ignore[comparison-overlap]
+        assert response.output_format == "png"
 
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_SAMPLE)
@@ -178,11 +268,17 @@ class TestAmazonNovaCanvasEditing:
         sample_alpha_mask_file: bytes,
         model_id: str,
     ) -> None:
-        """Test OUTPAINTING with an OpenAI-style alpha-transparency mask.
+        """``OUTPAINTING`` accepts an OpenAI-style alpha-transparency mask.
 
-        The mask's transparent (edit) region must be converted to Nova
-        Canvas's outpainting polarity (white=generate), not inpainting's
-        (black=edit), for Bedrock to accept the request.
+        Bedrock only takes an alpha-less black/white mask, so the RGBA mask must
+        be converted — with the outpainting polarity (white = generate) rather
+        than inpainting's (black = edit) — for the invocation to succeed. The
+        resulting pixel values are asserted at unit level in
+        ``tests/test_models_image.py``; here the accepted request and the
+        returned image are the observable evidence.
+
+        Ref: stdapi/utils.py:alpha_mask_to_bw
+             https://docs.aws.amazon.com/nova/latest/userguide/image-gen-access.html
         """
         if use_official_api:
             pytest.skip(
@@ -203,7 +299,14 @@ class TestAmazonNovaCanvasEditing:
         assert response.created > 0
         assert response.data is not None
         assert len(response.data) == 1
-        assert response.data[0].b64_json is not None
+        _decoded_png(response.data[0].b64_json)
+        assert response.data[0].url is None
+        assert response.size == "512x512"  # type: ignore[comparison-overlap]
+        assert response.output_format == "png"
+        assert response.usage is not None
+        assert response.usage.input_tokens_details.image_tokens <= 2, (
+            "only the source image and the mask are input images"
+        )
 
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_SAMPLE)
@@ -214,7 +317,14 @@ class TestAmazonNovaCanvasEditing:
         sample_image_file: bytes,
         model_id: str,
     ) -> None:
-        """Test editing with BACKGROUND_REMOVAL taskType (no mask supported)."""
+        """``BACKGROUND_REMOVAL`` needs no mask and ignores the prompt.
+
+        The Bedrock request carries only ``backgroundRemovalParams.image``; a
+        mask would be rejected by the gateway before the invocation.
+
+        Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
+             stdapi/models/image/amazon_nova_canvas.py:_ImageGenerationJob._get_request_background_removal
+        """
         if use_official_api:
             pytest.skip(
                 "Amazon Nova Canvas is not available on the official OpenAI API"
@@ -233,8 +343,10 @@ class TestAmazonNovaCanvasEditing:
         assert response.created > 0
         assert response.data is not None
         assert len(response.data) == 1
-        assert response.data[0].b64_json is not None
+        _decoded_png(response.data[0].b64_json)
+        assert response.data[0].url is None
         assert response.size == "512x512"  # type: ignore[comparison-overlap]
+        assert response.output_format == "png"
 
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_SAMPLE)
@@ -247,7 +359,18 @@ class TestAmazonNovaCanvasEditing:
         model_id: str,
         mask_type: str,
     ) -> None:
-        """Test editing with VIRTUAL_TRY_ON taskType using all maskType options."""
+        """``VIRTUAL_TRY_ON`` dresses the source person with the reference garment.
+
+        The task maps the OpenAI fields onto Nova Canvas's own: ``image`` becomes
+        ``sourceImage``, ``mask`` becomes ``referenceImage``, and ``prompt`` feeds
+        whichever mask sub-object the ``maskType`` selects — ``maskPrompt`` for
+        ``PROMPT``, ``garmentClass`` for ``GARMENT``, ``maskImage`` for ``IMAGE``
+        (supplied through ``virtualTryOnParams`` here because the OpenAI client
+        caps ``prompt`` at 1024 characters).
+
+        Ref: stdapi/models/image/amazon_nova_canvas.py:_ImageGenerationJob._get_request_virtual_try_on
+             https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
+        """
         if use_official_api:
             pytest.skip(
                 "Amazon Nova Canvas is not available on the official OpenAI API"
@@ -307,10 +430,12 @@ class TestAmazonNovaCanvasEditing:
         assert response.data is not None
         assert len(response.data) == 1
         assert response.data[0].b64_json is not None
+        assert response.data[0].url is None
         assert response.size == "1024x1024"
+        assert response.output_format == "png"
 
         # Save the output image for manual inspection
-        output_image_data = base64.b64decode(response.data[0].b64_json)
+        output_image_data = _decoded_png(response.data[0].b64_json)
         output_path = OUTPUT_DIR / f"vto_result_{mask_type.lower()}.jpg"
         output_path.write_bytes(output_image_data)
 
@@ -362,7 +487,13 @@ class TestAmazonNovaCanvasEditing:
         sample_image_file: bytes,
         model_id: str,
     ) -> None:
-        """Test INPAINTING without mask (mask is optional)."""
+        """``INPAINTING`` accepts a ``maskPrompt`` instead of an uploaded mask.
+
+        Nova Canvas requires exactly one of ``maskPrompt`` or ``maskImage``, so
+        the request is only valid because no mask file was uploaded.
+
+        Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
+        """
         if use_official_api:
             pytest.skip(
                 "Amazon Nova Canvas is not available on the official OpenAI API"
@@ -384,8 +515,10 @@ class TestAmazonNovaCanvasEditing:
         assert response.created > 0
         assert response.data is not None
         assert len(response.data) == 1
-        assert response.data[0].b64_json is not None
+        _decoded_png(response.data[0].b64_json)
+        assert response.data[0].url is None
         assert response.size == "512x512"  # type: ignore[comparison-overlap]
+        assert response.output_format == "png"
 
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_SAMPLE)
@@ -396,7 +529,13 @@ class TestAmazonNovaCanvasEditing:
         sample_image_file: bytes,
         model_id: str,
     ) -> None:
-        """Test OUTPAINTING without mask (mask is optional)."""
+        """``OUTPAINTING`` accepts a ``maskPrompt`` instead of an uploaded mask.
+
+        The prompt-derived mask replaces ``maskImage``, which is mutually
+        exclusive with it.
+
+        Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
+        """
         if use_official_api:
             pytest.skip(
                 "Amazon Nova Canvas is not available on the official OpenAI API"
@@ -418,8 +557,10 @@ class TestAmazonNovaCanvasEditing:
         assert response.created > 0
         assert response.data is not None
         assert len(response.data) == 1
-        assert response.data[0].b64_json is not None
+        _decoded_png(response.data[0].b64_json)
+        assert response.data[0].url is None
         assert response.size == "512x512"  # type: ignore[comparison-overlap]
+        assert response.output_format == "png"
 
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_SAMPLE)
     def test_edit_with_invalid_task_type(
@@ -430,7 +571,15 @@ class TestAmazonNovaCanvasEditing:
         sample_mask_file: bytes,
         model_id: str,
     ) -> None:
-        """Test that invalid taskType raises BadRequestError."""
+        """An unknown ``taskType`` is rejected locally as an ``invalid_request_error``.
+
+        The gateway dispatches on the ``taskType`` extra itself, so the request
+        never reaches Bedrock and the message lists the edit task types Nova
+        Canvas supports.
+
+        Ref: stdapi/models/image/amazon_nova_canvas.py:_ImageGenerationJob._edit_image
+             stdapi/api_providers/openai.py:_format_error
+        """
         if use_official_api:
             pytest.skip(
                 "Amazon Nova Canvas is not available on the official OpenAI API"
@@ -446,11 +595,15 @@ class TestAmazonNovaCanvasEditing:
                 extra_body={"taskType": "INVALID_TASK_TYPE"},
             )
 
-        assert (
-            "taskType" in str(exc_info.value).lower()
-            or "INPAINTING" in str(exc_info.value)
-            or "OUTPAINTING" in str(exc_info.value)
-            or "BACKGROUND_REMOVAL" in str(exc_info.value)
+        assert exc_info.value.status_code == 400
+        # The OpenAI client unwraps the envelope: body is already the error object.
+        body = exc_info.value.body
+        assert isinstance(body, dict)
+        assert body["type"] == "invalid_request_error"
+        message = body["message"]
+        assert "taskType" in message
+        assert "VIRTUAL_TRY_ON" in message, (
+            f"expected the Nova Canvas edit task types, got: {message}"
         )
 
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_SAMPLE)
@@ -461,7 +614,13 @@ class TestAmazonNovaCanvasEditing:
         sample_image_file: bytes,
         model_id: str,
     ) -> None:
-        """Test that invalid virtualTryOnParams.maskType raises BadRequestError."""
+        """An unknown ``virtualTryOnParams.maskType`` is rejected before invoking Bedrock.
+
+        Only ``PROMPT``, ``GARMENT`` and ``IMAGE`` select a mask sub-object; any
+        other value has no request shape to build.
+
+        Ref: stdapi/models/image/amazon_nova_canvas.py:_ImageGenerationJob._get_request_virtual_try_on
+        """
         if use_official_api:
             pytest.skip(
                 "Amazon Nova Canvas is not available on the official OpenAI API"
@@ -483,7 +642,15 @@ class TestAmazonNovaCanvasEditing:
                 },
             )
 
-        assert "maskType" in str(exc_info.value) or "PROMPT" in str(exc_info.value)
+        assert exc_info.value.status_code == 400
+        body = exc_info.value.body
+        assert isinstance(body, dict)
+        assert body["type"] == "invalid_request_error"
+        message = body["message"]
+        assert "virtualTryOnParams.maskType" in message
+        assert "INVALID_MASK_TYPE" in message, (
+            f"expected the rejected maskType to be echoed, got: {message}"
+        )
 
 
 pytest.skip("Amazon Nova Canvas is deprecated", allow_module_level=True)

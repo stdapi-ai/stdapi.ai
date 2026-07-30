@@ -1,9 +1,16 @@
-"""Unit tests for stdapi.usage's cost computation, focused on multi-currency handling.
+"""Usage recording, cost computation, log entries and EMF emission in stdapi.usage.
 
-Regression: a record's dimensions can resolve to more than one currency (e.g.
-regional price fallback pulling from a differently-partitioned region). Costs
-must never be summed across currencies -- records always surface a full
-per-currency breakdown instead of collapsing to a single cost/currency pair.
+Usage aggregates into one record per (service, model, operation, region, tier,
+routing, context) key, then ``compute_costs()`` resolves a price per dimension
+and per TTL/spec bucket. Costs are never summed across currencies: a record
+whose dimensions resolve to more than one currency (e.g. regional price
+fallback pulling from a differently-partitioned Region) surfaces a full
+per-currency breakdown instead of a single cost/currency pair.
+
+Ref: stdapi/usage.py:record_bedrock_usage
+     stdapi/usage.py:compute_costs
+     stdapi/usage.py:usage_log_entries
+     stdapi/pricing.py:resolve_price
 """
 
 import asyncio
@@ -53,7 +60,10 @@ def _reset_context_vars() -> Generator[None]:
 
 
 class TestComputeCostsMultiCurrency:
-    """A record whose dimensions resolve to more than one currency."""
+    """A record whose dimensions resolve to more than one currency.
+
+    Ref: stdapi/usage.py:_apply_record_cost
+    """
 
     def _record_mixed_currency_usage(self) -> None:
         usage.init_usage()
@@ -67,7 +77,11 @@ class TestComputeCostsMultiCurrency:
         record_bedrock_usage("mixedmodel", input_tokens=1000, output_tokens=1000)
 
     def test_mixed_currency_surfaces_full_per_currency_breakdown(self) -> None:
-        """A record spanning multiple currencies: costs dict has both, cost/currency left unset."""
+        """A record spanning two currencies fills ``costs`` and leaves cost/currency unset.
+
+        1000 input tokens at 0.000003 USD and 1000 output tokens at 0.000015
+        EUR: each currency keeps its own subtotal, quantized to 6 decimals.
+        """
         self._record_mixed_currency_usage()
         compute_costs()
         record = next(iter(usage.USAGE.get().values()))
@@ -76,7 +90,10 @@ class TestComputeCostsMultiCurrency:
         assert record.costs == {"USD": Decimal("0.003000"), "EUR": Decimal("0.015000")}
 
     def test_mixed_currency_log_entry_has_costs_not_cost(self) -> None:
-        """usage_log_entries() must expose `costs`, not a misleading single `cost`."""
+        """A multi-currency log entry carries ``costs`` and neither ``cost`` nor ``currency``.
+
+        Ref: stdapi/usage.py:_add_cost_fields
+        """
         self._record_mixed_currency_usage()
         compute_costs()
         entry = next(iter(usage.usage_log_entries()))
@@ -85,7 +102,7 @@ class TestComputeCostsMultiCurrency:
         assert entry["costs"] == {"USD": "0.003", "EUR": "0.015"}
 
     def test_multi_currency_return_value_warns_naming_both_currencies(self) -> None:
-        """compute_costs()'s return value must surface a warning naming both currencies."""
+        """compute_costs() returns one warning naming the service, model, Region and currencies."""
         self._record_mixed_currency_usage()
         warnings = compute_costs()
         assert warnings == [
@@ -96,7 +113,10 @@ class TestComputeCostsMultiCurrency:
         ]
 
     def test_single_currency_still_uses_cost_and_currency(self) -> None:
-        """A normal, single-currency record must still use cost/currency, never costs."""
+        """A single-currency record fills cost/currency and leaves ``costs`` empty.
+
+        1000 * 0.000003 + 1000 * 0.000015 = 0.018 in one currency.
+        """
         usage.init_usage()
         get_model_state("onemodel").region = "us-east-1"
         set_test_price(
@@ -114,7 +134,15 @@ class TestComputeCostsMultiCurrency:
 
 
 class TestRoutingTierPricing:
-    """Model-state routing -> UsageRecord.routing -> resolve_price plumbing."""
+    """Model-state routing -> UsageRecord.routing -> resolve_price plumbing.
+
+    AWS publishes a separate, cheaper price for global cross-Region inference
+    profiles, so the serving profile is part of the price lookup key.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/cross-region-inference.html
+         stdapi/usage.py:record_bedrock_usage
+         stdapi/pricing.py:resolve_price
+    """
 
     def _set_routed_prices(self) -> None:
         set_test_price(
@@ -130,7 +158,7 @@ class TestRoutingTierPricing:
         )
 
     def test_global_routing_used_prices_at_global_rate(self) -> None:
-        """A global-routed call must use the cheaper global price."""
+        """A global-routed call is billed at the global rate (0.003), not the regional one."""
         usage.init_usage()
         state = get_model_state("routedmodel")
         state.region = "us-east-1"
@@ -143,7 +171,7 @@ class TestRoutingTierPricing:
         assert record.cost == Decimal("3.000000")
 
     def test_no_effective_routing_uses_regional_rate(self) -> None:
-        """When no routing profile is tracked, cost must use the plain (regional) rate."""
+        """With no routing profile tracked, the record is billed at the plain regional rate."""
         usage.init_usage()
         get_model_state("routedmodel").region = "us-east-1"
         self._set_routed_prices()
@@ -156,10 +184,18 @@ class TestRoutingTierPricing:
 
 
 class TestImageSpecPricing:
-    """IMAGE_SPEC -> UsageRecord.output_images_by_spec -> resolve_price plumbing."""
+    """IMAGE_SPEC -> UsageRecord.output_images_by_spec -> resolve_price plumbing.
+
+    Image models publish a price per "<resolution>:<quality>" spec, so images
+    generated at different specs within one request must be priced per bucket
+    rather than at a single flat rate.
+
+    Ref: stdapi/usage.py:_dimension_price_buckets
+         stdapi/pricing.py:resolve_price
+    """
 
     def test_mixed_spec_images_price_each_bucket_independently(self) -> None:
-        """Two calls with different specs in one record must each use their own price."""
+        """Two specs in one record bill per bucket: 2 * 0.008 + 3 * 0.012 = 0.052."""
         usage.init_usage()
         get_model_state("imagemodel").region = "us-east-1"
         set_test_price(
@@ -191,10 +227,13 @@ class TestImageSpecPricing:
         assert record.cost == Decimal("0.052000")
 
     def test_partial_spec_breakdown_prices_the_remainder_at_the_flat_rate(self) -> None:
-        """Regression: flat-only portion must not be mispriced as $0 when mixed with spec-bearing.
+        """A spec-bearing and a flat-only call in one record bill 2 * 0.01 + 3 * 0.0036.
 
-        Prior bug: _dimension_price_buckets returned ONLY breakdown buckets when
-        output_images_by_spec was non-empty, silently pricing flat portion as $0.
+        Regression: _dimension_price_buckets returned ONLY breakdown buckets
+        when output_images_by_spec was non-empty, silently pricing the
+        flat-only portion as $0.
+
+        Ref: stdapi/usage.py:_reconcile_buckets
         """
         usage.init_usage()
         get_model_state("mixedimagemodel").region = "us-east-1"
@@ -227,7 +266,7 @@ class TestImageSpecPricing:
         assert record.cost == Decimal("0.030800")
 
     def test_no_spec_falls_back_to_flat_price(self) -> None:
-        """A model with no IMAGE_SPEC set must still price via the flat per-image rate."""
+        """With no IMAGE_SPEC set, images bill at the flat per-image rate: 2 * 0.0036."""
         usage.init_usage()
         get_model_state("flatimagemodel").region = "us-east-1"
         set_test_price(
@@ -242,9 +281,13 @@ class TestImageSpecPricing:
     def test_resetting_image_spec_prevents_leakage_to_a_later_flat_priced_call(
         self,
     ) -> None:
-        """Regression: stale IMAGE_SPEC must not leak from one model to a later unrelated model.
+        """A cleared IMAGE_SPEC keeps a later model's images on its flat rate.
 
-        Only Titan Image Generator sets IMAGE_SPEC; nothing cleared it afterwards.
+        Only Titan Image Generator sets IMAGE_SPEC; before it was cleared after
+        each call the stale spec leaked into the next model's record, sending
+        its images into a spec bucket that model has no price for.
+
+        Ref: stdapi/models/image/__init__.py:ImageModelBase._record_invoke_usage
         """
         usage.init_usage()
         get_model_state("titanimagegeneratorv2").region = "us-east-1"
@@ -269,10 +312,18 @@ class TestImageSpecPricing:
 
 
 class TestOutputSecondsSpecPricing:
-    """output_seconds_spec -> UsageRecord.output_seconds_by_spec -> resolve_price plumbing."""
+    """output_seconds_spec -> UsageRecord.output_seconds_by_spec -> resolve_price plumbing.
+
+    Video models publish a per-second price per resolution bucket ("hd"), so
+    generated seconds are priced per bucket with the unbucketed remainder
+    falling back to the flat rate.
+
+    Ref: stdapi/usage.py:_dimension_price_buckets
+         stdapi/pricing.py:resolve_price
+    """
 
     def test_mixed_spec_seconds_price_each_bucket_independently(self) -> None:
-        """A flat call and an "hd"-spec call in one record must each use their own price."""
+        """A flat call and an "hd" call in one record bill 5 * 0.06 + 5 * 0.08 = 0.7."""
         usage.init_usage()
         get_model_state("videomodel").region = "us-east-1"
         set_test_price(
@@ -298,7 +349,7 @@ class TestOutputSecondsSpecPricing:
         assert record.cost == Decimal("0.700000")
 
     def test_no_spec_falls_back_to_flat_price(self) -> None:
-        """A model with no spec bucket must still price via the flat per-second rate."""
+        """With no spec bucket recorded, seconds bill at the flat rate: 6 * 0.05 = 0.3."""
         usage.init_usage()
         get_model_state("flatvideomodel").region = "us-east-1"
         set_test_price(
@@ -311,23 +362,30 @@ class TestOutputSecondsSpecPricing:
         assert record.cost == Decimal("0.300000")
 
     def test_usage_log_entry_reports_output_seconds_by_spec(self) -> None:
-        """usage_log_entries() must surface the accumulated output_seconds_by_spec breakdown."""
+        """The log entry carries both the flat output_seconds total and its per-spec breakdown."""
         usage.init_usage()
         get_model_state("videomodel").region = "us-east-1"
         record_bedrock_usage("videomodel", output_seconds=5, output_seconds_spec="hd")
         entry = next(iter(usage.usage_log_entries()))
         assert entry["output_seconds_by_spec"] == {"hd": 5}
+        assert entry["output_seconds"] == 5
 
 
 class TestCacheTtlPricing:
     """cache_write_tokens_by_ttl -> UsageRecord -> resolve_price plumbing.
 
-    Regression: mirrors TestImageSpecPricing scenarios for cache-write tokens;
-    previously untested end-to-end.
+    Bedrock reports cache writes per TTL bucket (``usage.cacheDetails``) and
+    AWS charges a 1h write more than a 5m one, so each bucket is priced from
+    its own rate; anything the breakdown does not cover falls back to the flat
+    cache-write rate.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_TokenUsage.html
+         stdapi/usage.py:_add_cache_ttl_breakdown
+         stdapi/usage.py:_dimension_price_buckets
     """
 
     def test_mixed_ttl_cache_writes_price_each_bucket_independently(self) -> None:
-        """Two TTL buckets in one record must each use their own price."""
+        """Two TTL buckets bill per bucket: 500 * 0.000004 + 1000 * 0.000008 = 0.01."""
         usage.init_usage()
         get_model_state("cachemodel").region = "us-east-1"
         set_test_price(
@@ -359,7 +417,10 @@ class TestCacheTtlPricing:
         assert record.cost == Decimal("0.010000")
 
     def test_partial_ttl_breakdown_prices_the_remainder_at_the_flat_rate(self) -> None:
-        """A flat-only call mixed with a TTL-bearing call must not lose the flat portion's cost."""
+        """The portion no TTL bucket covers bills at the flat rate: 400 * 0.000008 + 1200 * 0.000004.
+
+        Ref: stdapi/usage.py:_reconcile_buckets
+        """
         usage.init_usage()
         get_model_state("mixedcachemodel").region = "us-east-1"
         set_test_price(
@@ -395,7 +456,10 @@ class TestCacheTtlPricing:
         assert record.cost == Decimal("0.008000")
 
     def test_ttl_breakdown_without_a_flat_total_is_still_priced(self) -> None:
-        """A by-TTL breakdown with no matching flat quantity must still be priced."""
+        """A by-TTL breakdown with no flat total tops the flat quantity up and bills it.
+
+        Ref: stdapi/usage.py:_add_cache_ttl_breakdown
+        """
         usage.init_usage()
         get_model_state("noflatcachemodel").region = "us-east-1"
         set_test_price(
@@ -422,7 +486,7 @@ class TestCacheTtlPricing:
     def test_flat_only_and_breakdown_only_calls_merge_order_independently(
         self, flat_call_first: bool
     ) -> None:
-        """A flat-only call and a breakdown-only call must merge to the same total in either order."""
+        """A flat-only and a breakdown-only call merge to 250 tokens and 0.001 in either order."""
         usage.init_usage()
         get_model_state("ordercachemodel").region = "us-east-1"
         set_test_price(
@@ -454,10 +518,19 @@ class TestCacheTtlPricing:
 
 
 class TestRecordBedrockUsageTierResolution:
-    """record_bedrock_usage's tier precedence: explicit arg > this model's invocation state."""
+    """record_bedrock_usage's tier precedence: explicit arg > this model's invocation state.
+
+    Tiers are priced differently, and the shared model state can be overwritten
+    by a sibling call to the same model, so an explicitly threaded tier wins.
+    Bedrock's wire value for the Standard tier is "default", normalized here to
+    "standard" (the pricing catalog's tier name).
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/service-tiers-inference.html
+         stdapi/usage.py:record_bedrock_usage
+    """
 
     def test_explicit_tier_overrides_context_var(self) -> None:
-        """An explicit `tier=` argument must win over a conflicting model-state tier."""
+        """An explicit ``tier=`` argument wins over a conflicting model-state tier."""
         usage.init_usage()
         state = get_model_state("tiermodel")
         state.region = "us-east-1"
@@ -467,7 +540,7 @@ class TestRecordBedrockUsageTierResolution:
         assert record.tier == "flex"
 
     def test_falls_back_to_service_tier_context_var_when_not_given(self) -> None:
-        """With no explicit tier, the record must pick up the model-state tier (set by models/__init__.py)."""
+        """With no explicit tier, the record picks up the model-state tier."""
         usage.init_usage()
         state = get_model_state("tiermodel")
         state.region = "us-east-1"
@@ -477,7 +550,7 @@ class TestRecordBedrockUsageTierResolution:
         assert record.tier == "priority"
 
     def test_falls_back_to_standard_when_neither_is_set(self) -> None:
-        """With no explicit tier and a default (never-overridden) model-state tier, default to standard."""
+        """A never-overridden model-state tier ("default") is normalized to "standard"."""
         usage.init_usage()
         get_model_state("tiermodel").region = "us-east-1"
         record_bedrock_usage("tiermodel", input_tokens=100)
@@ -486,14 +559,16 @@ class TestRecordBedrockUsageTierResolution:
 
 
 class TestInitUsageTokenReset:
-    """init_usage() must return a token that restores the previous USAGE dict.
+    """init_usage() returns a token that restores the previous USAGE dict.
 
-    Regression: nested calls permanently replaced the outer dict because
-    init_usage() didn't capture a reset token.
+    Regression: nested in-process calls permanently replaced the outer
+    request's dict because init_usage() didn't capture a reset token.
+
+    Ref: stdapi/usage.py:init_usage
     """
 
     def test_nested_init_usage_does_not_clobber_the_outer_dict(self) -> None:
-        """A reset token must restore the exact prior dict object, not a copy."""
+        """Resetting the inner token restores the exact prior dict object, not a copy."""
         outer_token = usage.init_usage()
         outer_records = usage.USAGE.get()
         inner_token = usage.init_usage()
@@ -506,10 +581,16 @@ class TestInitUsageTokenReset:
 
 
 class TestComputeCostsUnpricedDimension:
-    """A record with a dimension for which no price could be resolved."""
+    """A record with a dimension for which no price could be resolved.
+
+    A pricing miss must never block the request: the cost is omitted and the
+    dimension is named in a warning for the request log.
+
+    Ref: stdapi/usage.py:_apply_record_cost
+    """
 
     def test_fully_unpriced_model_returns_a_warning_naming_the_dimension(self) -> None:
-        """A model with no price entry at all: warning names it, cost stays zero."""
+        """A model with no price entry at all is warned about and left at zero cost."""
         usage.init_usage()
         # Seed an unrelated price so the catalog counts as ready -- the point
         # of this test is a genuine per-model miss, not an unloaded catalog.
@@ -530,7 +611,7 @@ class TestComputeCostsUnpricedDimension:
         assert record.currency == ""
 
     def test_partially_priced_model_still_prices_the_resolvable_dimension(self) -> None:
-        """One priced and one unpriced dimension: cost reflects only the priced one."""
+        """With one dimension priced and one not, the cost covers only the priced one."""
         usage.init_usage()
         get_model_state("partialpricemodel").region = "us-east-1"
         set_test_price(
@@ -550,10 +631,16 @@ class TestComputeCostsUnpricedDimension:
 
 
 class TestComputeCostsRegionSkip:
-    """Records with no region attributed must never be priced."""
+    """Records with no Region attributed are never priced.
+
+    Prices are per Region, so an unattributed record has no defensible rate to
+    bill at and is skipped without a pricing-miss warning.
+
+    Ref: stdapi/usage.py:compute_costs
+    """
 
     def test_record_without_region_is_skipped(self) -> None:
-        """compute_costs() must leave cost/currency untouched when region is empty."""
+        """An empty region leaves cost/currency untouched and emits no warning."""
         usage.init_usage()
         key = UsageKey(Service.BEDROCK, "modelnoregion", "", "", "standard")
         usage.USAGE.get()[key] = UsageRecord(
@@ -563,19 +650,28 @@ class TestComputeCostsRegionSkip:
             region="",
             quantities={Dimension.INPUT_TOKENS: 100},
         )
-        compute_costs()
+        warnings = compute_costs()
         record = usage.USAGE.get()[key]
         assert record.cost == Decimal(0)
         assert record.currency == ""
+        assert warnings == [], "an unattributed record must not report a pricing miss"
 
 
 class TestEmitUsageMetrics:
-    """CloudWatch EMF line emission -- previously had zero test coverage."""
+    """One CloudWatch EMF log line per usage record, written to stdout.
+
+    Each line is an EMF document: ``_aws.CloudWatchMetrics`` holds the metric
+    directives (Namespace, Dimensions, Metrics) and every metric named in a
+    directive must exist as a root member of the same line.
+
+    Ref: https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Embedded_Metric_Format_Specification.html
+         stdapi/usage.py:emit_usage_metrics
+    """
 
     def test_disabled_setting_emits_nothing(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """cloudwatch_metrics off must suppress emission entirely."""
+        """With cloudwatch_metrics off, a priced record emits no line at all."""
         monkeypatch.setattr(SETTINGS, "cloudwatch_metrics", False)
         usage.init_usage()
         get_model_state("emfmodel").region = "us-east-1"
@@ -588,7 +684,14 @@ class TestEmitUsageMetrics:
     def test_single_currency_emits_one_line_with_quantities_and_cost(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A priced record emits one EMF line with both quantity metrics and Cost/Currency."""
+        """A priced record emits one EMF line carrying its quantities and Cost/Currency.
+
+        Cost sits in its own directive dimensioned by ["Model", "Currency"]:
+        EMF publishes every metric of a directive under each of that
+        directive's dimension sets, so a single directive spanning ["Model"]
+        and ["Model", "Currency"] would also publish Cost bare-by-Model,
+        silently summing across currencies.
+        """
         monkeypatch.setattr(SETTINGS, "cloudwatch_metrics", True)
         usage.init_usage()
         get_model_state("emfmodel").region = "us-east-1"
@@ -607,20 +710,25 @@ class TestEmitUsageMetrics:
         assert payload["InputTokens"] == 1000
         assert payload["Cost"] == pytest.approx(0.003)
         assert payload["Currency"] == "USD"
-        # Cost and quantities must be scoped to separate directives -- a
-        # single directive spanning both ["Model"] and ["Model", "Currency"]
-        # would also publish Cost bare-by-Model, summing across currencies on
-        # a multi-currency record (see the multi-currency test below).
+        # The declared "Model" dimension needs a matching root member.
+        assert payload["Model"] == "emfmodel"
         quantity_directive, cost_directive = payload["_aws"]["CloudWatchMetrics"]
         assert quantity_directive["Dimensions"] == [["Model"]]
         assert {m["Name"] for m in quantity_directive["Metrics"]} == {"InputTokens"}
         assert cost_directive["Dimensions"] == [["Model", "Currency"]]
         assert {m["Name"] for m in cost_directive["Metrics"]} == {"Cost"}
+        assert {
+            directive["Namespace"] for directive in (quantity_directive, cost_directive)
+        } == {SETTINGS.cloudwatch_metrics_namespace}
 
     def test_no_cost_resolved_emits_quantities_only_with_model_dimension(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """No price indexed at all: quantities still emit, but with no Cost/Currency."""
+        """With no price resolved, the line keeps its quantities and omits Cost/Currency.
+
+        Currency is a declared EMF dimension, so it must be absent whenever no
+        Cost member is emitted.
+        """
         monkeypatch.setattr(SETTINGS, "cloudwatch_metrics", True)
         usage.init_usage()
         get_model_state("emfmodel").region = "us-east-1"
@@ -642,7 +750,11 @@ class TestEmitUsageMetrics:
     def test_multi_currency_emits_one_extra_line_without_duplicating_quantities(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Regression guard: quantity metrics must only appear on the first per-currency line."""
+        """A two-currency record emits one line per currency, quantities only on the first.
+
+        Repeating the quantity metrics on the second line would double-count
+        them, since both lines carry the same ["Model"] dimension value.
+        """
         monkeypatch.setattr(SETTINGS, "cloudwatch_metrics", True)
         usage.init_usage()
         get_model_state("emfmodel").region = "us-east-1"
@@ -669,11 +781,22 @@ class TestEmitUsageMetrics:
         assert "OutputTokens" not in second
         assert {"Cost", "Currency"} <= second.keys()
         assert {first["Currency"], second["Currency"]} == {"USD", "EUR"}
+        cost_by_currency = {line["Currency"]: line["Cost"] for line in written}
+        assert cost_by_currency["USD"] == pytest.approx(0.003)  # 1000 * 0.000003
+        assert cost_by_currency["EUR"] == pytest.approx(0.015)  # 1000 * 0.000015
+        # The extra-currency line declares the cost directive only.
+        assert [
+            directive["Dimensions"] for directive in second["_aws"]["CloudWatchMetrics"]
+        ] == [[["Model", "Currency"]]]
 
     def test_cost_is_a_json_serializable_float(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """EMF requires JSON numbers: Cost must be a float and survive json.dumps."""
+        """Cost is emitted as a JSON float, not a Decimal.
+
+        EMF metric values must be JSON numbers, and ``json.dumps`` raises
+        TypeError on the Decimal the cost is computed in.
+        """
         monkeypatch.setattr(SETTINGS, "cloudwatch_metrics", True)
         usage.init_usage()
         get_model_state("emfmodel").region = "us-east-1"
@@ -694,10 +817,20 @@ class TestEmitUsageMetrics:
 
 
 class TestLongContextDetection:
-    """record_bedrock_usage's context="long" detection (prompt > 200K tokens)."""
+    """record_bedrock_usage's context="long" detection (prompt > 200K tokens).
+
+    AWS bills a whole call at the long-context rate once the prompt exceeds
+    200K tokens. Bedrock reports fresh, cache-read and cache-write tokens
+    separately (inputTokens excludes both cache counts), so the threshold is
+    evaluated on their sum, and the bucket is part of the record key so long
+    and standard calls to one model never merge.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_TokenUsage.html
+         stdapi/usage.py:record_bedrock_usage
+    """
 
     def test_exactly_threshold_is_not_long(self) -> None:
-        """A prompt of exactly 200_000 tokens must stay at the standard rate (boundary)."""
+        """A prompt of exactly 200_000 tokens stays in the standard bucket (boundary)."""
         usage.init_usage()
         get_model_state("longmodel").region = "us-east-1"
         record_bedrock_usage("longmodel", input_tokens=200_000)
@@ -705,7 +838,7 @@ class TestLongContextDetection:
         assert record.context == ""
 
     def test_one_token_over_threshold_via_mixed_dimensions_is_long(self) -> None:
-        """Input + cached + cache_write tokens combine to cross the threshold."""
+        """Fresh, cached and cache-write tokens sum to 200_001 and mark the record long."""
         usage.init_usage()
         get_model_state("longmodel").region = "us-east-1"
         record_bedrock_usage(
@@ -718,7 +851,7 @@ class TestLongContextDetection:
         assert record.context == "long"
 
     def test_small_and_large_calls_produce_separate_records(self) -> None:
-        """A long-context call and a standard call for the same model must not merge."""
+        """A long-context call and a standard call for the same model stay separate records."""
         usage.init_usage()
         get_model_state("longmodel").region = "us-east-1"
         record_bedrock_usage("longmodel", input_tokens=1_000)
@@ -729,22 +862,25 @@ class TestLongContextDetection:
         assert contexts == {"", "long"}
 
     def test_usage_log_entries_include_context_only_for_the_long_record(self) -> None:
-        """usage_log_entries() must surface "context": "long" only on the long-context record."""
+        """Only the long-context entry carries "context": "long", with its own token total."""
         usage.init_usage()
         get_model_state("longmodel").region = "us-east-1"
         record_bedrock_usage("longmodel", input_tokens=1_000)
         record_bedrock_usage("longmodel", input_tokens=200_001)
         entries = usage.usage_log_entries()
         assert len(entries) == 2
-        long_entries = [entry for entry in entries if entry.get("context") == "long"]
-        standard_entries = [entry for entry in entries if "context" not in entry]
-        assert len(long_entries) == 1
-        assert len(standard_entries) == 1
+        (long_entry,) = [entry for entry in entries if entry.get("context") == "long"]
+        (standard_entry,) = [entry for entry in entries if "context" not in entry]
+        assert long_entry["input_tokens"] == 200_001
+        assert standard_entry["input_tokens"] == 1_000
 
     def test_compute_costs_uses_the_long_context_price_for_the_long_record(
         self,
     ) -> None:
-        """compute_costs() must pass record.context through to resolve_price."""
+        """The long record bills at the long-context rate while the standard one keeps its own.
+
+        Ref: stdapi/pricing.py:resolve_price
+        """
         usage.init_usage()
         get_model_state("longmodel").region = "us-east-1"
         set_test_price(
@@ -771,10 +907,17 @@ class TestLongContextDetection:
 
 
 class TestGroundingRequests:
-    """grounding_requests -> Dimension.GROUNDING_REQUESTS plumbing."""
+    """grounding_requests -> Dimension.GROUNDING_REQUESTS plumbing.
+
+    Amazon Nova's ``nova_grounding`` system tool bills per invocation on top of
+    inference, so grounding calls are a dimension of their own.
+
+    Ref: https://docs.aws.amazon.com/nova/latest/nova2-userguide/web-grounding.html
+         stdapi/usage.py:record_bedrock_usage
+    """
 
     def test_zero_or_none_grounding_requests_omit_the_field(self) -> None:
-        """No grounding tool calls must not add a grounding_requests entry."""
+        """Zero or None grounding calls add neither the dimension nor the log key."""
         usage.init_usage()
         get_model_state("groundedmodel").region = "us-east-1"
         record_bedrock_usage("groundedmodel", input_tokens=100, grounding_requests=0)
@@ -785,7 +928,7 @@ class TestGroundingRequests:
         assert "grounding_requests" not in entry
 
     def test_usage_log_entries_reports_grounding_requests_count(self) -> None:
-        """usage_log_entries() must surface the accumulated grounding_requests count."""
+        """The log entry reports the accumulated grounding_requests count."""
         usage.init_usage()
         get_model_state("groundedmodel").region = "us-east-1"
         record_bedrock_usage("groundedmodel", grounding_requests=2)
@@ -793,7 +936,7 @@ class TestGroundingRequests:
         assert entry["grounding_requests"] == 2
 
     def test_grounding_requests_are_priced_per_request(self) -> None:
-        """Cost is computed from an indexed GROUNDING_REQUESTS price."""
+        """Grounding calls bill per request: 2 * 0.03 = 0.06."""
         usage.init_usage()
         get_model_state("groundedmodel").region = "us-east-1"
         set_test_price(
@@ -806,10 +949,16 @@ class TestGroundingRequests:
 
 
 class TestSearchUnitsUsage:
-    """search_units -> Dimension.SEARCH_UNITS plumbing."""
+    """search_units -> Dimension.SEARCH_UNITS plumbing.
+
+    Bedrock rerank is billed in search units rather than tokens.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_Rerank.html
+         stdapi/usage.py:record_bedrock_usage
+    """
 
     def test_search_units_are_recorded_logged_and_priced(self) -> None:
-        """search_units must accumulate in quantities, the log entry, and cost."""
+        """search_units reach the record, the log entry and the cost: 3 * 0.001 = 0.003."""
         usage.init_usage()
         get_model_state("searchmodel").region = "us-east-1"
         set_test_price(
@@ -825,10 +974,18 @@ class TestSearchUnitsUsage:
 
 
 class TestInputMediaSpecUsage:
-    """input_images/input_seconds + media_spec -> *_by_spec breakdown plumbing."""
+    """input_images/input_seconds + media_spec -> *_by_spec breakdown plumbing.
+
+    Multimodal models publish separate per-item prices for document pages,
+    audio seconds and video seconds, so each call's single media kind is
+    recorded as its own spec bucket.
+
+    Ref: stdapi/usage.py:record_bedrock_usage
+         stdapi/usage.py:_dimension_price_buckets
+    """
 
     def test_input_images_with_media_spec_price_and_log_by_spec(self) -> None:
-        """input_images with media_spec="document" must price from the "document" spec bucket."""
+        """input_images with media_spec="document" bills from the "document" bucket."""
         usage.init_usage()
         get_model_state("mediaimagemodel").region = "us-east-1"
         set_test_price(
@@ -849,7 +1006,7 @@ class TestInputMediaSpecUsage:
         assert record.cost == Decimal("0.001600")
 
     def test_input_seconds_with_media_spec_price_and_log_by_spec(self) -> None:
-        """input_seconds with media_spec="audio" must price from the "audio" spec bucket."""
+        """input_seconds with media_spec="audio" bills from the "audio" bucket: 45 * 0.0001."""
         usage.init_usage()
         get_model_state("mediaaudiomodel").region = "us-east-1"
         set_test_price(
@@ -872,7 +1029,7 @@ class TestInputMediaSpecUsage:
     def test_mixed_audio_and_video_input_seconds_price_each_bucket_independently(
         self,
     ) -> None:
-        """Two calls with different media_spec values must each use their own rate."""
+        """Audio and video seconds in one record bill 30 * 0.0001 + 10 * 0.0005 = 0.008."""
         usage.init_usage()
         get_model_state("mixedaudiovideomodel").region = "us-east-1"
         set_test_price(
@@ -905,10 +1062,19 @@ class TestInputMediaSpecUsage:
 
 
 class TestLatencyRoutingUsage:
-    """ModelInvocationState.routing == "latency" -> UsageKey/UsageRecord/log plumbing."""
+    """ModelInvocationState.routing == "latency" -> UsageKey/UsageRecord/log plumbing.
+
+    Latency-optimized inference carries its own published price, so the routing
+    label is part of the price lookup and falls back to the plain rate when AWS
+    publishes no latency-optimized price for the model.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/latency-optimized-inference.html
+         stdapi/models/__init__.py:_request_routing
+         stdapi/pricing.py:resolve_price
+    """
 
     def test_latency_routing_state_produces_latency_key_log_and_price(self) -> None:
-        """A "latency"-routed call must key/log as "latency" and price from its own rate."""
+        """A "latency"-routed call keys and logs as "latency" and bills 1000 * 0.004."""
         usage.init_usage()
         state = get_model_state("latencymodel")
         state.region = "us-east-1"
@@ -937,7 +1103,7 @@ class TestLatencyRoutingUsage:
     def test_latency_routing_falls_back_to_the_plain_rate_when_not_indexed(
         self,
     ) -> None:
-        """A "latency"-routed call with no latency price indexed must use the plain rate."""
+        """With no latency price indexed, a "latency"-routed call bills the plain rate."""
         usage.init_usage()
         state = get_model_state("latencyfallbackmodel")
         state.region = "us-east-1"
@@ -953,23 +1119,39 @@ class TestLatencyRoutingUsage:
 
 
 class TestNonBedrockRecordUsageHelpers:
-    """record_polly_usage/record_transcribe_usage/record_translate_usage/record_comprehend_usage."""
+    """Non-Bedrock billed quantities: Polly and Translate characters, Transcribe seconds, Comprehend units.
+
+    Each helper returns the quantity AWS actually bills -- which is not the
+    input size when a service applies a minimum -- and records it under a model
+    key that encodes the priced variant (Polly's engine, Comprehend's feature).
+
+    Ref: https://docs.aws.amazon.com/transcribe/latest/dg/what-is.html
+         stdapi/usage.py:record_polly_usage
+         stdapi/usage.py:record_transcribe_usage
+         stdapi/usage.py:record_translate_usage
+         stdapi/usage.py:record_comprehend_usage
+    """
 
     def test_record_polly_usage_bills_exact_character_count(self) -> None:
-        """Polly bills per character, no minimum."""
+        """Polly bills the exact character count, with no minimum, per engine."""
         usage.init_usage()
         billed = record_polly_usage(42, "neural")
         assert billed == 42
         record = next(iter(usage.USAGE.get().values()))
         assert record.quantities[Dimension.INPUT_CHARACTERS] == 42
+        assert record.service == Service.POLLY
+        # The engine is part of the priced model key: Polly rates differ by engine.
+        assert record.model == "amazon.polly-neural"
 
     def test_record_translate_usage_bills_exact_character_count(self) -> None:
-        """Translate bills per character, no minimum."""
+        """Translate bills the exact character count, with no minimum."""
         usage.init_usage()
         billed = record_translate_usage(100)
         assert billed == 100
         record = next(iter(usage.USAGE.get().values()))
         assert record.quantities[Dimension.INPUT_CHARACTERS] == 100
+        assert record.service == Service.TRANSLATE
+        assert record.model == "amazon.translate"
 
     @pytest.mark.parametrize(
         ("duration", "expected"), [(5.0, 15), (15.0, 15), (15.4, 16), (30.0, 30)]
@@ -977,12 +1159,14 @@ class TestNonBedrockRecordUsageHelpers:
     def test_record_transcribe_usage_applies_15_second_minimum(
         self, duration: float, expected: int
     ) -> None:
-        """Transcribe bills per second, rounded up, with a 15-second minimum."""
+        """Transcribe bills per second, rounded up, with a 15-second per-request minimum."""
         usage.init_usage()
         billed = record_transcribe_usage(duration)
         assert billed == expected
         record = next(iter(usage.USAGE.get().values()))
         assert record.quantities[Dimension.INPUT_SECONDS] == expected
+        assert record.service == Service.TRANSCRIBE
+        assert record.model == "amazon.transcribe"
 
     @pytest.mark.parametrize(("text_length", "expected"), [(50, 3), (300, 3), (500, 5)])
     def test_record_comprehend_usage_applies_3_unit_minimum(
@@ -994,23 +1178,26 @@ class TestNonBedrockRecordUsageHelpers:
         assert billed == expected
         record = next(iter(usage.USAGE.get().values()))
         assert record.quantities[Dimension.COMPREHEND_UNITS] == expected
+        assert record.service == Service.COMPREHEND
+        # The feature is part of the priced model key: rates differ per feature.
+        assert record.model == "amazon.comprehend-language-detection"
 
     def test_record_polly_usage_with_zero_characters_records_nothing(self) -> None:
-        """Zero characters must not create a usage record."""
+        """Zero characters bill nothing and create no usage record."""
         usage.init_usage()
         billed = record_polly_usage(0, "neural")
         assert billed == 0
         assert usage.USAGE.get() == {}
 
     def test_record_translate_usage_with_zero_characters_records_nothing(self) -> None:
-        """Zero characters must not create a usage record."""
+        """Zero characters bill nothing and create no usage record."""
         usage.init_usage()
         billed = record_translate_usage(0)
         assert billed == 0
         assert usage.USAGE.get() == {}
 
     def test_record_transcribe_usage_with_zero_duration_bills_the_minimum(self) -> None:
-        """Zero duration must still bill the 15-second minimum, not record nothing."""
+        """Zero duration still bills the 15-second minimum rather than recording nothing."""
         usage.init_usage()
         billed = record_transcribe_usage(0)
         assert billed == 15
@@ -1018,7 +1205,7 @@ class TestNonBedrockRecordUsageHelpers:
         assert record.quantities[Dimension.INPUT_SECONDS] == 15
 
     def test_record_comprehend_usage_with_zero_length_bills_the_minimum(self) -> None:
-        """Zero text length must still bill the 3-unit minimum, not record nothing."""
+        """Zero text length still bills the 3-unit minimum rather than recording nothing."""
         usage.init_usage()
         billed = record_comprehend_usage(0, "language-detection")
         assert billed == 3
@@ -1026,10 +1213,13 @@ class TestNonBedrockRecordUsageHelpers:
         assert record.quantities[Dimension.COMPREHEND_UNITS] == 3
 
     def test_non_bedrock_usage_does_not_inherit_a_prior_bedrock_region(self) -> None:
-        """Regression: Polly/Transcribe/Translate/Comprehend must not inherit a Bedrock model's region.
+        """A prior Bedrock call's Region does not leak into a Polly record.
 
-        Old bug: shared-context-var region fallback let non-Bedrock services
-        silently inherit a prior Bedrock call's region, mispricing it.
+        The MODEL_STATE region fallback is Bedrock-only: a shared fallback let
+        Polly/Transcribe/Translate/Comprehend inherit the Bedrock Region of an
+        earlier call in the same request and be priced against it.
+
+        Ref: stdapi/usage.py:_record_usage
         """
         usage.init_usage()
         get_model_state(
@@ -1041,7 +1231,13 @@ class TestNonBedrockRecordUsageHelpers:
 
 
 class TestFormatCost:
-    """format_cost: exact plain-decimal text with no exponent or trailing zeros."""
+    """format_cost: exact plain-decimal text with no exponent or trailing zeros.
+
+    Costs go into JSON logs as strings: float rendering would turn small
+    amounts into exponent notation and lose exactness.
+
+    Ref: stdapi/usage.py:format_cost
+    """
 
     @pytest.mark.parametrize(
         ("amount", "expected"),
@@ -1061,7 +1257,16 @@ class TestFormatCost:
 
 
 class TestCloudWatchNamespaceValidation:
-    """cloudwatch_metrics_namespace must satisfy CloudWatch's namespace naming rules."""
+    """cloudwatch_metrics_namespace is validated at settings load, not at emission time.
+
+    An invalid namespace makes CloudWatch silently drop EMF metric extraction
+    (the log line is still written), so the gateway rejects it up front. Its
+    charset is stricter than CloudWatch's, which also accepts the space
+    character, and the reserved ``AWS/`` prefix is refused outright.
+
+    Ref: https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/cloudwatch_concepts.html
+         stdapi/config.py:_Settings._validate_cloudwatch_namespace
+    """
 
     @staticmethod
     def _settings(namespace: str) -> _Settings:
@@ -1073,37 +1278,52 @@ class TestCloudWatchNamespaceValidation:
         "namespace", ["stdapi", "my-app_metrics.prod/v1#2:3", "a" * 255]
     )
     def test_valid_namespace_accepted(self, namespace: str) -> None:
-        """A namespace using only the allowed charset within the length limit is accepted."""
+        """Every allowed character and the 255-character limit are accepted unchanged."""
         assert self._settings(namespace).cloudwatch_metrics_namespace == namespace
 
     def test_invalid_character_rejected(self) -> None:
-        """A namespace containing a disallowed character (e.g. space) is rejected."""
-        with pytest.raises(ValidationError, match="cloudwatch_metrics_namespace"):
+        """A space in the namespace fails validation on the charset rule."""
+        with pytest.raises(
+            ValidationError, match="cloudwatch_metrics_namespace"
+        ) as exc:
             self._settings("invalid namespace")
+        (error,) = exc.value.errors()
+        assert error["loc"] == ("cloudwatch_metrics_namespace",)
+        assert "must be 1-255 characters" in error["msg"]
 
     def test_reserved_aws_prefix_rejected(self) -> None:
-        """A namespace starting with the reserved 'AWS/' prefix is rejected."""
-        with pytest.raises(ValidationError, match="reserved"):
+        """A namespace starting with the reserved "AWS/" prefix fails validation."""
+        with pytest.raises(ValidationError, match="reserved") as exc:
             self._settings("AWS/MyNamespace")
+        (error,) = exc.value.errors()
+        assert error["loc"] == ("cloudwatch_metrics_namespace",)
+        assert 'must not start with the reserved "AWS/" prefix' in error["msg"]
 
     def test_too_long_namespace_rejected(self) -> None:
-        """A namespace longer than 255 characters is rejected."""
-        with pytest.raises(ValidationError, match="cloudwatch_metrics_namespace"):
+        """A 256-character namespace fails validation on the length rule."""
+        with pytest.raises(
+            ValidationError, match="cloudwatch_metrics_namespace"
+        ) as exc:
             self._settings("a" * 256)
+        (error,) = exc.value.errors()
+        assert error["loc"] == ("cloudwatch_metrics_namespace",)
+        assert "must be 1-255 characters" in error["msg"]
 
 
 class TestConcurrentSameModelUsageAttribution:
-    """MODEL_STATE is a shared per-request dict.
+    """MODEL_STATE is one shared entry per model, not per call.
 
-    Concurrent same-model calls must pass region/tier/routing explicitly to
-    avoid misattributing usage to a sibling call's value (see
-    ModelInvocationState).
+    A sibling call to the same model can overwrite region/tier/routing between
+    invocation and recording, so callers that may run concurrently with
+    differing values pass them explicitly to record_bedrock_usage.
+
+    Ref: stdapi/usage.py:ModelInvocationState
     """
 
     async def test_concurrent_calls_with_explicit_region_attribute_correctly(
         self,
     ) -> None:
-        """Two concurrent same-model calls passing region explicitly stay race-free."""
+        """Concurrent same-model calls passing region explicitly bill each Region separately."""
         usage.init_usage()
 
         async def call(region: str, tokens: int) -> None:
@@ -1123,7 +1343,11 @@ class TestConcurrentSameModelUsageAttribution:
     async def test_concurrent_calls_without_explicit_region_share_last_written_state(
         self,
     ) -> None:
-        """Documents the fallback's last-write-wins semantics when region is omitted."""
+        """Omitting region collapses concurrent calls onto the last-written Region.
+
+        Documented, accepted behavior of the shared-state fallback: both calls
+        merge into one record keyed to whichever Region was written last.
+        """
         usage.init_usage()
 
         async def call(region: str, tokens: int) -> None:

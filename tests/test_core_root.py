@@ -1,11 +1,30 @@
-"""Tests for /, /.well-known/api-catalog, /.well-known/mcp/server-card.json, /robots.txt."""
+"""Unauthenticated discovery endpoints: /, /.well-known/api-catalog, the MCP server card and /robots.txt.
+
+Every payload in this module is built once at import time from ``SETTINGS``, so
+each test derives its expectation from the settings rather than from the
+module-level constant it is meant to police.
+
+Ref: stdapi/routes/core_root.py
+"""
 
 from typing import TYPE_CHECKING
 
 import pytest
 
+from stdapi.config import SETTINGS
+
 if TYPE_CHECKING:
     from starlette.testclient import TestClient
+
+#: Documentation target the welcome message points at for the current settings.
+_EXPECTED_DOC_TARGET = (
+    "/docs"
+    if SETTINGS.enable_docs
+    else ("/redoc" if SETTINGS.enable_redoc else "https://stdapi.ai/api_reference/")
+)
+
+#: Whether at least one MCP transport is enabled, which gates the server card.
+_MCP_ENABLED = SETTINGS.enable_mcp_streamable_http or SETTINGS.enable_mcp_sse
 
 
 @pytest.fixture(scope="module")
@@ -17,156 +36,276 @@ def client(test_client: TestClient | None) -> TestClient:
 
 
 class TestRoot:
-    """Tests for GET /."""
+    """GET / welcome payload and its RFC 8288 ``Link`` discovery header.
+
+    Ref: stdapi/routes/core_root.py:root
+         stdapi/routes/core_root.py:_WELCOME
+    """
 
     def test_returns_200(self, client: TestClient) -> None:
         """GET / returns HTTP 200."""
         assert client.get("/").status_code == 200
 
     def test_response_has_message(self, client: TestClient) -> None:
-        """GET / response body contains a 'message' key."""
+        """GET / returns a single ``message`` pointing at the enabled documentation target.
+
+        The pointer is resolved once at import time: ``/docs`` when Swagger UI
+        is enabled, otherwise ``/redoc``, otherwise the public documentation URL.
+        """
         body = client.get("/").json()
-        assert "message" in body
-        assert isinstance(body["message"], str)
-        assert body["message"]
+        assert set(body) == {"message"}
+        message = body["message"]
+        assert isinstance(message, str)
+        assert message == (
+            "Welcome to the stdapi.ai API! Documentation is available at "
+            f"{_EXPECTED_DOC_TARGET}"
+        )
 
     def test_json_content_type(self, client: TestClient) -> None:
-        """GET / returns JSON content-type."""
-        assert "application/json" in client.get("/").headers["content-type"]
+        """GET / is served as ``application/json``."""
+        response = client.get("/")
+        assert "application/json" in response.headers["content-type"]
+        assert "message" in response.json()
 
     def test_no_auth_required(self, client: TestClient) -> None:
-        """GET / does not require an Authorization header."""
-        assert client.get("/").status_code == 200
+        """GET / succeeds with no credentials and with invalid ones alike.
+
+        The metadata router declares no ``Depends(authenticate)``, so a wrong
+        bearer token must not produce the 401 authenticated routes return.
+
+        Ref: stdapi/auth.py:authenticate
+        """
+        anonymous = client.get("/")
+        assert anonymous.status_code == 200
+
+        bad_key = client.get("/", headers={"Authorization": "Bearer wrong-key"})
+        assert bad_key.status_code == 200
+        assert bad_key.json() == anonymous.json()
 
     def test_link_header_absent_when_features_disabled(
         self, client: TestClient
     ) -> None:
-        """GET / has no Link header when docs, redoc, openapi and MCP are all disabled.
+        """GET / advertises exactly the enabled discovery resources in its ``Link`` header.
 
-        The default test configuration does not enable any of those features,
-        so _LINK_HEADER is None and the header must be absent.
+        The header is omitted entirely when none of OpenAPI JSON, Swagger UI /
+        ReDoc and MCP are enabled — the default test configuration.
+
+        Ref: stdapi/routes/core_root.py:_LINK_HEADER
         """
-        from stdapi.routes.core_root import _LINK_HEADER  # noqa: PLC0415
+        expected_parts = [
+            part
+            for part in (
+                '</openapi.json>; rel="service-desc"'
+                if SETTINGS.enable_openapi_json
+                else None,
+                '</docs>; rel="service-doc"'
+                if SETTINGS.enable_docs
+                else ('</redoc>; rel="service-doc"' if SETTINGS.enable_redoc else None),
+                '</.well-known/mcp/server-card.json>; rel="mcp-server-card"'
+                if _MCP_ENABLED
+                else None,
+            )
+            if part is not None
+        ]
 
         response = client.get("/")
-        if _LINK_HEADER is None:
+        if not expected_parts:
             assert "link" not in response.headers
         else:
-            assert "link" in response.headers
-            assert response.headers["link"] == _LINK_HEADER
+            assert response.headers["link"] == ", ".join(expected_parts)
 
 
 class TestApiCatalog:
-    """Tests for GET /.well-known/api-catalog."""
+    """GET /.well-known/api-catalog serves an RFC 9727 / RFC 9264 linkset.
+
+    Ref: stdapi/routes/core_root.py:api_catalog
+         stdapi/routes/core_root.py:_API_CATALOG
+    """
 
     def test_returns_200(self, client: TestClient) -> None:
         """GET /.well-known/api-catalog returns HTTP 200."""
         assert client.get("/.well-known/api-catalog").status_code == 200
 
     def test_content_type_linkset(self, client: TestClient) -> None:
-        """GET /.well-known/api-catalog uses application/linkset+json content-type."""
+        """GET /.well-known/api-catalog is served as ``application/linkset+json``."""
         ct = client.get("/.well-known/api-catalog").headers["content-type"]
         assert "application/linkset+json" in ct
 
     def test_body_has_linkset_key(self, client: TestClient) -> None:
-        """GET /.well-known/api-catalog body has a top-level 'linkset' list."""
+        """The body is a ``linkset`` holding exactly one link context object."""
         body = client.get("/.well-known/api-catalog").json()
-        assert "linkset" in body
+        assert set(body) == {"linkset"}
         assert isinstance(body["linkset"], list)
-        assert len(body["linkset"]) > 0
+        assert len(body["linkset"]) == 1
 
     def test_linkset_entry_has_anchor(self, client: TestClient) -> None:
-        """First linkset entry contains the expected anchor URL."""
+        """The single linkset entry is anchored on the catalog's own path."""
         body = client.get("/.well-known/api-catalog").json()
         entry = body["linkset"][0]
-        assert "anchor" in entry
         assert entry["anchor"] == "/.well-known/api-catalog"
 
     def test_linkset_optional_sections_match_settings(self, client: TestClient) -> None:
-        """Linkset entry contains service-desc/service-doc/mcp-server-card only when enabled.
+        """service-desc, service-doc and mcp-server-card appear only for enabled features.
 
-        Reads the live _API_CATALOG constant so the assertion mirrors the actual
-        server configuration rather than hard-coding assumptions about feature flags.
+        Each relation is derived from ``SETTINGS`` here rather than read back
+        from ``_API_CATALOG``, so a wrong href or a relation advertised for a
+        disabled feature fails the test.
         """
-        from stdapi.routes.core_root import _API_CATALOG  # noqa: PLC0415
+        (entry,) = client.get("/.well-known/api-catalog").json()["linkset"]
 
-        body = client.get("/.well-known/api-catalog").json()
-        assert body == _API_CATALOG
+        if SETTINGS.enable_openapi_json:
+            assert entry["service-desc"] == [
+                {
+                    "href": "/openapi.json",
+                    "type": "application/vnd.oai.openapi+json;version=3.0",
+                }
+            ]
+        else:
+            assert "service-desc" not in entry
+
+        if SETTINGS.enable_docs:
+            assert entry["service-doc"] == [{"href": "/docs", "title": "Swagger UI"}]
+        elif SETTINGS.enable_redoc:
+            assert entry["service-doc"] == [{"href": "/redoc", "title": "ReDoc"}]
+        else:
+            assert "service-doc" not in entry
+
+        if _MCP_ENABLED:
+            assert entry["mcp-server-card"] == [
+                {"href": "/.well-known/mcp/server-card.json"}
+            ]
+        else:
+            assert "mcp-server-card" not in entry
 
 
 class TestMcpServerCard:
-    """Tests for GET /.well-known/mcp/server-card.json."""
+    """GET /.well-known/mcp/server-card.json is served only when an MCP transport is on.
+
+    Ref: stdapi/routes/core_root.py:mcp_server_card
+         stdapi/routes/core_root.py:MCP_SERVER_CARD
+    """
 
     def test_reflects_mcp_status(self, client: TestClient) -> None:
-        """GET /.well-known/mcp/server-card.json returns 200 when MCP enabled, 404 otherwise."""
-        from stdapi.routes.core_root import MCP_SERVER_CARD  # noqa: PLC0415
-
+        """The card is 200 when a transport is enabled and a 404 ``error`` payload otherwise."""
         response = client.get("/.well-known/mcp/server-card.json")
-        if MCP_SERVER_CARD is None:
+        body = response.json()
+        if not _MCP_ENABLED:
             assert response.status_code == 404
-            assert "error" in response.json()
+            assert body == {"error": "MCP is not enabled"}
         else:
             assert response.status_code == 200
-            body = response.json()
-            assert "serverInfo" in body
-            assert "transport" in body
-            assert "capabilities" in body
+            assert body["serverInfo"]["name"]
+            assert body["serverInfo"]["version"]
+            assert body["capabilities"] == {"tools": {}}
+            assert body["transport"]["endpoint"] in {"/mcp", "/sse"}
 
     def test_no_auth_required(self, client: TestClient) -> None:
-        """GET /.well-known/mcp/server-card.json does not require authorization."""
-        response = client.get("/.well-known/mcp/server-card.json")
-        assert response.status_code in {200, 404}
+        """Credentials never change the card's outcome, and it never answers 401.
+
+        The route is reachable anonymously, so the "not enabled" 404 must not be
+        masked by an authentication failure.
+
+        Ref: stdapi/auth.py:authenticate
+        """
+        anonymous = client.get("/.well-known/mcp/server-card.json")
+        bad_key = client.get(
+            "/.well-known/mcp/server-card.json",
+            headers={"Authorization": "Bearer wrong-key"},
+        )
+        assert anonymous.status_code != 401
+        assert bad_key.status_code == anonymous.status_code
+        assert bad_key.json() == anonymous.json()
 
     def test_mcp_disabled_returns_error_body(self, client: TestClient) -> None:
-        """When MCP is disabled the response body contains an 'error' key."""
-        from stdapi.routes.core_root import MCP_SERVER_CARD  # noqa: PLC0415
-
-        if MCP_SERVER_CARD is not None:
+        """With every MCP transport off the route answers 404 ``MCP is not enabled``."""
+        if _MCP_ENABLED:
             pytest.skip("MCP is enabled in this environment")
-        body = client.get("/.well-known/mcp/server-card.json").json()
-        assert "error" in body
+        response = client.get("/.well-known/mcp/server-card.json")
+        assert response.status_code == 404
+        assert response.json() == {"error": "MCP is not enabled"}
 
     def test_mcp_enabled_body_structure(self, client: TestClient) -> None:
-        """When MCP is enabled the server card has the expected schema fields."""
-        from stdapi.routes.core_root import MCP_SERVER_CARD  # noqa: PLC0415
+        """The card pins the SEP-1649 schema, version, protocol and the active transport.
 
-        if MCP_SERVER_CARD is None:
+        ``streamable-http`` on ``/mcp`` wins when it is enabled; the SSE
+        transport on ``/sse`` is only advertised as the fallback.
+        """
+        if not _MCP_ENABLED:
             pytest.skip("MCP is disabled in this environment")
+        from stdapi.metering import EDITION_TITLE  # noqa: PLC0415
+        from stdapi.server import SERVER_VERSION  # noqa: PLC0415
+
         body = client.get("/.well-known/mcp/server-card.json").json()
+        assert body["$schema"] == (
+            "https://static.modelcontextprotocol.io/schemas/mcp-server-card/v1.json"
+        )
         assert body["version"] == "1.0"
-        assert "protocolVersion" in body
-        assert body["transport"]["type"] in {"streamable-http", "sse"}
+        assert body["protocolVersion"] == "2025-03-26"
+        assert body["serverInfo"] == {"name": EDITION_TITLE, "version": SERVER_VERSION}
+        assert body["transport"] == (
+            {"type": "streamable-http", "endpoint": "/mcp"}
+            if SETTINGS.enable_mcp_streamable_http
+            else {"type": "sse", "endpoint": "/sse"}
+        )
 
 
 class TestRobotsTxt:
-    """Tests for GET /robots.txt."""
+    """GET /robots.txt denies crawling by default and opens only the enabled doc paths.
+
+    Ref: stdapi/routes/core_root.py:robots_txt
+         stdapi/routes/core_root.py:_ROBOTS_TXT
+    """
 
     def test_returns_200(self, client: TestClient) -> None:
         """GET /robots.txt returns HTTP 200."""
         assert client.get("/robots.txt").status_code == 200
 
     def test_plain_text_content_type(self, client: TestClient) -> None:
-        """GET /robots.txt returns plain text content-type."""
+        """GET /robots.txt is served as ``text/plain``."""
         assert "text/plain" in client.get("/robots.txt").headers["content-type"]
 
     def test_has_user_agent_directive(self, client: TestClient) -> None:
-        """GET /robots.txt contains a User-agent directive."""
-        assert "User-agent: *" in client.get("/robots.txt").text
+        """The record opens with a wildcard ``User-agent: *`` group."""
+        lines = client.get("/robots.txt").text.splitlines()
+        assert lines[0] == "User-agent: *"
 
     def test_has_disallow_all(self, client: TestClient) -> None:
-        """GET /robots.txt contains 'Disallow: /' to restrict crawlers."""
-        assert "Disallow: /" in client.get("/robots.txt").text
+        """``Disallow: /`` is the last line, so it denies everything not allowed above it.
+
+        Position is load-bearing: the ``Allow:`` lines must precede the blanket
+        disallow for crawlers applying longest-match precedence to reach them.
+        """
+        lines = client.get("/robots.txt").text.splitlines()
+        assert lines[-1] == "Disallow: /"
 
     def test_allows_well_known(self, client: TestClient) -> None:
-        """GET /robots.txt always allows /.well-known/."""
-        assert "Allow: /.well-known/" in client.get("/robots.txt").text
+        """``Allow: /.well-known/`` is present unconditionally, whatever the settings."""
+        lines = client.get("/robots.txt").text.splitlines()
+        assert "Allow: /.well-known/" in lines
 
     def test_has_ai_content_signal(self, client: TestClient) -> None:
-        """GET /robots.txt contains the AI content signal header."""
-        assert "Content-Signal:" in client.get("/robots.txt").text
+        """The AI Content-Signal line opts the API docs into training, search and AI input."""
+        lines = client.get("/robots.txt").text.splitlines()
+        assert "Content-Signal: ai-train=yes, search=yes, ai-input=yes" in lines
 
     def test_matches_settings(self, client: TestClient) -> None:
-        """GET /robots.txt exactly matches the _ROBOTS_TXT constant."""
-        from stdapi.routes.core_root import _ROBOTS_TXT  # noqa: PLC0415
+        """The record lists exactly the doc paths the current settings enable.
 
-        assert client.get("/robots.txt").text == _ROBOTS_TXT
+        Built from ``SETTINGS`` rather than compared against ``_ROBOTS_TXT`` so a
+        path allowed for a disabled feature — or a missing allow for an enabled
+        one — is caught.
+        """
+        expected = [
+            line
+            for line in (
+                "User-agent: *",
+                "Content-Signal: ai-train=yes, search=yes, ai-input=yes",
+                "Allow: /docs" if SETTINGS.enable_docs else None,
+                "Allow: /redoc" if SETTINGS.enable_redoc else None,
+                "Allow: /openapi.json" if SETTINGS.enable_openapi_json else None,
+                "Allow: /.well-known/",
+                "Disallow: /",
+            )
+            if line is not None
+        ]
+        assert client.get("/robots.txt").text.splitlines() == expected

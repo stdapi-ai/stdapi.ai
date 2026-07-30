@@ -1,11 +1,15 @@
-"""Tests for OpenAI Images API /v1/images/edits endpoint.
+"""Coverage of the OpenAI-compatible /v1/images/edits endpoint.
 
-This module contains comprehensive tests for the /v1/images/edits endpoint,
-validating functionality, error handling, and compliance with OpenAI API specification.
+Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+     https://stdapi.ai/api_openai_images_edits/
+     stdapi/routes/openai_images_edits.py:edit_images
 """
+
+import re
 
 import pytest
 from openai import BadRequestError, OpenAI
+from pydantic import ValidationError
 from starlette.testclient import TestClient
 
 from stdapi.api_errors import UnsupportedModelError
@@ -21,19 +25,33 @@ from .test_openai_images_generations import (
     validate_url_format,
 )
 
+#: Shape of the ``size`` field built by ``build_images_response`` ("WIDTHxHEIGHT")
+_SIZE_PATTERN = re.compile(r"^\d+x\d+$")
+
 
 class TestImagesEditsBasic:
-    """Basic tests for /v1/images/edits endpoint.
+    """Editing-specific behavior of /v1/images/edits: masks, image fields, streaming.
 
-    These tests focus on new code paths and features specific to image edits
-    (mask support, editing operations) compared to image generations tests.
+    Ref: https://stdapi.ai/api_openai_images_edits/
+         stdapi/routes/openai_images_edits.py:edit_images
     """
 
     @pytest.mark.expensive
     def test_edit_image_with_mask(
         self, openai_client: OpenAI, sample_image_file: bytes, sample_mask_file: bytes
     ) -> None:
-        """Test image editing with explicit mask (unique to edits endpoint)."""
+        """An explicit mask is accepted and the edited image is returned as a URL.
+
+        ``sample_mask_file`` is an RGB PNG with no alpha channel, so the gateway
+        forwards it unchanged; Stability inpaint reads white pixels as maximum
+        inpaint strength, i.e. its white centre square is the regenerated area.
+        The mask counts as an input image in the usage breakdown, and ``size``
+        is measured on the produced image rather than echoing the requested
+        ``512x512``.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/stable-image-services.html
+             stdapi/routes/_images_common.py:build_images_response
+        """
         response = openai_client.images.edit(
             image=sample_image_file,
             mask=sample_mask_file,
@@ -49,24 +67,42 @@ class TestImagesEditsBasic:
         assert len(response.data) == 1
         assert response.data[0].url is not None
         validate_url_format(response.data[0].url)
+        assert response.data[0].b64_json is None
+
+        # Response metadata built by build_images_response
+        assert response.background == "opaque"
+        assert response.output_format == "png"
+        assert response.size is not None
+        assert _SIZE_PATTERN.match(response.size), response.size
 
         # Validate usage metadata
-        assert hasattr(response, "usage")
         assert response.usage is not None
         assert response.usage.input_tokens > 0
         assert response.usage.output_tokens > 0
         assert response.usage.total_tokens > 0
+        assert (
+            response.usage.total_tokens
+            == response.usage.input_tokens + response.usage.output_tokens
+        )
 
         # Check input tokens details - edits should have both text and image tokens
-        assert hasattr(response.usage, "input_tokens_details")
-        assert response.usage.input_tokens_details.text_tokens >= 0
-        assert response.usage.input_tokens_details.image_tokens > 0
+        details = response.usage.input_tokens_details
+        assert details.text_tokens >= 0
+        assert details.image_tokens > 0
+        assert details.image_tokens + details.text_tokens == response.usage.input_tokens
 
     @pytest.mark.expensive
     def test_edit_image_b64_json_with_mask(
         self, openai_client: OpenAI, sample_image_file: bytes, sample_mask_file: bytes
     ) -> None:
-        """Test masked editing with base64 response format."""
+        """`response_format=b64_json` returns inline image data and no URL.
+
+        ``output_format`` is reported from the format the backend actually
+        produced, so it must match the magic bytes of the returned payload.
+
+        Ref: stdapi/routes/_images_common.py:build_images_response
+             stdapi/models/image/__init__.py:ImageGenerationJobBase.output_format
+        """
         response = openai_client.images.edit(
             image=sample_image_file,
             mask=sample_mask_file,
@@ -84,11 +120,16 @@ class TestImagesEditsBasic:
 
         image_format = validate_base64_image(response.data[0].b64_json)
         assert image_format == "png"
+        assert response.output_format == image_format
 
     def test_invalid_model(
         self, openai_client: OpenAI, sample_image_file: bytes
     ) -> None:
-        """Test error with invalid model."""
+        """An unknown model id is rejected with a 400 naming the requested model.
+
+        Ref: stdapi/models/__init__.py:validate_model
+             stdapi/api_errors.py:UnsupportedModelError
+        """
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.images.edit(
                 image=sample_image_file,
@@ -97,11 +138,22 @@ class TestImagesEditsBasic:
                 size="512x512",
             )
         validate_error_response(exc_info.value)
+        assert exc_info.value.type == "invalid_request_error"
+        assert "invalid-model-name" in str(exc_info.value)
 
     def test_invalid_mask_format(
         self, openai_client: OpenAI, sample_image_file: bytes
     ) -> None:
-        """Test error with invalid mask format (unique to edits endpoint)."""
+        """A mask that is not a decodable image fails the request with a 400.
+
+        The gateway never decodes the mask: the bytes are base64-encoded and
+        forwarded, and the backend's ``ValidationException`` is mapped to a 400
+        ``invalid_request_error``. The message text comes from AWS, so only the
+        status and the envelope are asserted.
+
+        Ref: stdapi/aws_bedrock.py:handle_bedrock_client_error
+             stdapi/routes/openai_images_edits.py:edit_images
+        """
         invalid_mask = b"not a valid image"
 
         with pytest.raises(BadRequestError) as exc_info:
@@ -113,14 +165,22 @@ class TestImagesEditsBasic:
                 size="512x512",
             )
         validate_error_response(exc_info.value)
+        assert exc_info.value.type == "invalid_request_error"
+        body = exc_info.value.body
+        assert isinstance(body, dict)
+        assert body["message"], "error envelope must carry a message"
 
     def test_image_array_notation_accepted(
         self, openai_client: OpenAI, sample_image_file: bytes
     ) -> None:
-        """Test that 'image[]' field name is recognized, not treated as missing image.
+        """The multipart ``image[]`` field name is merged into the image list.
 
-        Regression: image[] was silently ignored after the JSON body support was added,
-        causing a 400 "at least 1 image" error instead of reaching the model.
+        Regression: ``image[]`` was silently ignored after the JSON body support
+        was added, causing a 400 "at least 1 image" error instead of reaching
+        the model. Failing on the unknown model instead proves the upload was
+        parsed.
+
+        Ref: stdapi/routes/openai_images_edits.py:_merge_image_parameters
         """
         http_client = openai_client._client  # noqa: SLF001
         response = http_client.post(
@@ -131,10 +191,17 @@ class TestImagesEditsBasic:
         )
         # image[] was parsed → error is about the model, not missing image
         assert response.status_code == 400
-        assert "model" in response.json()["error"]["message"].lower()
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "model" in error["message"].lower()
+        assert "invalid-model-name" in error["message"]
 
     def test_image_array_notation_invalid_type(self, openai_client: OpenAI) -> None:
-        """Test that a non-file value for 'image[]' returns 400."""
+        """A non-file value under ``image[]`` is a validation error on ``body.image[]``.
+
+        Ref: stdapi/routes/openai_images_edits.py:_merge_image_parameters
+             stdapi/main.py:handle_validation_exception
+        """
         http_client = openai_client._client  # noqa: SLF001
         response = http_client.post(
             f"{openai_client.base_url}images/edits",
@@ -147,13 +214,22 @@ class TestImagesEditsBasic:
             headers={"Authorization": f"Bearer {openai_client.api_key}"},
         )
         assert response.status_code == 400
-        assert response.json()["error"]["type"] == "invalid_request_error"
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert "body.image[]" in error["message"], error["message"]
 
     @pytest.mark.skip("Currently no models to use for this test case")
     def test_model_not_supporting_image_editing(
         self, openai_client: OpenAI, sample_image_file: bytes
     ) -> None:
-        """Test error when model doesn't support image editing."""
+        """A model without edit support reports that editing is unsupported.
+
+        Skipped: every catalogued image model that accepts an image input also
+        implements ``_edit_image``, so no model id reaches the base-class
+        fallback.
+
+        Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase._edit_image
+        """
         # Use a model that only supports text-to-image generation (not editing)
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.images.edit(
@@ -173,7 +249,14 @@ class TestImagesEditsBasic:
     def test_multiple_images_error(
         self, openai_client: OpenAI, sample_image_file: bytes
     ) -> None:
-        """Test error when multiple images are provided to edit endpoint."""
+        """Two images sent to a single-image edit model are rejected.
+
+        The OpenAI schema allows up to 16 images for GPT image models; the
+        Bedrock backends consume exactly one, so the extra image is rejected by
+        the job rather than by request validation.
+
+        Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase._get_one_image_from_list
+        """
         # Pass a sequence of images to trigger the "exactly one image" validation
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.images.edit(
@@ -183,8 +266,8 @@ class TestImagesEditsBasic:
                 size="512x512",
             )
 
-        error_msg = str(exc_info.value).lower()
-        assert "exactly one image" in error_msg or "one image" in error_msg
+        assert exc_info.value.type == "invalid_request_error"
+        assert "Exactly one image must be provided." in str(exc_info.value)
 
     def test_mask_not_supported_error(
         self,
@@ -193,7 +276,14 @@ class TestImagesEditsBasic:
         sample_mask_file: bytes,
         use_official_api: bool,
     ) -> None:
-        """Test error when mask is provided to a model that doesn't support it."""
+        """A mask sent to a model with no mask input is rejected as unsupported.
+
+        Background removal derives its own matte, so any supplied mask is
+        refused instead of being silently dropped.
+
+        Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase._validate_no_mask
+             stdapi/models/image/stability_stable_image_remove_background.py:_RemoveBackgroundJob
+        """
         if use_official_api:
             pytest.skip(
                 "Amazon Nova Canvas is not available on the official OpenAI API"
@@ -209,14 +299,21 @@ class TestImagesEditsBasic:
                 size="512x512",
             )
 
-        error_msg = str(exc_info.value).lower()
-        assert "mask" in error_msg
-        assert "not supported" in error_msg or "not allowed" in error_msg
+        assert exc_info.value.type == "invalid_request_error"
+        assert '"mask" parameter is not supported' in str(exc_info.value)
 
     def test_mask_required_error(
         self, openai_client: OpenAI, sample_image_file: bytes, use_official_api: bool
     ) -> None:
-        """Test error when mask is required but not provided."""
+        """VIRTUAL_TRY_ON without a mask is rejected because the mask is the reference image.
+
+        Nova Canvas' VIRTUAL_TRY_ON task maps the OpenAI ``mask`` upload onto
+        its ``referenceImage``, so the parameter is mandatory for that task type
+        even though it is optional for the endpoint.
+
+        Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
+             stdapi/models/image/amazon_nova_canvas.py:_get_request_virtual_try_on
+        """
         if use_official_api:
             pytest.skip(
                 "Amazon Nova Canvas is not available on the official OpenAI API"
@@ -232,15 +329,25 @@ class TestImagesEditsBasic:
                 extra_body={"taskType": "VIRTUAL_TRY_ON"},
             )
 
-        error_msg = str(exc_info.value).lower()
-        assert "mask" in error_msg
-        assert "required" in error_msg
+        assert exc_info.value.type == "invalid_request_error"
+        assert '"mask" parameter is required with VIRTUAL_TRY_ON taskType' in str(
+            exc_info.value
+        )
 
     @pytest.mark.expensive
     def test_edit_with_streaming(
         self, openai_client: OpenAI, sample_image_file: bytes, sample_mask_file: bytes
     ) -> None:
-        """Test image editing with streaming support."""
+        """Streaming an edit emits a single ``image_generation.completed`` SSE event.
+
+        The edits route reuses the generations stream serializer, so it emits
+        OpenAI's ``image_generation.*`` event names instead of the
+        ``image_edit.*`` names the OpenAI schema documents for this endpoint,
+        and Stability backends never produce preview frames.
+
+        Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+             stdapi/routes/openai_images_generations.py:stream_generator
+        """
         response = openai_client.images.edit(
             image=sample_image_file,
             mask=sample_mask_file,
@@ -251,21 +358,26 @@ class TestImagesEditsBasic:
             stream=True,
         )
 
+        events = list(response)
         # Validate the streaming response structure
-        assert response is not None
-        validate_streaming_image_response(response)
+        validate_streaming_image_response(events)
+        assert [str(event.type) for event in events] == ["image_generation.completed"]
+        assert validate_base64_image(events[-1].b64_json) == "png"
 
     @pytest.mark.expensive
     @pytest.mark.parametrize("partial_images_value", [0, 2, 3])
     def test_stream_with_partial_images(
         self, openai_client: OpenAI, sample_image_file: bytes, partial_images_value: int
     ) -> None:
-        """Test editing with various partial_images values.
+        """Any accepted `partial_images` value still yields only the final image event.
 
-        This test validates that all valid partial_images values (0, 2, 3) work
-        correctly when stream=True is enabled, even though no available model
-        currently emits partial preview events (the final image arrives as a
-        single event).
+        ``partial_images`` (0-3, streaming only) is validated and forwarded, but
+        no available backend emits preview frames, so the stream carries exactly
+        one ``image_generation.completed`` event and no ``partial_image`` event
+        whatever the requested preview count.
+
+        Ref: stdapi/types/openai_images.py:_ImageEditCommonParams
+             stdapi/routes/openai_images_generations.py:stream_generator
         """
         response = openai_client.images.edit(
             image=sample_image_file,
@@ -276,14 +388,22 @@ class TestImagesEditsBasic:
             partial_images=partial_images_value,
         )
 
-        assert response is not None
-        validate_streaming_image_response(response)
+        events = list(response)
+        validate_streaming_image_response(events)
+        assert [str(event.type) for event in events] == ["image_generation.completed"]
 
     @pytest.mark.expensive
     def test_image_parameter_aliases(
         self, openai_client: OpenAI, sample_image_file: bytes, sample_mask_file: bytes
     ) -> None:
-        """Test that both 'image' and 'image[]' parameter names work correctly."""
+        """`image` and `image[]` are interchangeable multipart field names.
+
+        Also covers the two failure modes of the same merge step: no image field
+        at all (min-length error on ``body.image``) and a non-file value under
+        ``body.image[]``.
+
+        Ref: stdapi/routes/openai_images_edits.py:_merge_image_parameters
+        """
         # Derive HTTP client from OpenAI client
         http_client = openai_client._client  # noqa: SLF001
 
@@ -370,7 +490,7 @@ class TestImagesEditsBasic:
         # Verify the error details match Pydantic's min_length validation format
         assert "message" in error_response["error"]
         error_message = error_response["error"]["message"]
-        assert "image" in error_message.lower()
+        assert "body.image" in error_message, error_message
         assert (
             "validation" in error_message.lower() or "at least" in error_message.lower()
         )
@@ -397,14 +517,17 @@ class TestImagesEditsBasic:
         # Verify the error message indicates type mismatch
         assert "message" in error_response_invalid["error"]
         error_message_invalid = error_response_invalid["error"]["message"]
-        assert "image" in error_message_invalid.lower()
+        assert "body.image[]" in error_message_invalid, error_message_invalid
 
 
 class TestImagesEditsJsonBody:
-    """Tests for /v1/images/edits endpoint with application/json request body.
+    """/v1/images/edits with an ``application/json`` body instead of multipart.
 
-    Covers the structured JSON format where images are referenced by URL or
-    Files API identifier instead of binary multipart uploads.
+    Images are referenced by URL/data URL or Files API identifier rather than
+    uploaded as binary parts.
+
+    Ref: https://stdapi.ai/api_openai_images_edits/
+         stdapi/types/openai_images.py:ImageEditJsonBody
     """
 
     @pytest.fixture(autouse=True)
@@ -419,11 +542,10 @@ class TestImagesEditsJsonBody:
     def test_edit_with_image_url(
         self, openai_client: OpenAI, sample_image_file_base64: str
     ) -> None:
-        """Test image edit via JSON body using a data URL for the image reference.
+        """A ``data:`` URL in the JSON ``images`` array is accepted as the source image.
 
-        Validates:
-            - 200 response with valid image data
-            - Response structure matches ImagesResponse schema
+        Ref: stdapi/types/openai_images.py:ImageInputReferenceParam
+             stdapi/input_file.py:InputFile
         """
         http_client = openai_client._client  # noqa: SLF001
         response = http_client.post(
@@ -446,22 +568,28 @@ class TestImagesEditsJsonBody:
         assert body.get("data") is not None
         assert len(body["data"]) == 1
         assert body["data"][0].get("b64_json") is not None
-        validate_base64_image(body["data"][0]["b64_json"])
+        assert body["data"][0].get("url") is None
+        assert body["output_format"] == validate_base64_image(
+            body["data"][0]["b64_json"]
+        )
 
     @pytest.mark.expensive
     def test_edit_with_file_id(
         self, openai_client: OpenAI, sample_image_file: bytes
     ) -> None:
-        """Test image edit via JSON body using a Files API file_id reference.
+        """A Files API ``file_id`` reference in the JSON body resolves to the stored bytes.
 
-        Validates:
-            - Upload succeeds and returns a file-* identifier
-            - JSON body edit with that file_id returns 200 with image data
+        The Files API is S3-backed here and the identifier it returns carries
+        the ``file-`` prefix that the edit body accepts.
+
+        Ref: https://stdapi.ai/api_openai_files/
+             stdapi/input_file.py:FileIdInputFile
         """
         uploaded = openai_client.files.create(
             file=("image.png", sample_image_file, "image/png"), purpose="assistants"
         )
         try:
+            assert uploaded.id.startswith("file-"), uploaded.id
             http_client = openai_client._client  # noqa: SLF001
             response = http_client.post(
                 f"{openai_client.base_url}images/edits",
@@ -482,16 +610,17 @@ class TestImagesEditsJsonBody:
             assert body.get("data") is not None
             assert len(body["data"]) == 1
             assert body["data"][0].get("b64_json") is not None
-            validate_base64_image(body["data"][0]["b64_json"])
+            assert body["output_format"] == validate_base64_image(
+                body["data"][0]["b64_json"]
+            )
         finally:
             openai_client.files.delete(uploaded.id)
 
     def test_missing_images_returns_400(self, openai_client: OpenAI) -> None:
-        """Test that a JSON body without an 'images' field returns 400.
+        """A JSON body without an ``images`` array is a validation error naming the field.
 
-        Validates:
-            - 400 status code
-            - Error type is invalid_request_error
+        Ref: stdapi/types/openai_images.py:ImageEditJsonBody
+             stdapi/main.py:handle_validation_exception
         """
         http_client = openai_client._client  # noqa: SLF001
         response = http_client.post(
@@ -505,13 +634,17 @@ class TestImagesEditsJsonBody:
         assert response.status_code == 400
         error = response.json().get("error", {})
         assert error.get("type") == "invalid_request_error"
+        assert error["message"].startswith("Validation error"), error["message"]
+        assert "images" in error["message"], error["message"]
 
     def test_empty_image_ref_returns_400(self, openai_client: OpenAI) -> None:
-        """Test that an ImageRef with neither file_id nor image_url returns 400.
+        """An ``images`` entry with neither ``file_id`` nor ``image_url`` is rejected.
 
-        Validates:
-            - 400 status code
-            - Error type is invalid_request_error
+        The failing element is reported positionally (``images.0``) by the
+        model validator that requires exactly one image source.
+
+        Ref: stdapi/types/openai_images.py:ImageInputReferenceParam
+             stdapi/main.py:handle_validation_exception
         """
         http_client = openai_client._client  # noqa: SLF001
         response = http_client.post(
@@ -526,11 +659,16 @@ class TestImagesEditsJsonBody:
         assert response.status_code == 400
         error = response.json().get("error", {})
         assert error.get("type") == "invalid_request_error"
+        assert "images.0" in error["message"], error["message"]
+        assert "file_id" in error["message"], error["message"]
 
 
 @pytest.mark.local
 class TestImagesEditsModelField:
-    """Unit tests for the 'model' field regardless of request encoding (no AWS calls)."""
+    """The ``model`` field is read from either request encoding (no AWS calls).
+
+    Ref: stdapi/routes/openai_images_edits.py:edit_images
+    """
 
     @pytest.fixture
     def client(self, api_key: str) -> TestClient:
@@ -561,6 +699,8 @@ class TestImagesEditsModelField:
         Regression: the unused, form-only 'model' Form parameter carried
         'min_length=1' with an empty-string default, which rejected every
         JSON-body request with a 422 before the JSON 'model' field was read.
+
+        Ref: stdapi/types/openai_images.py:ImageEditJsonBody
         """
         response = client.post(
             "/v1/images/edits",
@@ -577,7 +717,10 @@ class TestImagesEditsModelField:
     def test_multipart_form_model_field_still_works(
         self, client: TestClient, probed_model_ids: list[str]
     ) -> None:
-        """A model supplied via multipart form data still reaches model resolution unchanged."""
+        """A model supplied via multipart form data reaches model resolution unchanged.
+
+        Ref: stdapi/types/openai_images.py:ImageEditParams
+        """
         response = client.post(
             "/v1/images/edits",
             data={"model": "probe-model-id", "prompt": "test"},
@@ -590,28 +733,47 @@ class TestImagesEditsModelField:
 
 @pytest.mark.local
 class TestPartialImagesAccepted:
-    """ImageEditParams.partial_images: accepted (0-3) even though no model emits partials."""
+    """``partial_images`` validation on the multipart edit request model.
+
+    The OpenAI schema allows 0-3 preview images while streaming; the gateway
+    accepts and keeps the value even though no backend emits previews.
+
+    Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+         stdapi/types/openai_images.py:_ImageEditCommonParams
+    """
 
     @pytest.mark.parametrize("value", [0, 1, 2, 3])
     def test_value_is_accepted(self, value: int) -> None:
-        """`partial_images` in 0-3 is accepted; no current model emits partial events."""
+        """`partial_images` in 0-3 is kept verbatim on the parsed request."""
         params = ImageEditParams(model="m", stream=True, partial_images=value)
         assert params.partial_images == value
 
     def test_omitted_is_accepted(self) -> None:
-        """Omitting `partial_images` (None) is accepted."""
+        """Omitting `partial_images` leaves it unset rather than defaulting to 0."""
         params = ImageEditParams(model="m", stream=True)
         assert params.partial_images is None
 
     def test_requires_stream(self) -> None:
-        """`partial_images` without `stream=True` is still rejected."""
-        with pytest.raises(ValueError, match="partial_images"):
+        """`partial_images` without `stream=True` is a single value error on the model.
+
+        Ref: stdapi/types/openai_images.py:_ImageEditCommonParams._unsupported
+        """
+        with pytest.raises(ValidationError) as exc_info:
             ImageEditParams(model="m", partial_images=0)
+
+        errors = exc_info.value.errors()
+        assert len(errors) == 1
+        assert errors[0]["type"] == "value_error"
+        assert "partial_images requires streaming mode." in errors[0]["msg"]
 
 
 @pytest.mark.local
 class TestImagesEditsSizeAuto:
-    """Multipart form `size`: the OpenAI literal `auto` is accepted, not rejected."""
+    """Multipart form `size`: the OpenAI literal `auto` is accepted, not rejected.
+
+    Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+         stdapi/types/openai_images.py:_ImageBaseParams._resolve_auto_size
+    """
 
     @pytest.fixture
     def client(self, api_key: str) -> TestClient:
@@ -628,6 +790,8 @@ class TestImagesEditsSizeAuto:
         Regression: the Form `size` parameter's pattern only matched
         `WIDTHxHEIGHT`, rejecting the OpenAI `auto` literal already accepted
         by the JSON body path.
+
+        Ref: stdapi/routes/openai_images_edits.py:edit_images
         """
 
         async def _validate_model(

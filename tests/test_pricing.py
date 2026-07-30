@@ -6,6 +6,10 @@ using recorded AWS Price List API samples in tests/fixtures/pricing/.
 Regression content: fixtures catch bugs in pricePerUnit/unit JSON level handling,
 model-key normalization against live Bedrock IDs, and unvalidated operator
 price overrides (the 3 confirmed mispricing incidents that prompted this module).
+
+Ref: stdapi/pricing.py:_ingest_price_list_item
+     stdapi/pricing.py:resolve_price
+     botocore/data/pricing/2017-10-15/service-2.json
 """
 
 import asyncio
@@ -120,7 +124,10 @@ def _price_item(
 
 
 class TestIngestPriceListItem:
-    """Parsing of real-shaped AWS Price List API items."""
+    """Parsing of real-shaped AWS Price List API items.
+
+    Ref: stdapi/pricing.py:_ingest_price_list_item
+    """
 
     def test_bedrock_fixture_produces_one_entry_per_item(self) -> None:
         """Every fixture item must yield exactly one price entry (none silently dropped)."""
@@ -130,7 +137,11 @@ class TestIngestPriceListItem:
         assert len(results) == len(items)
 
     def test_per_1k_token_price_is_divided_by_1000(self) -> None:
-        """Regression: `unit: "1K tokens"` must scale the stored price, not be ignored."""
+        """Regression: `unit: "1K tokens"` must scale the stored price, not be ignored.
+
+        Ref: stdapi/pricing.py:parse_unit_scale
+             stdapi/pricing.py:_parse_price
+        """
         results, diagnostics = _ingest_fixture("bedrock_sample.json", Service.BEDROCK)
         assert diagnostics == []
         key = PriceKey(
@@ -141,7 +152,10 @@ class TestIngestPriceListItem:
         assert results[key].currency == "USD"
 
     def test_service_tier_attribute_becomes_price_key_tier(self) -> None:
-        """A flex-tier row must be keyed under tier="flex", not merged into another row."""
+        """A flex-tier row must be keyed under tier="flex", not merged into another row.
+
+        Ref: stdapi/pricing.py:_resolve_tier
+        """
         results, diagnostics = _ingest_fixture("bedrock_sample.json", Service.BEDROCK)
         assert diagnostics == []
         flex_key = PriceKey(
@@ -170,6 +184,8 @@ class TestIngestPriceListItem:
 
         These rows incorrectly modeled routing via a fabricated service_tier
         attribute before the fix. The actual signal is the usagetype suffix.
+
+        Ref: stdapi/pricing.py:_native_routing
         """
         results, diagnostics = _ingest_fixture("bedrock_sample.json", Service.BEDROCK)
         assert diagnostics == []
@@ -186,7 +202,11 @@ class TestIngestPriceListItem:
         assert results[global_key].amount == Decimal("0.003") / 1000
 
     def test_polly_fixture_matches_engine_based_key(self) -> None:
-        """Polly rows (no `model` attribute) must key the same way record_polly_usage does."""
+        """Polly rows (no `model` attribute) must key the same way record_polly_usage does.
+
+        Ref: stdapi/pricing.py:_synthesize_service_model_key
+             stdapi/usage.py:record_polly_usage
+        """
         results, diagnostics = _ingest_fixture("polly_sample.json", Service.POLLY)
         assert diagnostics == []
         key = PriceKey(
@@ -200,7 +220,11 @@ class TestIngestPriceListItem:
         assert results[key].amount == Decimal("0.000004")
 
     def test_transcribe_fixture_matches_synthetic_key(self) -> None:
-        """Transcribe rows must key the same way record_transcribe_usage does."""
+        """Transcribe rows must key the same way record_transcribe_usage does.
+
+        Ref: stdapi/pricing.py:_synthesize_service_model_key
+             stdapi/usage.py:record_transcribe_usage
+        """
         results, diagnostics = _ingest_fixture(
             "transcribe_sample.json", Service.TRANSCRIBE
         )
@@ -220,6 +244,8 @@ class TestIngestPriceListItem:
 
         Before the fix these rows were skipped entirely (routing wasn't modeled),
         so models priced only via Global routing had no price at all.
+
+        Ref: stdapi/pricing.py:_marketplace_routing
         """
         results, diagnostics = _ingest_fixture("bedrock_sample.json", Service.BEDROCK)
         assert diagnostics == []
@@ -240,6 +266,8 @@ class TestIngestPriceListItem:
 
         This app only bills inference usage. Before the fix these rows weren't
         excluded, so they silently collided with the model's on-demand PriceKey.
+
+        Ref: stdapi/pricing.py:_ingest_native_item
         """
         results: dict[PriceKey, Price] = {}
         item = json.dumps(
@@ -259,12 +287,39 @@ class TestIngestPriceListItem:
         assert results == {}
 
     def test_malformed_json_is_skipped_not_raised(self) -> None:
-        """A single bad item must not raise -- callers rely on this to isolate failures."""
+        """A single bad item must not raise -- callers rely on this to isolate failures.
+
+        A valid item ingested into the same accumulator afterwards proves the
+        bad one was skipped rather than the whole call being inert.
+        """
         results: dict[PriceKey, Price] = {}
         _ingest_price_list_item(
             "{not valid json", Service.BEDROCK, "us-east-1", "USD", results
         )
         assert results == {}
+
+        good_item = json.dumps(
+            _price_item(
+                {
+                    "regionCode": "us-east-1",
+                    "usagetype": "USE1-SomeModel-input-tokens",
+                    "inferenceType": "Input tokens",
+                    "model": "Some Model",
+                },
+                unit="1K tokens",
+                price="0.001",
+            )
+        )
+        _ingest_price_list_item(good_item, Service.BEDROCK, "us-east-1", "USD", results)
+        key = PriceKey(
+            Service.BEDROCK,
+            normalize_model_key("Some Model"),
+            "us-east-1",
+            Dimension.INPUT_TOKENS,
+            "standard",
+        )
+        assert set(results) == {key}
+        assert results[key].amount == Decimal("0.001") / 1000
 
     @pytest.mark.parametrize("bad_price", ["", "N/A", "NaN", "Infinity"])
     def test_invalid_or_non_finite_price_per_unit_is_skipped_not_raised(
@@ -274,6 +329,8 @@ class TestIngestPriceListItem:
 
         ``Decimal("")``/``Decimal("N/A")`` raise ``decimal.InvalidOperation``;
         ``Decimal("NaN")``/``Decimal("Infinity")`` parse but aren't valid prices.
+
+        Ref: stdapi/pricing.py:_parse_price
         """
         results: dict[PriceKey, Price] = {}
         item = json.dumps(
@@ -293,7 +350,10 @@ class TestIngestPriceListItem:
 
 
 class TestResolveTier:
-    """AWS signals tier via 3 incompatible schemas -- _resolve_tier() must handle all 3."""
+    """AWS signals tier via 3 incompatible schemas -- _resolve_tier() must handle all 3.
+
+    Ref: stdapi/pricing.py:_resolve_tier
+    """
 
     def test_service_tier_attribute_wins_when_present(self) -> None:
         """Newer models (GPT-OSS, Nemotron, ...): explicit `service_tier` attribute."""
@@ -353,6 +413,8 @@ class TestPriceCollisionDetection:
     confirmed mispricing incidents (BatchInference spelling, Model Customization,
     Nova Canvas, Nova 2.0 global-batch): two unrelated rows silently resolve
     to identical PriceKeys, with the wrong one winning depending on ingestion order.
+
+    Ref: stdapi/pricing.py:_store_price
     """
 
     def test_different_usagetype_same_key_different_price_warns(self) -> None:
@@ -423,7 +485,11 @@ class TestPriceCollisionDetection:
 
 
 class _FakePricingPaginator:
-    """Minimal fake aiobotocore pricing paginator serving items per ServiceCode."""
+    """Minimal fake aiobotocore pricing paginator serving items per ServiceCode.
+
+    Ref: stdapi/pricing.py:_fetch_service_pricing
+         botocore/data/pricing/2017-10-15/service-2.json
+    """
 
     def __init__(
         self,
@@ -451,7 +517,11 @@ class _FakePricingPaginator:
 
 
 class _FakePricingClient:
-    """Minimal fake aiobotocore pricing client serving items per ServiceCode."""
+    """Minimal fake aiobotocore pricing client serving items per ServiceCode.
+
+    Ref: stdapi/pricing.py:_fetch_service_pricing
+         botocore/data/pricing/2017-10-15/service-2.json
+    """
 
     def __init__(
         self,
@@ -477,6 +547,9 @@ class TestCrossFetchCollisionDetection:
 
     Same-region Bedrock service codes claiming one PriceKey must warn and
     resolve deterministically (fetch generation order, not completion order).
+
+    Ref: stdapi/pricing.py:_load_price_catalog
+         stdapi/pricing.py:_store_price
     """
 
     #: The PriceKey both fetches' items below resolve to.
@@ -579,7 +652,11 @@ class TestCrossFetchCollisionDetection:
 
 
 class TestPartialFetchFailureIsTolerated:
-    """One fetch failing must not cancel or discard its sibling fetches."""
+    """One fetch failing must not cancel or discard its sibling fetches.
+
+    Ref: stdapi/pricing.py:_load_price_catalog
+         stdapi/pricing.py:_fetch_or_capture
+    """
 
     @staticmethod
     def _bedrock_item(usagetype: str, price: str) -> dict[str, object]:
@@ -694,7 +771,10 @@ class TestPartialFetchFailureIsTolerated:
 
 
 class TestNativeCacheTtl:
-    """Native (non-Marketplace) 1-hour prompt-cache-write pricing."""
+    """Native (non-Marketplace) 1-hour prompt-cache-write pricing.
+
+    Ref: stdapi/pricing.py:_ingest_native_item
+    """
 
     def test_one_hour_usagetype_becomes_cache_ttl_1h(self) -> None:
         """A "1 hour" usagetype row must be keyed under cache_ttl="1h", not merged."""
@@ -728,7 +808,10 @@ class TestNativeCacheTtl:
 
 
 class TestMarketplaceCacheTtl:
-    """Marketplace-listed models' 5-minute (default) vs 1-hour prompt-cache-write pricing."""
+    """Marketplace-listed models' 5-minute (default) vs 1-hour prompt-cache-write pricing.
+
+    Ref: stdapi/pricing.py:_marketplace_dimension_tier_ttl
+    """
 
     @staticmethod
     def _ingest_marketplace_cache_row(
@@ -779,7 +862,11 @@ class TestMarketplaceCacheTtl:
 
 
 class TestTitanImageGeneratorIngestion:
-    """Titan Image Generator's titanModel/T2I-I2I/resolution/quality pricing rows."""
+    """Titan Image Generator's titanModel/T2I-I2I/resolution/quality pricing rows.
+
+    Ref: stdapi/pricing.py:_image_generation_spec
+         stdapi/pricing.py:_resolve_native_model
+    """
 
     def test_t2i_and_i2i_share_the_same_image_spec_key(self) -> None:
         """T2I and I2I are priced identically at each resolution/quality (live-confirmed)."""
@@ -855,6 +942,9 @@ class TestNovaCanvasIngestion:
     inferenceType wasn't recognized -- real on-demand rows were silently dropped.
     Meanwhile Provisioned Throughput rows matched the usagetype fallback and
     silently overwrote the real image prices. Confirmed live on Nova 2.0 Omni/Pro.
+
+    Ref: stdapi/pricing.py:_resolve_native_model
+         stdapi/pricing.py:_native_price_spec
     """
 
     def test_on_demand_rows_are_ingested_under_their_image_spec(self) -> None:
@@ -899,7 +989,11 @@ class TestNovaCanvasIngestion:
 
 
 class TestVideoGenerationIngestion:
-    """Nova Reel-like T2V/I2V rows: OUTPUT_SECONDS dimension, "hdres" usagetype -> spec="hd"."""
+    """Nova Reel-like T2V/I2V rows: OUTPUT_SECONDS dimension, "hdres" usagetype -> spec="hd".
+
+    Ref: stdapi/pricing.py:_native_price_spec
+         stdapi/pricing.py:_VIDEO_GENERATION_PATTERN
+    """
 
     @staticmethod
     def _item(inference_type: str, usagetype: str, price: str) -> str:
@@ -961,7 +1055,8 @@ class TestVideoGenerationIngestion:
             Dimension.OUTPUT_SECONDS,
             "standard",
         )
-        assert key in results
+        assert set(results) == {key}
+        assert results[key].amount == Decimal("0.06")
 
     def test_hdres_usagetype_ingests_under_the_hd_spec_bucket(self) -> None:
         """A "HDResolution" usagetype segment must resolve to spec="hd", distinct from standard."""
@@ -1018,7 +1113,10 @@ class TestVideoGenerationIngestion:
     def test_resolve_price_round_trip_for_hd_spec(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """resolve_price() must find the ingested HD row via a real Bedrock model ID."""
+        """resolve_price() must find the ingested HD row via a real Bedrock model ID.
+
+        Ref: stdapi/pricing.py:resolve_price
+        """
         results: dict[PriceKey, Price] = {}
         _ingest_price_list_item(
             self._item(
@@ -1044,7 +1142,11 @@ class TestVideoGenerationIngestion:
 
 
 class TestLumaRayIngestion:
-    """Luma Ray rows: bare "Video" inferenceType, "Ray v2" model, HDRes/StandardRes."""
+    """Luma Ray rows: bare "Video" inferenceType, "Ray v2" model, HDRes/StandardRes.
+
+    Ref: stdapi/pricing.py:inference_type_to_dimension
+         stdapi/pricing.py:_native_price_spec
+    """
 
     @staticmethod
     def _item(usagetype: str, price: str) -> str:
@@ -1084,7 +1186,10 @@ class TestLumaRayIngestion:
         )
 
     def test_model_id_and_price_row_normalize_to_the_same_key(self) -> None:
-        """The model ID and the price row's "Ray v2" name must share one price key."""
+        """The model ID and the price row's "Ray v2" name must share one price key.
+
+        Ref: stdapi/pricing.py:normalize_model_key
+        """
         assert normalize_model_key("luma.ray-v2:0") == normalize_model_key("Ray v2")
 
     def test_hd_and_standard_rows_ingest_under_distinct_spec_buckets(self) -> None:
@@ -1126,7 +1231,10 @@ class TestLumaRayIngestion:
     def test_resolve_price_round_trip_for_the_luma_model_id(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """resolve_price() must find the ingested HD row via the Bedrock model ID."""
+        """resolve_price() must find the ingested HD row via the Bedrock model ID.
+
+        Ref: stdapi/pricing.py:resolve_price
+        """
         results: dict[PriceKey, Price] = {}
         _ingest_price_list_item(
             self._item("USW2-Ray-V2-Medfps-HDRes", "1.50"),
@@ -1148,7 +1256,11 @@ class TestLumaRayIngestion:
 
 
 class TestImageTokenCountIsNotAnImageDimension:
-    """Multimodal "image token count" must not resolve to OUTPUT_IMAGES."""
+    """Multimodal "image token count" must not resolve to OUTPUT_IMAGES.
+
+    Ref: stdapi/pricing.py:inference_type_to_dimension
+         stdapi/pricing.py:_resolve_dimension
+    """
 
     def test_image_token_count_usagetype_does_not_match_output_images(self) -> None:
         """ "Image Token Count" inferenceType/usagetype pairs must resolve to no dimension."""  # noqa: D210
@@ -1208,7 +1320,11 @@ class TestImageTokenCountIsNotAnImageDimension:
 
 
 class TestNova2GlobalBatchIngestion:
-    """Nova 2.0 global-routed batch rows, signaled only by usagetype."""
+    """Nova 2.0 global-routed batch rows, signaled only by usagetype.
+
+    Ref: stdapi/pricing.py:_resolve_tier
+         stdapi/pricing.py:_native_routing
+    """
 
     def test_global_standard_and_global_batch_are_distinct_keys(self) -> None:
         """Both rows must resolve to their own price, not collapse onto one key."""
@@ -1244,6 +1360,8 @@ class TestMarketplaceCacheWriteOneHourNewGeneration:
     Older listings signal 1h cache-write via "CacheWrite1hInputTokenCount"
     (see TestMarketplaceCacheTtl); newer listings use "cache_write_tokens_1h"
     instead, which the older pattern doesn't match.
+
+    Ref: stdapi/pricing.py:_marketplace_dimension_tier_ttl
     """
 
     @staticmethod
@@ -1373,7 +1491,11 @@ class TestMarketplaceCacheWriteOneHourNewGeneration:
 
 
 class TestMarketplaceLegacyContextWindowListingsSkipped:
-    """Legacy "(100K)"-suffixed Marketplace listings must not be ingested at all."""
+    """Legacy "(100K)"-suffixed Marketplace listings must not be ingested at all.
+
+    Ref: stdapi/pricing.py:_ingest_marketplace_item
+         stdapi/pricing.py:_MARKETPLACE_CONTEXT_WINDOW_LISTING_PATTERN
+    """
 
     @staticmethod
     def _item(servicename: str, price: str = "3.26") -> str:
@@ -1429,6 +1551,9 @@ class TestMarketplaceClaimIncludesListingName:
     that normalize to the SAME model key but carry different prices must now
     be caught as a collision (previously silent, since the claim was keyed
     on usagetype text alone).
+
+    Ref: stdapi/pricing.py:_ingest_marketplace_item
+         stdapi/pricing.py:_store_price
     """
 
     @staticmethod
@@ -1472,7 +1597,10 @@ class TestMarketplaceClaimIncludesListingName:
 
 
 class TestMarketplaceLatencyOptimizedRouting:
-    """Marketplace "_LatencyOptimized" usagetype rows -- a distinct, pricier serving profile."""
+    """Marketplace "_LatencyOptimized" usagetype rows -- a distinct, pricier serving profile.
+
+    Ref: stdapi/pricing.py:_marketplace_routing
+    """
 
     @staticmethod
     def _item(usagetype: str, price: str) -> str:
@@ -1556,6 +1684,9 @@ class TestMarketplaceScaleOneDimensions:
 
     Unlike token dimensions (see _MARKETPLACE_PER_MILLION_DIMENSIONS), these
     quote a per-unit price directly -- no /1_000_000 scaling applies.
+
+    Ref: stdapi/pricing.py:_ingest_marketplace_item
+         stdapi/pricing.py:_MARKETPLACE_PER_MILLION_DIMENSIONS
     """
 
     @staticmethod
@@ -1603,7 +1734,10 @@ class TestMarketplaceScaleOneDimensions:
 
 
 class TestLongContextAxis:
-    """Long-context (>200K prompt) pricing bucket, signaled by a "long-context" usagetype segment."""
+    """Long-context (>200K prompt) pricing bucket, signaled by a "long-context" usagetype segment.
+
+    Ref: stdapi/pricing.py:_price_context
+    """
 
     def test_long_context_input_tokens_row_does_not_collide_with_standard_row(
         self,
@@ -1752,7 +1886,10 @@ class TestLongContextAxis:
 
 
 class TestNovaMultiModalEmbeddingsInputMediaExclusion:
-    """Nova Multimodal Embeddings' per-input-image SKUs are not billed usage; its per-input-tokens SKU is."""
+    """Nova Multimodal Embeddings' per-input-image SKUs are not billed usage; its per-input-tokens SKU is.
+
+    Ref: stdapi/pricing.py:_native_price_spec
+    """
 
     @staticmethod
     def _item(usagetype: str, unit: str, price: str) -> str:
@@ -1812,11 +1949,16 @@ class TestNovaMultiModalEmbeddingsInputMediaExclusion:
             spec,
         )
         assert set(results) == {key}
+        # "Images Processed" carries no K/M multiplier: the price is per unit.
+        assert results[key].amount == Decimal("0.0008")
 
     def test_input_tokens_row_ingests_via_usagetype_token_fallback(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """ "input-tokens" (no inferenceType) must ingest as INPUT_TOKENS."""  # noqa: D210
+        """ "input-tokens" (no inferenceType) must ingest as INPUT_TOKENS.
+
+        Ref: stdapi/pricing.py:_generic_usagetype_dimension
+        """  # noqa: D210
         results: dict[PriceKey, Price] = {}
         _ingest_price_list_item(
             self._item(
@@ -1840,7 +1982,10 @@ class TestNovaMultiModalEmbeddingsInputMediaExclusion:
     def test_batch_suffix_on_input_tokens_row_becomes_batch_tier(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """ "input-tokens-batch" must be keyed under tier="batch"."""  # noqa: D210
+        """ "input-tokens-batch" must be keyed under tier="batch".
+
+        Ref: stdapi/pricing.py:_resolve_tier
+        """  # noqa: D210
         results: dict[PriceKey, Price] = {}
         _ingest_price_list_item(
             self._item(
@@ -1866,7 +2011,11 @@ class TestNovaMultiModalEmbeddingsInputMediaExclusion:
 
 
 class TestNovaGroundingRequests:
-    """Nova Grounding (built-in web-grounding tool) $/request pricing."""
+    """Nova Grounding (built-in web-grounding tool) $/request pricing.
+
+    Ref: stdapi/pricing.py:_generic_usagetype_dimension
+         stdapi/pricing.py:_USAGETYPE_FALLBACK_DIMENSIONS
+    """
 
     def test_nova_grounding_usagetype_maps_to_grounding_requests_dimension(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1897,7 +2046,10 @@ class TestNovaGroundingRequests:
 
 
 class TestReservedCapacityExclusion:
-    """Reserved-capacity ("Reserved - N Month") rows are a commitment rate, not billed by this app."""
+    """Reserved-capacity ("Reserved - N Month") rows are a commitment rate, not billed by this app.
+
+    Ref: stdapi/pricing.py:_ingest_native_item
+    """
 
     def test_reserved_capacity_row_is_not_ingested(self) -> None:
         """A "Reserved - 1 Month" feature row must be skipped, even with no inferenceType."""
@@ -1927,6 +2079,10 @@ class TestTranslateAndComprehendIngestion:
     These services carry no `model` attribute; _synthesize_service_model_key()
     reconstructs the exact synthetic model string record_translate_usage()/
     record_comprehend_usage() bill against (see stdapi/usage.py).
+
+    Ref: stdapi/pricing.py:_synthesize_service_model_key
+         stdapi/usage.py:record_translate_usage
+         stdapi/usage.py:record_comprehend_usage
     """
 
     @staticmethod
@@ -2052,6 +2208,9 @@ class TestUsagetypeTokenFallbackTierSuffixes:
 
     "mantle" rows are the bedrock-mantle API's rates: they must key under
     ``Service.BEDROCK_MANTLE``, never mixing with bedrock-runtime rates.
+
+    Ref: stdapi/pricing.py:_bedrock_api_service
+         stdapi/pricing.py:_generic_usagetype_dimension
     """
 
     @staticmethod
@@ -2088,7 +2247,8 @@ class TestUsagetypeTokenFallbackTierSuffixes:
             Dimension.INPUT_TOKENS,
             expected_tier,
         )
-        assert key in results
+        assert set(results) == {key}
+        assert results[key].amount == Decimal("0.002") / 1000
 
     def test_mantle_cache_read_tokens_usagetype_maps_to_cache_read_tokens(self) -> None:
         """ "cache-read-tokens" must resolve to CACHE_READ_TOKENS."""  # noqa: D210
@@ -2107,7 +2267,8 @@ class TestUsagetypeTokenFallbackTierSuffixes:
             Dimension.CACHE_READ_TOKENS,
             "standard",
         )
-        assert key in results
+        assert set(results) == {key}
+        assert results[key].amount == Decimal("0.002") / 1000
 
     def test_cache_read_pattern_takes_precedence_over_inputtoken_substring(
         self,
@@ -2130,12 +2291,16 @@ class TestUsagetypeTokenFallbackTierSuffixes:
             Dimension.CACHE_READ_TOKENS,
             "standard",
         )
-        assert key in results
-        assert not any(k.dimension == Dimension.INPUT_TOKENS for k in results)
+        assert set(results) == {key}
+        assert results[key].amount == Decimal("0.002") / 1000
 
 
 class TestNovaSonicModality:
-    """Nova Sonic (speech-to-speech) rows: text-modality tokens billed, speech-modality rows unmapped."""
+    """Nova Sonic (speech-to-speech) rows: text-modality tokens billed, speech-modality rows unmapped.
+
+    Ref: stdapi/pricing.py:inference_type_to_dimension
+         stdapi/pricing.py:_native_price_spec
+    """
 
     @staticmethod
     def _item(inference_type: str, usagetype: str, price: str = "0.0034") -> str:
@@ -2169,7 +2334,8 @@ class TestNovaSonicModality:
             Dimension.INPUT_TOKENS,
             "standard",
         )
-        assert key in results
+        assert set(results) == {key}
+        assert results[key].amount == Decimal("0.0034") / 1000
 
     def test_text_output_token_maps_to_output_tokens(self) -> None:
         """ "Text output token" must resolve to OUTPUT_TOKENS."""  # noqa: D210
@@ -2188,7 +2354,8 @@ class TestNovaSonicModality:
             Dimension.OUTPUT_TOKENS,
             "standard",
         )
-        assert key in results
+        assert set(results) == {key}
+        assert results[key].amount == Decimal("0.0034") / 1000
 
     def test_speech_understanding_tokens_ingest_with_speech_spec(self) -> None:
         """Speech-modality rows must index under the "speech" spec bucket."""
@@ -2213,6 +2380,7 @@ class TestNovaSonicModality:
             "speech",
         )
         assert set(results) == {key}
+        assert results[key].amount == Decimal("0.0034") / 1000
 
     def test_unrecognized_inference_type_is_not_ingested(self) -> None:
         """An unrecognized non-empty inferenceType must not fall through to the usagetype fallback."""
@@ -2233,6 +2401,9 @@ class TestNativeLatencyOptimizedRouting:
     Confirmed live: Nova Pro publishes a separate "Nova Pro Latency Optimized"
     price-list `model` value, pricier than the plain "Nova Pro" rows, that
     must key under the same normalized model ("novapro") with routing="latency".
+
+    Ref: stdapi/pricing.py:_resolve_native_model
+         stdapi/pricing.py:_LATENCY_OPTIMIZED_SUFFIX_PATTERN
     """
 
     @staticmethod
@@ -2319,7 +2490,10 @@ class TestNativeLatencyOptimizedRouting:
 
 
 class TestNormalizeModelKey:
-    """Matching Bedrock model IDs to AWS Price List `model` display names."""
+    """Matching Bedrock model IDs to AWS Price List `model` display names.
+
+    Ref: stdapi/pricing.py:normalize_model_key
+    """
 
     @pytest.mark.parametrize(
         ("model_id", "display_name"),
@@ -2348,7 +2522,11 @@ class TestNormalizeModelKey:
 
 
 class TestRegisterModelKeyOverrides:
-    """register_model_key_overrides() merges entries into the override registry."""
+    """register_model_key_overrides() merges entries into the override registry.
+
+    Ref: stdapi/pricing.py:register_model_key_overrides
+         stdapi/pricing.py:resolve_model_key
+    """
 
     @pytest.fixture(autouse=True)
     def _restore_overrides(self) -> Generator[None]:
@@ -2370,7 +2548,11 @@ class TestRegisterModelKeyOverrides:
 
 
 class TestModelsPackageRegistersPricingOverrides:
-    """`stdapi.models` registers its `pricing_overrides.MODEL_KEY_OVERRIDES` at import time."""
+    """`stdapi.models` registers its `pricing_overrides.MODEL_KEY_OVERRIDES` at import time.
+
+    Ref: stdapi/models/pricing_overrides.py:MODEL_KEY_OVERRIDES
+         stdapi/pricing.py:resolve_model_key
+    """
 
     def test_nova_2_lite_resolves_via_the_registered_override(self) -> None:
         """ "amazon.nova-2-lite-v1:0" must resolve to "nova20lite" via the registered table."""  # noqa: D210
@@ -2378,7 +2560,11 @@ class TestModelsPackageRegistersPricingOverrides:
 
 
 class TestDefaultModelPrices:
-    """Built-in pricing-page defaults: applied only to models with no published row."""
+    """Built-in pricing-page defaults: applied only to models with no published row.
+
+    Ref: stdapi/pricing.py:_apply_default_prices
+         stdapi/models/pricing_overrides.py:DEFAULT_MODEL_PRICES
+    """
 
     def test_gap_model_resolves_at_the_pricing_page_rate(
         self, monkeypatch: pytest.MonkeyPatch
@@ -2419,7 +2605,10 @@ class TestDefaultModelPrices:
     def test_operator_override_still_wins_over_defaults(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """cost_price_overrides must overwrite a built-in default price."""
+        """cost_price_overrides must overwrite a built-in default price.
+
+        Ref: stdapi/pricing.py:_apply_price_overrides
+        """
         monkeypatch.setattr(
             SETTINGS,
             "cost_price_overrides",
@@ -2440,7 +2629,10 @@ class TestDefaultModelPrices:
 
 
 class TestParseUnitScale:
-    """Scale-multiplier parsing from AWS Price List `unit` strings."""
+    """Scale-multiplier parsing from AWS Price List `unit` strings.
+
+    Ref: stdapi/pricing.py:parse_unit_scale
+    """
 
     @pytest.mark.parametrize(
         ("unit", "expected_scale"),
@@ -2478,7 +2670,10 @@ class TestParseUnitScale:
 
 
 class TestNormalizeUsagetypeModel:
-    """Model-key extraction from usagetype text for `model`-less price-list rows."""
+    """Model-key extraction from usagetype text for `model`-less price-list rows.
+
+    Ref: stdapi/pricing.py:normalize_usagetype_model
+    """
 
     def test_strips_the_mp_marker_and_its_duplicated_region_code(self) -> None:
         """Regression: "MP:<REGION>_..." usagetypes must strip both marker and region code."""
@@ -2495,7 +2690,10 @@ class TestNormalizeUsagetypeModel:
 
 
 class TestApplyPriceOverrides:
-    """Operator-supplied COST_PRICE_OVERRIDES validation."""
+    """Operator-supplied COST_PRICE_OVERRIDES validation.
+
+    Ref: stdapi/pricing.py:_apply_price_overrides
+    """
 
     def test_valid_override_is_applied_per_region_currency(
         self, monkeypatch: pytest.MonkeyPatch
@@ -2599,7 +2797,11 @@ class TestApplyPriceOverrides:
 
 
 class TestApplyRegionalFallback:
-    """Near-region-first backfill for models AWS hasn't priced in every region."""
+    """Near-region-first backfill for models AWS hasn't priced in every region.
+
+    Ref: stdapi/pricing.py:_apply_regional_fallback
+         stdapi/pricing.py:_FALLBACK_ANCHOR_REGIONS
+    """
 
     def test_same_geography_region_is_preferred(self) -> None:
         """eu-west-3 must fall back to another eu-* region before us-east-1."""
@@ -2706,7 +2908,10 @@ class TestApplyRegionalFallback:
         ],
     )
     def test_region_family_extracts_geo_prefix(self, region: str, family: str) -> None:
-        """Geo prefix is everything before the first hyphen."""
+        """Geo prefix is everything before the first hyphen.
+
+        Ref: stdapi/pricing.py:_region_family
+        """
         assert _region_family(region) == family
 
     @pytest.mark.parametrize(
@@ -2728,14 +2933,22 @@ class TestApplyRegionalFallback:
     def test_pricing_endpoint_follows_first_bedrock_region(
         self, monkeypatch: pytest.MonkeyPatch, bedrock_region: str, endpoint: str | None
     ) -> None:
-        """The endpoint matches the first configured Bedrock region's geography."""
+        """The endpoint matches the first configured Bedrock region's geography.
+
+        Ref: stdapi/pricing.py:pricing_endpoint_region
+             stdapi/pricing.py:_PRICING_ENDPOINT_BY_GEOGRAPHY
+        """
         monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", [bedrock_region])
         assert pricing.pricing_endpoint_region() == endpoint
 
     async def test_catalog_load_skips_partitions_without_endpoint(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """GovCloud: the load no-ops with a diagnostic instead of calling AWS."""
+        """GovCloud: the load no-ops with a diagnostic instead of calling AWS.
+
+        Ref: stdapi/pricing.py:_load_price_catalog
+             stdapi/pricing.py:_UNPRICED_PARTITIONS
+        """
         monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", ["us-gov-west-1"])
 
         def _no_client(*_args: object, **_kwargs: object) -> object:
@@ -2751,7 +2964,10 @@ class TestApplyRegionalFallback:
     async def test_overrides_still_apply_without_a_pricing_endpoint(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """GovCloud: operator cost_price_overrides remain the sole price source."""
+        """GovCloud: operator cost_price_overrides remain the sole price source.
+
+        Ref: stdapi/pricing.py:_apply_price_overrides
+        """
         monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", ["us-gov-west-1"])
         monkeypatch.setattr(
             SETTINGS,
@@ -2851,7 +3067,12 @@ class TestApplyRegionalFallback:
 
 
 class TestResolvePrice:
-    """Tier-aware price resolution."""
+    """Tier-aware price resolution.
+
+    Ref: stdapi/pricing.py:resolve_price
+         stdapi/pricing.py:_TIER_PRICE_RATIO
+         stdapi/pricing.py:_TIER_SCALED_DIMENSIONS
+    """
 
     def test_missing_tier_falls_back_to_standard_scaled_by_aws_ratio(
         self, monkeypatch: pytest.MonkeyPatch
@@ -3305,7 +3526,11 @@ class TestResolvePrice:
 
 
 class TestResolvePriceContext:
-    """Long-context resolve_price behavior: exact match, fallback, and tier-ratio interaction."""
+    """Long-context resolve_price behavior: exact match, fallback, and tier-ratio interaction.
+
+    Ref: stdapi/pricing.py:resolve_price
+         stdapi/pricing.py:_price_context
+    """
 
     def test_long_context_price_is_returned_when_indexed(
         self, monkeypatch: pytest.MonkeyPatch
@@ -3421,7 +3646,11 @@ class TestResolvePriceContext:
 
 
 class TestRefreshPriceCatalogForNewModels:
-    """On-demand price-catalog refresh triggered by newly discovered Bedrock models."""
+    """On-demand price-catalog refresh triggered by newly discovered Bedrock models.
+
+    Ref: stdapi/pricing.py:refresh_price_catalog_for_new_models
+         stdapi/pricing.py:is_model_priced
+    """
 
     def test_is_model_priced_reflects_current_index(
         self, monkeypatch: pytest.MonkeyPatch
@@ -3465,16 +3694,22 @@ class TestRefreshPriceCatalogForNewModels:
     async def test_no_reload_when_cost_tracking_disabled(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Must never reload the catalog when cost tracking is disabled."""
+        """Must never reload the catalog when cost tracking is disabled.
+
+        The model ID is deliberately unpriced, so only the ``cost_tracking``
+        guard can suppress the reload.
+        """
         monkeypatch.setattr(SETTINGS, "cost_tracking", False)
+        calls = 0
 
-        async def _fail(_diagnostics: list[str]) -> None:
-            pytest.fail(
-                "_load_price_catalog must not be called when cost_tracking is disabled"
-            )
+        async def _counting_load(_diagnostics: list[str]) -> None:
+            nonlocal calls
+            calls += 1
 
-        monkeypatch.setattr(pricing, "_load_price_catalog", _fail)
+        monkeypatch.setattr(pricing, "_load_price_catalog", _counting_load)
+        assert is_model_priced("amazon.some-model-v1:0") is False
         await refresh_price_catalog_for_new_models(["amazon.some-model-v1:0"])
+        assert calls == 0, "_load_price_catalog ran with cost tracking disabled"
 
     async def test_no_reload_when_every_model_already_priced(
         self, monkeypatch: pytest.MonkeyPatch
@@ -3493,14 +3728,16 @@ class TestRefreshPriceCatalogForNewModels:
             key,
             Price(Decimal("0.001"), "USD"),
         )
+        calls = 0
 
-        async def _fail(_diagnostics: list[str]) -> None:
-            pytest.fail(
-                "_load_price_catalog must not be called when all models are priced"
-            )
+        async def _counting_load(_diagnostics: list[str]) -> None:
+            nonlocal calls
+            calls += 1
 
-        monkeypatch.setattr(pricing, "_load_price_catalog", _fail)
+        monkeypatch.setattr(pricing, "_load_price_catalog", _counting_load)
+        assert is_model_priced("amazon.already-priced-model-v1:0") is True
         await refresh_price_catalog_for_new_models(["amazon.already-priced-model-v1:0"])
+        assert calls == 0, "_load_price_catalog ran for an already-priced model"
 
     async def test_reload_triggered_for_an_unpriced_model(
         self, monkeypatch: pytest.MonkeyPatch
@@ -3520,7 +3757,10 @@ class TestRefreshPriceCatalogForNewModels:
     async def test_no_reload_for_a_permanently_unpriced_model_within_the_cooldown(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A model a completed reload still couldn't price must not retrigger one right away."""
+        """A model a completed reload still couldn't price must not retrigger one right away.
+
+        Ref: stdapi/pricing.py:_UNPRICED_MODEL_COOLDOWN_NS
+        """
         monkeypatch.setattr(SETTINGS, "cost_tracking", True)
         calls = 0
 
@@ -3545,16 +3785,24 @@ class TestRefreshPriceCatalogForNewModels:
     ) -> None:
         """An empty model_ids iterable must never trigger a reload."""
         monkeypatch.setattr(SETTINGS, "cost_tracking", True)
+        calls = 0
 
-        async def _fail(_diagnostics: list[str]) -> None:
-            pytest.fail("_load_price_catalog must not be called with no model IDs")
+        async def _counting_load(_diagnostics: list[str]) -> None:
+            nonlocal calls
+            calls += 1
 
-        monkeypatch.setattr(pricing, "_load_price_catalog", _fail)
+        monkeypatch.setattr(pricing, "_load_price_catalog", _counting_load)
         await refresh_price_catalog_for_new_models([])
+        assert calls == 0, "_load_price_catalog ran with no model IDs"
 
 
 class TestStartPriceCatalogBackgroundLoad:
-    """start/stop_price_catalog: background load task lifecycle and logging."""
+    """start/stop_price_catalog: background load task lifecycle and logging.
+
+    Ref: stdapi/pricing.py:start_price_catalog
+         stdapi/pricing.py:stop_price_catalog
+         stdapi/pricing.py:_load_price_catalog_with_retry
+    """
 
     @pytest.fixture(autouse=True)
     async def _stop_task_after_test(self) -> AsyncIterator[None]:
@@ -3584,7 +3832,10 @@ class TestStartPriceCatalogBackgroundLoad:
     async def test_successful_load_logs_an_info_background_event(
         self, monkeypatch: pytest.MonkeyPatch, events: list[EventLog]
     ) -> None:
-        """A clean load completes the task and logs one info background event."""
+        """A clean load completes the task and logs one info background event.
+
+        Ref: stdapi/pricing.py:_log_price_catalog_event
+        """
         monkeypatch.setattr(SETTINGS, "cost_tracking", True)
 
         async def _load(_diagnostics: list[str]) -> None:
@@ -3743,7 +3994,11 @@ class TestStartPriceCatalogBackgroundLoad:
     async def test_backoff_delays_double_and_cap_at_the_maximum(
         self, monkeypatch: pytest.MonkeyPatch, events: list[EventLog]
     ) -> None:
-        """Retry delays double from the initial value and cap at the maximum."""
+        """Retry delays double from the initial value and cap at the maximum.
+
+        Ref: stdapi/pricing.py:_LOAD_RETRY_INITIAL_SECONDS
+             stdapi/pricing.py:_LOAD_RETRY_MAX_SECONDS
+        """
         monkeypatch.setattr(SETTINGS, "cost_tracking", True)
         real_sleep = asyncio.sleep  # Captured before the monkeypatch below.
         delays: list[float] = []
@@ -3775,7 +4030,10 @@ class TestStartPriceCatalogBackgroundLoad:
     async def test_shutdown_error_event_has_no_execution_time(
         self, events: list[EventLog]
     ) -> None:
-        """A task that already failed is logged at shutdown without execution_time_ms."""
+        """A task that already failed is logged at shutdown without execution_time_ms.
+
+        Ref: stdapi/pricing.py:_log_price_catalog_event
+        """
 
         async def _boom() -> None:
             msg = "boom"
@@ -3797,7 +4055,11 @@ class TestStartPriceCatalogBackgroundLoad:
     async def test_backoff_exits_when_a_refresh_completed_the_catalog(
         self, monkeypatch: pytest.MonkeyPatch, events: list[EventLog]
     ) -> None:
-        """The loop must not reload after an on-demand refresh completed the catalog."""
+        """The loop must not reload after an on-demand refresh completed the catalog.
+
+        Ref: stdapi/pricing.py:_PriceCatalogState
+             stdapi/pricing.py:refresh_price_catalog_for_new_models
+        """
         monkeypatch.setattr(SETTINGS, "cost_tracking", True)
         error_response = {"Error": {"Code": "ThrottlingException", "Message": "x"}}
         client = _FakePricingClient(
@@ -3873,6 +4135,10 @@ async def test_bedrock_model_pricing_coverage() -> None:
     ``normalize_usagetype_model``) -- those aren't surfaced here since the
     signal is too noisy to present usefully; if one of those shows up in
     UNPRICED MODELS, it needs manual investigation, not just a quick pairing.
+
+    Ref: stdapi/models/pricing_overrides.py:MODEL_KEY_OVERRIDES
+         stdapi/models/pricing_overrides.py:DEFAULT_MODEL_PRICES
+         stdapi/pricing.py:_MODEL_KEY_OVERRIDES
     """
     try:
         async with AWSConnectionManager(("sts", None)):
@@ -3890,6 +4156,10 @@ async def test_bedrock_model_pricing_coverage() -> None:
         await pricing._load_price_catalog([])  # noqa: SLF001
         registered = dict(models._MODELS)  # noqa: SLF001
         configured_regions = [str(r) for r in SETTINGS.aws_bedrock_regions]
+        # Without these two, an empty catalog or an empty model registry would
+        # make the whole coverage check below pass vacuously.
+        assert registered, "no Bedrock model was registered -- nothing was checked"
+        assert pricing._state.price_index, "the price catalog loaded no rows at all"  # noqa: SLF001
 
         # Some dimensions are only priced per spec bucket (image resolution/
         # quality, media modality) -- a spec-less lookup alone would wrongly
@@ -4034,7 +4304,11 @@ async def _unclaimed_bedrock_price_list_models(
 
 
 class TestModelPrices:
-    """model_prices(): filtered, sorted read of one model's price rows."""
+    """model_prices(): filtered, sorted read of one model's price rows.
+
+    Ref: stdapi/pricing.py:model_prices
+         stdapi/pricing.py:_row_sort_key
+    """
 
     @staticmethod
     def _seed(monkeypatch: pytest.MonkeyPatch) -> dict[PriceKey, Price]:
@@ -4164,11 +4438,21 @@ class TestModelPrices:
     def test_model_key_overrides_are_resolved(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """An aliased/overridden model ID reads the same rows."""
+        """An aliased/overridden model ID reads the same rows.
+
+        The alias shares no normalized key with "cardmodel", so identical rows
+        can only come from the override registry.
+
+        Ref: stdapi/pricing.py:resolve_model_key
+        """
         self._seed(monkeypatch)
+        assert normalize_model_key("vendor.other-alias-v9:9") != "cardmodel"
         pricing.register_model_key_overrides({"vendor.other-alias-v9:9": "cardmodel"})
         try:
-            assert len(pricing.model_prices("vendor.other-alias-v9:9")) == 7
+            aliased = pricing.model_prices("vendor.other-alias-v9:9")
+            assert len(aliased) == 7
+            assert all(key.model == "cardmodel" for key, _ in aliased)
+            assert aliased == pricing.model_prices("amazon.cardmodel-v1:0")
         finally:
             pricing._MODEL_KEY_OVERRIDES.pop("vendor.other-alias-v9:9", None)  # noqa: SLF001
 
@@ -4179,7 +4463,10 @@ class TestModelPrices:
 
 
 class TestModelPricesServiceDedupe:
-    """Rows registered under both Bedrock services collapse to one."""
+    """Rows registered under both Bedrock services collapse to one.
+
+    Ref: stdapi/pricing.py:_dedupe_service_rows
+    """
 
     @staticmethod
     def _seed_dual(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -4227,11 +4514,25 @@ class TestModelPricesServiceDedupe:
 
 
 class TestModelPricesGroupingCache:
-    """The per-model row grouping tracks price-index swaps."""
+    """The per-model row grouping tracks price-index swaps.
+
+    Ref: stdapi/pricing.py:_rows_by_model
+    """
 
     def test_prices_seeded_after_a_read_are_visible(self) -> None:
-        """A price added (index swap) after a first read appears in the next."""
+        """A price added (index swap) after a first read appears in the next.
+
+        The first read populates the grouping cache; a stale cache would keep
+        returning only the input-token row.
+        """
         set_test_price("cachedmodel", "us-east-1", Dimension.INPUT_TOKENS, "1", "USD")
-        assert len(pricing.model_prices("cachedmodel")) == 1
+        ((first_key, first_price),) = pricing.model_prices("cachedmodel")
+        assert first_key.dimension is Dimension.INPUT_TOKENS
+        assert first_price.amount == Decimal(1)
+
         set_test_price("cachedmodel", "us-east-1", Dimension.OUTPUT_TOKENS, "2", "USD")
-        assert len(pricing.model_prices("cachedmodel")) == 2
+        rows = pricing.model_prices("cachedmodel")
+        assert {(key.dimension, price.amount) for key, price in rows} == {
+            (Dimension.INPUT_TOKENS, Decimal(1)),
+            (Dimension.OUTPUT_TOKENS, Decimal(2)),
+        }

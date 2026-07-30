@@ -1,4 +1,7 @@
-"""Tests for the /health endpoint."""
+"""GET /health, the unauthenticated liveness probe.
+
+Ref: stdapi/routes/core_root.py:health_check
+"""
 
 from typing import TYPE_CHECKING
 
@@ -17,26 +20,49 @@ def client(test_client: TestClient | None) -> TestClient:
 
 
 class TestHealth:
-    """Tests for GET /health."""
+    """GET /health liveness contract.
+
+    Ref: stdapi/routes/core_root.py:health_check
+         stdapi/routes/core_root.py:HealthResponse
+    """
 
     def test_returns_200(self, client: TestClient) -> None:
         """GET /health returns HTTP 200."""
         assert client.get("/health").status_code == 200
 
     def test_response_body(self, client: TestClient) -> None:
-        """GET /health returns {"status": "ok"}."""
+        """GET /health returns exactly ``{"status": "ok"}``.
+
+        The route returns the ``HealthResponse`` dataclass whose only field
+        defaults to ``"ok"``; FastAPI serialises it with no extra envelope.
+        """
         assert client.get("/health").json() == {"status": "ok"}
 
     def test_json_content_type(self, client: TestClient) -> None:
-        """GET /health returns JSON content-type."""
+        """GET /health is served as ``application/json``."""
         response = client.get("/health")
         assert "application/json" in response.headers["content-type"]
+        assert response.json() == {"status": "ok"}
 
     def test_no_auth_required(self, client: TestClient) -> None:
-        """GET /health succeeds without an Authorization header."""
-        response = client.get("/health")
-        assert response.status_code == 200
+        """GET /health succeeds with no credentials and with invalid ones alike.
+
+        The route declares no ``Depends(authenticate)``, so an API key is
+        neither required nor validated: a deliberately wrong bearer token must
+        not turn into the 401 that authenticated routes return.
+
+        Ref: stdapi/auth.py:authenticate
+        """
+        anonymous = client.get("/health")
+        assert anonymous.status_code == 200
+        assert anonymous.json() == {"status": "ok"}
+
+        bad_key = client.get("/health", headers={"Authorization": "Bearer wrong-key"})
+        assert bad_key.status_code == 200
+        assert bad_key.json() == {"status": "ok"}
 
     def test_repeated_calls_consistent(self, client: TestClient) -> None:
-        """GET /health returns the same body across multiple calls."""
-        assert client.get("/health").json() == client.get("/health").json()
+        """GET /health is stateless: every call returns the same ``ok`` body."""
+        first = client.get("/health").json()
+        second = client.get("/health").json()
+        assert first == second == {"status": "ok"}

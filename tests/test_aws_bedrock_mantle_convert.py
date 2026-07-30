@@ -3,6 +3,16 @@
 Covers request, response and stream conversion between the three Mantle wire
 shapes (:mod:`stdapi.models.chat._mantle._convert`) and the passthrough
 payload builders, all without any network or AWS call.
+
+A Mantle model serves only a subset of these wire shapes, so the gateway converts
+client-side whenever the inbound API is not one the model supports. Cross-shape
+conversion always composes through the Chat Completions shape.
+
+Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html
+     https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+     https://developers.openai.com/api/reference/resources/responses/methods/create
+     https://platform.claude.com/docs/en/api/messages
+     stdapi/models/chat/_mantle/_convert.py
 """
 
 from __future__ import annotations
@@ -87,12 +97,23 @@ def _names(events: list[SseEvent]) -> list[str | None]:
 
 
 class TestChatToResponsesRequest:
-    """Chat Completions request payloads converted to the Responses shape."""
+    """Chat Completions request payloads converted to the Responses shape.
+
+    Ref: https://developers.openai.com/api/docs/guides/migrate-to-responses
+         stdapi/models/chat/_mantle/_convert.py:_chat_to_responses_request
+    """
 
     def test_system_and_string_user_message_produce_instructions_and_input(
         self,
     ) -> None:
-        """System text becomes instructions; a string user message stays a string."""
+        """System text becomes instructions; a string user message stays a string.
+
+        Responses has no ``system`` role, so that text is hoisted to the top-level
+        ``instructions`` field. A string ``content`` stays a string instead of being
+        expanded into an ``input_text`` part list.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_chat_messages_to_input
+        """
         payload = {
             "model": "m",
             "messages": [
@@ -105,7 +126,13 @@ class TestChatToResponsesRequest:
         assert out["input"] == [{"role": "user", "content": "Hello"}]
 
     def test_user_part_list_with_image_data_uri_becomes_input_image(self) -> None:
-        """A user text+image part list converts to input_text/input_image parts."""
+        """A user text+image part list converts to input_text/input_image parts.
+
+        Responses flattens the nested ``image_url`` object: the URL becomes the part's
+        ``image_url`` string and ``detail`` becomes a sibling field.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_input_parts_from_chat
+        """
         payload = {
             "model": "m",
             "messages": [
@@ -140,7 +167,14 @@ class TestChatToResponsesRequest:
         ]
 
     def test_assistant_message_with_tool_calls_and_content(self) -> None:
-        """An assistant message yields a text item and a function_call item."""
+        """An assistant message yields a text item and a function_call item.
+
+        Responses has no per-message ``tool_calls`` array: every call becomes its own
+        top-level ``function_call`` item, emitted after the assistant text item.
+
+        Ref: https://developers.openai.com/api/docs/guides/function-calling
+             stdapi/models/chat/_mantle/_convert.py:_input_items_from_chat_assistant
+        """
         payload = {
             "model": "m",
             "messages": [
@@ -172,7 +206,11 @@ class TestChatToResponsesRequest:
         ]
 
     def test_tool_message_becomes_function_call_output(self) -> None:
-        """A tool-role message becomes a function_call_output item."""
+        """A tool-role message becomes a function_call_output item.
+
+        Ref: https://developers.openai.com/api/docs/guides/function-calling
+             stdapi/models/chat/_mantle/_convert.py:_chat_messages_to_input
+        """
         payload = {
             "model": "m",
             "messages": [{"role": "tool", "tool_call_id": "call_1", "content": "72F"}],
@@ -183,7 +221,13 @@ class TestChatToResponsesRequest:
         ]
 
     def test_function_tool_converted_non_function_tool_dropped(self) -> None:
-        """Only ``function``-typed tools survive conversion to Responses tools."""
+        """Only ``function``-typed tools survive conversion to Responses tools.
+
+        A Chat Completions ``custom`` tool has no Responses analogue, so it is dropped
+        rather than forwarded with a type upstream would reject.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_responses_tools_from_chat
+        """
         payload = {
             "model": "m",
             "messages": [],
@@ -222,7 +266,11 @@ class TestChatToResponsesRequest:
     def test_tool_choice_forms(
         self, tool_choice: str | dict[str, Any], expected: str | dict[str, Any]
     ) -> None:
-        """``auto`` passes through; a named function choice becomes flat."""
+        """``auto`` passes through; a named function choice becomes flat.
+
+        Ref: https://developers.openai.com/api/docs/guides/function-calling#tool-choice
+             stdapi/models/chat/_mantle/_convert.py:_responses_tool_choice_from_chat
+        """
         payload: dict[str, Any] = {
             "model": "m",
             "messages": [],
@@ -232,7 +280,11 @@ class TestChatToResponsesRequest:
         assert out["tool_choice"] == expected
 
     def test_response_format_json_object(self) -> None:
-        """``response_format: json_object`` becomes ``text.format: json_object``."""
+        """``response_format: json_object`` becomes ``text.format: json_object``.
+
+        Ref: https://developers.openai.com/api/docs/guides/structured-outputs
+             stdapi/models/chat/_mantle/_convert.py:_text_format_from_response_format
+        """
         payload = {
             "model": "m",
             "messages": [],
@@ -242,7 +294,14 @@ class TestChatToResponsesRequest:
         assert out["text"]["format"] == {"type": "json_object"}
 
     def test_response_format_json_schema(self) -> None:
-        """``response_format: json_schema`` becomes a flat ``text.format`` value."""
+        """``response_format: json_schema`` becomes a flat ``text.format`` value.
+
+        Responses drops the ``json_schema`` wrapper object: ``name``, ``schema`` and
+        ``strict`` sit directly on ``text.format`` beside its ``type``.
+
+        Ref: https://developers.openai.com/api/docs/guides/structured-outputs
+             stdapi/models/chat/_mantle/_convert.py:_text_format_from_response_format
+        """
         payload = {
             "model": "m",
             "messages": [],
@@ -270,10 +329,20 @@ class TestChatToResponsesRequest:
 
 
 class TestChatToMessagesRequestRich:
-    """Chat Completions request payloads converted to the Anthropic shape."""
+    """Chat Completions request payloads converted to the Anthropic shape.
+
+    Ref: https://platform.claude.com/docs/en/api/messages
+         stdapi/models/chat/_mantle/_convert.py:_chat_to_messages_request
+    """
 
     def test_system_and_developer_messages_join_as_system_text(self) -> None:
-        """System and developer message text join into the Anthropic system."""
+        """System and developer message text join into the Anthropic system.
+
+        Anthropic has neither a ``system`` nor a ``developer`` message role, so both are
+        hoisted into the top-level ``system`` field and joined by a blank line.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_chat_to_messages_request
+        """
         payload = {
             "model": "m",
             "messages": [
@@ -289,7 +358,13 @@ class TestChatToMessagesRequestRich:
         ]
 
     def test_user_part_list_with_image_data_uri(self) -> None:
-        """A user image_url data URI part becomes a base64 Anthropic image block."""
+        """A user image_url data URI part becomes a base64 Anthropic image block.
+
+        Anthropic takes the media type and the raw base64 as separate ``source`` members,
+        so the ``data:`` URI has to be split rather than forwarded.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_anthropic_image_block
+        """
         payload = {
             "model": "m",
             "messages": [
@@ -315,7 +390,14 @@ class TestChatToMessagesRequestRich:
         ]
 
     def test_assistant_message_with_tool_calls_and_text(self) -> None:
-        """Assistant text and tool calls both convert into Anthropic blocks."""
+        """Assistant text and tool calls both convert into Anthropic blocks.
+
+        ``tool_calls[].function.arguments`` is a JSON *string* on the OpenAI wire while
+        Anthropic's ``tool_use.input`` is a decoded object.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_anthropic_blocks_from_chat_assistant
+             stdapi/models/chat/_mantle/_convert.py:_json_object
+        """
         payload = {
             "model": "m",
             "messages": [
@@ -342,7 +424,13 @@ class TestChatToMessagesRequestRich:
         }
 
     def test_tool_message_becomes_tool_result_block(self) -> None:
-        """A tool-role message becomes a user turn carrying a tool_result block."""
+        """A tool-role message becomes a user turn carrying a tool_result block.
+
+        Anthropic has no ``tool`` role: results are ``tool_result`` blocks inside a user
+        turn.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_anthropic_messages_from_chat
+        """
         payload = {
             "model": "m",
             "messages": [
@@ -362,7 +450,13 @@ class TestChatToMessagesRequestRich:
         }
 
     def test_consecutive_same_role_messages_merge_into_one_turn(self) -> None:
-        """A user message directly followed by a tool message merge into one turn."""
+        """A user message directly followed by a tool message merge into one turn.
+
+        Anthropic requires alternating roles, and a tool result is a user-turn block, so
+        it has to be appended to the preceding user turn instead of opening a new one.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_append_anthropic_turn
+        """
         payload = {
             "model": "m",
             "messages": [
@@ -382,31 +476,53 @@ class TestChatToMessagesRequestRich:
         ]
 
     def test_temperature_clamped_to_one(self) -> None:
-        """A temperature above the Anthropic range is clamped to 1.0."""
+        """A temperature above the Anthropic range is clamped to 1.0.
+
+        Chat Completions accepts ``temperature`` up to 2.0 while Anthropic caps it at 1.0;
+        the value is clamped so a legal inbound request is not turned into an upstream 400.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+             stdapi/models/chat/_mantle/_convert.py:_chat_to_messages_request
+        """
         payload = {"model": "m", "messages": [], "temperature": 1.5}
         out = mantle_convert._chat_to_messages_request(payload)  # noqa: SLF001
         assert out["temperature"] == 1.0
 
     def test_stop_string_becomes_single_element_list(self) -> None:
-        """A single stop string becomes a one-element ``stop_sequences`` list."""
+        """A single stop string becomes a one-element ``stop_sequences`` list.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_chat_to_messages_request
+        """
         payload = {"model": "m", "messages": [], "stop": "STOP"}
         out = mantle_convert._chat_to_messages_request(payload)  # noqa: SLF001
         assert out["stop_sequences"] == ["STOP"]
 
     def test_stop_list_passthrough(self) -> None:
-        """A stop list passes through unchanged as ``stop_sequences``."""
+        """A stop list passes through unchanged as ``stop_sequences``.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_chat_to_messages_request
+        """
         payload = {"model": "m", "messages": [], "stop": ["A", "B"]}
         out = mantle_convert._chat_to_messages_request(payload)  # noqa: SLF001
         assert out["stop_sequences"] == ["A", "B"]
 
     def test_user_field_becomes_metadata_user_id(self) -> None:
-        """The ``user`` field maps to Anthropic ``metadata.user_id``."""
+        """The ``user`` field maps to Anthropic ``metadata.user_id``.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_chat_to_messages_request
+        """
         payload = {"model": "m", "messages": [], "user": "user-123"}
         out = mantle_convert._chat_to_messages_request(payload)  # noqa: SLF001
         assert out["metadata"] == {"user_id": "user-123"}
 
     def test_tool_without_parameters_gets_default_object_schema(self) -> None:
-        """A function tool without ``parameters`` gets a default object schema."""
+        """A function tool without ``parameters`` gets a default object schema.
+
+        ``input_schema`` is required by Anthropic, so a parameterless function tool gets a
+        bare object schema rather than being dropped.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_anthropic_tools_from_chat
+        """
         payload = {
             "model": "m",
             "messages": [],
@@ -430,7 +546,11 @@ class TestChatToMessagesRequestRich:
     def test_tool_choice_forms(
         self, tool_choice: str | dict[str, Any], expected: dict[str, Any]
     ) -> None:
-        """Each Chat Completions tool choice form maps to its Anthropic shape."""
+        """Each Chat Completions tool choice form maps to its Anthropic shape.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools#forcing-tool-use
+             stdapi/models/chat/_mantle/_convert.py:_anthropic_tool_choice_from_chat
+        """
         payload: dict[str, Any] = {
             "model": "m",
             "messages": [],
@@ -456,7 +576,15 @@ class TestChatToMessagesRequestRich:
     def test_parallel_tool_calls_false_disables_parallel_tool_use(
         self, tool_choice: str | dict[str, Any] | None, expected: dict[str, Any]
     ) -> None:
-        """``parallel_tool_calls: false`` maps to ``disable_parallel_tool_use``."""
+        """``parallel_tool_calls: false`` maps to ``disable_parallel_tool_use``.
+
+        Anthropic expresses the constraint as a flag on ``tool_choice`` instead of a
+        top-level field, so a choice has to be synthesised when the caller sent none.
+        Anthropic's ``none`` choice has no such flag, which is why it is parametrised apart.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools#forcing-tool-use
+             stdapi/models/chat/_mantle/_convert.py:_anthropic_tool_choice_from_chat
+        """
         payload: dict[str, Any] = {
             "model": "m",
             "messages": [],
@@ -469,19 +597,35 @@ class TestChatToMessagesRequestRich:
         assert out["tool_choice"] == expected
 
     def test_parallel_tool_calls_false_without_tools_adds_no_choice(self) -> None:
-        """Without tools the synthesised ``auto`` tool choice is not emitted."""
+        """Without tools the synthesised ``auto`` tool choice is not emitted.
+
+        A ``tool_choice`` without ``tools`` is rejected upstream, so the synthesised choice
+        is suppressed entirely.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools#forcing-tool-use
+             stdapi/models/chat/_mantle/_convert.py:_anthropic_tool_choice_from_chat
+        """
         payload = {"model": "m", "messages": [], "parallel_tool_calls": False}
         out = mantle_convert._chat_to_messages_request(payload)  # noqa: SLF001
         assert "tool_choice" not in out
 
     def test_unknown_role_ignored(self) -> None:
-        """A message with an unrecognized role produces no turn."""
+        """A message with an unrecognized role produces no turn.
+
+        Skipping keeps the turn list valid: forwarding an unknown role would make Anthropic
+        reject the whole request.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_anthropic_messages_from_chat
+        """
         payload = {"model": "m", "messages": [{"role": "foo", "content": "bar"}]}
         out = mantle_convert._chat_to_messages_request(payload)  # noqa: SLF001
         assert out["messages"] == []
 
     def test_http_image_url_becomes_url_source(self) -> None:
-        """A non-data-URI image URL becomes an Anthropic ``url`` source."""
+        """A non-data-URI image URL becomes an Anthropic ``url`` source.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_anthropic_image_block
+        """
         payload = {
             "model": "m",
             "messages": [
@@ -505,7 +649,14 @@ class TestChatToMessagesRequestRich:
         ]
 
     def test_max_tokens_defaults_when_absent(self) -> None:
-        """Missing token limits fall back to the default max_tokens."""
+        """Missing token limits fall back to the default max_tokens.
+
+        ``max_tokens`` is required by Anthropic but optional for Chat Completions, so the
+        converter injects the module default instead of letting upstream reject the request.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_chat_to_messages_request
+             stdapi/models/chat/_mantle/_convert.py:_DEFAULT_MAX_TOKENS
+        """
         payload = {"model": "m", "messages": []}
         out = mantle_convert._chat_to_messages_request(payload)  # noqa: SLF001
         assert out["max_tokens"] == 4096
@@ -517,10 +668,21 @@ class TestChatToMessagesRequestRich:
 
 
 class TestMessagesToChatRequestEdges:
-    """Anthropic Messages request payloads converted to the Chat Completions shape."""
+    """Anthropic Messages request payloads converted to the Chat Completions shape.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+         stdapi/models/chat/_mantle/_convert.py:_messages_to_chat_request
+    """
 
     def test_system_block_list_becomes_chat_system_message(self) -> None:
-        """A list-of-blocks system prompt joins into a single system message."""
+        """A list-of-blocks system prompt joins into a single system message.
+
+        Block texts are concatenated without a separator and emitted as the single leading
+        ``system`` message.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_messages_to_chat_request
+             stdapi/models/chat/_mantle/_convert.py:_anthropic_text
+        """
         payload = {
             "model": "m",
             "system": [{"type": "text", "text": "a"}, {"type": "text", "text": "b"}],
@@ -530,7 +692,15 @@ class TestMessagesToChatRequestEdges:
         assert out["messages"][0] == {"role": "system", "content": "ab"}
 
     def test_user_turn_with_mixed_blocks_keeps_all_parts(self) -> None:
-        """User turns keep text, base64 image, URL image and base64 document parts."""
+        """User turns keep text, base64 image, URL image and base64 document parts.
+
+        Base64 sources are re-encoded as ``data:`` URIs, the only inline form Chat
+        Completions accepts, while a URL source is forwarded as the URL itself.
+
+        Ref: https://developers.openai.com/api/docs/guides/file-inputs
+             stdapi/models/chat/_mantle/_convert.py:_chat_part_from_anthropic_image
+             stdapi/models/chat/_mantle/_convert.py:_chat_part_from_anthropic_document
+        """
         payload = {
             "model": "m",
             "messages": [
@@ -580,7 +750,15 @@ class TestMessagesToChatRequestEdges:
         }
 
     def test_document_url_source_has_no_equivalent_and_is_dropped(self) -> None:
-        """A ``document`` block with a URL source has no mapping and is dropped."""
+        """A ``document`` block with a URL source has no mapping and is dropped.
+
+        A Chat Completions ``file`` part carries inline ``file_data`` or a stored
+        ``file_id``, never a URL, so the block is unmappable and the emptied turn is
+        dropped with it.
+
+        Ref: https://developers.openai.com/api/docs/guides/file-inputs
+             stdapi/models/chat/_mantle/_convert.py:_chat_part_from_anthropic_document
+        """
         payload = {
             "model": "m",
             "messages": [
@@ -599,7 +777,10 @@ class TestMessagesToChatRequestEdges:
         assert out["messages"] == []
 
     def test_assistant_turn_with_tool_use_and_text(self) -> None:
-        """An assistant turn's text and tool_use block convert to message+tool_calls."""
+        """An assistant turn's text and tool_use block convert to message+tool_calls.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_chat_messages_from_anthropic_turn
+        """
         payload = {
             "model": "m",
             "messages": [
@@ -631,7 +812,13 @@ class TestMessagesToChatRequestEdges:
         }
 
     def test_assistant_turn_with_image_block_drops_non_text_content(self) -> None:
-        """Assistant turns keep only text; image/document parts are dropped."""
+        """Assistant turns keep only text; image/document parts are dropped.
+
+        Chat Completions assistant messages carry text and refusals only; image and
+        document parts are legal for user messages.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_assemble_chat_message
+        """
         payload = {
             "model": "m",
             "messages": [
@@ -655,7 +842,13 @@ class TestMessagesToChatRequestEdges:
         assert out["messages"][0] == {"role": "assistant", "content": "Here"}
 
     def test_tool_result_block_becomes_tool_message_before_turn(self) -> None:
-        """A tool_result block emits a ``tool`` message ahead of the rest of the turn."""
+        """A tool_result block emits a ``tool`` message ahead of the rest of the turn.
+
+        Chat Completions requires the tool output in its own ``tool`` message, so a turn
+        mixing a result with text splits into two messages, result first.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_chat_messages_from_anthropic_turn
+        """
         payload = {
             "model": "m",
             "messages": [
@@ -679,7 +872,15 @@ class TestMessagesToChatRequestEdges:
         ]
 
     def test_metadata_user_id_over_64_chars_is_hashed(self) -> None:
-        """A user ID over 64 characters is replaced by its SHA-256 hex digest."""
+        """A user ID over 64 characters is replaced by its SHA-256 hex digest.
+
+        OpenAI caps ``user`` at 64 characters while Anthropic's ``metadata.user_id`` is not
+        capped; hashing keeps the value stable per original ID instead of truncating it
+        into a collision.
+
+        Ref: https://developers.openai.com/api/docs/guides/safety-best-practices#implement-safety-identifiers
+             stdapi/models/chat/_mantle/_convert.py:_openai_user
+        """
         long_id = "u" * 70
         payload = {"model": "m", "messages": [], "metadata": {"user_id": long_id}}
         out = mantle_convert._messages_to_chat_request(payload)  # noqa: SLF001
@@ -688,13 +889,22 @@ class TestMessagesToChatRequestEdges:
         assert len(out["user"]) == 64
 
     def test_metadata_user_id_under_64_chars_passthrough(self) -> None:
-        """A user ID within the OpenAI limit passes through unchanged."""
+        """A user ID within the OpenAI limit passes through unchanged.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_openai_user
+        """
         payload = {"model": "m", "messages": [], "metadata": {"user_id": "u1"}}
         out = mantle_convert._messages_to_chat_request(payload)  # noqa: SLF001
         assert out["user"] == "u1"
 
     def test_tool_without_input_schema_is_skipped(self) -> None:
-        """A tool missing the ``input_schema`` key is dropped from the output."""
+        """A tool missing the ``input_schema`` key is dropped from the output.
+
+        ``input_schema`` is mandatory on an Anthropic tool, so a tool lacking it is
+        malformed and skipped rather than forwarded with a fabricated schema.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_chat_tools_from_anthropic
+        """
         payload = {
             "model": "m",
             "messages": [],
@@ -707,7 +917,10 @@ class TestMessagesToChatRequestEdges:
         assert [tool["function"]["name"] for tool in out["tools"]] == ["good"]
 
     def test_tool_description_forwarded(self) -> None:
-        """A tool's description is forwarded to the Chat Completions shape."""
+        """A tool's description is forwarded to the Chat Completions shape.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_chat_tools_from_anthropic
+        """
         payload = {
             "model": "m",
             "messages": [],
@@ -744,13 +957,23 @@ class TestMessagesToChatRequestEdges:
     def test_tool_choice_forms(
         self, tool_choice: dict[str, Any], expected: str | dict[str, Any]
     ) -> None:
-        """Each Anthropic tool choice type maps to its Chat Completions shape."""
+        """Each Anthropic tool choice type maps to its Chat Completions shape.
+
+        Ref: https://developers.openai.com/api/docs/guides/function-calling#tool-choice
+             stdapi/models/chat/_mantle/_convert.py:_chat_tool_choice_from_anthropic
+        """
         payload = {"model": "m", "messages": [], "tool_choice": tool_choice}
         out = mantle_convert._messages_to_chat_request(payload)  # noqa: SLF001
         assert out["tool_choice"] == expected
 
     def test_disable_parallel_tool_use_becomes_parallel_tool_calls(self) -> None:
-        """``disable_parallel_tool_use`` maps to ``parallel_tool_calls: false``."""
+        """``disable_parallel_tool_use`` maps to ``parallel_tool_calls: false``.
+
+        Anthropic hangs the flag off ``tool_choice`` while Chat Completions has a
+        top-level field, so the single inbound object produces two outbound fields.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_chat_tool_choice_from_anthropic
+        """
         payload = {
             "model": "m",
             "messages": [],
@@ -765,13 +988,22 @@ class TestMessagesToChatRequestEdges:
         assert out["parallel_tool_calls"] is False
 
     def test_parallel_tool_use_left_enabled(self) -> None:
-        """Without ``disable_parallel_tool_use`` no ``parallel_tool_calls`` is set."""
+        """Without ``disable_parallel_tool_use`` no ``parallel_tool_calls`` is set.
+
+        Parallel tool use is the default on both APIs, so nothing is emitted when the
+        inbound flag is absent.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_chat_tool_choice_from_anthropic
+        """
         payload = {"model": "m", "messages": [], "tool_choice": {"type": "auto"}}
         out = mantle_convert._messages_to_chat_request(payload)  # noqa: SLF001
         assert "parallel_tool_calls" not in out
 
     def test_stop_sequences_become_stop(self) -> None:
-        """``stop_sequences`` maps to the Chat Completions ``stop`` field."""
+        """``stop_sequences`` maps to the Chat Completions ``stop`` field.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_messages_to_chat_request
+        """
         payload = {"model": "m", "messages": [], "stop_sequences": ["END"]}
         out = mantle_convert._messages_to_chat_request(payload)  # noqa: SLF001
         assert out["stop"] == ["END"]
@@ -783,10 +1015,17 @@ class TestMessagesToChatRequestEdges:
 
 
 class TestResponsesToChatRequestBranches:
-    """Responses API request payloads converted to the Chat Completions shape."""
+    """Responses API request payloads converted to the Chat Completions shape.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+         stdapi/models/chat/_mantle/_convert.py:_responses_to_chat_request
+    """
 
     def test_instructions_and_string_input_become_messages(self) -> None:
-        """Instructions become a system message; a string input becomes user text."""
+        """Instructions become a system message; a string input becomes user text.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_responses_to_chat_request
+        """
         payload = {"model": "m", "instructions": "Be terse.", "input": "Hi"}
         out = mantle_convert._responses_to_chat_request(payload)  # noqa: SLF001
         assert out["messages"] == [
@@ -795,7 +1034,11 @@ class TestResponsesToChatRequestBranches:
         ]
 
     def test_function_call_item_becomes_assistant_tool_call(self) -> None:
-        """A ``function_call`` input item becomes an assistant tool_calls message."""
+        """A ``function_call`` input item becomes an assistant tool_calls message.
+
+        Ref: https://developers.openai.com/api/docs/guides/function-calling
+             stdapi/models/chat/_mantle/_convert.py:_chat_messages_from_input_item
+        """
         payload = {
             "model": "m",
             "input": [
@@ -822,7 +1065,14 @@ class TestResponsesToChatRequestBranches:
         ]
 
     def test_parallel_function_calls_share_one_assistant_message(self) -> None:
-        """Consecutive ``function_call`` items merge into one assistant message."""
+        """Consecutive ``function_call`` items merge into one assistant message.
+
+        Responses lists parallel calls as separate items while Chat Completions groups them
+        in one assistant message; without coalescing, the second call would open a new
+        assistant message and the tool outputs would no longer follow their calls.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_append_chat_message
+        """
         payload = {
             "model": "m",
             "input": [
@@ -856,7 +1106,10 @@ class TestResponsesToChatRequestBranches:
         ]
 
     def test_function_call_output_item_becomes_tool_message(self) -> None:
-        """A ``function_call_output`` input item becomes a ``tool`` message."""
+        """A ``function_call_output`` input item becomes a ``tool`` message.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_chat_messages_from_input_item
+        """
         payload = {
             "model": "m",
             "input": [
@@ -873,7 +1126,13 @@ class TestResponsesToChatRequestBranches:
         ]
 
     def test_function_call_output_with_part_list_output(self) -> None:
-        """A part-list ``function_call_output.output`` is flattened to plain text."""
+        """A part-list ``function_call_output.output`` is flattened to plain text.
+
+        Chat Completions ``tool`` message content is a plain string, so a part list has to
+        be collapsed rather than forwarded.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_responses_text
+        """
         payload = {
             "model": "m",
             "input": [
@@ -888,7 +1147,11 @@ class TestResponsesToChatRequestBranches:
         assert out["messages"][0]["content"] == "42"
 
     def test_input_image_and_input_file_parts_become_chat_parts(self) -> None:
-        """``input_image``/``input_file`` parts convert to ``image_url``/``file``."""
+        """``input_image``/``input_file`` parts convert to ``image_url``/``file``.
+
+        Ref: https://developers.openai.com/api/docs/guides/file-inputs
+             stdapi/models/chat/_mantle/_convert.py:_chat_part_from_input
+        """
         payload = {
             "model": "m",
             "input": [
@@ -925,7 +1188,14 @@ class TestResponsesToChatRequestBranches:
         ]
 
     def test_input_file_without_file_data_is_dropped(self) -> None:
-        """An ``input_file`` part without inline ``file_data`` has no mapping."""
+        """An ``input_file`` part without inline ``file_data`` has no mapping.
+
+        A bare ``file_id`` refers to an OpenAI-hosted file that Mantle cannot resolve, so
+        the part is unmappable and the emptied turn is dropped with it.
+
+        Ref: https://developers.openai.com/api/docs/guides/file-inputs
+             stdapi/models/chat/_mantle/_convert.py:_chat_part_from_input
+        """
         payload = {
             "model": "m",
             "input": [
@@ -939,19 +1209,30 @@ class TestResponsesToChatRequestBranches:
         assert out["messages"] == []
 
     def test_max_output_tokens_becomes_max_completion_tokens(self) -> None:
-        """``max_output_tokens`` maps to ``max_completion_tokens``."""
+        """``max_output_tokens`` maps to ``max_completion_tokens``.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_responses_to_chat_request
+        """
         payload = {"model": "m", "input": "hi", "max_output_tokens": 500}
         out = mantle_convert._responses_to_chat_request(payload)  # noqa: SLF001
         assert out["max_completion_tokens"] == 500
 
     def test_reasoning_effort_forwarded(self) -> None:
-        """``reasoning.effort`` maps to the flat ``reasoning_effort`` field."""
+        """``reasoning.effort`` maps to the flat ``reasoning_effort`` field.
+
+        Ref: https://developers.openai.com/api/docs/guides/reasoning
+             stdapi/models/chat/_mantle/_convert.py:_responses_to_chat_request
+        """
         payload = {"model": "m", "input": "hi", "reasoning": {"effort": "low"}}
         out = mantle_convert._responses_to_chat_request(payload)  # noqa: SLF001
         assert out["reasoning_effort"] == "low"
 
     def test_text_format_json_object(self) -> None:
-        """``text.format: json_object`` maps to ``response_format: json_object``."""
+        """``text.format: json_object`` maps to ``response_format: json_object``.
+
+        Ref: https://developers.openai.com/api/docs/guides/structured-outputs
+             stdapi/models/chat/_mantle/_convert.py:_response_format_from_text
+        """
         payload = {
             "model": "m",
             "input": "hi",
@@ -961,7 +1242,14 @@ class TestResponsesToChatRequestBranches:
         assert out["response_format"] == {"type": "json_object"}
 
     def test_text_format_json_schema(self) -> None:
-        """``text.format: json_schema`` maps to a nested ``response_format``."""
+        """``text.format: json_schema`` maps to a nested ``response_format``.
+
+        Chat Completions keeps the ``json_schema`` wrapper that Responses flattens, so the
+        name, schema, strict and description fields move back down one level.
+
+        Ref: https://developers.openai.com/api/docs/guides/structured-outputs
+             stdapi/models/chat/_mantle/_convert.py:_response_format_from_text
+        """
         payload = {
             "model": "m",
             "input": "hi",
@@ -987,7 +1275,12 @@ class TestResponsesToChatRequestBranches:
         }
 
     def test_tools_and_named_tool_choice(self) -> None:
-        """Flat Responses tools/tool_choice map to their nested Chat shapes."""
+        """Flat Responses tools/tool_choice map to their nested Chat shapes.
+
+        Ref: https://developers.openai.com/api/docs/guides/function-calling#tool-choice
+             stdapi/models/chat/_mantle/_convert.py:_chat_tools_from_responses
+             stdapi/models/chat/_mantle/_convert.py:_chat_tool_choice_from_responses
+        """
         payload = {
             "model": "m",
             "input": "hi",
@@ -1023,10 +1316,21 @@ class TestResponsesToChatRequestBranches:
 
 
 class TestNonStreamResponseConversions:
-    """Complete-response conversion between the three Mantle wire shapes."""
+    """Complete-response conversion between the three Mantle wire shapes.
+
+    Ref: stdapi/models/chat/_mantle/_convert.py:convert_response
+    """
 
     def test_chat_to_responses_response(self) -> None:
-        """Chat text, tool calls and usage convert to Responses output items."""
+        """Chat text, tool calls and usage convert to Responses output items.
+
+        The upstream ID token is reused so the two shapes stay correlatable:
+        ``chatcmpl-abc123`` becomes ``resp_abc123`` and every output item ID is derived
+        from it.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_chat_to_responses_response
+             stdapi/models/chat/_mantle/_convert.py:_id_token
+        """
         raw = {
             "id": "chatcmpl-abc123",
             "created": 1000,
@@ -1087,7 +1391,15 @@ class TestNonStreamResponseConversions:
         }
 
     def test_reasoning_tokens_survive_both_usage_directions(self) -> None:
-        """Reasoning tokens are carried over in both usage conversions."""
+        """Reasoning tokens are carried over in both usage conversions.
+
+        The two usage converters round-trip the fields both shapes carry; the added
+        ``cached_tokens: 0`` is the Chat Completions shape's mandatory counterpart to
+        ``input_tokens_details``.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_responses_usage_from_chat
+             stdapi/models/chat/_mantle/_convert.py:_chat_usage_from_responses
+        """
         chat_usage = {
             "prompt_tokens": 10,
             "completion_tokens": 5,
@@ -1105,7 +1417,11 @@ class TestNonStreamResponseConversions:
         }
 
     def test_chat_to_messages_response(self) -> None:
-        """Chat text, tool calls and usage convert to Anthropic content blocks."""
+        """Chat text, tool calls and usage convert to Anthropic content blocks.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_chat_to_messages_response
+             stdapi/models/chat/_mantle/_convert.py:_FINISH_TO_STOP
+        """
         raw = {
             "id": "chatcmpl-abc123",
             "model": "m",
@@ -1143,7 +1459,15 @@ class TestNonStreamResponseConversions:
         }
 
     def test_messages_to_chat_response_with_tool_use_and_cache_usage(self) -> None:
-        """Anthropic text, tool_use and cache usage convert to CC choice/usage."""
+        """Anthropic text, tool_use and cache usage convert to CC choice/usage.
+
+        Anthropic reports cache reads and writes outside ``input_tokens`` while OpenAI's
+        ``prompt_tokens`` includes cached tokens, so the counters are added back in
+        (8 + 4 + 1 = 13) and the cached share is echoed in ``prompt_tokens_details``.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+             stdapi/models/chat/_mantle/_convert.py:_chat_usage_from_messages
+        """
         raw = {
             "id": "msg_xyz789",
             "model": "m",
@@ -1189,7 +1513,11 @@ class TestNonStreamResponseConversions:
     def test_messages_to_chat_response_stop_reason_mapped_without_tool_use(
         self,
     ) -> None:
-        """Without tool_use blocks, the finish reason follows ``stop_reason``."""
+        """Without tool_use blocks, the finish reason follows ``stop_reason``.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_messages_to_chat_response
+             stdapi/models/chat/_mantle/_convert.py:_STOP_TO_FINISH
+        """
         raw = {
             "id": "msg_1",
             "model": "m",
@@ -1202,10 +1530,20 @@ class TestNonStreamResponseConversions:
 
 
 class TestFinishFromResponse:
-    """Chat Completions finish reason derivation from a Responses response."""
+    """Chat Completions finish reason derivation from a Responses response.
+
+    Ref: stdapi/models/chat/_mantle/_convert.py:_finish_from_response
+    """
 
     def test_function_call_output_item_forces_tool_calls(self) -> None:
-        """A ``function_call`` output item forces the ``tool_calls`` finish reason."""
+        """A ``function_call`` output item forces the ``tool_calls`` finish reason.
+
+        A pending call in the output overrides the response status: a completed Responses
+        response carrying a tool call would otherwise finish as ``stop``, and the client
+        would never run the tool.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_finish_from_response
+        """
         response = {"output": [{"type": "function_call", "name": "f"}]}
         result = mantle_convert._finish_from_response(  # noqa: SLF001
             response, has_tool_calls=False
@@ -1213,7 +1551,11 @@ class TestFinishFromResponse:
         assert result == "tool_calls"
 
     def test_incomplete_max_output_tokens_maps_to_length(self) -> None:
-        """An incomplete response with ``max_output_tokens`` maps to ``length``."""
+        """An incomplete response with ``max_output_tokens`` maps to ``length``.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_finish_from_response
+             stdapi/models/chat/_mantle/_convert.py:_INCOMPLETE_TO_FINISH
+        """
         response = {
             "output": [],
             "status": "incomplete",
@@ -1231,7 +1573,11 @@ class TestFinishFromResponse:
 
 
 class TestChatToResponsesStream:
-    """Chat Completions SSE chunks converted to a Responses SSE stream."""
+    """Chat Completions SSE chunks converted to a Responses SSE stream.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+         stdapi/models/chat/_mantle/_convert.py:_chat_stream_to_responses
+    """
 
     def _cc_chunks(self) -> list[SseEvent]:
         """Build role, text-delta and tool-call CC chunks ending on a finish chunk."""
@@ -1364,7 +1710,15 @@ class TestChatToResponsesStream:
     async def test_full_event_sequence_ends_with_completed_and_increasing_sequence(
         self,
     ) -> None:
-        """Text then a tool call produce the full close/open event sequence."""
+        """Text then a tool call produce the full close/open event sequence.
+
+        ``sequence_number`` is a stream-wide counter starting at 0, and switching from text
+        to a tool call must close the message item (text done, part done, item done) before
+        the function-call item opens.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_responses_chunk_events
+             stdapi/models/chat/_mantle/_convert.py:_responses_event
+        """
         chunks = [
             *self._cc_chunks(),
             (
@@ -1409,7 +1763,10 @@ class TestChatToResponsesStream:
         assert completed["response"]["usage"]["output_tokens"] == 5
 
     async def test_in_progress_follows_created_with_same_response(self) -> None:
-        """``response.in_progress`` follows ``response.created`` as upstream does."""
+        """``response.in_progress`` follows ``response.created`` as upstream does.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_chat_stream_to_responses
+        """
         events = await _collect(
             mantle_convert.convert_stream(
                 "chat_completions", "responses", _agen(self._cc_chunks())
@@ -1423,7 +1780,13 @@ class TestChatToResponsesStream:
     async def test_stream_ending_without_usage_chunk_still_emits_completed(
         self,
     ) -> None:
-        """A stream ending without a usage chunk still closes with zero usage."""
+        """A stream ending without a usage chunk still closes with zero usage.
+
+        Usage is requested upstream, but a stream that ends without it must still terminate
+        with a well-formed ``response.completed`` rather than leaving the client hanging.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_responses_stream_tail
+        """
         events = await _collect(
             mantle_convert.convert_stream(
                 "chat_completions", "responses", _agen(self._cc_chunks())
@@ -1440,6 +1803,9 @@ class TestChatToResponsesStream:
 
         Matches the sibling Converse adapter's wire grammar: the event name
         itself (not just the nested ``status``) marks a truncated response.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_responses_completed
+             stdapi/models/chat/_mantle/_convert.py:_FINISH_TO_INCOMPLETE
         """
         chunk = dumps(
             {
@@ -1474,7 +1840,14 @@ class TestChatToResponsesStream:
     async def test_error_chunk_raises_mantle_error_without_fabricated_tail(
         self,
     ) -> None:
-        """An in-band chat-shaped error chunk aborts the stream: no fabricated tail."""
+        """An in-band chat-shaped error chunk aborts the stream: no fabricated tail.
+
+        Raising lets the route surface the upstream failure; synthesising the terminal
+        events would make a failed generation look like a successful completion.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_stream_error_message
+             stdapi/aws_bedrock_mantle.py:MantleError
+        """
         chunks: list[SseEvent] = [
             *self._cc_chunks()[:2],
             (None, dumps({"error": {"message": "upstream exploded"}})),
@@ -1489,7 +1862,13 @@ class TestChatToResponsesStream:
         assert "response.completed" not in _names(collected)
 
     async def test_malformed_frame_is_skipped_without_aborting_the_stream(self) -> None:
-        """A non-JSON upstream frame is skipped; the rest still converts."""
+        """A non-JSON upstream frame is skipped; the rest still converts.
+
+        An unparseable frame is dropped rather than raised on, so a single bad frame cannot
+        lose the text already streamed nor the terminal event.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_parsed_chunk
+        """
         chunks: list[SseEvent] = [
             *self._cc_chunks()[:2],
             (None, "{not json"),
@@ -1500,13 +1879,37 @@ class TestChatToResponsesStream:
                 "chat_completions", "responses", _agen(chunks)
             )
         )
-        assert "response.created" in _names(events)
+        assert _names(events) == _names(
+            await _collect(
+                mantle_convert.convert_stream(
+                    "chat_completions", "responses", _agen(self._cc_chunks())
+                )
+            )
+        ), "the bad frame must not add or remove a single event"
+        deltas = {
+            name: "".join(
+                payload["delta"]
+                for (event_name, _data), payload in zip(
+                    events, _payloads(events), strict=True
+                )
+                if event_name == name
+            )
+            for name in (
+                "response.output_text.delta",
+                "response.function_call_arguments.delta",
+            )
+        }
+        assert deltas["response.output_text.delta"] == "Hello"
+        assert deltas["response.function_call_arguments.delta"] == '{"city":"Paris"}'
 
     async def test_route_assigned_id_is_carried_by_every_response_event(self) -> None:
         """The plumbed route ID replaces the minted one on all events.
 
         A minted ``resp_`` ID is parsed by the route as a Mantle-tagged ID
         and always 404s: the streamed ID must be the retrievable one.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:convert_stream
+             stdapi/models/chat/_mantle/_convert.py:_ResponsesStreamState
         """
         chunks = [
             *self._cc_chunks(),
@@ -1548,17 +1951,34 @@ class TestChatToResponsesStream:
         assert not any("resp_" in data for _, data in events)
 
     async def test_minted_id_is_used_when_no_route_id_is_plumbed(self) -> None:
-        """Without a route ID the converter still mints a synthetic response ID."""
+        """Without a route ID the converter still mints a synthetic response ID.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_chat_stream_to_responses
+        """
         events = await _collect(
             mantle_convert.convert_stream(
                 "chat_completions", "responses", _agen(self._cc_chunks())
             )
         )
-        assert _payloads(events)[0]["response"]["id"].startswith("resp_")
+        payloads = _payloads(events)
+        minted = payloads[0]["response"]["id"]
+        assert minted.startswith("resp_")
+        assert {
+            payload["response"]["id"] for payload in payloads if "response" in payload
+        } == {minted}, "the minted ID must be stable across the whole stream"
+        assert all(
+            payload["item"]["id"].startswith(f"{minted}-")
+            for payload in payloads
+            if "item" in payload
+        )
 
 
 class TestChatToMessagesStream:
-    """Chat Completions SSE chunks converted to an Anthropic Messages SSE stream."""
+    """Chat Completions SSE chunks converted to an Anthropic Messages SSE stream.
+
+    Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
+         stdapi/models/chat/_mantle/_convert.py:_chat_stream_to_messages
+    """
 
     def _cc_chunks(self) -> list[SseEvent]:
         """Build role, text-delta and tool-call CC chunks without a finish chunk."""
@@ -1678,7 +2098,14 @@ class TestChatToMessagesStream:
         ]
 
     async def test_full_event_sequence_with_usage_and_finish(self) -> None:
-        """Text, a tool call, a finish chunk and usage produce the full sequence."""
+        """Text, a tool call, a finish chunk and usage produce the full sequence.
+
+        Anthropic indexes content blocks, so the text block is stopped before the tool-use
+        block starts, and the terminal counters land on ``message_delta`` rather than
+        ``message_stop``.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_messages_chunk_events
+        """
         chunks = [
             *self._cc_chunks(),
             (
@@ -1726,16 +2153,30 @@ class TestChatToMessagesStream:
         assert message_delta["usage"]["output_tokens"] == 5
 
     async def test_response_id_is_ignored_when_converting_to_messages(self) -> None:
-        """Anthropic message IDs stay minted: they are not retrievable."""
+        """Anthropic message IDs stay minted: they are not retrievable.
+
+        The route-assigned ID identifies a stored Responses object, so leaking it into
+        an Anthropic ``message_start`` would advertise an ID no Messages endpoint can
+        resolve.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_chat_stream_to_messages
+        """
         events = await _collect(
             mantle_convert.convert_stream(
                 "chat_completions", "messages", _agen(self._cc_chunks()), "resp-req-id"
             )
         )
         assert _payloads(events)[0]["message"]["id"].startswith("msg_")
+        assert not any("resp-req-id" in data for _, data in events)
 
     async def test_early_end_without_finish_or_usage_closes_open_block(self) -> None:
-        """A stream ending mid tool-call still closes the block and defaults usage."""
+        """A stream ending mid tool-call still closes the block and defaults usage.
+
+        Anthropic clients track open blocks, so an unterminated stream must still emit the
+        matching ``content_block_stop`` and a complete usage object.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_messages_stream_tail
+        """
         events = await _collect(
             mantle_convert.convert_stream(
                 "chat_completions", "messages", _agen(self._cc_chunks())
@@ -1758,7 +2199,14 @@ class TestChatToMessagesStream:
     async def test_error_chunk_raises_mantle_error_without_fabricated_tail(
         self,
     ) -> None:
-        """An in-band chat-shaped error chunk aborts the stream: no fabricated tail."""
+        """An in-band chat-shaped error chunk aborts the stream: no fabricated tail.
+
+        Raising lets the route surface the upstream failure; synthesising the terminal
+        events would make a failed generation look like a completed message.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_stream_error_message
+             stdapi/aws_bedrock_mantle.py:MantleError
+        """
         chunks: list[SseEvent] = [
             *self._cc_chunks()[:2],
             (None, dumps({"error": {"message": "upstream exploded"}})),
@@ -1774,10 +2222,20 @@ class TestChatToMessagesStream:
 
 
 class TestMessagesToChatStream:
-    """Anthropic Messages SSE events converted to Chat Completions SSE chunks."""
+    """Anthropic Messages SSE events converted to Chat Completions SSE chunks.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events
+         stdapi/models/chat/_mantle/_convert.py:_messages_stream_to_chat
+    """
 
     async def test_full_event_sequence_with_tool_use_and_text_deltas(self) -> None:
-        """A tool_use, arguments, a text delta, a thinking delta and ping convert."""
+        """A tool_use, arguments, a text delta, a thinking delta and ping convert.
+
+        ``thinking_delta`` has no Chat Completions field and ``ping`` is keep-alive only, so
+        neither yields a chunk; usage arrives as a final choice-less chunk.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_chat_delta_from_messages
+        """
         events_in: list[SseEvent] = [
             (
                 "message_start",
@@ -1873,7 +2331,13 @@ class TestMessagesToChatStream:
         }
 
     async def test_unnamed_error_type_payload_raises_mantle_error(self) -> None:
-        """An unnamed ``{"type": "error"}`` data event aborts the stream (502)."""
+        """An unnamed ``{"type": "error"}`` data event aborts the stream (502).
+
+        The Anthropic wire marks errors with ``type: error``, so a frame arriving without
+        its SSE event name must still be recognised as an error.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_stream_error_message
+        """
         events_in: list[SseEvent] = [
             (None, dumps({"type": "error", "message": "boom problem"}))
         ]
@@ -1886,12 +2350,22 @@ class TestMessagesToChatStream:
 
 
 class TestResponsesToChatStreamExtension:
-    """Responses SSE events converted to Chat Completions SSE chunks."""
+    """Responses SSE events converted to Chat Completions SSE chunks.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+         stdapi/models/chat/_mantle/_convert.py:_responses_stream_to_chat
+    """
 
     async def test_function_call_item_and_argument_delta_with_unknown_event_ignored(
         self,
     ) -> None:
-        """A function_call item, argument deltas and completion convert; unknown is skipped."""
+        """A function_call item, argument deltas and completion convert; unknown is skipped.
+
+        Unknown ``response.*`` events are ignored so a newer upstream event grammar cannot
+        break the conversion.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_responses_stream_to_chat
+        """
         events_in: list[SseEvent] = [
             (
                 "response.created",
@@ -1960,6 +2434,9 @@ class TestResponsesToChatStreamExtension:
 
         Without this, a truncated Responses stream converted to Chat
         Completions would end with neither a finish reason nor billed usage.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_responses_stream_to_chat
+             stdapi/models/chat/_mantle/_convert.py:_finish_from_response
         """
         events_in: list[SseEvent] = [
             (
@@ -2002,12 +2479,25 @@ class TestResponsesToChatStreamExtension:
 
 
 class TestChatCompletionsPayloadBuilder:
-    """Validated Chat Completions requests dumped to the Mantle passthrough shape."""
+    """Validated Chat Completions requests dumped to the Mantle passthrough shape.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/inference-chat-completions-mantle.html
+         stdapi/models/chat/_mantle/_convert.py:chat_completions_payload
+    """
 
     async def test_inline_parts_resolved_model_overridden_extension_fields_stripped(
         self,
     ) -> None:
-        """Image/audio/file parts are inlined, the model is overridden, store dropped."""
+        """Image/audio/file parts are inlined, the model is overridden, store dropped.
+
+        The caller's model name is replaced by the resolved Mantle model ID, gateway-only
+        extension fields such as ``store`` never reach Mantle, and ``input_audio.data`` is
+        reduced to bare base64 because that part carries the format separately.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:chat_completions_payload
+             stdapi/models/chat/_mantle/_convert.py:_resolve_chat_part
+             stdapi/models/chat/_mantle/_convert.py:sanitize_tool_schema
+        """
         image_uri = _data_uri(b"PNGDATA", "image/png")
         audio_uri = _data_uri(b"AUDIODATA", "audio/wav")
         audio_b64 = b64encode(b"AUDIODATA").decode()
@@ -2063,7 +2553,13 @@ class TestChatCompletionsPayloadBuilder:
         assert parameters["$schema"] == "http://json-schema.org/draft-07/schema#"
 
     async def test_named_tool_choice_forwarded_verbatim(self) -> None:
-        """A named-function ``tool_choice`` reaches the upstream payload unchanged."""
+        """A named-function ``tool_choice`` reaches the upstream payload unchanged.
+
+        This is the passthrough path, so the nested Chat Completions shape must survive
+        untouched: a cross-API conversion would flatten it.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:chat_completions_payload
+        """
         request = ChatCompletionCreateParams.model_validate(
             {
                 "model": "ignored",
@@ -2083,10 +2579,22 @@ class TestChatCompletionsPayloadBuilder:
 
 
 class TestMessagesPayloadBuilder:
-    """Validated Anthropic Messages requests dumped to the Mantle passthrough shape."""
+    """Validated Anthropic Messages requests dumped to the Mantle passthrough shape.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html
+         stdapi/models/chat/_mantle/_convert.py:messages_payload
+    """
 
     async def test_inline_sources_default_max_tokens_system_folding(self) -> None:
-        """Base64 sources stay inline, max_tokens defaults, inline system folds in."""
+        """Base64 sources stay inline, max_tokens defaults, inline system folds in.
+
+        On Mantle the Anthropic version is an HTTP header, so ``anthropic_version`` is
+        stripped from the body. A ``system``-role message is not part of the Anthropic wire
+        format and folds into the ``system`` field.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:messages_payload
+             stdapi/models/chat/_mantle/_convert.py:_fold_inline_system
+        """
         request = MessageCreateParams.model_validate(
             {
                 "model": "ignored",
@@ -2139,7 +2647,15 @@ class TestMessagesPayloadBuilder:
         assert "propertyNames" not in schema["properties"]["a"]
 
     async def test_system_messages_forwarded_when_natively_supported(self) -> None:
-        """Mid-conversation system messages stay in place for capable models."""
+        """Mid-conversation system messages stay in place for capable models.
+
+        ``system_message_as_messages`` is set for models that accept a ``system`` role
+        inside ``messages``; the top-level ``system`` field is then left as the caller sent
+        it.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_fold_inline_system
+             stdapi/models/chat/_mantle/_convert.py:_is_native_system_placement
+        """
         request = MessageCreateParams.model_validate(
             {
                 "model": "ignored",
@@ -2165,7 +2681,14 @@ class TestMessagesPayloadBuilder:
         ]
 
     async def test_misplaced_system_messages_fold_when_natively_supported(self) -> None:
-        """Placements the model rejects keep folding into the ``system`` field."""
+        """Placements the model rejects keep folding into the ``system`` field.
+
+        Native support is per-position: a directive must follow a user turn and either end
+        the list or precede an assistant turn. A leading directive and one followed by
+        another user turn both fail that test and fold into ``system`` instead.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_is_native_system_placement
+        """
         request = MessageCreateParams.model_validate(
             {
                 "model": "ignored",
@@ -2185,7 +2708,13 @@ class TestMessagesPayloadBuilder:
         assert [message["role"] for message in payload["messages"]] == ["user", "user"]
 
     async def test_trailing_system_message_is_forwarded(self) -> None:
-        """A directive ending the message list is accepted by the model as-is."""
+        """A directive ending the message list is accepted by the model as-is.
+
+        Ending the list is an accepted placement, so nothing folds and the ``system`` field
+        stays absent.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_is_native_system_placement
+        """
         request = MessageCreateParams.model_validate(
             {
                 "model": "ignored",
@@ -2206,7 +2735,13 @@ class TestMessagesPayloadBuilder:
         ]
 
     async def test_consecutive_system_messages_are_forwarded(self) -> None:
-        """Consecutive directives are one section, placed as a whole."""
+        """Consecutive directives are one section, placed as a whole.
+
+        Placement is evaluated for the whole run of consecutive directives, not per
+        message, so a pair between a user and an assistant turn is forwarded intact.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_is_native_system_placement
+        """
         request = MessageCreateParams.model_validate(
             {
                 "model": "ignored",
@@ -2233,7 +2768,12 @@ class TestMessagesPayloadBuilder:
         ]
 
     async def test_system_messages_folded_when_not_natively_supported(self) -> None:
-        """Mid-conversation system messages fold into ``system`` by default."""
+        """Mid-conversation system messages fold into ``system`` by default.
+
+        Folding appends to any caller-provided ``system`` text rather than replacing it.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_fold_inline_system
+        """
         request = MessageCreateParams.model_validate(
             {
                 "model": "ignored",
@@ -2257,12 +2797,26 @@ class TestMessagesPayloadBuilder:
 
 
 class TestResponsesPayloadBuilder:
-    """Validated Responses requests dumped to the Mantle passthrough shape."""
+    """Validated Responses requests dumped to the Mantle passthrough shape.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
+         stdapi/models/chat/_mantle/_convert.py:responses_payload
+    """
 
     async def test_inline_files_web_search_forced_off_tool_sanitized_pinned_region(
         self,
     ) -> None:
-        """Files inline, web_search access is forced off, and the region pins."""
+        """Files inline, web_search access is forced off, and the region pins.
+
+        ``external_web_access`` is forced off so a request can never reach the public
+        internet implicitly. The region is read back from the response-ID tag because a
+        stored Mantle response can only be chained in the Region that created it.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html
+             https://developers.openai.com/api/docs/guides/tools-web-search
+             stdapi/models/chat/_mantle/_convert.py:responses_payload
+             stdapi/models/chat/_mantle/_convert.py:_pin_previous_response
+        """
         region = _mantle_region()
         tagged_id = encode_mantle_response_id(region, "resp_native123")
         image_uri = _data_uri(b"PNGDATA", "image/png")
@@ -2317,16 +2871,31 @@ class TestResponsesPayloadBuilder:
         assert content[1]["filename"] == "doc.pdf"
 
     async def test_undecodable_previous_response_id_raises_api_error(self) -> None:
-        """A non-Mantle ``previous_response_id`` fails with a 400 ApiError."""
+        """A non-Mantle ``previous_response_id`` fails with a 400 ApiError.
+
+        Only IDs this gateway minted carry the region tag; forwarding an unknown ID would
+        reach an arbitrary Region and fail upstream with a confusing error.
+
+        Ref: https://developers.openai.com/api/docs/guides/conversation-state#passing-context-from-the-previous-response
+             stdapi/models/chat/_mantle/_convert.py:_pin_previous_response
+        """
         request = ResponseCreateParams.model_validate(
             {"model": "ignored", "previous_response_id": "resp_@@@invalid@@@"}
         )
-        with pytest.raises(ApiError) as exc_info:
+        with pytest.raises(
+            ApiError, match="non-Mantle previous_response_id"
+        ) as exc_info:
             await mantle_convert.responses_payload(request, "model-id")
         assert exc_info.value.status == 400
 
     async def test_null_previous_response_id_removed_from_payload(self) -> None:
-        """An explicitly-null ``previous_response_id`` is dropped, not forwarded."""
+        """An explicitly-null ``previous_response_id`` is dropped, not forwarded.
+
+        An explicit ``null`` is not the same as an absent field upstream, so a falsy value
+        is popped instead of being serialized.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_pin_previous_response
+        """
         request = ResponseCreateParams.model_validate(
             {"model": "ignored", "previous_response_id": "resp-local", "input": "hi"}
         ).model_copy(update={"previous_response_id": None})
@@ -2337,7 +2906,12 @@ class TestResponsesPayloadBuilder:
         assert pinned_region is None
 
     async def test_named_tool_choice_forwarded_verbatim(self) -> None:
-        """A named-function ``tool_choice`` reaches the upstream payload unchanged."""
+        """A named-function ``tool_choice`` reaches the upstream payload unchanged.
+
+        This is the passthrough path, so the flat Responses shape must survive untouched.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:responses_payload
+        """
         request = ResponseCreateParams.model_validate(
             {
                 "model": "ignored",
@@ -2351,22 +2925,40 @@ class TestResponsesPayloadBuilder:
 
 
 class TestEnableStreamUsage:
-    """Forcing streaming with usage reporting on upstream request payloads."""
+    """Forcing streaming with usage reporting on upstream request payloads.
+
+    Ref: stdapi/models/chat/_mantle/_convert.py:enable_stream_usage
+    """
 
     def test_chat_merges_existing_stream_options(self) -> None:
-        """Existing ``stream_options`` keys are preserved alongside include_usage."""
+        """Existing ``stream_options`` keys are preserved alongside include_usage.
+
+        Usage is always requested because the gateway meters the request even when the
+        caller did not ask for token counts.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:enable_stream_usage
+        """
         payload = {"stream_options": {"foo": "bar"}}
         out = mantle_convert.enable_stream_usage("chat_completions", payload)
         assert out["stream"] is True
         assert out["stream_options"] == {"foo": "bar", "include_usage": True}
 
     def test_chat_creates_stream_options_when_absent(self) -> None:
-        """``stream_options`` is created when the payload has none."""
+        """``stream_options`` is created when the payload has none.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:enable_stream_usage
+        """
         out = mantle_convert.enable_stream_usage("chat_completions", {})
         assert out["stream_options"] == {"include_usage": True}
 
     def test_non_chat_api_only_forces_stream(self) -> None:
-        """Non-chat APIs get ``stream: True`` without a ``stream_options`` field."""
+        """Non-chat APIs get ``stream: True`` without a ``stream_options`` field.
+
+        Responses and Messages report usage in their terminal event unconditionally, so
+        they have no ``stream_options`` equivalent to set.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:enable_stream_usage
+        """
         out = mantle_convert.enable_stream_usage("responses", {"model": "m"})
         assert out["stream"] is True
         assert "stream_options" not in out
@@ -2378,10 +2970,17 @@ class TestEnableStreamUsage:
 
 
 class TestTextCompletionAsChatPayload:
-    """Legacy completion requests converted to a Chat Completions payload."""
+    """Legacy completion requests converted to a Chat Completions payload.
+
+    Ref: https://developers.openai.com/api/reference/resources/completions/methods/create
+         stdapi/models/chat/_mantle/_convert.py:text_completion_as_chat_payload
+    """
 
     async def test_string_prompt_copies_supported_fields(self) -> None:
-        """A string prompt and supported sampling fields are copied through."""
+        """A string prompt and supported sampling fields are copied through.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:text_completion_as_chat_payload
+        """
         request = LegacyCompletionCreateParams.model_validate(
             {
                 "model": "ignored",
@@ -2403,7 +3002,13 @@ class TestTextCompletionAsChatPayload:
         assert payload["user"] == "u1"
 
     async def test_one_element_list_prompt_unwrapped(self) -> None:
-        """A single-element prompt list is unwrapped to its string element."""
+        """A single-element prompt list is unwrapped to its string element.
+
+        The legacy API accepts a batch of prompts; a one-element batch is equivalent to a
+        single prompt and needs no multi-choice handling.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:text_completion_as_chat_payload
+        """
         request = LegacyCompletionCreateParams.model_validate(
             {"model": "ignored", "prompt": ["Solo"]}
         )
@@ -2413,7 +3018,14 @@ class TestTextCompletionAsChatPayload:
         assert payload["messages"] == [{"role": "user", "content": "Solo"}]
 
     async def test_n_is_copied_through_without_rejection(self) -> None:
-        """``n`` is copied unchanged; only the target-API conversion rejects n>1."""
+        """``n`` is copied unchanged; only the target-API conversion rejects n>1.
+
+        Mantle Chat Completions models can serve several choices, so the ``n>1`` rejection
+        belongs to the Responses and Messages converters, not to this payload builder.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:text_completion_as_chat_payload
+             stdapi/models/chat/_mantle/_convert.py:_ensure_single_choice
+        """
         request = LegacyCompletionCreateParams.model_validate(
             {"model": "ignored", "prompt": "Hi", "n": 2}
         )
@@ -2426,38 +3038,74 @@ class TestTextCompletionAsChatPayload:
         ("field", "value"), [("echo", True), ("suffix", "S"), ("logprobs", 1)]
     )
     async def test_unsupported_option_rejected(self, field: str, value: object) -> None:
-        """``echo``, ``suffix`` and ``logprobs`` are rejected with a 400 ApiError."""
+        """``echo``, ``suffix`` and ``logprobs`` are rejected with a 400 ApiError.
+
+        None of the three has a Chat Completions equivalent, and silently dropping them
+        would change the response shape the caller expects.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:text_completion_as_chat_payload
+        """
         request = LegacyCompletionCreateParams.model_validate(
             {"model": "ignored", "prompt": "Hi", field: value}
         )
-        with pytest.raises(ApiError) as exc_info:
+        with pytest.raises(ApiError, match=f"`{field}` is not supported") as exc_info:
             await mantle_convert.text_completion_as_chat_payload(request, "model-id")
         assert exc_info.value.status == 400
 
     async def test_multi_prompt_list_rejected(self) -> None:
-        """A multi-element prompt list is rejected: only one prompt is supported."""
+        """A multi-element prompt list is rejected: only one prompt is supported.
+
+        One upstream call serves one prompt; the legacy multi-prompt batch would need a
+        fan-out this passthrough path does not implement.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:text_completion_as_chat_payload
+        """
         request = LegacyCompletionCreateParams.model_validate(
             {"model": "ignored", "prompt": ["a", "b"]}
         )
-        with pytest.raises(ApiError, match="Multiple prompts"):
+        with pytest.raises(ApiError, match="Multiple prompts") as exc_info:
             await mantle_convert.text_completion_as_chat_payload(request, "model-id")
+        assert exc_info.value.status == 400
 
     async def test_url_prompt_rejected_as_file_prompt(self) -> None:
-        """A non-inline (URL) prompt is rejected: file prompts are unsupported."""
+        """A non-inline (URL) prompt is rejected: file prompts are unsupported.
+
+        The request model parses a non-inline prompt into an ``InputFileUrl`` rather than a
+        string, and a file cannot be used as a Chat Completions prompt.
+
+        Ref: stdapi/types/openai_completions.py:CompletionCreateParams.prompt
+             stdapi/models/chat/_mantle/_convert.py:text_completion_as_chat_payload
+        """
         request = LegacyCompletionCreateParams.model_validate(
             {"model": "ignored", "prompt": "https://example.com/prompt.txt"}
         )
-        with pytest.raises(ApiError, match="File prompts"):
+        assert not isinstance(request.prompt, str), (
+            "a URL prompt must not validate as inline text"
+        )
+        with pytest.raises(ApiError, match="File prompts") as exc_info:
             await mantle_convert.text_completion_as_chat_payload(request, "model-id")
+        assert exc_info.value.status == 400
 
 
 class TestChatResponseAsTextCompletion:
-    """Chat Completions responses converted to the legacy ``Completion`` shape."""
+    """Chat Completions responses converted to the legacy ``Completion`` shape.
+
+    Ref: https://developers.openai.com/api/reference/resources/completions/methods/create
+         stdapi/models/chat/_mantle/_convert.py:chat_response_as_text_completion
+    """
 
     def test_tool_calls_finish_reason_maps_to_stop_and_usage_extras_filtered(
         self,
     ) -> None:
-        """A ``tool_calls`` finish maps to ``stop``; unknown usage keys are dropped."""
+        """A ``tool_calls`` finish maps to ``stop``; unknown usage keys are dropped.
+
+        The legacy shape has no tool-call finish reason, so ``tool_calls`` collapses onto
+        ``stop``. Usage is filtered through ``CompletionUsage``'s fields so provider extras
+        cannot leak into the response model.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_text_finish
+             stdapi/models/chat/_mantle/_convert.py:chat_response_as_text_completion
+        """
         raw = {
             "id": "chatcmpl-1",
             "created": 100,
@@ -2478,18 +3126,32 @@ class TestChatResponseAsTextCompletion:
             },
         }
         result = mantle_convert.chat_response_as_text_completion(raw, "cmpl-1")
+        assert result.id == "cmpl-1"
+        assert result.object == "text_completion"
+        assert result.choices[0].text == "hi"
         assert result.choices[0].finish_reason == "stop"
         assert result.usage is not None
         assert result.usage.prompt_tokens == 5
         assert result.usage.completion_tokens == 2
         assert result.usage.total_tokens == 7
+        assert "cache_read_input_tokens" not in result.usage.model_dump()
 
 
 class TestChatStreamAsTextCompletionCompact:
-    """SSE wrapper converting a Chat Completions stream to text-completion chunks."""
+    """SSE wrapper converting a Chat Completions stream to text-completion chunks.
+
+    Ref: https://developers.openai.com/api/reference/resources/completions/methods/create
+         stdapi/models/chat/_mantle/_convert.py:chat_stream_as_text_completion
+    """
 
     async def test_done_and_non_string_data_pass_through(self) -> None:
-        """The ``[DONE]`` sentinel and a non-string ``data`` event pass through."""
+        """The ``[DONE]`` sentinel and a non-string ``data`` event pass through.
+
+        ``[DONE]`` is the stream terminator and must not be parsed as a chunk; an event
+        carrying no data has nothing to convert.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:chat_stream_as_text_completion
+        """
 
         async def source() -> AsyncGenerator[ServerSentEvent]:
             yield ServerSentEvent(data="[DONE]")
@@ -2504,7 +3166,11 @@ class TestChatStreamAsTextCompletionCompact:
         assert [event.data for event in events] == ["[DONE]", None]
 
     async def test_unnamed_error_chunk_raises_mantle_error(self) -> None:
-        """An unnamed in-band error chunk aborts the stream instead of being dropped."""
+        """An unnamed in-band error chunk aborts the stream instead of being dropped.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_stream_error_message
+             stdapi/aws_bedrock_mantle.py:MantleError
+        """
 
         async def source() -> AsyncGenerator[ServerSentEvent]:
             yield ServerSentEvent(data=dumps({"error": {"message": "boom problem"}}))
@@ -2516,7 +3182,13 @@ class TestChatStreamAsTextCompletionCompact:
         assert exc_info.value.status == 502
 
     async def test_named_error_event_still_passes_through_unchanged(self) -> None:
-        """A named error event (e.g. relayed) is passed through, not raised on."""
+        """A named error event (e.g. relayed) is passed through, not raised on.
+
+        A named ``error`` event is already a relayed upstream error frame: raising on it
+        would replace a faithful passthrough with a synthesised 502.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:chat_stream_as_text_completion
+        """
 
         async def source() -> AsyncGenerator[ServerSentEvent]:
             yield ServerSentEvent(
@@ -2539,7 +3211,14 @@ class TestChatStreamAsTextCompletionCompact:
 
 
 class TestJsonObjectHelper:
-    """Tool-arguments JSON string parsing."""
+    """Tool-arguments JSON string parsing.
+
+    Tool-call arguments arrive as a JSON string that a model may leave empty or
+    truncated, so parsing never raises: the Anthropic and Responses shapes both need
+    an object.
+
+    Ref: stdapi/models/chat/_mantle/_convert.py:_json_object
+    """
 
     def test_invalid_json_returns_empty_dict(self) -> None:
         """Malformed JSON falls back to an empty object."""
@@ -2559,7 +3238,10 @@ class TestJsonObjectHelper:
 
 
 class TestSplitDataUri:
-    """Base64 ``data:`` URI splitting."""
+    """Base64 ``data:`` URI splitting.
+
+    Ref: stdapi/models/chat/_mantle/_convert.py:_split_data_uri
+    """
 
     def test_non_data_uri_returns_none(self) -> None:
         """A plain URL is not a data URI."""
@@ -2576,40 +3258,67 @@ class TestSplitDataUri:
 
 
 class TestTextExtractors:
-    """Plain-text extraction from the three wire content shapes."""
+    """Plain-text extraction from the three wire content shapes.
+
+    Ref: stdapi/models/chat/_mantle/_convert.py:_chat_text
+    """
 
     def test_chat_text_from_string(self) -> None:
-        """A plain string is returned as-is."""
+        """A plain string is returned as-is.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_chat_text
+        """
         assert mantle_convert._chat_text("hi") == "hi"  # noqa: SLF001
 
     def test_chat_text_from_part_list(self) -> None:
-        """Text and refusal parts concatenate."""
+        """Text and refusal parts concatenate.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_chat_text
+        """
         parts = [{"type": "text", "text": "a"}, {"type": "refusal", "refusal": "b"}]
         assert mantle_convert._chat_text(parts) == "ab"  # noqa: SLF001
 
     def test_chat_text_from_none(self) -> None:
-        """``None`` content yields an empty string."""
+        """``None`` content yields an empty string.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_chat_text
+        """
         assert mantle_convert._chat_text(None) == ""  # noqa: SLF001
 
     def test_anthropic_text_from_string(self) -> None:
-        """A plain string is returned as-is."""
+        """A plain string is returned as-is.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_anthropic_text
+        """
         assert mantle_convert._anthropic_text("hi") == "hi"  # noqa: SLF001
 
     def test_anthropic_text_from_block_list(self) -> None:
-        """Only ``text`` blocks contribute; other block types are ignored."""
+        """Only ``text`` blocks contribute; other block types are ignored.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_anthropic_text
+        """
         blocks = [{"type": "text", "text": "a"}, {"type": "tool_use", "id": "x"}]
         assert mantle_convert._anthropic_text(blocks) == "a"  # noqa: SLF001
 
     def test_anthropic_text_from_none(self) -> None:
-        """``None`` content yields an empty string."""
+        """``None`` content yields an empty string.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_anthropic_text
+        """
         assert mantle_convert._anthropic_text(None) == ""  # noqa: SLF001
 
     def test_responses_text_from_string(self) -> None:
-        """A plain string is returned as-is."""
+        """A plain string is returned as-is.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_responses_text
+        """
         assert mantle_convert._responses_text("hi") == "hi"  # noqa: SLF001
 
     def test_responses_text_from_part_list(self) -> None:
-        """Textual part types concatenate."""
+        """Textual part types concatenate.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_responses_text
+        """
         parts = [
             {"type": "input_text", "text": "a"},
             {"type": "output_text", "text": "b"},
@@ -2617,27 +3326,50 @@ class TestTextExtractors:
         assert mantle_convert._responses_text(parts) == "ab"  # noqa: SLF001
 
     def test_responses_text_from_none(self) -> None:
-        """``None`` content yields an empty string."""
+        """``None`` content yields an empty string.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_responses_text
+        """
         assert mantle_convert._responses_text(None) == ""  # noqa: SLF001
 
 
 class TestEnsureSingleChoice:
-    """Multi-choice request rejection for single-choice-only APIs."""
+    """Multi-choice request rejection for single-choice-only APIs.
+
+    Responses and Anthropic Messages have no ``n``: a multi-choice request would
+    silently return a single choice, so it is rejected up front.
+
+    Ref: stdapi/models/chat/_mantle/_convert.py:_ensure_single_choice
+    """
 
     def test_n_greater_than_one_raises(self) -> None:
-        """``n=2`` is rejected with a 400 ApiError."""
-        with pytest.raises(ApiError) as exc_info:
+        """``n=2`` is rejected with a 400 ApiError naming the unsupported option."""
+        with pytest.raises(ApiError, match=r"Multiple choices \(n>1\)") as exc_info:
             mantle_convert._ensure_single_choice({"n": 2})  # noqa: SLF001
         assert exc_info.value.status == 400
 
     def test_n_one_or_absent_does_not_raise(self) -> None:
-        """``n=1`` and a missing ``n`` are both accepted."""
-        mantle_convert._ensure_single_choice({"n": 1})  # noqa: SLF001
-        mantle_convert._ensure_single_choice({})  # noqa: SLF001
+        """``n=1`` and a missing ``n`` are accepted and leave the payload untouched.
+
+        The guard is a pure precondition check: an accepted payload must come back
+        byte-for-byte identical, so it can be handed straight to the converter.
+        """
+        single: dict[str, Any] = {"model": "m", "n": 1}
+        absent: dict[str, Any] = {"model": "m"}
+        mantle_convert._ensure_single_choice(single)  # noqa: SLF001
+        mantle_convert._ensure_single_choice(absent)  # noqa: SLF001
+        assert single == {"model": "m", "n": 1}
+        assert absent == {"model": "m"}
 
 
 class TestSanitizeToolSchema:
-    """Recursive stripping of unsupported JSON Schema keywords."""
+    """Recursive stripping of unsupported JSON Schema keywords.
+
+    Some open-weight tool templates emit an empty generation when a schema contains
+    ``propertyNames``, so it is stripped in place at any depth.
+
+    Ref: stdapi/models/chat/_mantle/_convert.py:sanitize_tool_schema
+    """
 
     def test_removes_property_names_recursively_in_nested_dict_and_anyof_list(
         self,
@@ -2656,7 +3388,13 @@ class TestSanitizeToolSchema:
 
 
 class TestStreamErrorMessageHelper:
-    """In-band stream error message extraction."""
+    """In-band stream error message extraction.
+
+    The helper decides whether an in-band SSE frame aborts the stream, so anything that
+    is not recognisably an error must return ``None``.
+
+    Ref: stdapi/models/chat/_mantle/_convert.py:_stream_error_message
+    """
 
     def test_non_json_returns_none(self) -> None:
         """Non-JSON data carries no error message."""
@@ -2673,10 +3411,16 @@ class TestStreamErrorMessageHelper:
 
 
 class TestIdentityDispatchAndComposition:
-    """Same-shape conversions are no-ops; cross-shape ones compose through chat."""
+    """Same-shape conversions are no-ops; cross-shape ones compose through chat.
+
+    Ref: stdapi/models/chat/_mantle/_convert.py:convert_payload
+    """
 
     def test_convert_payload_same_api_returns_same_object(self) -> None:
-        """A same-shape payload conversion returns the identical object."""
+        """A same-shape payload conversion returns the identical object.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:convert_payload
+        """
         payload = {"a": 1}
         result = mantle_convert.convert_payload(
             "chat_completions", "chat_completions", payload
@@ -2684,19 +3428,34 @@ class TestIdentityDispatchAndComposition:
         assert result is payload
 
     def test_convert_response_same_api_returns_same_object(self) -> None:
-        """A same-shape response conversion returns the identical object."""
+        """A same-shape response conversion returns the identical object.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:convert_response
+        """
         raw = {"a": 1}
         result = mantle_convert.convert_response("responses", "responses", raw)
         assert result is raw
 
     def test_convert_stream_same_api_returns_same_generator(self) -> None:
-        """A same-shape stream conversion returns the identical generator."""
+        """A same-shape stream conversion returns the identical generator.
+
+        Returning the caller's generator unchanged keeps a passthrough stream free of an
+        extra async wrapper.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:convert_stream
+        """
         gen = _agen([])
         result = mantle_convert.convert_stream("messages", "messages", gen)
         assert result is gen
 
     def test_messages_to_responses_composes_through_chat(self) -> None:
-        """A Messages payload converts to Responses via the Chat Completions shape."""
+        """A Messages payload converts to Responses via the Chat Completions shape.
+
+        There is no direct Messages-to-Responses converter: the pair is composed from the
+        two Chat Completions converters, so the intermediate shape's losses apply.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:convert_payload
+        """
         payload = {
             "model": "m",
             "system": "Be terse.",
@@ -2714,7 +3473,14 @@ class TestIdentityDispatchAndComposition:
 
 
 class TestChatToResponsesDropList:
-    """Chat Completions fields without a Responses equivalent are dropped."""
+    """Chat Completions fields without a Responses equivalent are dropped.
+
+    Silently dropping is deliberate: forwarding a field Responses does not define
+    would make upstream reject an otherwise valid request.
+
+    Ref: https://developers.openai.com/api/docs/guides/migrate-to-responses
+         stdapi/models/chat/_mantle/_convert.py:_chat_to_responses_request
+    """
 
     @pytest.mark.parametrize(
         ("field", "value"),
@@ -2736,7 +3502,14 @@ class TestChatToResponsesDropList:
 
 
 class TestChatToMessagesDropList:
-    """Chat Completions fields without an Anthropic equivalent are dropped."""
+    """Chat Completions fields without an Anthropic equivalent are dropped.
+
+    Silently dropping is deliberate: forwarding a field Anthropic does not define
+    would make upstream reject an otherwise valid request.
+
+    Ref: https://platform.claude.com/docs/en/api/messages
+         stdapi/models/chat/_mantle/_convert.py:_chat_to_messages_request
+    """
 
     @pytest.mark.parametrize(
         ("field", "value"),
@@ -2758,7 +3531,14 @@ class TestChatToMessagesDropList:
 
 
 class TestMessagesToChatDropList:
-    """Anthropic fields without a Chat Completions equivalent are dropped."""
+    """Anthropic fields without a Chat Completions equivalent are dropped.
+
+    Silently dropping is deliberate: forwarding a field Chat Completions does not
+    define would make upstream reject an otherwise valid request.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+         stdapi/models/chat/_mantle/_convert.py:_messages_to_chat_request
+    """
 
     @pytest.mark.parametrize(
         ("field", "value"),

@@ -1,8 +1,18 @@
-"""Integration tests for AWS Bedrock region routing strategies.
+"""AWS Bedrock region routing, failover backoff and ``InputFile`` source resolution.
+
+Covers the ``RegionRouter`` strategies (ordered / round-robin / lowest-latency),
+``route_and_execute`` failover bookkeeping, ``compute_candidate_regions`` S3
+locality rules, and the ``InputFile`` source backends those rules depend on.
 
 Uses the session-scoped ``openai_client`` from conftest directly.
 Per-strategy fixtures patch SETTINGS in-place, swap the two name-bound
 REGION_ROUTER copies, and inject fresh no-retry clients for AioStubber.
+
+Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/cross-region-inference.html
+     https://docs.aws.amazon.com/bedrock/latest/userguide/troubleshooting-api-error-codes.html
+     stdapi/region_routing.py:RegionRouter
+     stdapi/models/__init__.py:route_and_execute
+     stdapi/input_file.py:InputFile
 """
 
 from contextlib import AsyncExitStack, asynccontextmanager, contextmanager, suppress
@@ -41,7 +51,10 @@ _MAX_TOKENS = 8
 ROUTING_PRIMARY: RegionName = "us-east-1"
 ROUTING_SECONDARY: RegionName = "us-west-2"
 _ROUTING_REGIONS: list[RegionName] = [ROUTING_PRIMARY, ROUTING_SECONDARY]
-_QUOTA_BACKOFF_BASE = 60  # seconds — mirrors the fixture override below
+#: Quota backoff base in seconds -- mirrors the fixture override below.
+_QUOTA_BACKOFF_BASE = 60
+#: Unavailability backoff in seconds -- mirrors the fixture override below.
+_UNAVAILABLE_BACKOFF = 30
 
 
 def _no_retry_config() -> AioConfig:
@@ -183,7 +196,9 @@ async def _routing_fixture_context(
                 _QUOTA_BACKOFF_BASE,
             ),
             patch.object(
-                SETTINGS, "aws_bedrock_region_routing_unavailable_backoff_seconds", 30
+                SETTINGS,
+                "aws_bedrock_region_routing_unavailable_backoff_seconds",
+                _UNAVAILABLE_BACKOFF,
             ),
             patch.object(_rr_mod, "REGION_ROUTER", router),
             patch.object(_rr_mod, "ORDERED_BEDROCK_REGIONS", list(effective_regions)),
@@ -272,24 +287,35 @@ def _require_local_mode(request: pytest.FixtureRequest) -> None:
 
 
 class TestOrderedRouting:
-    """Ordered strategy always prefers the first usable region in the list."""
+    """Ordered strategy always prefers the first usable region in the list.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/troubleshooting-api-error-codes.html
+         stdapi/region_routing.py:RegionRouter.ordered_regions
+         stdapi/models/__init__.py:route_and_execute
+    """
 
     def test_success_uses_primary_region(self, routing_ordered: RoutingFixture) -> None:
-        """Successful request goes to the primary region with no quota errors recorded."""
+        """Successful request leaves the primary region leading with no quota errors recorded."""
         response = routing_ordered.openai.chat.completions.create(
             model=MODEL, messages=_MESSAGES, max_tokens=_MAX_TOKENS
         )
         assert response.choices[0].message.content
-        assert routing_ordered.get_state(MODEL, ROUTING_PRIMARY).is_usable
-        assert (
-            routing_ordered.get_state(MODEL, ROUTING_PRIMARY).consecutive_quota_errors
-            == 0
-        )
+        state = routing_ordered.get_state(MODEL, ROUTING_PRIMARY)
+        assert state.is_usable
+        assert state.consecutive_quota_errors == 0
+        assert state.quota_blocked_until == 0.0
+        assert routing_ordered.router is not None
+        # "ordered" keeps the configured order, so the primary stays the first try.
+        assert routing_ordered.router.ordered_regions(MODEL, _ROUTING_REGIONS) == [
+            ROUTING_PRIMARY,
+            ROUTING_SECONDARY,
+        ]
 
     def test_throttling_fails_over_to_secondary(
         self, routing_ordered: RoutingFixture
     ) -> None:
-        """ThrottlingException on the primary causes failover; primary is quota-blocked."""
+        """ThrottlingException on the primary causes failover and one base-length quota backoff."""
+        before = monotonic()
         with routing_ordered.stub_errors(
             ROUTING_PRIMARY, [("converse", "ThrottlingException")]
         ):
@@ -297,20 +323,23 @@ class TestOrderedRouting:
                 model=MODEL, messages=_MESSAGES, max_tokens=_MAX_TOKENS
             )
         assert response.choices[0].message.content
-        assert not routing_ordered.get_state(MODEL, ROUTING_PRIMARY).is_usable
-        assert (
-            +routing_ordered.get_state(MODEL, ROUTING_PRIMARY).quota_blocked_until
-            > monotonic()
-        )
-        assert (
-            routing_ordered.get_state(MODEL, ROUTING_SECONDARY).consecutive_quota_errors
-            == 0
-        )
+        primary = routing_ordered.get_state(MODEL, ROUTING_PRIMARY)
+        assert not primary.is_usable
+        assert primary.consecutive_quota_errors == 1
+        # First quota error => backoff is exactly the configured base, not escalated.
+        assert before + _QUOTA_BACKOFF_BASE <= primary.quota_blocked_until
+        assert primary.quota_blocked_until <= monotonic() + _QUOTA_BACKOFF_BASE
+        assert primary.unavailable_until == 0.0
+        # The secondary served the request, so mark_success cleared its state.
+        secondary = routing_ordered.get_state(MODEL, ROUTING_SECONDARY)
+        assert secondary.is_usable
+        assert secondary.consecutive_quota_errors == 0
 
     def test_unavailable_fails_over_to_secondary(
         self, routing_ordered: RoutingFixture
     ) -> None:
-        """ServiceUnavailableException marks primary unavailable, not quota-blocked."""
+        """ServiceUnavailableException applies the fixed unavailability backoff, not a quota backoff."""
+        before = monotonic()
         with routing_ordered.stub_errors(
             ROUTING_PRIMARY, [("converse", "ServiceUnavailableException")]
         ):
@@ -319,50 +348,69 @@ class TestOrderedRouting:
             )
         assert response.choices[0].message.content
         state = routing_ordered.get_state(MODEL, ROUTING_PRIMARY)
-        assert state.unavailable_until > monotonic()
+        assert not state.is_usable
+        assert before + _UNAVAILABLE_BACKOFF <= state.unavailable_until
+        assert state.unavailable_until <= monotonic() + _UNAVAILABLE_BACKOFF
         assert state.quota_blocked_until == 0.0
         assert state.consecutive_quota_errors == 0
+        assert routing_ordered.get_state(MODEL, ROUTING_SECONDARY).is_usable
 
     def test_non_retryable_error_raises_immediately(
         self, routing_ordered: RoutingFixture
     ) -> None:
-        """ValidationException is not retried across regions and is re-raised as-is."""
-        from openai import APIError  # noqa: PLC0415
+        """ValidationException is not retried across regions and surfaces as a 400.
+
+        Bedrock returns ``ValidationException`` for a malformed request, which is
+        outside ``ROUTING_RETRYABLE_CODES``; the gateway re-raises it so the client
+        sees the AWS code in ``error.code`` instead of a region failover.
+        """
+        from openai import BadRequestError  # noqa: PLC0415
 
         with (
             routing_ordered.stub_errors(
                 ROUTING_PRIMARY, [("converse", "ValidationException")]
             ),
-            pytest.raises(APIError),
+            pytest.raises(BadRequestError) as excinfo,
         ):
             routing_ordered.openai.chat.completions.create(
                 model=MODEL, messages=_MESSAGES, max_tokens=_MAX_TOKENS
             )
-        # Primary remains usable — validation errors do not trigger backoff
+        assert excinfo.value.status_code == 400
+        error = excinfo.value.response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        assert error["code"] == "ValidationException"
+        # Primary remains usable — validation errors do not trigger backoff.
         assert routing_ordered.get_state(MODEL, ROUTING_PRIMARY).is_usable
-        assert (
-            routing_ordered.get_state(MODEL, ROUTING_SECONDARY).consecutive_quota_errors
-            == 0
-        )
+        # Only the primary was stubbed: had the router failed over, the live
+        # secondary would have answered and no exception would have been raised.
+        assert routing_ordered.get_state(MODEL, ROUTING_SECONDARY).is_usable
 
     def test_both_regions_throttled_raises(
         self, routing_ordered: RoutingFixture
     ) -> None:
-        """When all regions are quota-blocked the router raises instead of looping."""
-        from openai import APIError  # noqa: PLC0415
+        """When every region is throttled the request ends as a 429 carrying ``retry-after``.
 
+        Enough errors are queued to cover all ``aws_bedrock_max_retries + 1``
+        attempts, so the terminal error is the router's own ThrottlingException
+        rather than an exhausted stub queue. ``retry-after`` reports the smallest
+        backoff applied, i.e. the un-escalated base value.
+        """
+        from openai import RateLimitError  # noqa: PLC0415
+
+        throttles = [("converse", "ThrottlingException")] * 3
         with (
-            routing_ordered.stub_errors(
-                ROUTING_PRIMARY, [("converse", "ThrottlingException")]
-            ),
-            routing_ordered.stub_errors(
-                ROUTING_SECONDARY, [("converse", "ThrottlingException")]
-            ),
-            pytest.raises(APIError),
+            routing_ordered.stub_errors(ROUTING_PRIMARY, throttles),
+            routing_ordered.stub_errors(ROUTING_SECONDARY, throttles),
+            pytest.raises(RateLimitError) as excinfo,
         ):
             routing_ordered.openai.chat.completions.create(
                 model=MODEL, messages=_MESSAGES, max_tokens=_MAX_TOKENS
             )
+        assert excinfo.value.status_code == 429
+        error = excinfo.value.response.json()["error"]
+        assert error["type"] == "rate_limit_error"
+        assert error["code"] == "ThrottlingException"
+        assert excinfo.value.response.headers["retry-after"] == str(_QUOTA_BACKOFF_BASE)
         assert not routing_ordered.get_state(MODEL, ROUTING_PRIMARY).is_usable
         assert not routing_ordered.get_state(MODEL, ROUTING_SECONDARY).is_usable
 
@@ -373,12 +421,17 @@ class TestOrderedRouting:
 
 
 class TestQuotaBackoffEscalation:
-    """Backoff duration grows exponentially with consecutive quota errors."""
+    """Backoff duration grows exponentially with consecutive quota errors.
+
+    Ref: stdapi/region_routing.py:RegionRouter.mark_error
+         stdapi/region_routing.py:RegionRouter.mark_success
+    """
 
     def test_quota_backoff_escalates_on_repeated_errors(
         self, routing_ordered: RoutingFixture
     ) -> None:
-        """Second quota error produces a longer backoff than the first."""
+        """A second quota error while still blocked doubles the backoff to ``2 * base``."""
+        before = monotonic()
         with routing_ordered.stub_errors(
             ROUTING_PRIMARY, [("converse", "ThrottlingException")]
         ):
@@ -389,17 +442,26 @@ class TestQuotaBackoffEscalation:
         state = routing_ordered.get_state(MODEL, ROUTING_PRIMARY)
         blocked_until_1 = state.quota_blocked_until
         assert state.consecutive_quota_errors == 1
-
-        # Mutate state directly — router.mark_error() requires a live REQUEST_LOG
-        # context that only exists inside a real request handler.
-        state.consecutive_quota_errors += 1  # → 2
-        state.quota_blocked_until = monotonic() + min(
-            _QUOTA_BACKOFF_BASE * (2 ** (state.consecutive_quota_errors - 1)), 3600
+        assert (
+            before + _QUOTA_BACKOFF_BASE
+            <= blocked_until_1
+            <= (monotonic() + _QUOTA_BACKOFF_BASE)
         )
+
+        # log_error_details is patched out: mark_error is called here outside the
+        # request handler that normally provides the request-log context.
+        assert routing_ordered.router is not None
+        before_2 = monotonic()
+        with patch("stdapi.region_routing.log_error_details"):
+            routing_ordered.router.mark_error(
+                MODEL, ROUTING_PRIMARY, "ThrottlingException"
+            )
 
         state2 = routing_ordered.get_state(MODEL, ROUTING_PRIMARY)
         assert state2.consecutive_quota_errors == 2
         assert state2.quota_blocked_until > blocked_until_1
+        assert before_2 + 2 * _QUOTA_BACKOFF_BASE <= state2.quota_blocked_until
+        assert state2.quota_blocked_until <= monotonic() + 2 * _QUOTA_BACKOFF_BASE
 
     def test_success_resets_quota_state(self, routing_ordered: RoutingFixture) -> None:
         """A successful request after a quota error resets the error counters."""
@@ -412,6 +474,7 @@ class TestQuotaBackoffEscalation:
         assert not routing_ordered.get_state(MODEL, ROUTING_PRIMARY).is_usable
 
         routing_ordered.mark_success(MODEL, ROUTING_PRIMARY)
+        assert routing_ordered.get_state(MODEL, ROUTING_PRIMARY).is_usable
 
         response = routing_ordered.openai.chat.completions.create(
             model=MODEL, messages=_MESSAGES, max_tokens=_MAX_TOKENS
@@ -420,6 +483,7 @@ class TestQuotaBackoffEscalation:
         state = routing_ordered.get_state(MODEL, ROUTING_PRIMARY)
         assert state.consecutive_quota_errors == 0
         assert state.quota_blocked_until == 0.0
+        assert state.last_quota_error_time == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -428,23 +492,31 @@ class TestQuotaBackoffEscalation:
 
 
 class TestRoundRobinRouting:
-    """Round-robin strategy cycles the lead region across successive calls."""
+    """Round-robin strategy cycles the lead region across successive calls.
+
+    Ref: stdapi/region_routing.py:RegionRouter._round_robin_order
+    """
 
     def test_rotates_lead_region_across_calls(
         self, routing_round_robin: RoutingFixture
     ) -> None:
-        """Both regions take the lead position across two consecutive calls."""
+        """Both regions take the lead position across two consecutive calls.
+
+        The first call seeds the per-model counter with a random index, so only the
+        rotation across two calls is deterministic, not which region leads first.
+        """
         # SETTINGS.aws_bedrock_region_routing is patched to "round_robin" by the fixture.
         import stdapi.region_routing as _rr_mod  # noqa: PLC0415
 
         rr = _rr_mod.RegionRouter()
         rr_model = f"{MODEL}.__rr_rotation_test__"
-        # Collect which region leads on each of two calls; both must appear.
-        regions_used = {
-            rr.ordered_regions(rr_model, _ROUTING_REGIONS)[0] for _ in range(2)
-        }
-        assert ROUTING_PRIMARY in regions_used
-        assert ROUTING_SECONDARY in regions_used
+        orderings = [rr.ordered_regions(rr_model, _ROUTING_REGIONS) for _ in range(2)]
+        # Each ordering is a rotation of the full list, and the lead alternates.
+        assert all(sorted(o) == sorted(_ROUTING_REGIONS) for o in orderings)
+        assert orderings[0][0] != orderings[1][0]
+        assert {o[0] for o in orderings} == {ROUTING_PRIMARY, ROUTING_SECONDARY}
+        # The rotation is counter-driven, so the model now has a counter entry.
+        assert rr_model in rr._round_robin_counters  # noqa: SLF001
 
     def test_blocked_region_is_always_last(
         self, routing_round_robin: RoutingFixture
@@ -459,10 +531,11 @@ class TestRoundRobinRouting:
                 model=MODEL, messages=_MESSAGES, max_tokens=_MAX_TOKENS
             )
         assert response.choices[0].message.content
+        assert not routing_round_robin.get_state(MODEL, ROUTING_PRIMARY).is_usable
         assert routing_round_robin.router is not None
+        # Rotation only applies to usable regions; blocked ones are appended last.
         ordered = routing_round_robin.router.ordered_regions(MODEL, _ROUTING_REGIONS)
-        assert ordered[0] == ROUTING_SECONDARY
-        assert ordered[-1] == ROUTING_PRIMARY
+        assert ordered == [ROUTING_SECONDARY, ROUTING_PRIMARY]
 
 
 # ---------------------------------------------------------------------------
@@ -471,12 +544,19 @@ class TestRoundRobinRouting:
 
 
 class TestLowestLatencyRouting:
-    """Lowest-latency strategy picks the region with the best observed latency."""
+    """Lowest-latency strategy picks the region with the best observed latency.
+
+    Ordering is applied once, at startup, by rewriting ``ORDERED_BEDROCK_REGIONS``;
+    the router itself keeps the candidate order untouched (``_identity_order``).
+
+    Ref: stdapi/region_routing.py:measure_region_latencies
+         stdapi/region_routing.py:RegionRouter._identity_order
+    """
 
     def test_succeeds_and_uses_a_region(
         self, routing_lowest_latency: RoutingFixture
     ) -> None:
-        """Request succeeds and at least one region remains usable."""
+        """Request succeeds and the strategy preserves the candidate order it is given."""
         response = routing_lowest_latency.openai.chat.completions.create(
             model=MODEL, messages=_MESSAGES, max_tokens=_MAX_TOKENS
         )
@@ -484,6 +564,14 @@ class TestLowestLatencyRouting:
         assert (
             routing_lowest_latency.get_state(MODEL, ROUTING_PRIMARY).is_usable
             or routing_lowest_latency.get_state(MODEL, ROUTING_SECONDARY).is_usable
+        )
+        # Unlike round_robin, lowest_latency never rotates: a model with no
+        # recorded errors keeps the candidate list exactly as supplied.
+        assert routing_lowest_latency.router is not None
+        probe_model = f"{MODEL}.__latency_order_probe__"
+        assert (
+            routing_lowest_latency.router.ordered_regions(probe_model, _ROUTING_REGIONS)
+            == _ROUTING_REGIONS
         )
 
     def test_throttling_fails_over(
@@ -497,7 +585,11 @@ class TestLowestLatencyRouting:
                 model=MODEL, messages=_MESSAGES, max_tokens=_MAX_TOKENS
             )
         assert response.choices[0].message.content
-        assert not routing_lowest_latency.get_state(MODEL, ROUTING_PRIMARY).is_usable
+        primary = routing_lowest_latency.get_state(MODEL, ROUTING_PRIMARY)
+        assert not primary.is_usable
+        assert primary.consecutive_quota_errors == 1
+        # The secondary answered, so mark_success left it unblocked.
+        assert routing_lowest_latency.get_state(MODEL, ROUTING_SECONDARY).is_usable
 
 
 # ---------------------------------------------------------------------------
@@ -506,7 +598,14 @@ class TestLowestLatencyRouting:
 
 
 class TestStreamingFailover:
-    """Failover works for streaming responses as well as non-streaming."""
+    """Failover works for streaming responses as well as non-streaming.
+
+    ``ConverseStream`` fails before the first event when the region is throttled, so
+    the router can still switch region without a partially emitted response.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ConverseStream.html
+         stdapi/models/__init__.py:route_and_execute
+    """
 
     def test_throttling_failover_with_streaming(
         self, routing_lowest_latency: RoutingFixture
@@ -526,13 +625,14 @@ class TestStreamingFailover:
                 if chunk.choices
             )
         assert content
-        assert not routing_lowest_latency.get_state(MODEL, ROUTING_PRIMARY).is_usable
-        assert (
-            routing_lowest_latency.get_state(
-                MODEL, ROUTING_SECONDARY
-            ).consecutive_quota_errors
-            == 0
-        )
+        primary = routing_lowest_latency.get_state(MODEL, ROUTING_PRIMARY)
+        assert not primary.is_usable
+        assert primary.quota_blocked_until > monotonic()
+        assert primary.unavailable_until == 0.0
+        # The secondary served the stream, so mark_success left it unblocked.
+        secondary = routing_lowest_latency.get_state(MODEL, ROUTING_SECONDARY)
+        assert secondary.is_usable
+        assert secondary.consecutive_quota_errors == 0
 
 
 # ---------------------------------------------------------------------------
@@ -541,12 +641,20 @@ class TestStreamingFailover:
 
 
 class TestSingleRegionMode:
-    """With a single configured region the router is None and requests still work."""
+    """With a single configured region the router is None and requests still work.
+
+    ``route_and_execute`` short-circuits to ``candidates[0]`` in that case and lets
+    botocore's own adaptive retries handle transient errors inside the region.
+
+    Ref: stdapi/region_routing.py:REGION_ROUTER
+         stdapi/models/__init__.py:route_and_execute
+    """
 
     def test_chat_succeeds_without_router(
         self, routing_single_region: RoutingFixture
     ) -> None:
         """Non-streaming chat completion works when REGION_ROUTER is None."""
+        assert routing_single_region.router is None
         response = routing_single_region.openai.chat.completions.create(
             model=MODEL, messages=_MESSAGES, max_tokens=_MAX_TOKENS
         )
@@ -556,6 +664,7 @@ class TestSingleRegionMode:
         self, routing_single_region: RoutingFixture
     ) -> None:
         """Streaming chat completion works when REGION_ROUTER is None."""
+        assert routing_single_region.router is None
         with routing_single_region.openai.chat.completions.create(
             model=MODEL, messages=_MESSAGES, max_tokens=_MAX_TOKENS, stream=True
         ) as stream:
@@ -587,10 +696,18 @@ def _make_model_details(available_regions: list[str]) -> Any:  # noqa: ANN401
 
 
 class TestCandidateRegions:
-    """Unit tests for ``compute_candidate_regions`` — fully mocked, no real AWS."""
+    """``compute_candidate_regions`` S3-locality rules, with model details mocked.
+
+    S3 content blocks are resolved as a terminal operation, so a request carrying
+    S3 inputs is pinned to a single region: retrying elsewhere would hand Bedrock a
+    cross-region ``s3Location`` it cannot read.
+
+    Ref: stdapi/models/__init__.py:compute_candidate_regions
+         stdapi/input_file.py:get_s3_input_regions
+    """
 
     async def test_s3_input_overlap_returns_single_best_region(self) -> None:
-        """When an S3 input file is in one region, only that region is returned."""
+        """The single model region holding the most S3 input bytes is returned."""
         from stdapi.models import compute_candidate_regions  # noqa: PLC0415
 
         model = _make_model_details([ROUTING_PRIMARY, ROUTING_SECONDARY])
@@ -622,7 +739,7 @@ class TestCandidateRegions:
             assert await compute_candidate_regions(MODEL) == [ROUTING_PRIMARY]
 
     async def test_s3_input_no_overlap_no_bucket_raises(self) -> None:
-        """ApiError is raised when the S3 file has no overlap and no bucket is configured."""
+        """A 400 ApiError naming both region sets is raised when neither overlap nor bucket exists."""
         from stdapi.api_errors import ApiError  # noqa: PLC0415
         from stdapi.models import compute_candidate_regions  # noqa: PLC0415
 
@@ -633,9 +750,16 @@ class TestCandidateRegions:
                 "stdapi.models.get_s3_input_regions", return_value={"eu-west-1": 200}
             ),
             patch("stdapi.models.get_s3_bucket_for_region", return_value=None),
-            pytest.raises(ApiError),
+            pytest.raises(ApiError) as excinfo,
         ):
             await compute_candidate_regions(MODEL)
+
+        message = str(excinfo.value)
+        assert excinfo.value.status == 400
+        assert "S3 input data is located in ['eu-west-1']" in message
+        assert MODEL in message
+        assert ROUTING_PRIMARY in message
+        assert ROUTING_SECONDARY in message
 
     async def test_s3_required_input_overlap_without_bucket_falls_back_to_bucketed_region(
         self,
@@ -678,7 +802,7 @@ class TestCandidateRegions:
             ]
 
     async def test_s3_required_no_bucket_raises(self) -> None:
-        """ApiError is raised when s3_required=True but no region has a bucket."""
+        """A 400 ApiError reporting the missing bucket is raised when s3_required has no candidate."""
         from stdapi.api_errors import ApiError  # noqa: PLC0415
         from stdapi.models import compute_candidate_regions  # noqa: PLC0415
 
@@ -687,9 +811,17 @@ class TestCandidateRegions:
             patch("stdapi.models.get_model_details", new=AsyncMock(return_value=model)),
             patch("stdapi.models.get_s3_input_regions", return_value={}),
             patch("stdapi.models.get_s3_bucket_for_region", return_value=None),
-            pytest.raises(ApiError),
+            pytest.raises(ApiError) as excinfo,
         ):
             await compute_candidate_regions(MODEL, s3_required=True)
+
+        message = str(excinfo.value)
+        assert excinfo.value.status == 400
+        assert (
+            f"Model '{MODEL}' requires an S3 bucket but none is configured" in message
+        )
+        assert ROUTING_PRIMARY in message
+        assert ROUTING_SECONDARY in message
 
 
 # ---------------------------------------------------------------------------
@@ -698,7 +830,16 @@ class TestCandidateRegions:
 
 
 class TestRegionRouterUnit:
-    """Unit tests for RegionRouter methods — fully mocked, no real AWS calls."""
+    """RegionRouter health bookkeeping and region ordering, without any AWS call.
+
+    Quota errors escalate exponentially from
+    ``aws_bedrock_region_routing_quota_backoff_seconds`` and are capped at
+    ``_MAX_QUOTA_BACKOFF``; unavailability errors apply a single fixed backoff.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/troubleshooting-api-error-codes.html
+         stdapi/region_routing.py:RegionRouter.mark_error
+         stdapi/region_routing.py:RegionRouter.ordered_regions
+    """
 
     def _make_router(self, strategy: str = "ordered") -> Any:  # noqa: ANN401
         """Return a fresh RegionRouter with the given strategy patched in."""
@@ -711,15 +852,33 @@ class TestRegionRouterUnit:
     # -- ordered_regions: single-region short-circuit --
 
     def test_ordered_regions_single_region_returns_as_is(self) -> None:
-        """ordered_regions returns the list unchanged when only one region is given."""
+        """ordered_regions returns the very same list object when only one region is given.
+
+        The short-circuit runs before any health lookup, so identity — not just
+        equality — is what distinguishes it from the usable/blocked partition path.
+        """
+        from stdapi.config import SETTINGS  # noqa: PLC0415
+
         router = self._make_router()
-        result = router.ordered_regions(MODEL, [ROUTING_PRIMARY])
-        assert result == [ROUTING_PRIMARY]
+        regions = [ROUTING_PRIMARY]
+        assert router.ordered_regions(MODEL, regions) is regions
+
+        # Still returned as-is once the region is blocked: there is no alternative.
+        with (
+            patch.object(
+                SETTINGS,
+                "aws_bedrock_region_routing_quota_backoff_seconds",
+                _QUOTA_BACKOFF_BASE,
+            ),
+            patch("stdapi.region_routing.log_error_details"),
+        ):
+            router.mark_error(MODEL, ROUTING_PRIMARY, "ThrottlingException")
+        assert router.ordered_regions(MODEL, regions) is regions
 
     # -- mark_error: quota escalation while still blocked --
 
     def test_mark_error_quota_escalates_while_blocked(self) -> None:
-        """Second quota error while the region is still blocked increments the counter and extends backoff."""
+        """Two quota errors in a row give backoffs of exactly ``base`` then ``2 * base``."""
         from stdapi.config import SETTINGS  # noqa: PLC0415
 
         router = self._make_router()
@@ -732,21 +891,30 @@ class TestRegionRouterUnit:
             patch("stdapi.region_routing.log_error_details"),
         ):
             # First error — region starts unblocked so counter goes to 1.
+            before_1 = monotonic()
             router.mark_error(MODEL, ROUTING_PRIMARY, "ThrottlingException")
             state = router._index.get(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
             assert state.consecutive_quota_errors == 1
             blocked_until_1 = state.quota_blocked_until
+            assert before_1 + _QUOTA_BACKOFF_BASE <= blocked_until_1
+            assert blocked_until_1 <= monotonic() + _QUOTA_BACKOFF_BASE
+            assert state.last_quota_error_time >= before_1
 
             # Second error — region is still blocked (quota_blocked_until > now).
+            before_2 = monotonic()
             router.mark_error(MODEL, ROUTING_PRIMARY, "ThrottlingException")
             state2 = router._index.get(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
             assert state2.consecutive_quota_errors == 2
             assert state2.quota_blocked_until > blocked_until_1
+            assert before_2 + 2 * _QUOTA_BACKOFF_BASE <= state2.quota_blocked_until
+            assert state2.quota_blocked_until <= monotonic() + 2 * _QUOTA_BACKOFF_BASE
+            # Quota errors never touch the unavailability window.
+            assert state2.unavailable_until == 0.0
 
     # -- mark_error: else branch (not blocked, not stale) --
 
     def test_mark_error_quota_increments_when_not_blocked_and_not_stale(self) -> None:
-        """Quota error while not currently blocked but with a recent prior error increments the counter."""
+        """A quota error after a recent one keeps escalating even once the backoff expired."""
         from stdapi.config import SETTINGS  # noqa: PLC0415
 
         router = self._make_router()
@@ -767,15 +935,19 @@ class TestRegionRouterUnit:
             ),
             patch("stdapi.region_routing.log_error_details"),
         ):
+            before = monotonic()
             router.mark_error(MODEL, ROUTING_PRIMARY, "ThrottlingException")
 
         state_after = router._index.get(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
         assert state_after.consecutive_quota_errors == 2
+        # Counter 2 => backoff base * 2**1, applied from the moment of the error.
+        assert before + 2 * _QUOTA_BACKOFF_BASE <= state_after.quota_blocked_until
+        assert state_after.quota_blocked_until <= monotonic() + 2 * _QUOTA_BACKOFF_BASE
 
     # -- mark_error: stale-counter reset --
 
     def test_mark_error_quota_resets_counter_when_stale(self) -> None:
-        """Quota error whose last occurrence was beyond the stale threshold resets counter to 1."""
+        """A quota error older than the stale threshold restarts the counter and the base backoff."""
         import stdapi.region_routing as _rr_mod  # noqa: PLC0415
         from stdapi.config import SETTINGS  # noqa: PLC0415
 
@@ -797,20 +969,28 @@ class TestRegionRouterUnit:
             ),
             patch("stdapi.region_routing.log_error_details"),
         ):
+            before = monotonic()
             router.mark_error(MODEL, ROUTING_PRIMARY, "ThrottlingException")
 
         state_after = router._index.get(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
         # Counter must be reset to 1, not incremented from 5.
         assert state_after.consecutive_quota_errors == 1
+        # ...and the backoff must therefore be the un-escalated base, not base * 2**5.
+        assert before + _QUOTA_BACKOFF_BASE <= state_after.quota_blocked_until
+        assert state_after.quota_blocked_until <= monotonic() + _QUOTA_BACKOFF_BASE
 
     # -- mark_error: unavailability error (else branch) --
 
     def test_mark_error_unavailability_sets_unavailable_until_not_quota(self) -> None:
-        """Unavailability error sets unavailable_until with the fixed backoff and leaves quota state untouched."""
+        """ServiceUnavailableException applies exactly the fixed backoff and no quota penalty.
+
+        AWS documents 503 as service-side capacity, unrelated to account quotas, so
+        it must not escalate the exponential quota counter.
+        """
         from stdapi.config import SETTINGS  # noqa: PLC0415
 
         router = self._make_router()
-        backoff = 30
+        backoff = _UNAVAILABLE_BACKOFF
         before = monotonic()
         with (
             patch.object(
@@ -824,19 +1004,26 @@ class TestRegionRouterUnit:
 
         state = router._index.get(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
         assert state.unavailable_until >= before + backoff
+        assert state.unavailable_until <= monotonic() + backoff
+        assert not state.is_usable
         assert state.quota_blocked_until == 0.0
         assert state.consecutive_quota_errors == 0
+        assert state.last_quota_error_time == 0.0
 
     # -- mark_error: BotocoreConnectionError takes the unavailability path --
 
     def test_mark_error_connection_error_class_name_takes_unavailability_path(
         self,
     ) -> None:
-        """A connection-error class name (not in quota codes) applies the fixed unavailability backoff."""
+        """A connection-error class name (not in quota codes) applies the fixed unavailability backoff.
+
+        ``route_and_execute`` labels connection failures with the exception class
+        name rather than an AWS code, which must still land on the non-quota branch.
+        """
         from stdapi.config import SETTINGS  # noqa: PLC0415
 
         router = self._make_router()
-        backoff = 30
+        backoff = _UNAVAILABLE_BACKOFF
         before = monotonic()
         with (
             patch.object(
@@ -851,12 +1038,19 @@ class TestRegionRouterUnit:
 
         state = router._index.get(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
         assert state.unavailable_until >= before + backoff
+        assert state.unavailable_until <= monotonic() + backoff
+        assert not state.is_usable
         assert state.quota_blocked_until == 0.0
+        assert state.consecutive_quota_errors == 0
 
     # -- ordered_regions: all regions blocked → fallback list returned --
 
     def test_ordered_regions_all_blocked_returns_full_list(self) -> None:
-        """When every region is blocked, ordered_regions returns all regions as a last-resort fallback."""
+        """When every region is blocked, ordered_regions still returns them all, in order.
+
+        Callers iterate the result, so an empty list would turn a transient
+        all-regions-throttled state into an IndexError instead of a 429.
+        """
         from stdapi.config import SETTINGS  # noqa: PLC0415
 
         router = self._make_router()
@@ -872,15 +1066,20 @@ class TestRegionRouterUnit:
             router.mark_error(MODEL, ROUTING_PRIMARY, "ThrottlingException")
             router.mark_error(MODEL, ROUTING_SECONDARY, "ThrottlingException")
 
+        assert not router._index.get(MODEL, ROUTING_PRIMARY).is_usable  # noqa: SLF001
+        assert not router._index.get(MODEL, ROUTING_SECONDARY).is_usable  # noqa: SLF001
         result = router.ordered_regions(MODEL, _ROUTING_REGIONS)
-        # All regions must appear in the fallback — none must be dropped.
-        assert set(result) == {ROUTING_PRIMARY, ROUTING_SECONDARY}
-        assert len(result) == 2
+        # All regions must appear in the fallback, keeping the "ordered" order.
+        assert result == [ROUTING_PRIMARY, ROUTING_SECONDARY]
 
     # -- mark_error: quota backoff is capped at _MAX_QUOTA_BACKOFF --
 
     def test_mark_error_quota_backoff_capped_at_max(self) -> None:
-        """Quota backoff is capped at _MAX_QUOTA_BACKOFF (3600 s) regardless of error count."""
+        """Quota backoff saturates at ``_MAX_QUOTA_BACKOFF`` instead of doubling unbounded.
+
+        ``base * 2**100`` would otherwise park the region for longer than the process
+        lifetime; the counter itself keeps climbing.
+        """
         import stdapi.region_routing as _rr_mod  # noqa: PLC0415
         from stdapi.config import SETTINGS  # noqa: PLC0415
 
@@ -888,8 +1087,12 @@ class TestRegionRouterUnit:
         state = router._index.get(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
         # Force a very high consecutive error count so the raw backoff would overflow the cap.
         state.consecutive_quota_errors = 100
-        state.quota_blocked_until = monotonic() + 1  # still blocked → escalation branch
+        state.quota_blocked_until = monotonic() + 1  # still blocked
+        # The escalate-vs-reset choice keys off the age of the last error, so the
+        # timestamp must be recent for the counter to be carried forward.
+        state.last_quota_error_time = monotonic()
 
+        before = monotonic()
         with (
             patch.object(
                 SETTINGS,
@@ -900,10 +1103,11 @@ class TestRegionRouterUnit:
         ):
             router.mark_error(MODEL, ROUTING_PRIMARY, "ThrottlingException")
 
+        cap = _rr_mod._MAX_QUOTA_BACKOFF  # noqa: SLF001
         state_after = router._index.get(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
-        now = monotonic()
-        # Backoff window must not exceed the cap.
-        assert state_after.quota_blocked_until <= now + _rr_mod._MAX_QUOTA_BACKOFF + 1  # noqa: SLF001
+        assert state_after.consecutive_quota_errors == 101
+        # Backoff window is exactly the cap, neither shorter nor longer.
+        assert before + cap <= state_after.quota_blocked_until <= monotonic() + cap
 
     # -- mark_success resets unavailable_until as well --
 
@@ -914,7 +1118,9 @@ class TestRegionRouterUnit:
         router = self._make_router()
         with (
             patch.object(
-                SETTINGS, "aws_bedrock_region_routing_unavailable_backoff_seconds", 30
+                SETTINGS,
+                "aws_bedrock_region_routing_unavailable_backoff_seconds",
+                _UNAVAILABLE_BACKOFF,
             ),
             patch("stdapi.region_routing.log_error_details"),
         ):
@@ -928,6 +1134,8 @@ class TestRegionRouterUnit:
         assert state_after.unavailable_until == 0.0
         assert state_after.quota_blocked_until == 0.0
         assert state_after.consecutive_quota_errors == 0
+        assert state_after.last_quota_error_time == 0.0
+        assert state_after.is_usable
 
 
 # ---------------------------------------------------------------------------
@@ -936,7 +1144,14 @@ class TestRegionRouterUnit:
 
 
 class TestBedrockProbeUrl:
-    """_bedrock_probe_url: partition-correct hostname resolution, not a hardcoded suffix."""
+    """_bedrock_probe_url: partition-correct hostname resolution, not a hardcoded suffix.
+
+    Resolution goes through botocore's on-disk endpoint data, so no network access
+    and no credentials are involved.
+
+    Ref: botocore/data/endpoints.json
+         stdapi/region_routing.py:_bedrock_probe_url
+    """
 
     @pytest.mark.parametrize(
         ("region", "url"),
@@ -965,7 +1180,14 @@ class TestBedrockProbeUrl:
 
 
 class TestMeasureRegionLatencies:
-    """Unit tests for ``measure_region_latencies`` — all network I/O is mocked."""
+    """``measure_region_latencies`` startup probing, with all network I/O mocked.
+
+    Three HEAD probes per configured region feed the mean latency; regions whose
+    probes all fail are dropped rather than being ranked last.
+
+    Ref: stdapi/region_routing.py:measure_region_latencies
+         stdapi/region_routing.py:_single_probe
+    """
 
     async def test_returns_none_when_routing_disabled(self) -> None:
         """Returns None immediately when region routing strategy is not lowest_latency."""
@@ -992,7 +1214,7 @@ class TestMeasureRegionLatencies:
         assert result is None
 
     async def test_probes_regions_and_sorts_by_latency(self) -> None:
-        """Successful probes return a dict keyed by region with latency_ms and stddev_ms floats."""
+        """Each region is HEAD-probed three times and results come back sorted by latency."""
         import stdapi.region_routing as _rr_mod  # noqa: PLC0415
         from stdapi.config import SETTINGS  # noqa: PLC0415
 
@@ -1016,15 +1238,28 @@ class TestMeasureRegionLatencies:
             patch("stdapi.region_routing.ClientSession", return_value=mock_session),
         ):
             result = await _rr_mod.measure_region_latencies()
+            measured = dict(_rr_mod._REGION_LATENCIES)  # noqa: SLF001
 
         assert result is not None
         assert set(result.keys()) == set(_ROUTING_REGIONS)
+        # 3 probes per region, each on that region's own partition hostname.
+        assert mock_session.head.call_count == 3 * len(_ROUTING_REGIONS)
+        assert {call.args[0] for call in mock_session.head.call_args_list} == {
+            f"https://bedrock-runtime.{region}.amazonaws.com"
+            for region in _ROUTING_REGIONS
+        }
         for stats in result.values():
             assert isinstance(stats["latency_ms"], float)
             assert isinstance(stats["stddev_ms"], float)
+            assert stats["latency_ms"] >= 0.0
+            assert stats["stddev_ms"] >= 0.0
+        latencies = [stats["latency_ms"] for stats in result.values()]
+        assert latencies == sorted(latencies), "results must be lowest-latency first"
+        # The shared per-region latency map drives ORDERED_BEDROCK_REGIONS afterwards.
+        assert set(measured) == set(_ROUTING_REGIONS)
 
     async def test_failed_probes_are_excluded_from_results(self) -> None:
-        """Regions whose probes all fail (latency=None) are excluded from the returned dict."""
+        """A region whose three probes all time out is omitted; the reachable one keeps its mean."""
         import stdapi.region_routing as _rr_mod  # noqa: PLC0415
         from stdapi.config import SETTINGS  # noqa: PLC0415
 
@@ -1045,7 +1280,8 @@ class TestMeasureRegionLatencies:
 
         assert result is not None
         assert ROUTING_PRIMARY not in result
-        assert ROUTING_SECONDARY in result
+        # mean/pstdev of three identical 50 ms samples.
+        assert result[ROUTING_SECONDARY] == {"latency_ms": 50.0, "stddev_ms": 0.0}
 
 
 # ---------------------------------------------------------------------------
@@ -1054,30 +1290,56 @@ class TestMeasureRegionLatencies:
 
 
 class TestRouteAndExecute:
-    """Unit tests for route_and_execute — fully mocked, no real AWS calls."""
+    """route_and_execute failover classification and retry budget, with ``fn`` mocked.
+
+    The loop runs ``aws_bedrock_max_retries + 1`` attempts, marks the region for each
+    retryable failure and re-raises the last error once the budget is spent.
+
+    Ref: stdapi/models/__init__.py:route_and_execute
+         stdapi/models/__init__.py:_region_failover_label
+    """
 
     async def test_botocore_connection_error_is_reraised_after_retries_exhausted(
         self,
     ) -> None:
-        """BotocoreConnectionError exhausts all retries and is re-raised."""
+        """A connection error is retried once more, then re-raised unchanged."""
         import stdapi.models as _models  # noqa: PLC0415
         import stdapi.region_routing as _rr_mod  # noqa: PLC0415
         from stdapi.config import SETTINGS  # noqa: PLC0415
 
-        async def always_fails(_region: str) -> None:
+        # route_and_execute reads REGION_ROUTER from its own module namespace, so both
+        # bindings must point at the test router for the routed path to be exercised.
+        router = _rr_mod.RegionRouter()
+        calls: list[str] = []
+
+        async def always_fails(region: str) -> None:
+            calls.append(region)
             raise BotocoreConnectionError(error=Exception("Connection timed out"))
 
         with (
-            patch.object(_rr_mod, "REGION_ROUTER", _rr_mod.RegionRouter()),
+            patch.object(_rr_mod, "REGION_ROUTER", router),
+            patch.object(_models, "REGION_ROUTER", router),
             patch.object(SETTINGS, "aws_bedrock_region_routing", "ordered"),
             patch.object(SETTINGS, "aws_bedrock_regions", _ROUTING_REGIONS),
             patch.object(SETTINGS, "aws_bedrock_max_retries", 1),
-            pytest.raises(BotocoreConnectionError),
+            patch("stdapi.region_routing.log_error_details"),
+            pytest.raises(BotocoreConnectionError) as excinfo,
         ):
             await _models.route_and_execute(MODEL, list(_ROUTING_REGIONS), always_fails)
 
+        # max_retries=1 => 2 attempts; the blocked primary hands attempt 2 to the secondary.
+        assert calls == [ROUTING_PRIMARY, ROUTING_SECONDARY]
+        assert "Connection timed out" in str(excinfo.value)
+        # Both regions were penalised on the unavailability branch.
+        for region in _ROUTING_REGIONS:
+            assert router._index.get(MODEL, region).unavailable_until > monotonic()  # noqa: SLF001
+
     async def test_botocore_connection_error_calls_mark_error(self) -> None:
-        """BotocoreConnectionError triggers mark_error with the exception class name."""
+        """BotocoreConnectionError is recorded under its exception class name, once per attempt.
+
+        Connection failures carry no AWS error code, so ``_region_failover_label``
+        falls back to the class name and the router applies the unavailability backoff.
+        """
         import stdapi.models as _models  # noqa: PLC0415
         import stdapi.region_routing as _rr_mod  # noqa: PLC0415
         from stdapi.config import SETTINGS  # noqa: PLC0415
@@ -1085,8 +1347,10 @@ class TestRouteAndExecute:
         # RegionRouter uses __slots__, so we cannot patch instance attributes.
         # Patch the class method instead and track all calls during the test.
         router = _rr_mod.RegionRouter()
+        calls: list[str] = []
 
-        async def always_fails(_region: str) -> None:
+        async def always_fails(region: str) -> None:
+            calls.append(region)
             raise BotocoreConnectionError(error=Exception("Connection timed out"))
 
         with (
@@ -1096,16 +1360,23 @@ class TestRouteAndExecute:
             patch.object(SETTINGS, "aws_bedrock_regions", _ROUTING_REGIONS),
             patch.object(SETTINGS, "aws_bedrock_max_retries", 0),
             patch.object(_rr_mod.RegionRouter, "mark_error") as mock_mark_error,
-            pytest.raises(BotocoreConnectionError),
+            pytest.raises(BotocoreConnectionError) as excinfo,
         ):
             await _models.route_and_execute(MODEL, list(_ROUTING_REGIONS), always_fails)
 
+        # max_retries=0 => a single attempt, on the leading region only.
+        assert calls == [ROUTING_PRIMARY]
+        assert "Connection timed out" in str(excinfo.value)
         mock_mark_error.assert_called_once_with(
             MODEL, _ROUTING_REGIONS[0], "ConnectionError"
         )
 
     async def test_mantle_error_failover_throttling_retries_next_region(self) -> None:
-        """A failover MantleError with status 429 is mapped to ThrottlingException and retried."""
+        """A failover MantleError with status 429 is recorded as ThrottlingException and retried.
+
+        Bedrock Mantle reports HTTP statuses rather than Converse error codes, so the
+        router reuses the Converse taxonomy to pick the quota backoff.
+        """
         import stdapi.models as _models  # noqa: PLC0415
         import stdapi.region_routing as _rr_mod  # noqa: PLC0415
         from stdapi.aws_bedrock_mantle import MantleError  # noqa: PLC0415
@@ -1113,12 +1384,11 @@ class TestRouteAndExecute:
 
         router = _rr_mod.RegionRouter()
         original_mark_error = _rr_mod.RegionRouter.mark_error
-        calls = 0
+        calls: list[str] = []
 
-        async def fn(_region: str) -> str:
-            nonlocal calls
-            calls += 1
-            if calls == 1:
+        async def fn(region: str) -> str:
+            calls.append(region)
+            if len(calls) == 1:
                 msg = "throttled"
                 raise MantleError(msg, status=429, failover=True)
             return "ok"
@@ -1140,13 +1410,19 @@ class TestRouteAndExecute:
             result = await _models.route_and_execute(MODEL, list(_ROUTING_REGIONS), fn)
 
         assert result == "ok"
-        assert calls == 2
+        assert calls == [ROUTING_PRIMARY, ROUTING_SECONDARY]
         mock_mark_error.assert_called_once_with(
             MODEL, _ROUTING_REGIONS[0], "ThrottlingException"
         )
+        # 429 must land on the quota branch, and the retry must clear the survivor.
+        primary = router._index.get(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
+        assert primary.consecutive_quota_errors == 1
+        assert primary.quota_blocked_until > monotonic()
+        assert primary.unavailable_until == 0.0
+        assert router._index.get(MODEL, ROUTING_SECONDARY).is_usable  # noqa: SLF001
 
     async def test_mantle_error_failover_unavailable_retries_next_region(self) -> None:
-        """A failover MantleError with status 503 is mapped to ServiceUnavailableException and retried."""
+        """A failover MantleError with a non-429 status takes the unavailability branch and is retried."""
         import stdapi.models as _models  # noqa: PLC0415
         import stdapi.region_routing as _rr_mod  # noqa: PLC0415
         from stdapi.aws_bedrock_mantle import MantleError  # noqa: PLC0415
@@ -1154,12 +1430,11 @@ class TestRouteAndExecute:
 
         router = _rr_mod.RegionRouter()
         original_mark_error = _rr_mod.RegionRouter.mark_error
-        calls = 0
+        calls: list[str] = []
 
-        async def fn(_region: str) -> str:
-            nonlocal calls
-            calls += 1
-            if calls == 1:
+        async def fn(region: str) -> str:
+            calls.append(region)
+            if len(calls) == 1:
                 msg = "unavailable"
                 raise MantleError(msg, status=503, failover=True)
             return "ok"
@@ -1181,28 +1456,38 @@ class TestRouteAndExecute:
             result = await _models.route_and_execute(MODEL, list(_ROUTING_REGIONS), fn)
 
         assert result == "ok"
-        assert calls == 2
+        assert calls == [ROUTING_PRIMARY, ROUTING_SECONDARY]
         mock_mark_error.assert_called_once_with(
             MODEL, _ROUTING_REGIONS[0], "ServiceUnavailableException"
         )
+        # 503 must not escalate the quota counter.
+        primary = router._index.get(MODEL, ROUTING_PRIMARY)  # noqa: SLF001
+        assert primary.unavailable_until > monotonic()
+        assert primary.quota_blocked_until == 0.0
+        assert primary.consecutive_quota_errors == 0
 
     async def test_mantle_error_without_failover_is_reraised_immediately(self) -> None:
-        """A non-failover MantleError is re-raised without retrying another region."""
+        """A non-failover MantleError is re-raised as-is, without a second region attempt.
+
+        ``failover=False`` marks a client-side error (here 400) that another region
+        would reject identically, so retrying would only waste the retry budget.
+        """
         import stdapi.models as _models  # noqa: PLC0415
         import stdapi.region_routing as _rr_mod  # noqa: PLC0415
         from stdapi.aws_bedrock_mantle import MantleError  # noqa: PLC0415
         from stdapi.config import SETTINGS  # noqa: PLC0415
 
-        calls = 0
+        router = _rr_mod.RegionRouter()
+        calls: list[str] = []
 
-        async def fn(_region: str) -> str:
-            nonlocal calls
-            calls += 1
+        async def fn(region: str) -> str:
+            calls.append(region)
             msg = "bad request"
             raise MantleError(msg, status=400, failover=False)
 
         with (
-            patch.object(_rr_mod, "REGION_ROUTER", _rr_mod.RegionRouter()),
+            patch.object(_rr_mod, "REGION_ROUTER", router),
+            patch.object(_models, "REGION_ROUTER", router),
             patch.object(SETTINGS, "aws_bedrock_region_routing", "ordered"),
             patch.object(SETTINGS, "aws_bedrock_regions", _ROUTING_REGIONS),
             patch.object(SETTINGS, "aws_bedrock_max_retries", 1),
@@ -1211,7 +1496,11 @@ class TestRouteAndExecute:
             await _models.route_and_execute(MODEL, list(_ROUTING_REGIONS), fn)
 
         assert exc_info.value.status == 400
-        assert calls == 1
+        assert exc_info.value.failover is False
+        assert str(exc_info.value) == "bad request"
+        assert calls == [ROUTING_PRIMARY]
+        # No backoff bookkeeping for a non-retryable error.
+        assert router._index.get(MODEL, ROUTING_PRIMARY).is_usable  # noqa: SLF001
 
 
 # ---------------------------------------------------------------------------
@@ -1220,7 +1509,14 @@ class TestRouteAndExecute:
 
 
 class TestNoRetryClientWarmUp:
-    """__aenter__ warms a single-attempt client pool per region-rotated Bedrock service."""
+    """__aenter__ warms a single-attempt client pool per region-rotated Bedrock service.
+
+    Region failover must not sit through botocore's own adaptive retries first, so
+    routed calls use a parallel pool created with ``max_attempts=1``.
+
+    Ref: stdapi/aws.py:AWSConnectionManager
+         stdapi/aws_bedrock.py:bedrock_client
+    """
 
     #: Client creation is fully stubbed: exercises the local implementation only.
     pytestmark = pytest.mark.local
@@ -1260,7 +1556,7 @@ class TestNoRetryClientWarmUp:
     async def test_no_retry_pool_built_per_region(
         self, monkeypatch: pytest.MonkeyPatch, service: str
     ) -> None:
-        """With routing active, each region gets an extra single-attempt client."""
+        """With routing active, each region gets an extra ``max_attempts=1`` client."""
         import stdapi.aws as _aws_mod  # noqa: PLC0415
         from stdapi.config import SETTINGS  # noqa: PLC0415
 
@@ -1418,12 +1714,19 @@ async def s3_file(sample_image_file: bytes) -> AsyncGenerator[S3FileFixture]:
 
 
 class TestS3InputRegions:
-    """Tests for ``get_s3_input_regions`` and ``InputFile`` S3 tracking."""
+    """``get_s3_input_regions`` reports the region and byte weight of each S3 input.
+
+    The byte totals are what ``compute_candidate_regions`` ranks regions by, so an
+    unresolved file must still register its region, with weight 0.
+
+    Ref: stdapi/input_file.py:get_s3_input_regions
+         stdapi/models/__init__.py:compute_candidate_regions
+    """
 
     async def test_get_s3_input_regions_returns_region_and_size(
         self, s3_file: S3FileFixture
     ) -> None:
-        """InputFile created from an S3 URI contributes its region and size to get_s3_input_regions."""
+        """A resolved S3 InputFile contributes its region mapped to its exact byte count."""
         _require_s3_bucket()
         from stdapi.input_file import (  # noqa: PLC0415
             _CURRENT_INPUT_FILES,
@@ -1441,8 +1744,7 @@ class TestS3InputRegions:
         finally:
             _CURRENT_INPUT_FILES.reset(token)
 
-        assert s3_file.region in regions
-        assert regions[s3_file.region] == len(s3_file.content)
+        assert regions == {s3_file.region: len(s3_file.content)}
 
     async def test_get_s3_input_regions_without_metadata_contributes_zero_size(
         self, s3_file: S3FileFixture
@@ -1462,8 +1764,7 @@ class TestS3InputRegions:
         finally:
             _CURRENT_INPUT_FILES.reset(token)
 
-        assert s3_file.region in regions
-        assert regions[s3_file.region] == 0
+        assert regions == {s3_file.region: 0}
 
     async def test_get_s3_input_regions_empty_when_no_s3_files(self) -> None:
         """get_s3_input_regions returns an empty dict when no S3 InputFiles are in context."""
@@ -1482,12 +1783,18 @@ class TestS3InputRegions:
 
 
 class TestS3SourceToS3:
-    """Tests for ``_S3Source.to_s3`` — same-region return and cross-region copy."""
+    """``_S3Source.to_s3`` returns the object in place, or copies it across regions.
+
+    Bedrock can only read an ``s3Location`` from its own region, so a cross-region
+    input has to be copied before invocation; a same-region input must not be.
+
+    Ref: stdapi/input_file.py:_S3Source.to_s3
+    """
 
     async def test_to_s3_same_region_returns_same_object(
         self, s3_file: S3FileFixture
     ) -> None:
-        """to_s3 for an S3 file already in the target region returns a reference to the same object."""
+        """to_s3 for an S3 file already in the target region returns the same bucket and key."""
         _require_s3_bucket()
         from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile  # noqa: PLC0415
 
@@ -1504,7 +1811,7 @@ class TestS3SourceToS3:
     async def test_to_s3_cross_region_copies_object(
         self, s3_file: S3FileFixture
     ) -> None:
-        """to_s3 for an S3 file copies it when the target region differs from the source."""
+        """to_s3 copies the object, byte-for-byte, into the target region's bucket under a new key."""
         _require_s3_bucket()
         import stdapi.aws as _aws_mod  # noqa: PLC0415
         from stdapi.aws_s3 import get_s3_bucket_for_region  # noqa: PLC0415
@@ -1573,10 +1880,14 @@ class TestS3SourceToS3:
 
 
 class TestS3ComputeCandidateRegions:
-    """Integration tests for ``compute_candidate_regions`` with real S3 inputs."""
+    """``compute_candidate_regions`` region pinning driven by a real S3 object.
+
+    Ref: stdapi/models/__init__.py:compute_candidate_regions
+         stdapi/aws_s3.py:get_s3_bucket_for_region
+    """
 
     async def test_s3_input_routes_to_file_region(self, s3_file: S3FileFixture) -> None:
-        """compute_candidate_regions pins to the region where the S3 file lives."""
+        """compute_candidate_regions pins to the single region where the S3 file lives."""
         _require_s3_bucket()
         from stdapi.input_file import (  # noqa: PLC0415
             _CURRENT_INPUT_FILES,
@@ -1646,12 +1957,20 @@ class TestS3ComputeCandidateRegions:
 
 
 class TestResolveBedrockContentBlocksS3:
-    """Tests for ``resolve_all_bedrock_content_blocks`` using a real S3 file."""
+    """``resolve_all_bedrock_content_blocks`` rewrites pending blocks in place.
+
+    ``to_s3=True`` yields an ``s3Location`` reference (used for async invocation) and
+    ``to_s3=False`` inlines the bytes; the two source variants are mutually exclusive
+    in the Bedrock ``ImageSource`` union.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ContentBlock.html
+         stdapi/input_file.py:resolve_all_bedrock_content_blocks
+    """
 
     async def test_resolve_to_s3_location_writes_s3_uri(
         self, s3_file: S3FileFixture
     ) -> None:
-        """resolve_bedrock_content_block with to_s3=True writes s3Location into the block."""
+        """resolve_all_bedrock_content_blocks with to_s3=True replaces the source with an s3Location."""
         _require_s3_bucket()
         from stdapi.input_file import (  # noqa: PLC0415
             _CURRENT_INPUT_FILES,
@@ -1670,13 +1989,15 @@ class TestResolveBedrockContentBlocksS3:
         # After resolution, _bedrock_source should be removed and replaced with s3Location.
         assert "image" in block
         source = block["image"]["source"]
-        assert "s3Location" in source
-        assert source["s3Location"]["uri"].startswith("s3://")
+        assert source["s3Location"]["uri"].startswith(f"s3://{s3_file.bucket}/")
+        # The union is exclusive, and the pending-source handle is consumed.
+        assert "bytes" not in source
+        assert not hasattr(f, "_bedrock_source")
 
     async def test_resolve_to_bytes_downloads_content(
         self, s3_file: S3FileFixture
     ) -> None:
-        """resolve_bedrock_content_block with to_s3=False fetches bytes from S3."""
+        """resolve_all_bedrock_content_blocks with to_s3=False inlines the object's bytes."""
         _require_s3_bucket()
         from stdapi.input_file import (  # noqa: PLC0415
             _CURRENT_INPUT_FILES,
@@ -1694,8 +2015,9 @@ class TestResolveBedrockContentBlocksS3:
 
         assert "image" in block
         source = block["image"]["source"]
-        assert "bytes" in source
         assert source["bytes"] == s3_file.content
+        assert "s3Location" not in source
+        assert not hasattr(f, "_bedrock_source")
 
 
 # ---------------------------------------------------------------------------
@@ -1705,15 +2027,19 @@ class TestResolveBedrockContentBlocksS3:
 
 
 class TestFileSourceBaseMethodsS3:
-    """Exercise _FileSource.get_size / get_filename / is_s3 / to_data_uri / to_s3.
+    """_FileSource.get_size / get_filename / is_s3 / to_data_uri / to_s3 over a real S3 object.
 
-    Uses a real _S3Source so the metadata path hits the live S3 HeadObject.
+    Metadata is lazy: the first accessor triggers a live ``HeadObject`` against the
+    uploaded fixture object.
+
+    Ref: stdapi/input_file.py:_S3Source
+         stdapi/input_file.py:_FileSource
     """
 
     async def test_s3source_get_size_via_head_object(
         self, s3_file: S3FileFixture
     ) -> None:
-        """_FileSource.get_size triggers _resolve_metadata and returns correct byte count."""
+        """_FileSource.get_size resolves metadata and returns the object's exact byte count."""
         _require_s3_bucket()
         from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile  # noqa: PLC0415
 
@@ -1775,7 +2101,11 @@ class TestFileSourceBaseMethodsS3:
     async def test_filesource_to_s3_via_base64_source(
         self, s3_file: S3FileFixture, sample_image_file: bytes
     ) -> None:
-        """_FileSource.to_s3 (base class path) uploads bytes and returns an S3Object."""
+        """_FileSource.to_s3 uploads the decoded bytes and returns the resulting S3 object.
+
+        A base64 source has no S3 identity of its own, so the base-class path must
+        materialise the payload through ``put_s3_object`` in the target region.
+        """
         _require_s3_bucket()
         import base64 as _b64  # noqa: PLC0415
 
@@ -1799,6 +2129,8 @@ class TestFileSourceBaseMethodsS3:
                 _aws_mod._CLIENTS.setdefault("s3", {})[s3_file.region] = s3  # noqa: SLF001
                 try:
                     result = await f.to_s3(s3_file.region, bucket=s3_file.bucket)
+                    head = await s3.head_object(Bucket=result.bucket, Key=result.key)
+                    assert head["ContentLength"] == len(sample_image_file)
                 finally:
                     if orig is None:
                         _aws_mod._CLIENTS.get("s3", {}).pop(s3_file.region, None)  # noqa: SLF001
@@ -1813,7 +2145,9 @@ class TestFileSourceBaseMethodsS3:
 
         assert result is not None
         assert result.bucket == s3_file.bucket
+        # A fresh key, not the fixture object's.
         assert result.key
+        assert result.key != s3_file.key
 
 
 # ---------------------------------------------------------------------------
@@ -1849,7 +2183,11 @@ async def s3_presigned_url(s3_file: S3FileFixture) -> str:
 
 
 class TestHttpSourceWithPresignedUrl:
-    """_HttpSource tests using a presigned S3 URL — real network, no SSRF."""
+    """_HttpSource behavior driven by a presigned S3 URL — real network, no SSRF target.
+
+    Ref: https://docs.aws.amazon.com/AmazonS3/latest/userguide/ShareObjectPreSignedURL.html
+         stdapi/input_file.py:_HttpSource
+    """
 
     async def test_resolve_metadata_sets_content_type_and_size(
         self, s3_presigned_url: str, s3_file: S3FileFixture
@@ -1905,11 +2243,11 @@ class TestHttpSourceWithPresignedUrl:
     async def test_http_source_to_s3_uploads_from_stream(
         self, s3_presigned_url: str, s3_file: S3FileFixture
     ) -> None:
-        """_HttpSource.to_s3 returns a valid S3Object.
+        """A presigned URL for an accepted bucket is normalised to s3://, so to_s3 re-uploads nothing.
 
-        The presigned URL belongs to an accepted bucket so InputFile normalises it
-        to an s3:// source.  to_s3 for a same-region S3 source returns the original
-        object without any upload; either way the result must point to a valid bucket+key.
+        The query string is excluded from the parsed key, so the normalised source
+        addresses the very object the URL was signed for and the same-region ``to_s3``
+        returns it untouched.
         """
         _require_s3_bucket()
         from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile  # noqa: PLC0415
@@ -1917,12 +2255,13 @@ class TestHttpSourceWithPresignedUrl:
         token = _CURRENT_INPUT_FILES.set([])
         try:
             f = InputFile(s3_presigned_url)
+            assert f.is_s3 is True
             result = await f.to_s3(s3_file.region)
         finally:
             _CURRENT_INPUT_FILES.reset(token)
 
-        assert result.bucket
-        assert result.key
+        assert result.bucket == s3_file.bucket
+        assert result.key == s3_file.key
 
     async def test_http_source_to_s3_via_presigned_url(
         self, s3_presigned_url: str, s3_file: S3FileFixture, sample_image_file: bytes
@@ -1974,12 +2313,15 @@ class TestHttpSourceWithPresignedUrl:
 
 
 class TestHttpSourceMocked:
-    """_HttpSource tests using aiohttp mocking — no real network required."""
+    """_HttpSource fallbacks with aiohttp mocked out — no real network required.
+
+    Ref: stdapi/input_file.py:_HttpSource._content_type_from_partial
+    """
 
     async def test_content_type_from_partial_when_head_has_no_content_type(
         self, sample_image_file: bytes
     ) -> None:
-        """_HttpSource._content_type_from_partial is called when HEAD response has no Content-Type."""
+        """A HEAD response without Content-Type falls back to magic detection on a ranged read."""
         from unittest.mock import AsyncMock, MagicMock, patch  # noqa: PLC0415
 
         from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile  # noqa: PLC0415
@@ -2019,6 +2361,12 @@ class TestHttpSourceMocked:
             _CURRENT_INPUT_FILES.reset(token)
 
         assert content_type == "image/png"
+        # HEAD alone was not enough, so exactly one follow-up GET was issued.
+        assert mock_session.head.call_count == 1
+        assert mock_session.get.call_count == 1
+        assert mock_session.get.call_args.args == ("https://example.com/file.png",)
+        # Only the magic prefix is read, never the whole body.
+        mock_get_resp.content.read.assert_awaited_once()
 
     async def test_http_source_is_s3_false(self) -> None:
         """InputFile from an http:// URL is not an S3 file."""
@@ -2039,7 +2387,10 @@ class TestHttpSourceMocked:
 
 
 class TestDataUriSource:
-    """Tests for _DataUriSource terminal methods."""
+    """_DataUriSource keeps the payload encoded: no decode/re-encode round trip.
+
+    Ref: stdapi/input_file.py:_DataUriSource
+    """
 
     async def test_to_base64_returns_payload_without_decoding(
         self, sample_image_file: bytes
@@ -2126,7 +2477,11 @@ class TestDataUriSource:
 
 
 class TestBase64Source:
-    """Tests for _Base64Source terminal methods and error handling."""
+    """_Base64Source terminal methods and its strict-validation failure mode.
+
+    Ref: stdapi/input_file.py:_Base64Source
+         stdapi/utils.py:b64decode
+    """
 
     async def test_to_base64_returns_original_string(
         self, sample_image_file: bytes
@@ -2168,7 +2523,12 @@ class TestBase64Source:
         assert result.endswith(b64)
 
     async def test_read_value_error_on_invalid_base64(self) -> None:
-        """_Base64Source._read raises ApiError when the base64 string is invalid."""
+        """Invalid base64 surfaces as a 400 ApiError quoting the binascii reason.
+
+        ``b64decode(validate=True)`` rejects the out-of-alphabet characters instead of
+        silently discarding them, and the resulting ``ValueError`` is re-raised as a
+        client error rather than a 500.
+        """
         from stdapi.api_errors import ApiError  # noqa: PLC0415
         from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile  # noqa: PLC0415
 
@@ -2178,10 +2538,16 @@ class TestBase64Source:
         token = _CURRENT_INPUT_FILES.set([])
         try:
             f = InputFile(bad_b64)
-            with pytest.raises(ApiError):
+            with pytest.raises(ApiError) as excinfo:
                 await f.to_bytes()
         finally:
             _CURRENT_INPUT_FILES.reset(token)
+
+        assert excinfo.value.status == 400
+        message = str(excinfo.value)
+        # Gateway-owned prefix; the tail is binascii's own wording.
+        assert message.startswith("Invalid base64 data: ")
+        assert "Non-base64 digit found" in message
 
 
 # ---------------------------------------------------------------------------
@@ -2192,7 +2558,14 @@ class TestBase64Source:
 
 
 class TestInputFilePublicApi:
-    """Tests for InputFile public API methods and constructor variants."""
+    """InputFile construction, S3 URL normalisation and JSON-schema exposure.
+
+    An HTTP URL that addresses a configured bucket is rewritten to an ``s3://``
+    source so Bedrock reads it directly instead of the gateway proxying the bytes.
+
+    Ref: stdapi/input_file.py:InputFile._normalize_and_detect_origin
+         stdapi/input_file.py:InputFile.__get_pydantic_json_schema__
+    """
 
     def test_new_with_content_type_sets_source_content_type(self) -> None:
         """InputFile.__new__ with content_type pre-populates _source._content_type."""
@@ -2231,6 +2604,8 @@ class TestInputFilePublicApi:
 
         assert f._origin == _FileOrigin.S3_URI  # noqa: SLF001
         assert f.is_s3 is True
+        # The rewritten source addresses the same bucket and key, query string dropped.
+        assert repr(f) == f"s3://{s3_file.bucket}/{s3_file.key}"
 
     async def test_normalize_s3_path_style_http_url_accepted_bucket(
         self, s3_file: S3FileFixture
@@ -2253,6 +2628,8 @@ class TestInputFilePublicApi:
 
         assert f._origin == _FileOrigin.S3_URI  # noqa: SLF001
         assert f.is_s3 is True
+        # The rewritten source addresses the same bucket and key, query string dropped.
+        assert repr(f) == f"s3://{s3_file.bucket}/{s3_file.key}"
 
     def test_normalize_s3_http_url_unknown_bucket_treated_as_http(self) -> None:
         """An S3 HTTP URL for a non-accepted bucket is treated as a plain HTTP URL."""
@@ -2277,7 +2654,7 @@ class TestInputFilePublicApi:
         """__get_pydantic_json_schema__ omits the URL pattern when BASE64 is in ALLOWED_ORIGINS."""
         from pydantic_core import CoreSchema  # noqa: PLC0415
 
-        from stdapi.input_file import InputFile  # noqa: PLC0415
+        from stdapi.input_file import InputFile, _FileOrigin  # noqa: PLC0415
 
         handler = None  # handler is not used in the implementation
         schema = InputFile.__get_pydantic_json_schema__(
@@ -2285,21 +2662,29 @@ class TestInputFilePublicApi:
             handler,  # type: ignore[arg-type]
         )
         # InputFile has BASE64 in ALLOWED_ORIGINS → no pattern restriction.
-        assert schema["type"] == "string"
-        assert "pattern" not in schema
+        assert _FileOrigin.BASE64 in InputFile.ALLOWED_ORIGINS
+        assert schema == {"type": "string", "minLength": 1}
 
     def test_get_pydantic_json_schema_url_only_has_pattern(self) -> None:
-        """__get_pydantic_json_schema__ adds URL pattern when BASE64 is not allowed."""
+        """A base64-rejecting subclass advertises a URL-only ``pattern`` in its JSON schema."""
+        import re  # noqa: PLC0415
+
         from pydantic_core import CoreSchema  # noqa: PLC0415
 
-        from stdapi.input_file import InputFileUrl  # noqa: PLC0415
+        from stdapi.input_file import InputFileUrl, _FileOrigin  # noqa: PLC0415
 
+        assert _FileOrigin.BASE64 not in InputFileUrl.ALLOWED_ORIGINS
         schema = InputFileUrl.__get_pydantic_json_schema__(
             CoreSchema,  # type: ignore[arg-type]
             None,  # type: ignore[arg-type]
         )
-        assert schema.get("pattern") is not None
-        assert schema["pattern"].startswith("^(?:https?://")
+        assert schema["type"] == "string"
+        pattern = schema["pattern"]
+        assert pattern.startswith("^(?:https?://")
+        # The advertised pattern must accept the URL forms and reject bare base64.
+        assert re.match(pattern, "https://example.com/file.png")
+        assert re.match(pattern, "s3://bucket/key.png")
+        assert not re.match(pattern, "aGVsbG8gd29ybGQ=")
 
     async def test_inputfile_get_size_via_data_uri(
         self, sample_pdf_file: bytes

@@ -1,4 +1,14 @@
-"""Tests for stdapi.aws_bedrock: extra model parameters and guardrail helpers."""
+"""Extra model parameters, inference config and guardrail helpers in stdapi.aws_bedrock.
+
+Covers gateway-internal helpers with no upstream analogue: the merge of
+``default_model_params`` with per-request extras, the ``inferenceConfig``
+builder, the ``X-Amzn-Bedrock-Guardrail*`` header override, guardrail Region
+resolution, and the guardrail-assessment to OpenAI-moderation mapping.
+
+Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+     https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-converse-api.html
+     stdapi/aws_bedrock.py
+"""
 
 from typing import TYPE_CHECKING, Any
 
@@ -48,7 +58,13 @@ class _Request(BaseModelRequestWithExtra):
 
 
 class TestGetExtraModelParameters:
-    """get_extra_model_parameters: default/extra merge and settings isolation."""
+    """get_extra_model_parameters: default/extra merge and settings isolation.
+
+    The merged mapping is what the gateway forwards as Converse's
+    ``additionalModelRequestFields``.
+
+    Ref: stdapi/aws_bedrock.py:get_extra_model_parameters
+    """
 
     def test_merges_defaults_with_request_extras(
         self, monkeypatch: pytest.MonkeyPatch
@@ -98,7 +114,15 @@ class TestGetExtraModelParameters:
 
 @pytest.mark.usefixtures("configured_guardrail")
 class TestResolveGuardrailModel:
-    """resolve_guardrail_model: version handling against the configured guardrail."""
+    """resolve_guardrail_model: version handling against the configured guardrail.
+
+    A moderation ``model`` value is parsed as ``<identifier>[:<version>]``, where
+    the version is a numeric version or the literal ``DRAFT``, matching
+    ApplyGuardrail's ``guardrailVersion`` pattern.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ApplyGuardrail.html
+         stdapi/aws_bedrock.py:resolve_guardrail_model
+    """
 
     def test_no_version_uses_configured_version(self) -> None:
         """Naming the configured guardrail with no version returns its configured version."""
@@ -118,10 +142,19 @@ class TestResolveGuardrailModel:
     def test_different_version_is_rejected_when_override_disallowed(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A different explicit version falls through to the override-permission check."""
+        """A different explicit version falls through to the override-permission check.
+
+        The identifier matches the configured guardrail, so only the version
+        differs — that alone must be treated as an override attempt and refused
+        as a 400 rather than being silently coerced to the configured version.
+        """
         monkeypatch.setattr(SETTINGS, "aws_bedrock_allow_guardrail_override", False)
-        with pytest.raises(ApiError, match="not allowed"):
+        with pytest.raises(ApiError) as not_allowed:
             resolve_guardrail_model("gr123:2")
+        assert not_allowed.value.status == 400
+        assert "Selecting a guardrail via 'model' is not allowed" in str(
+            not_allowed.value
+        )
 
 
 def _content_filter_assessment(
@@ -138,7 +171,15 @@ def _content_filter_assessment(
 
 
 class TestSetInferenceConfiguration:
-    """set_inference_configuration: explicit falsy values must not be dropped."""
+    """set_inference_configuration: explicit falsy values must not be dropped.
+
+    The result is Converse's ``inferenceConfig``, whose members are exactly
+    ``maxTokens``, ``stopSequences``, ``temperature`` and ``topP`` — hence the
+    camelCase renaming of the OpenAI-style arguments.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+         stdapi/aws_bedrock.py:set_inference_configuration
+    """
 
     def test_zero_temperature_and_top_p_are_forwarded(
         self, monkeypatch: pytest.MonkeyPatch
@@ -189,7 +230,17 @@ def _guardrail_config_var_isolated() -> Iterator[None]:
 
 @pytest.mark.usefixtures("_guardrail_config_var_isolated")
 class TestSetGuardrailConfiguration:
-    """set_guardrail_configuration: header-based override, incl. stream processing mode."""
+    """set_guardrail_configuration: header-based override, incl. stream processing mode.
+
+    The inbound header names mirror InvokeModel's ``X-Amzn-Bedrock-Guardrail*``
+    headers, and ``streamProcessingMode`` is allow-listed against Bedrock's
+    ``sync``/``async`` enum because it exists only on ConverseStream's
+    ``GuardrailStreamConfiguration``.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeModel.html
+         https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-converse-api.html
+         stdapi/aws_bedrock.py:set_guardrail_configuration
+    """
 
     def test_stream_processing_mode_header_is_applied(
         self, monkeypatch: pytest.MonkeyPatch
@@ -206,12 +257,20 @@ class TestSetGuardrailConfiguration:
 
         set_guardrail_configuration(headers)
 
-        assert GUARDRAIL_CONFIG_VAR.get()["streamProcessingMode"] == "async"
+        assert GUARDRAIL_CONFIG_VAR.get() == {
+            "guardrailIdentifier": "gr123",
+            "guardrailVersion": "1",
+            "streamProcessingMode": "async",
+        }
 
     def test_invalid_stream_processing_mode_header_is_ignored(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """An unrecognised streamProcessingMode value is dropped, not forwarded verbatim."""
+        """An unrecognised streamProcessingMode value is dropped, not forwarded verbatim.
+
+        The rest of the header-supplied guardrail still applies: only the
+        off-enum value is discarded, so Bedrock never sees it.
+        """
         monkeypatch.setattr(SETTINGS, "aws_bedrock_allow_guardrail_override", True)
         headers = Headers(
             {
@@ -223,12 +282,20 @@ class TestSetGuardrailConfiguration:
 
         set_guardrail_configuration(headers)
 
-        assert "streamProcessingMode" not in GUARDRAIL_CONFIG_VAR.get()
+        assert GUARDRAIL_CONFIG_VAR.get() == {
+            "guardrailIdentifier": "gr123",
+            "guardrailVersion": "1",
+        }
 
     def test_stream_processing_mode_header_ignored_without_override_permission(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The header is ignored (falls back to settings) when override is disallowed."""
+        """The header is ignored (falls back to settings) when override is disallowed.
+
+        Both the identifier/version pair and the stream processing mode come
+        from the server configuration, so a client cannot redirect its request
+        to another guardrail.
+        """
         monkeypatch.setattr(SETTINGS, "aws_bedrock_allow_guardrail_override", False)
         monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_identifier", "gr-default")
         monkeypatch.setattr(SETTINGS, "aws_bedrock_guardrail_version", "2")
@@ -244,11 +311,20 @@ class TestSetGuardrailConfiguration:
 
         config = GUARDRAIL_CONFIG_VAR.get()
         assert config["guardrailIdentifier"] == "gr-default"
+        assert config["guardrailVersion"] == "2"
         assert "streamProcessingMode" not in config
 
 
 class TestGuardrailRegion:
-    """guardrail_region: region validation against configured Bedrock regions."""
+    """guardrail_region: region validation against configured Bedrock regions.
+
+    ApplyGuardrail accepts either a bare identifier or a full guardrail ARN; the
+    gateway reads the Region out of ARN field 3 and refuses to call a Region the
+    server was not configured for.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ApplyGuardrail.html
+         stdapi/aws_bedrock.py:guardrail_region
+    """
 
     def test_arn_region_is_returned_when_configured(
         self, monkeypatch: pytest.MonkeyPatch
@@ -264,8 +340,13 @@ class TestGuardrailRegion:
         """Regression: an ARN naming an unconfigured region must not crash with KeyError."""
         monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", ["us-east-1"])
         arn = "arn:aws:bedrock:ap-south-1:123456789012:guardrail/gr123"
-        with pytest.raises(ApiError):
+        with pytest.raises(ApiError) as unconfigured:
             guardrail_region(arn)
+        assert unconfigured.value.status == 400
+        assert "ap-south-1" in str(unconfigured.value), (
+            "the rejected region must be named in the error"
+        )
+        assert "not a configured Bedrock region" in str(unconfigured.value)
 
     def test_bare_identifier_uses_primary_region(
         self, monkeypatch: pytest.MonkeyPatch
@@ -276,7 +357,15 @@ class TestGuardrailRegion:
 
 
 class TestMapGuardrailFilters:
-    """map_guardrail_filters: pinned filter/category and confidence/score tables."""
+    """map_guardrail_filters: pinned filter/category and confidence/score tables.
+
+    Bedrock Guardrails report a confidence level per content filter, not a
+    score, so both the five-filter to OpenAI-category mapping and the
+    level-to-float table are gateway inventions with no upstream equivalent.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ApplyGuardrail.html
+         stdapi/aws_bedrock.py:map_guardrail_filters
+    """
 
     @pytest.mark.parametrize(
         ("filter_type", "category"),
@@ -306,8 +395,14 @@ class TestMapGuardrailFilters:
     def test_full_confidence_to_score_mapping(
         self, confidence: str, score: float
     ) -> None:
-        """Every guardrail confidence level maps to its OpenAI-style score."""
-        _, scores, _ = map_guardrail_filters(
+        """Every guardrail confidence level maps to its OpenAI-style score.
+
+        ``action: NONE`` means the guardrail did not act, so the score is
+        reported while the category stays false and no intervention is flagged.
+        """
+        categories, scores, intervened = map_guardrail_filters(
             [_content_filter_assessment("HATE", confidence, action="NONE")]
         )
         assert scores == {"hate": score}
+        assert categories == {"hate": False}
+        assert intervened is False

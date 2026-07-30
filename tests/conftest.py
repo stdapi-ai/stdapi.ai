@@ -1,4 +1,20 @@
-"""Pytest configuration and fixtures."""
+"""Shared pytest configuration and fixtures for the whole suite.
+
+The suite runs against three interchangeable targets, selected by CLI flag:
+the in-process ASGI app (default), a remote deployment (``--server-url``) or the
+official OpenAI/Anthropic/Cohere APIs (``--use-official-api``). Every client and
+model fixture resolves per target, so the same test body exercises the gateway and
+the API it re-implements. ``MODEL_MAPPINGS`` and its Anthropic/Cohere counterparts
+hold that per-target model choice; each entry is pinned deliberately (cheapest
+model that has the capability under test) and must not be changed casually.
+
+Environment variables are written at import time, before any test module can
+import ``stdapi.config``, because ``SETTINGS`` is a module-level singleton built
+from ``os.environ`` on first import.
+
+Ref: stdapi/config.py:_Settings
+     stdapi/main.py:app
+"""
 
 from __future__ import annotations
 
@@ -44,6 +60,9 @@ def logged_usage_entries(
     model: str | None = None,
 ) -> list[dict[str, Any]]:
     """Extract usage entries from captured JSON logs, optionally filtered.
+
+    Usage is only observable through the structured request log, so cost/metering
+    tests read it back from captured stdout rather than from a return value.
 
     Args:
         captured_stdout: Captured stdout with one JSON log event per line.
@@ -131,7 +150,11 @@ def set_test_price(
 
 @pytest.fixture(autouse=True)
 def _clean_price_index() -> Generator[None]:
-    """Reset the price index before each test to prevent leakage."""
+    """Reset the price index around each test so seeded prices cannot leak.
+
+    ``set_test_price`` mutates process-wide pricing state; without this the first
+    test to seed a price would change every later cost assertion.
+    """
     from stdapi.pricing import _state  # noqa: PLC0415
 
     original = _state.price_index
@@ -323,7 +346,7 @@ _OPT_IN_MARKERS = ("expensive", "agentic", "slow", "video")
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
-    """Add custom pytest command line options."""
+    """Register the target-selection and opt-in-marker command line options."""
     parser.addoption(
         "--env-profile",
         action="store",
@@ -397,91 +420,91 @@ def pytest_collection_modifyitems(
 
 @pytest.fixture(scope="session")
 def use_official_api(request: pytest.FixtureRequest) -> bool:
-    """Determine if we should use an official API (OpenAI, Anthropic, etc.)."""
+    """True when the suite targets an official API instead of the gateway."""
     return request.config.getoption("--use-official-api")  # type: ignore[no-any-return]
 
 
 @pytest.fixture(scope="session")
 def models(use_official_api: bool) -> dict[str, str]:
-    """Provide appropriate models based on test context."""
+    """Per-capability model IDs for the selected target (Bedrock IDs, or OpenAI IDs)."""
     return MODEL_MAPPINGS["openai" if use_official_api else "local"].copy()
 
 
 @pytest.fixture(scope="session")
 def transcription_model(models: dict[str, str]) -> str:
-    """Provide the appropriate transcription model."""
+    """Model for batch transcription (Amazon Transcribe locally)."""
     return models["transcription"]
 
 
 @pytest.fixture(scope="session")
 def transcription_stream_model(models: dict[str, str]) -> str:
-    """Provide the appropriate transcription model."""
+    """Model for streaming transcription."""
     return models["transcription_stream"]
 
 
 @pytest.fixture(scope="session")
 def transcription_diarize_model(models: dict[str, str]) -> str:
-    """Provide the appropriate transcription model with diarization support."""
+    """Model for transcription with speaker partitioning (diarization)."""
     return models["transcription_diarize"]
 
 
 @pytest.fixture(scope="session")
 def speech_standard_model(models: dict[str, str]) -> str:
-    """Provide the appropriate standard speech model."""
+    """Model for text-to-speech using the standard (non-neural) engine."""
     return models["speech_standard"]
 
 
 @pytest.fixture(scope="session")
 def chat_model(models: dict[str, str]) -> str:
-    """Provide the appropriate chat model."""
+    """Cheapest text-only chat model."""
     return models["chat"]
 
 
 @pytest.fixture(scope="session")
 def completion_model(models: dict[str, str]) -> str:
-    """Provide the appropriate chat model."""
+    """Model for the legacy /v1/completions route."""
     return models["completion"]
 
 
 @pytest.fixture(scope="session")
 def chat_vision_model(models: dict[str, str]) -> str:
-    """Provide a chat model that supports IMAGE input."""
+    """Cheapest chat model accepting IMAGE input."""
     return models["chat_vision"]
 
 
 @pytest.fixture(scope="session")
 def chat_vision_judge_model(models: dict[str, str]) -> str:
-    """Provide a vision model used as a judge in image tests."""
+    """Stronger vision model used to grade generated images in image tests."""
     return models["chat_vision_judge"]
 
 
 @pytest.fixture(scope="session")
 def chat_reasoning_model(models: dict[str, str]) -> str:
-    """Provide a chat model that supports reasoning."""
+    """Chat model exposing reasoning/extended thinking."""
     return models["chat_reasoning"]
 
 
 @pytest.fixture(scope="session")
 def chat_legacy_model(models: dict[str, str]) -> str:
-    """Provide a chat model that supports legacy function input."""
+    """Chat model accepting the deprecated ``functions``/``function_call`` input."""
     return models["chat_legacy"]
 
 
 @pytest.fixture(scope="session")
 def chat_audio_model(models: dict[str, str]) -> str:
-    """Provide a chat model that supports audio output."""
+    """Chat model accepting audio input and producing audio output."""
     return models["chat_audio"]
 
 
 @pytest.fixture(scope="session")
 def embedding_model(models: dict[str, str]) -> str:
-    """Provide the appropriate embeddings model."""
+    """Default text embeddings model."""
     return models["embedding"]
 
 
 @pytest.fixture(scope="session")
 def responses_model(models: dict[str, str]) -> str:
-    """Provide the appropriate model for the Responses API."""
+    """Cheapest model for the Responses API."""
     return models["responses"]
 
 
@@ -497,7 +520,7 @@ def responses_json_output_model(models: dict[str, str]) -> str:
 
 @pytest.fixture(scope="session")
 def responses_web_search_model(models: dict[str, str]) -> str:
-    """Provide the appropriate model for the Responses API with web search support."""
+    """Responses-API model supporting the hosted web-search tool."""
     return models["responses_web_search"]
 
 
@@ -513,43 +536,49 @@ def responses_code_interpreter_model(models: dict[str, str]) -> str:
 
 @pytest.fixture(scope="session")
 def responses_input_tokens_model(models: dict[str, str]) -> str:
-    """Provide the appropriate model for Responses API input token counting."""
+    """Model for /responses/input_tokens (Bedrock CountTokens is Anthropic-only)."""
     return models["input_tokens"]
 
 
 @pytest.fixture(scope="session")
 def image_generation_model(models: dict[str, str]) -> str:
-    """Provide the appropriate default image generation model (cheapest)."""
+    """Cheapest image generation model, used as the default."""
     return models["image_generation"]
 
 
 @pytest.fixture(scope="session")
 def image_generation_hd_model(models: dict[str, str]) -> str:
-    """Provide the appropriate HD image generation model."""
+    """Image model mapping OpenAI ``quality``/``style`` onto backend parameters."""
     return models["image_generation_hd"]
 
 
 @pytest.fixture(scope="session")
 def image_generation_stream_model(models: dict[str, str]) -> str:
-    """Provide the appropriate advanced image generation model."""
+    """Image model used for streaming partial images."""
     return models["image_generation_stream"]
 
 
 @pytest.fixture(scope="session")
 def video_generation_model(models: dict[str, str]) -> str:
-    """Provide the appropriate default video generation model."""
+    """Cheapest non-legacy video generation model."""
     return models["video_generation"]
 
 
 @pytest.fixture(scope="session")
 def api_key() -> str:
-    """Returns the API key used for the test session with local clients."""
+    """API key shared by the test server and every local client."""
     return _TEST_API_KEY
 
 
 @pytest.fixture(scope="session")
 def test_client(request: pytest.FixtureRequest) -> Generator[TestClient | None]:
-    """Create a Starlette test client for local API testing."""
+    """In-process ASGI test client, or None when a remote target was selected.
+
+    Yielding None (rather than skipping) lets every dependent fixture and test
+    decide for itself whether it can run against a remote target. Entering the
+    ``TestClient`` context runs the app's lifespan, so startup work such as
+    authentication initialisation and MCP mounting happens exactly once per session.
+    """
     if not request.config.getoption(
         "--use-official-api"
     ) and not request.config.getoption("--server-url"):
@@ -565,7 +594,12 @@ def test_client(request: pytest.FixtureRequest) -> Generator[TestClient | None]:
 def openai_client(
     request: pytest.FixtureRequest, test_client: TestClient | None, api_key: str
 ) -> OpenAI:
-    """Create an OpenAI client for either local or official API testing."""
+    """OpenAI SDK client bound to the selected target.
+
+    Against the in-process app the SDK is given the ``TestClient`` as its HTTP
+    transport and ``max_retries=0``, so a failure surfaces as the gateway's own
+    status code instead of being retried away.
+    """
     # Local test
     if test_client:
         return OpenAI(
@@ -590,11 +624,10 @@ def openai_client(
 
 @pytest.fixture(scope="session")
 def sample_audio_file(openai_client: OpenAI, speech_standard_model: str) -> bytes:
-    """Create a sample audio file for testing using the speech endpoint.
+    """Short WAV snippet produced once by the speech endpoint and cached on disk.
 
-    This fixture generates a short WAV audio snippet using the TTS endpoint once,
-    caches it under tests/.cache/audio.wav, and returns its bytes for reuse by
-    tests (both local server and --use-official-api modes).
+    Cached under ``tests/.cache/audio.wav`` so the whole suite costs a single
+    synthesis call, and survives across sessions.
     """
     audio_file = _CACHE_DIR / "audio.wav"
     if audio_file.exists():
@@ -614,22 +647,13 @@ def sample_audio_file(openai_client: OpenAI, speech_standard_model: str) -> byte
 
 @pytest.fixture(scope="session")
 def sample_audio_file_base64(sample_audio_file: bytes) -> str:
-    """Generates a WAV data URL containing a base64-encoded audio.
-
-    Returns:
-        str: A string representing the data URL of a WAV audio in base64 encoding.
-    """
+    """The WAV sample as a ``data:audio/wav;base64,`` URL."""
     return f"data:audio/wav;base64,{b64encode(sample_audio_file).decode('utf-8')}"
 
 
 @pytest.fixture(scope="session")
 def sample_audio_mp3_file(openai_client: OpenAI, speech_standard_model: str) -> bytes:
-    """Create a sample audio file for testing using the speech endpoint.
-
-    This fixture generates a short MP3 audio snippet using the TTS endpoint once,
-    caches it under tests/.cache/audio.mp3, and returns its bytes for reuse by
-    tests (both local server and --use-official-api modes).
-    """
+    """Short MP3 snippet produced once by the speech endpoint and cached on disk."""
     audio_file = _CACHE_DIR / "audio.mp3"
     if audio_file.exists():
         with audio_file.open("rb") as file:
@@ -648,21 +672,15 @@ def sample_audio_mp3_file(openai_client: OpenAI, speech_standard_model: str) -> 
 
 @pytest.fixture(scope="session")
 def sample_audio_mp3_file_base64(sample_audio_mp3_file: bytes) -> str:
-    """Generates a MP3 data URL containing a base64-encoded audio.
-
-    Returns:
-        str: A string representing the data URL of a MP3 audio in base64 encoding.
-    """
+    """The MP3 sample as a ``data:audio/mp3;base64,`` URL."""
     return f"data:audio/mp3;base64,{b64encode(sample_audio_mp3_file).decode('utf-8')}"
 
 
 @pytest.fixture(scope="session")
 def sample_image_file(openai_client: OpenAI, image_generation_model: str) -> bytes:
-    """Create a sample PNG image for testing using the Images API.
+    """512x512 PNG produced once by the Images API and cached on disk.
 
-    The fixture prefers the b64_json response format to avoid external downloads.
-    It generates a small 512x512 image once, caches it under tests/.cache/image.png,
-    and returns its bytes for reuse across tests and sessions.
+    ``b64_json`` is requested so the fixture never has to fetch a presigned URL.
     """
     image_file = _CACHE_DIR / "image.png"
     if image_file.exists():
@@ -692,23 +710,18 @@ def sample_image_file(openai_client: OpenAI, image_generation_model: str) -> byt
 
 @pytest.fixture(scope="session")
 def sample_image_file_base64(sample_image_file: bytes) -> str:
-    """Generates a PNG data URL containing a base64-encoded image.
-
-    Returns:
-        str: A string representing the data URL of a PNG image in base64 encoding.
-    """
+    """The PNG sample as a ``data:image/png;base64,`` URL."""
     return f"data:image/png;base64,{b64encode(sample_image_file).decode('utf-8')}"
 
 
 @pytest.fixture(scope="session")
 def sample_mask_file(sample_image_file: bytes) -> bytes:
-    """Create a test mask image with white area in center (masked zone).
+    """Bedrock-style RGB mask matching the sample image, white in the centre.
 
-    Args:
-        sample_image_file: Sample image file to get dimensions from
+    White marks the region to edit for Titan/Nova inpainting.
 
     Returns:
-        Mask image bytes
+        PNG mask bytes.
     """
     width, height = PILImage.open(BytesIO(sample_image_file)).size
 
@@ -724,13 +737,13 @@ def sample_mask_file(sample_image_file: bytes) -> bytes:
 
 @pytest.fixture(scope="session")
 def sample_alpha_mask_file(sample_image_file: bytes) -> bytes:
-    """Create an OpenAI-style RGBA mask, transparent in the center (edit zone).
+    """OpenAI-style RGBA mask matching the sample image, transparent in the centre.
 
-    Args:
-        sample_image_file: Sample image file to get dimensions from
+    Transparency marks the region to edit, the polarity ``alpha_mask_to_bw``
+    converts for Bedrock.
 
     Returns:
-        Mask image bytes with an alpha channel.
+        PNG mask bytes with an alpha channel.
     """
     width, height = PILImage.open(BytesIO(sample_image_file)).size
 
@@ -746,7 +759,7 @@ def sample_alpha_mask_file(sample_image_file: bytes) -> bytes:
 
 @pytest.fixture(scope="session")
 def sample_video_file() -> bytes:
-    """Return a local mp4 video file as sample for testing."""
+    """Locally cached mp4 sample, or empty bytes when tests/.cache/video.mp4 is absent."""
     video_file = _CACHE_DIR / "video.mp4"
     if not video_file.exists():
         return b""
@@ -756,11 +769,7 @@ def sample_video_file() -> bytes:
 
 @pytest.fixture(scope="session")
 def sample_video_file_base64(sample_video_file: bytes) -> str:
-    """Generates a mp4 data URL containing a base64-encoded video.
-
-    Returns:
-        str: A string representing the data URL of a mp4 video in base64 encoding.
-    """
+    """The mp4 sample as a ``data:video/mp4;base64,`` URL, or "" when unavailable."""
     if sample_video_file:
         return f"data:video/mp4;base64,{b64encode(sample_video_file).decode('utf-8')}"
     return ""
@@ -768,10 +777,13 @@ def sample_video_file_base64(sample_video_file: bytes) -> str:
 
 @pytest.fixture(scope="session")
 def sample_pdf_file() -> bytes:
-    """Create a minimal PDF file for testing.
+    """Minimal valid single-page PDF containing the text "Hello World".
+
+    Built inline rather than generated so document-input tests have byte-stable
+    content with no extra dependency.
 
     Returns:
-        bytes: A minimal valid PDF file containing "Hello World" text.
+        PDF file bytes.
     """
     # Minimal PDF with "Hello World" text
     return (
@@ -793,20 +805,18 @@ def sample_pdf_file() -> bytes:
 
 @pytest.fixture(scope="session")
 def sample_pdf_file_data_uri(sample_pdf_file: bytes) -> str:
-    """Generates a PDF data URI containing a base64-encoded PDF.
-
-    Returns:
-        str: A string representing the data URI of a PDF file in base64 encoding.
-    """
+    """The PDF sample as a ``data:application/pdf;base64,`` URI."""
     return f"data:application/pdf;base64,{b64encode(sample_pdf_file).decode('utf-8')}"
 
 
 @pytest.fixture(scope="session")
 async def aws_session_info() -> tuple[str, str]:
-    """Get AWS region and account ID from STS client in a single call.
+    """The session's AWS region and account ID, from one ``sts:GetCallerIdentity`` call.
+
+    Session-scoped and shared so the suite makes a single STS call.
 
     Returns:
-        tuple[str, str]: A tuple containing (region, account_id).
+        ``(region, account_id)``.
     """
     session = get_session()
     async with session.create_client("sts") as sts:
@@ -816,21 +826,13 @@ async def aws_session_info() -> tuple[str, str]:
 
 @pytest.fixture(scope="session")
 async def aws_region(aws_session_info: tuple[str, str]) -> str:
-    """Get AWS region from session info.
-
-    Returns:
-        str: AWS region name.
-    """
+    """The AWS region the test session is configured for."""
     return aws_session_info[0]
 
 
 @pytest.fixture(scope="session")
 async def aws_account_id(aws_session_info: tuple[str, str]) -> str:
-    """Get AWS account ID from session info.
-
-    Returns:
-        str: AWS account ID.
-    """
+    """The AWS account ID the test session's credentials belong to."""
     return aws_session_info[1]
 
 
@@ -876,13 +878,13 @@ ANTHROPIC_MODEL_MAPPINGS["bedrock"]["count_tokens"] = (
 
 @pytest.fixture(scope="session")
 def use_anthropic_api(request: pytest.FixtureRequest) -> bool:
-    """Determine if we should use the official Anthropic API."""
+    """True when the Anthropic tests target the official API (or Bedrock directly)."""
     return request.config.getoption("--use-official-api")  # type: ignore[no-any-return]
 
 
 @pytest.fixture(scope="session")
 def anthropic_models(use_anthropic_api: bool) -> dict[str, str]:
-    """Get Anthropic model mappings based on test target."""
+    """Per-capability Anthropic model IDs for the selected target."""
     return (
         (
             ANTHROPIC_MODEL_MAPPINGS["anthropic"]
@@ -896,25 +898,25 @@ def anthropic_models(use_anthropic_api: bool) -> dict[str, str]:
 
 @pytest.fixture(scope="session")
 def anthropic_chat_model(anthropic_models: dict[str, str]) -> str:
-    """Provide the appropriate Anthropic chat model."""
+    """Default model for the Anthropic Messages route."""
     return anthropic_models["chat"]
 
 
 @pytest.fixture(scope="session")
 def anthropic_chat_basic_model(anthropic_models: dict[str, str]) -> str:
-    """Provide a cheap Anthropic-route chat model for API plumbing tests."""
+    """Cheapest Anthropic-route chat model, for API plumbing tests."""
     return anthropic_models["chat_basic"]
 
 
 @pytest.fixture(scope="session")
 def anthropic_chat_vision_model(anthropic_models: dict[str, str]) -> str:
-    """Provide the appropriate vision-capable Anthropic chat model."""
+    """Vision-capable model for the Anthropic Messages route."""
     return anthropic_models["chat_vision"]
 
 
 @pytest.fixture(scope="session")
 def anthropic_chat_reasoning_model(anthropic_models: dict[str, str]) -> str:
-    """Provide the appropriate reasoning-capable Anthropic chat model."""
+    """Extended-thinking-capable model for the Anthropic Messages route."""
     return anthropic_models["chat_reasoning"]
 
 
@@ -926,7 +928,7 @@ def anthropic_system_as_messages_model(anthropic_models: dict[str, str]) -> str:
 
 @pytest.fixture(scope="session")
 def anthropic_count_tokens_model(anthropic_models: dict[str, str]) -> str:
-    """Provide the appropriate Anthropic model for count tokens testing."""
+    """Model for the Anthropic count_tokens route (Bedrock CountTokens is Anthropic-only)."""
     return anthropic_models["count_tokens"]
 
 
@@ -934,7 +936,12 @@ def anthropic_count_tokens_model(anthropic_models: dict[str, str]) -> str:
 def anthropic_client(
     request: pytest.FixtureRequest, test_client: TestClient | None, api_key: str
 ) -> Anthropic | AnthropicBedrock:
-    """Create an Anthropic client for either local or official API testing."""
+    """Anthropic SDK client bound to the selected target.
+
+    With ``--use-official-api`` the client is ``Anthropic`` when an
+    ``ANTHROPIC_API_KEY`` is present and ``AnthropicBedrock`` otherwise, which is
+    why model IDs differ per lane (see ``ANTHROPIC_MODEL_MAPPINGS``).
+    """
     if test_client:
         return Anthropic(
             base_url="http://testserver/anthropic/",
@@ -991,25 +998,25 @@ COHERE_MODEL_MAPPINGS: dict[str, dict[str, str]] = {
 
 @pytest.fixture(scope="session")
 def cohere_models(use_official_api: bool) -> dict[str, str]:
-    """Get Cohere model mappings based on test target."""
+    """Per-capability Cohere model IDs for the selected target."""
     return COHERE_MODEL_MAPPINGS["cohere" if use_official_api else "local"]
 
 
 @pytest.fixture(scope="session")
 def cohere_embed_multilingual_model(cohere_models: dict[str, str]) -> str:
-    """Provide the appropriate multilingual Cohere embed model."""
+    """Cohere Embed v3 multilingual model."""
     return cohere_models["embed_multilingual"]
 
 
 @pytest.fixture(scope="session")
 def cohere_embed_v4_model(cohere_models: dict[str, str]) -> str:
-    """Provide the appropriate Cohere embed v4 model (images, output_dimension)."""
+    """Cohere Embed v4 model (image inputs and ``output_dimension``)."""
     return cohere_models["embed_v4"]
 
 
 @pytest.fixture(scope="session")
 def cohere_rerank_model(cohere_models: dict[str, str]) -> str:
-    """Provide the appropriate Cohere rerank model."""
+    """Cohere Rerank model."""
     return cohere_models["rerank"]
 
 
@@ -1017,7 +1024,7 @@ def cohere_rerank_model(cohere_models: dict[str, str]) -> str:
 def cohere_client(
     request: pytest.FixtureRequest, test_client: TestClient | None, api_key: str
 ) -> cohere.ClientV2:
-    """Create a Cohere client for either local or official API testing."""
+    """Cohere SDK client bound to the selected target."""
     if test_client:
         return cohere.ClientV2(
             api_key=api_key,

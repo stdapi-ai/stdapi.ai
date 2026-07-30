@@ -1,6 +1,19 @@
-"""OpenAI-compatible tests for Stability AI image editing."""
+"""Coverage of /v1/images/edits against the Stability AI models on Amazon Bedrock.
+
+Every model here reaches the endpoint through the same edit route, but each one
+consumes a different subset of the OpenAI parameters: some ignore ``prompt``,
+some require a mask, some repurpose ``mask`` as a second input image, and some
+require a provider extra passed through ``extra_body``. The assertions pin the
+gateway-side contract (payload format, response metadata, parameter validation);
+image content is left to the vision judge.
+
+Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/stable-image-services.html
+     https://stdapi.ai/api_openai_images_edits/
+     stdapi/models/image/_stability.py:StabilityImageGenerationJobBase
+"""
 
 import base64
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -10,37 +23,55 @@ from openai import BadRequestError
 if TYPE_CHECKING:
     from openai import OpenAI
 
-# Text-to-Image / Image-to-Image Models
+#: Stable Diffusion 3.5 Large, used here in its image-to-image edit mode
 STABILITY_SD3_5 = "stability.sd3-5-large-v1:0"
 
-# Upscale Models
+#: Fast 4x upscaler: takes no prompt and no mask
 STABILITY_FAST_UPSCALE = "stability.stable-fast-upscale-v1:0"
+#: Prompt-guided creative upscaler
 STABILITY_CREATIVE_UPSCALE = "stability.stable-creative-upscale-v1:0"
+#: Detail-preserving upscaler
 STABILITY_CONSERVATIVE_UPSCALE = "stability.stable-conservative-upscale-v1:0"
 
-# Edit Models
+#: Inpainting model: the mask is optional and derived from alpha when omitted
 STABILITY_INPAINT = "stability.stable-image-inpaint-v1:0"
+#: Outpainting model: extends the image beyond its borders, rejects masks
 STABILITY_OUTPAINT = "stability.stable-outpaint-v1:0"
+#: Recolors the region selected by the required ``select_prompt`` extra
 STABILITY_SEARCH_RECOLOR = "stability.stable-image-search-recolor-v1:0"
+#: Replaces the object named by the required ``search_prompt`` extra
 STABILITY_SEARCH_REPLACE = "stability.stable-image-search-replace-v1:0"
+#: Removes the masked object; requires a mask and ignores the prompt
 STABILITY_ERASE = "stability.stable-image-erase-object-v1:0"
+#: Automatic background removal; rejects masks and ignores the prompt
 STABILITY_REMOVE_BG = "stability.stable-image-remove-background-v1:0"
 
-# Control Models
+#: Sketch-guided generation
 STABILITY_CONTROL_SKETCH = "stability.stable-image-control-sketch-v1:0"
+#: Structure-preserving generation
 STABILITY_CONTROL_STRUCTURE = "stability.stable-image-control-structure-v1:0"
 
-# Style Models
+#: Applies the style of the input image to the prompt
 STABILITY_STYLE_GUIDE = "stability.stable-image-style-guide-v1:0"
+#: Style transfer: needs a second image as ``mask`` or as the ``style_image`` extra
 STABILITY_STYLE_TRANSFER = "stability.stable-style-transfer-v1:0"
 
+#: Models exercised by the generic image-to-image edit test
 STABILITY_ALL = (STABILITY_SD3_5,)
+
+#: PNG file signature, the format Stability returns unless another is requested
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+#: JPEG start-of-image marker
+_JPEG_MAGIC = b"\xff\xd8\xff"
+#: Shape of the ``size`` field built by ``build_images_response`` ("WIDTHxHEIGHT")
+_SIZE_PATTERN = re.compile(r"^\d+x\d+$")
 
 
 class TestStabilityEditing:
-    """Model-specific tests for Stability AI image editing.
+    """Image-to-image editing on Stable Diffusion 3.5 Large.
 
-    Focus on Stability-specific parameters like strength and negative_prompt.
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-diffusion-3-5-large.html
+         stdapi/models/image/stability_stable_diffusion.py:TextToImageJob
     """
 
     @pytest.mark.expensive
@@ -52,7 +83,15 @@ class TestStabilityEditing:
         sample_image_file: bytes,
         model_id: str,
     ) -> None:
-        """Test basic image-to-image editing with base64 response format."""
+        """An edit request without a mask runs as image-to-image and returns one PNG.
+
+        The gateway sends ``mode=image-to-image`` with a default ``strength`` of
+        0.35, so the source image is required but no mask is. Usage counts the
+        single source image as an input image and ``total_tokens`` is the sum of
+        the two counters.
+
+        Ref: stdapi/routes/_images_common.py:build_images_response
+        """
         if use_official_api:
             pytest.skip("Stability AI is not available on the official OpenAI API")
 
@@ -65,26 +104,54 @@ class TestStabilityEditing:
 
         assert response.created > 0
         assert response.size is not None
-        assert len(response.data) == 1  # type: ignore[arg-type]
-        img = response.data[0]  # type: ignore[index]
-        assert img.b64_json is not None
-        assert img.url is None
+        assert _SIZE_PATTERN.match(response.size), response.size
+        assert response.output_format == "png"
+
+        data = response.data
+        assert data is not None
+        assert len(data) == 1
+        b64_json = data[0].b64_json
+        assert b64_json is not None
+        assert data[0].url is None
+        assert base64.b64decode(b64_json).startswith(_PNG_MAGIC)
 
         assert response.usage is not None
         assert response.usage.input_tokens > 0
         assert response.usage.input_tokens_details.text_tokens >= 0
         assert response.usage.input_tokens_details.image_tokens > 0
         assert response.usage.total_tokens > 0
+        assert (
+            response.usage.total_tokens
+            == response.usage.input_tokens + response.usage.output_tokens
+        )
+        assert (
+            response.usage.input_tokens_details.image_tokens
+            + response.usage.input_tokens_details.text_tokens
+            == response.usage.input_tokens
+        )
 
 
 class TestStabilityUpscaleModels:
-    """Tests for Stability AI upscale models."""
+    """Upscaling models reached through /v1/images/edits.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/stable-image-services.html
+         stdapi/models/image/stability_stable_fast_upscale.py:_FastUpscaleJob
+         stdapi/models/image/stability_stable_image_edit.py:_SimpleEditJob
+    """
 
     @pytest.mark.expensive
     def test_fast_upscale(
         self, openai_client: OpenAI, use_official_api: bool, sample_image_file: bytes
     ) -> None:
-        """Test fast upscale model (no prompt needed)."""
+        """Fast upscale ignores the prompt and honors ``output_format=jpeg``.
+
+        The backend request carries only the image and the output format, so the
+        prompt the OpenAI client insists on is dropped; ``jpeg`` is a native
+        Stability output format and is therefore returned without a re-encode,
+        and the response metadata reports it.
+
+        Ref: stdapi/models/image/_stability.py:StabilityImageGenerationJobBase._finalize_request
+        """
         if use_official_api:
             pytest.skip("Stability AI is not available on the official OpenAI API")
 
@@ -97,8 +164,14 @@ class TestStabilityUpscaleModels:
         )
 
         assert response.created > 0
-        assert len(response.data) == 1  # type: ignore[arg-type]
-        assert response.data[0].b64_json is not None  # type: ignore[index]
+        assert response.output_format == "jpeg"
+
+        data = response.data
+        assert data is not None
+        assert len(data) == 1
+        b64_json = data[0].b64_json
+        assert b64_json is not None
+        assert base64.b64decode(b64_json).startswith(_JPEG_MAGIC)
 
     @pytest.mark.expensive
     @pytest.mark.parametrize(
@@ -111,7 +184,14 @@ class TestStabilityUpscaleModels:
         chat_vision_judge_model: str,
         model_id: str,
     ) -> None:
-        """Test creative/conservative upscale models using AWS documentation example."""
+        """Prompt-guided upscaling returns a JPEG that still depicts the source scene.
+
+        The prompt guides the added detail, so the AWS documentation sample image
+        of Big Ben is used and the result is checked by a vision judge; the
+        deterministic part of the contract is the requested ``jpeg`` output.
+
+        Ref: stdapi/models/image/stability_stable_image_edit.py:_SimpleEditJob
+        """
         if use_official_api:
             pytest.skip("Stability AI is not available on the official OpenAI API")
 
@@ -137,12 +217,18 @@ class TestStabilityUpscaleModels:
             raise
 
         assert response.created > 0
-        assert len(response.data) == 1  # type: ignore[arg-type]
-        assert response.data[0].b64_json is not None  # type: ignore[index]
+        assert response.output_format == "jpeg"
+
+        data = response.data
+        assert data is not None
+        assert len(data) == 1
+        b64_json = data[0].b64_json
+        assert b64_json is not None
+        output_data = base64.b64decode(b64_json)
+        assert output_data.startswith(_JPEG_MAGIC)
 
         # Save output for manual inspection
         model_name = "creative" if "creative" in model_id else "conservative"
-        output_data = base64.b64decode(response.data[0].b64_json)  # type: ignore[index]
         (output_dir / f"stability_{model_name}_upscale_result.jpg").write_bytes(
             output_data
         )
@@ -151,7 +237,7 @@ class TestStabilityUpscaleModels:
         validation_response = openai_client.chat.completions.create(
             model=chat_vision_judge_model,
             messages=[
-                {  # type: ignore[misc,list-item]
+                {
                     "role": "user",
                     "content": [
                         {
@@ -166,9 +252,7 @@ class TestStabilityUpscaleModels:
                         },
                         {
                             "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{response.data[0].b64_json}"  # type: ignore[index]
-                            },
+                            "image_url": {"url": f"data:image/jpeg;base64,{b64_json}"},
                         },
                     ],
                 }
@@ -183,7 +267,11 @@ class TestStabilityUpscaleModels:
 
 
 class TestStabilityEditModels:
-    """Tests for Stability AI specialized edit models."""
+    """Stability models that edit a region of the source image.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/stable-image-services.html
+         https://stdapi.ai/api_openai_images_edits/
+    """
 
     @pytest.mark.expensive
     def test_search_recolor(
@@ -192,7 +280,14 @@ class TestStabilityEditModels:
         use_official_api: bool,
         chat_vision_judge_model: str,
     ) -> None:
-        """Test search and recolor model using AWS documentation example."""
+        """Search-and-recolor recolors the region named by the ``select_prompt`` extra.
+
+        ``select_prompt`` has no OpenAI counterpart, so it travels as a provider
+        extra: ``prompt`` describes the target colour while ``select_prompt``
+        selects what to recolor.
+
+        Ref: stdapi/models/image/stability_search_recolor.py:_SearchRecolorJob
+        """
         if use_official_api:
             pytest.skip("Stability AI is not available on the official OpenAI API")
 
@@ -213,18 +308,24 @@ class TestStabilityEditModels:
         )
 
         assert response.created > 0
-        assert len(response.data) == 1  # type: ignore[arg-type]
-        assert response.data[0].b64_json is not None  # type: ignore[index]
+        assert response.output_format == "png"
+
+        data = response.data
+        assert data is not None
+        assert len(data) == 1
+        b64_json = data[0].b64_json
+        assert b64_json is not None
+        output_data = base64.b64decode(b64_json)
+        assert output_data.startswith(_PNG_MAGIC)
 
         # Save output for manual inspection
-        output_data = base64.b64decode(response.data[0].b64_json)  # type: ignore[index]
         (output_dir / "stability_search_recolor_result.jpg").write_bytes(output_data)
 
         # VLM validation
         validation_response = openai_client.chat.completions.create(
             model=chat_vision_judge_model,
             messages=[
-                {  # type: ignore[misc,list-item]
+                {
                     "role": "user",
                     "content": [
                         {
@@ -239,9 +340,7 @@ class TestStabilityEditModels:
                         },
                         {
                             "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{response.data[0].b64_json}"  # type: ignore[index]
-                            },
+                            "image_url": {"url": f"data:image/png;base64,{b64_json}"},
                         },
                     ],
                 }
@@ -257,7 +356,10 @@ class TestStabilityEditModels:
     def test_search_recolor_missing_select_prompt(
         self, openai_client: OpenAI, use_official_api: bool, sample_image_file: bytes
     ) -> None:
-        """Test that search-recolor without select_prompt raises BadRequestError."""
+        """Search-and-recolor without ``select_prompt`` is a 400 naming the parameter.
+
+        Ref: stdapi/models/image/stability_search_recolor.py:_SearchRecolorJob
+        """
         if use_official_api:
             pytest.skip("Stability AI is not available on the official OpenAI API")
 
@@ -269,7 +371,10 @@ class TestStabilityEditModels:
                 response_format="b64_json",
             )
 
-        assert "select_prompt" in str(exc_info.value)
+        assert exc_info.value.type == "invalid_request_error"
+        assert '"select_prompt" parameter is required for this model.' in str(
+            exc_info.value
+        )
 
     @pytest.mark.expensive
     def test_search_replace(
@@ -278,7 +383,13 @@ class TestStabilityEditModels:
         use_official_api: bool,
         chat_vision_judge_model: str,
     ) -> None:
-        """Test search and replace model using AWS documentation example."""
+        """Search-and-replace swaps the object named by the ``search_prompt`` extra.
+
+        ``prompt`` describes the replacement while the ``search_prompt`` provider
+        extra selects the object to replace.
+
+        Ref: stdapi/models/image/stability_search_replace.py:_SearchReplaceJob
+        """
         if use_official_api:
             pytest.skip("Stability AI is not available on the official OpenAI API")
 
@@ -299,18 +410,24 @@ class TestStabilityEditModels:
         )
 
         assert response.created > 0
-        assert len(response.data) == 1  # type: ignore[arg-type]
-        assert response.data[0].b64_json is not None  # type: ignore[index]
+        assert response.output_format == "png"
+
+        data = response.data
+        assert data is not None
+        assert len(data) == 1
+        b64_json = data[0].b64_json
+        assert b64_json is not None
+        output_data = base64.b64decode(b64_json)
+        assert output_data.startswith(_PNG_MAGIC)
 
         # Save output for manual inspection
-        output_data = base64.b64decode(response.data[0].b64_json)  # type: ignore[index]
         (output_dir / "stability_search_replace_result.jpg").write_bytes(output_data)
 
         # VLM validation
         validation_response = openai_client.chat.completions.create(
             model=chat_vision_judge_model,
             messages=[
-                {  # type: ignore[misc,list-item]
+                {
                     "role": "user",
                     "content": [
                         {
@@ -325,9 +442,7 @@ class TestStabilityEditModels:
                         },
                         {
                             "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{response.data[0].b64_json}"  # type: ignore[index]
-                            },
+                            "image_url": {"url": f"data:image/png;base64,{b64_json}"},
                         },
                     ],
                 }
@@ -343,7 +458,10 @@ class TestStabilityEditModels:
     def test_search_replace_missing_search_prompt(
         self, openai_client: OpenAI, use_official_api: bool, sample_image_file: bytes
     ) -> None:
-        """Test that search-replace without search_prompt raises BadRequestError."""
+        """Search-and-replace without ``search_prompt`` is a 400 naming the parameter.
+
+        Ref: stdapi/models/image/stability_search_replace.py:_SearchReplaceJob
+        """
         if use_official_api:
             pytest.skip("Stability AI is not available on the official OpenAI API")
 
@@ -355,7 +473,10 @@ class TestStabilityEditModels:
                 response_format="b64_json",
             )
 
-        assert "search_prompt" in str(exc_info.value)
+        assert exc_info.value.type == "invalid_request_error"
+        assert '"search_prompt" parameter is required for this model.' in str(
+            exc_info.value
+        )
 
     @pytest.mark.expensive
     def test_inpaint(
@@ -364,7 +485,16 @@ class TestStabilityEditModels:
         use_official_api: bool,
         chat_vision_judge_model: str,
     ) -> None:
-        """Test inpaint model with mask using AWS documentation example."""
+        """Inpainting regenerates the masked area from the prompt.
+
+        The AWS sample mask is a plain black/white PNG with no alpha channel, so
+        the gateway forwards it untouched; Stability reads white pixels as
+        maximum inpaint strength, the opposite of the Titan/Nova convention where
+        black marks the area to edit.
+
+        Ref: stdapi/models/image/stability_stable_image_inpaint.py:_InpaintJob
+             stdapi/utils.py:alpha_mask_to_bw
+        """
         if use_official_api:
             pytest.skip("Stability AI is not available on the official OpenAI API")
 
@@ -386,18 +516,24 @@ class TestStabilityEditModels:
         )
 
         assert response.created > 0
-        assert len(response.data) == 1  # type: ignore[arg-type]
-        assert response.data[0].b64_json is not None  # type: ignore[index]
+        assert response.output_format == "png"
+
+        data = response.data
+        assert data is not None
+        assert len(data) == 1
+        b64_json = data[0].b64_json
+        assert b64_json is not None
+        output_data = base64.b64decode(b64_json)
+        assert output_data.startswith(_PNG_MAGIC)
 
         # Save output for manual inspection
-        output_data = base64.b64decode(response.data[0].b64_json)  # type: ignore[index]
         (output_dir / "stability_inpaint_result.jpg").write_bytes(output_data)
 
         # VLM validation
         validation_response = openai_client.chat.completions.create(
             model=chat_vision_judge_model,
             messages=[
-                {  # type: ignore[misc,list-item]
+                {
                     "role": "user",
                     "content": [
                         {
@@ -412,9 +548,7 @@ class TestStabilityEditModels:
                         },
                         {
                             "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{response.data[0].b64_json}"  # type: ignore[index]
-                            },
+                            "image_url": {"url": f"data:image/png;base64,{b64_json}"},
                         },
                     ],
                 }
@@ -431,7 +565,14 @@ class TestStabilityEditModels:
     def test_inpaint_without_mask(
         self, openai_client: OpenAI, use_official_api: bool, sample_image_file: bytes
     ) -> None:
-        """Test inpaint model without mask (mask is optional)."""
+        """Inpainting accepts a request with no mask at all.
+
+        The ``mask`` key is only added to the backend request when one is
+        supplied; Stability then derives the mask from the input image's alpha
+        channel, so an opaque source image is edited as a whole.
+
+        Ref: stdapi/models/image/stability_stable_image_inpaint.py:_InpaintJob
+        """
         if use_official_api:
             pytest.skip("Stability AI is not available on the official OpenAI API")
 
@@ -443,8 +584,14 @@ class TestStabilityEditModels:
         )
 
         assert response.created > 0
-        assert len(response.data) == 1  # type: ignore[arg-type]
-        assert response.data[0].b64_json is not None  # type: ignore[index]
+        assert response.output_format == "png"
+
+        data = response.data
+        assert data is not None
+        assert len(data) == 1
+        b64_json = data[0].b64_json
+        assert b64_json is not None
+        assert base64.b64decode(b64_json).startswith(_PNG_MAGIC)
 
     @pytest.mark.expensive
     def test_erase(
@@ -453,7 +600,13 @@ class TestStabilityEditModels:
         use_official_api: bool,
         chat_vision_judge_model: str,
     ) -> None:
-        """Test erase model with mask using AWS documentation example."""
+        """Object erasure consumes the mask and ignores the prompt.
+
+        ``EraseRequest`` carries only the image and the mask, so the prompt the
+        OpenAI client requires is dropped before the backend call.
+
+        Ref: stdapi/models/image/stability_stable_image_erase_object.py:_EraseJob
+        """
         if use_official_api:
             pytest.skip("Stability AI is not available on the official OpenAI API")
 
@@ -475,12 +628,17 @@ class TestStabilityEditModels:
         )
 
         assert response.created > 0
-        assert len(response.data) == 1  # type: ignore[arg-type]
-        assert response.data[0].b64_json is not None  # type: ignore[index]
+        assert response.output_format == "png"
+
+        data = response.data
+        assert data is not None
+        assert len(data) == 1
+        b64_json = data[0].b64_json
+        assert b64_json is not None
+        output_data = base64.b64decode(b64_json)
+        assert output_data.startswith(_PNG_MAGIC)
 
         # Save output for manual inspection
-        output = response.data[0].b64_json  # type: ignore[index]
-        output_data = base64.b64decode(output)
         (output_dir / "stability_erase_result.jpg").write_bytes(output_data)
 
     @pytest.mark.expensive
@@ -490,7 +648,10 @@ class TestStabilityEditModels:
         use_official_api: bool,
         chat_vision_judge_model: str,
     ) -> None:
-        """Test background removal model using AWS documentation example."""
+        """Background removal isolates the subject from a prompt-free request.
+
+        Ref: stdapi/models/image/stability_stable_image_remove_background.py:_RemoveBackgroundJob
+        """
         if use_official_api:
             pytest.skip("Stability AI is not available on the official OpenAI API")
 
@@ -510,18 +671,24 @@ class TestStabilityEditModels:
         )
 
         assert response.created > 0
-        assert len(response.data) == 1  # type: ignore[arg-type]
-        assert response.data[0].b64_json is not None  # type: ignore[index]
+        assert response.output_format == "png"
+
+        data = response.data
+        assert data is not None
+        assert len(data) == 1
+        b64_json = data[0].b64_json
+        assert b64_json is not None
+        output_data = base64.b64decode(b64_json)
+        assert output_data.startswith(_PNG_MAGIC)
 
         # Save output for manual inspection
-        output_data = base64.b64decode(response.data[0].b64_json)  # type: ignore[index]
         (output_dir / "stability_remove_bg_result.png").write_bytes(output_data)
 
         # VLM validation
         validation_response = openai_client.chat.completions.create(
             model=chat_vision_judge_model,
             messages=[
-                {  # type: ignore[misc,list-item]
+                {
                     "role": "user",
                     "content": [
                         {
@@ -536,9 +703,7 @@ class TestStabilityEditModels:
                         },
                         {
                             "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{response.data[0].b64_json}"  # type: ignore[index]
-                            },
+                            "image_url": {"url": f"data:image/png;base64,{b64_json}"},
                         },
                     ],
                 }
@@ -553,7 +718,11 @@ class TestStabilityEditModels:
 
 
 class TestStabilityControlModels:
-    """Tests for Stability AI control models."""
+    """Control models: the input image constrains the generated structure.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/stable-image-services.html
+         stdapi/models/image/stability_stable_image_edit.py:_SimpleEditJob
+    """
 
     @pytest.mark.expensive
     def test_control_sketch(
@@ -562,7 +731,7 @@ class TestStabilityControlModels:
         use_official_api: bool,
         chat_vision_judge_model: str,
     ) -> None:
-        """Test control sketch model using AWS documentation example."""
+        """Control-sketch turns a sketch into a rendered scene described by the prompt."""
         if use_official_api:
             pytest.skip("Stability AI is not available on the official OpenAI API")
 
@@ -582,18 +751,24 @@ class TestStabilityControlModels:
         )
 
         assert response.created > 0
-        assert len(response.data) == 1  # type: ignore[arg-type]
-        assert response.data[0].b64_json is not None  # type: ignore[index]
+        assert response.output_format == "png"
+
+        data = response.data
+        assert data is not None
+        assert len(data) == 1
+        b64_json = data[0].b64_json
+        assert b64_json is not None
+        output_data = base64.b64decode(b64_json)
+        assert output_data.startswith(_PNG_MAGIC)
 
         # Save output for manual inspection
-        output_data = base64.b64decode(response.data[0].b64_json)  # type: ignore[index]
         (output_dir / "stability_control_sketch_result.jpg").write_bytes(output_data)
 
         # VLM validation
         validation_response = openai_client.chat.completions.create(
             model=chat_vision_judge_model,
             messages=[
-                {  # type: ignore[misc,list-item]
+                {
                     "role": "user",
                     "content": [
                         {
@@ -608,9 +783,7 @@ class TestStabilityControlModels:
                         },
                         {
                             "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{response.data[0].b64_json}"  # type: ignore[index]
-                            },
+                            "image_url": {"url": f"data:image/png;base64,{b64_json}"},
                         },
                     ],
                 }
@@ -630,7 +803,7 @@ class TestStabilityControlModels:
         use_official_api: bool,
         chat_vision_judge_model: str,
     ) -> None:
-        """Test control structure model using AWS documentation example."""
+        """Control-structure keeps the source composition while restyling it."""
         if use_official_api:
             pytest.skip("Stability AI is not available on the official OpenAI API")
 
@@ -652,18 +825,24 @@ class TestStabilityControlModels:
         )
 
         assert response.created > 0
-        assert len(response.data) == 1  # type: ignore[arg-type]
-        assert response.data[0].b64_json is not None  # type: ignore[index]
+        assert response.output_format == "png"
+
+        data = response.data
+        assert data is not None
+        assert len(data) == 1
+        b64_json = data[0].b64_json
+        assert b64_json is not None
+        output_data = base64.b64decode(b64_json)
+        assert output_data.startswith(_PNG_MAGIC)
 
         # Save output for manual inspection
-        output_data = base64.b64decode(response.data[0].b64_json)  # type: ignore[index]
         (output_dir / "stability_control_structure_result.jpg").write_bytes(output_data)
 
         # VLM validation
         validation_response = openai_client.chat.completions.create(
             model=chat_vision_judge_model,
             messages=[
-                {  # type: ignore[misc,list-item]
+                {
                     "role": "user",
                     "content": [
                         {
@@ -678,9 +857,7 @@ class TestStabilityControlModels:
                         },
                         {
                             "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{response.data[0].b64_json}"  # type: ignore[index]
-                            },
+                            "image_url": {"url": f"data:image/png;base64,{b64_json}"},
                         },
                     ],
                 }
@@ -695,13 +872,20 @@ class TestStabilityControlModels:
 
 
 class TestStabilityStyleModels:
-    """Tests for Stability AI style models."""
+    """Style models, including the two ways of passing a second input image.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/stable-image-services.html
+         stdapi/models/image/stability_stable_style_transfer.py:_StyleTransferJob
+    """
 
     @pytest.mark.expensive
     def test_style_guide(
         self, openai_client: OpenAI, use_official_api: bool, sample_image_file: bytes
     ) -> None:
-        """Test style-guide model."""
+        """Style-guide takes a single image as the style reference for the prompt.
+
+        Ref: stdapi/models/image/stability_stable_image_edit.py:_SimpleEditJob
+        """
         if use_official_api:
             pytest.skip("Stability AI is not available on the official OpenAI API")
 
@@ -713,8 +897,14 @@ class TestStabilityStyleModels:
         )
 
         assert response.created > 0
-        assert len(response.data) == 1  # type: ignore[arg-type]
-        assert response.data[0].b64_json is not None  # type: ignore[index]
+        assert response.output_format == "png"
+
+        data = response.data
+        assert data is not None
+        assert len(data) == 1
+        b64_json = data[0].b64_json
+        assert b64_json is not None
+        assert base64.b64decode(b64_json).startswith(_PNG_MAGIC)
 
     @pytest.mark.expensive
     def test_style_transfer_with_mask_as_style_image(
@@ -723,7 +913,14 @@ class TestStabilityStyleModels:
         use_official_api: bool,
         chat_vision_judge_model: str,
     ) -> None:
-        """Test style-transfer model with mask parameter used as style image."""
+        """Style transfer reads the OpenAI ``mask`` upload as its style image.
+
+        Style transfer needs two images but the endpoint only has one binary
+        image field, so the mask slot is repurposed as ``style_image`` — it is
+        not used as a mask at all.
+
+        Ref: stdapi/models/image/stability_stable_style_transfer.py:_StyleTransferJob
+        """
         if use_official_api:
             pytest.skip("Stability AI is not available on the official OpenAI API")
 
@@ -745,18 +942,24 @@ class TestStabilityStyleModels:
         )
 
         assert response.created > 0
-        assert len(response.data) == 1  # type: ignore[arg-type]
-        assert response.data[0].b64_json is not None  # type: ignore[index]
+        assert response.output_format == "png"
+
+        data = response.data
+        assert data is not None
+        assert len(data) == 1
+        b64_json = data[0].b64_json
+        assert b64_json is not None
+        output_data = base64.b64decode(b64_json)
+        assert output_data.startswith(_PNG_MAGIC)
 
         # Save output for manual inspection
-        output_data = base64.b64decode(response.data[0].b64_json)  # type: ignore[index]
         (output_dir / "stability_style_transfer_result.jpg").write_bytes(output_data)
 
         # VLM validation
         validation_response = openai_client.chat.completions.create(
             model=chat_vision_judge_model,
             messages=[
-                {  # type: ignore[misc,list-item]
+                {
                     "role": "user",
                     "content": [
                         {
@@ -771,9 +974,7 @@ class TestStabilityStyleModels:
                         },
                         {
                             "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{response.data[0].b64_json}"  # type: ignore[index]
-                            },
+                            "image_url": {"url": f"data:image/png;base64,{b64_json}"},
                         },
                     ],
                 }
@@ -793,7 +994,13 @@ class TestStabilityStyleModels:
         use_official_api: bool,
         chat_vision_judge_model: str,
     ) -> None:
-        """Test style-transfer model with style_image in extra_body."""
+        """A base64 ``style_image`` extra replaces the mask upload for style transfer.
+
+        This is the JSON-friendly form of the same input: the provider extra is
+        forwarded as ``style_image``, so no mask upload is needed.
+
+        Ref: stdapi/models/image/stability_stable_style_transfer.py:_StyleTransferJob
+        """
         if use_official_api:
             pytest.skip("Stability AI is not available on the official OpenAI API")
 
@@ -818,11 +1025,17 @@ class TestStabilityStyleModels:
         )
 
         assert response.created > 0
-        assert len(response.data) == 1  # type: ignore[arg-type]
-        assert response.data[0].b64_json is not None  # type: ignore[index]
+        assert response.output_format == "png"
+
+        data = response.data
+        assert data is not None
+        assert len(data) == 1
+        b64_json = data[0].b64_json
+        assert b64_json is not None
+        output_data = base64.b64decode(b64_json)
+        assert output_data.startswith(_PNG_MAGIC)
 
         # Save output for manual inspection
-        output_data = base64.b64decode(response.data[0].b64_json)  # type: ignore[index]
         (output_dir / "stability_style_transfer_extra_body_result.jpg").write_bytes(
             output_data
         )
@@ -831,7 +1044,7 @@ class TestStabilityStyleModels:
         validation_response = openai_client.chat.completions.create(
             model=chat_vision_judge_model,
             messages=[
-                {  # type: ignore[misc,list-item]
+                {
                     "role": "user",
                     "content": [
                         {
@@ -846,9 +1059,7 @@ class TestStabilityStyleModels:
                         },
                         {
                             "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{response.data[0].b64_json}"  # type: ignore[index]
-                            },
+                            "image_url": {"url": f"data:image/png;base64,{b64_json}"},
                         },
                     ],
                 }
@@ -864,7 +1075,13 @@ class TestStabilityStyleModels:
     def test_style_transfer_missing_style_image(
         self, openai_client: OpenAI, use_official_api: bool, sample_image_file: bytes
     ) -> None:
-        """Test that style-transfer without mask or style_image raises BadRequestError."""
+        """Style transfer with neither ``mask`` nor ``style_image`` is a 400.
+
+        The error names both spellings of the missing input, because either one
+        satisfies the model.
+
+        Ref: stdapi/models/image/stability_stable_style_transfer.py:_StyleTransferJob
+        """
         if use_official_api:
             pytest.skip("Stability AI is not available on the official OpenAI API")
 
@@ -876,4 +1093,6 @@ class TestStabilityStyleModels:
                 response_format="b64_json",
             )
 
-        assert "mask" in str(exc_info.value) or "style_image" in str(exc_info.value)
+        assert exc_info.value.type == "invalid_request_error"
+        assert '"mask" parameter is required by this model' in str(exc_info.value)
+        assert "style_image" in str(exc_info.value)

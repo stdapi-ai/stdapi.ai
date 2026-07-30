@@ -1,9 +1,20 @@
-"""Tests for MCP server: request ID propagation and structured error logging."""
+"""MCP server plumbing: request-ID propagation, structured error logging, transport.
+
+An MCP tool call re-enters the gateway over an in-process ASGI transport, so it
+would otherwise be logged as a second, unrelated request. The internal
+user-agent plus a per-process internal header let the nested call reuse the
+parent request ID, and ``fastapi_mcp``'s own logger is redirected into the
+structured JSON log instead of printing tracebacks to stderr.
+
+Ref: stdapi/mcp.py:mount_mcp
+     stdapi/monitoring.py:log_request_event
+"""
 
 from __future__ import annotations
 
 import logging
 import sys
+from contextvars import Context
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
@@ -12,7 +23,13 @@ from starlette.requests import Request as StarletteRequest
 
 from stdapi import server
 from stdapi.config import SETTINGS
-from stdapi.monitoring import REQUEST_ID, REQUEST_LOG, EventLog, log_request_event
+from stdapi.monitoring import (
+    REQUEST_ID,
+    REQUEST_LOG,
+    EventLog,
+    log_error_details,
+    log_request_event,
+)
 from stdapi.utils import webuuid
 
 if TYPE_CHECKING:
@@ -53,24 +70,42 @@ def _capture_exc_info(
 
 
 class TestLogRequestEventIdPropagation:
-    """log_request_event reuses the parent request ID for internal MCP calls."""
+    """log_request_event reuses the parent request ID only for internal MCP calls.
+
+    Both the internal user-agent and the internal header must be present: the
+    header name is randomised per process, and the user-agent check means a
+    client cannot graft its request onto someone else's log entry.
+
+    Ref: stdapi/monitoring.py:log_request_event
+         stdapi/server.py:INTERNAL_REQUEST_ID_HEADER
+    """
 
     def test_generates_new_id_for_external_requests(self) -> None:
-        """External requests get a fresh request ID regardless of any headers."""
+        """A client-supplied request-ID header is ignored; a fresh ID is minted.
+
+        ``x-stdapi-request-id`` is deliberately not the internal header name, so
+        guessing the prefix is not enough to inject an ID.
+        """
         request = _make_request(headers={"x-stdapi-request-id": "should-be-ignored"})
         with log_request_event(request) as log:
             assert log["id"] != "should-be-ignored"
+            assert REQUEST_ID.get() == log["id"]
 
     def test_generates_new_id_when_only_header_present(self) -> None:
-        """Header alone (without matching user-agent) does not reuse the ID."""
+        """The internal header alone, without the MCP user-agent, does not reuse the ID."""
         request = _make_request(
             headers={server.INTERNAL_REQUEST_ID_HEADER: "parent-id-123"}
         )
         with log_request_event(request) as log:
             assert log["id"] != "parent-id-123"
+            assert REQUEST_ID.get() == log["id"]
 
     def test_reuses_parent_id_for_internal_calls(self) -> None:
-        """Internal calls (MCP user-agent + header) reuse the parent request ID."""
+        """Internal calls (MCP user-agent + header) reuse the parent request ID.
+
+        This is what collapses a tool call and the API request it triggers into a
+        single log entry.
+        """
         parent_id = webuuid()
         request = _make_request(
             headers={
@@ -83,7 +118,11 @@ class TestLogRequestEventIdPropagation:
             assert REQUEST_ID.get() == parent_id
 
     def test_request_id_context_var_is_reset_after_exit(self) -> None:
-        """REQUEST_ID ContextVar is properly restored after log_request_event exits."""
+        """REQUEST_ID is restored to the outer value after log_request_event exits.
+
+        Without the reset, a nested call would leave its own ID behind and the
+        parent request's remaining log lines would be misattributed.
+        """
         outer_id = "outer-request-id"
         outer_token = REQUEST_ID.set(outer_id)
         try:
@@ -120,7 +159,14 @@ class TestLogRequestEventIdPropagation:
 
 
 class TestMcpLogHandler:
-    """_McpLogHandler routes fastapi_mcp errors into the structured JSON logger."""
+    """_McpLogHandler routes fastapi_mcp errors into the structured JSON logger.
+
+    ``fastapi_mcp`` logs tool failures through the stdlib logger, which would emit
+    a raw traceback to stderr and bypass the JSON request log entirely.
+
+    Ref: stdapi/mcp.py:_McpLogHandler
+         stdapi/monitoring.py:log_error_details
+    """
 
     @pytest.fixture(autouse=True)
     def _ensure_app_loaded(self, test_client: TestClient | None) -> None:
@@ -142,12 +188,22 @@ class TestMcpLogHandler:
         return handlers[0]
 
     def test_handler_is_registered_and_no_propagation(self) -> None:
-        """fastapi_mcp.server logger has the custom handler and propagate=False."""
-        self._get_handler()
+        """fastapi_mcp.server logger has the custom handler and propagate=False.
+
+        ``propagate = False`` is what stops the root handler from also printing
+        the record, so the message appears once, in the JSON log.
+        """
+        handler = self._get_handler()
+        assert type(handler).__name__ == "_McpLogHandler"
         assert not logging.getLogger("fastapi_mcp.server").propagate
 
     def test_emit_adds_error_detail_to_request_log(self) -> None:
-        """emit() adds the error message to the current request's error_detail."""
+        """A record is appended to the active request's ``error_detail`` and raises its level.
+
+        Promoting the entry to ``error`` is what makes the request show up as
+        failed in the JSON log even though the HTTP response was a 200 JSON-RPC
+        result carrying an in-band tool error.
+        """
         handler = self._get_handler()
 
         log: EventLog = EventLog(
@@ -176,7 +232,11 @@ class TestMcpLogHandler:
             REQUEST_LOG.reset(log_token)
 
     def test_emit_includes_exception_traceback_in_error_detail(self) -> None:
-        """emit() captures the exception traceback when exc_info is present."""
+        """A record carrying ``exc_info`` contributes the formatted traceback as a second detail.
+
+        The traceback is the only thing that makes a tool failure diagnosable, so
+        it is captured into the structured log rather than dropped with the record.
+        """
         handler = self._get_handler()
 
         log: EventLog = EventLog(
@@ -207,7 +267,13 @@ class TestMcpLogHandler:
             REQUEST_LOG.reset(log_token)
 
     def test_emit_is_safe_outside_request_context(self) -> None:
-        """emit() does not raise when called outside a request context."""
+        """Outside a request context the record is dropped instead of raising LookupError.
+
+        ``fastapi_mcp`` also logs during session setup and teardown, where no
+        request log exists. Both calls run in a fresh, empty
+        ``contextvars.Context`` so no ambient request log can hide the missing
+        context, and the first one shows the error ``emit`` has to swallow.
+        """
         handler = self._get_handler()
         record = logging.LogRecord(
             name="fastapi_mcp.server",
@@ -218,7 +284,9 @@ class TestMcpLogHandler:
             args=(),
             exc_info=None,
         )
-        handler.emit(record)
+        with pytest.raises(LookupError):
+            Context().run(log_error_details, "Unexpected error")
+        assert Context().run(handler.emit, record) is None
 
 
 # ---------------------------------------------------------------------------
@@ -227,7 +295,10 @@ class TestMcpLogHandler:
 
 
 class TestMCPIntegration:
-    """End-to-end MCP behaviour using the local test server."""
+    """End-to-end MCP behaviour over the streamable-HTTP transport mounted at /mcp.
+
+    Ref: stdapi/mcp.py:mount_mcp
+    """
 
     @pytest.fixture(scope="class")
     def client(self, test_client: TestClient | None) -> TestClient:
@@ -262,7 +333,14 @@ class TestMCPIntegration:
         return response.headers["mcp-session-id"]  # type: ignore[no-any-return]
 
     def test_mcp_initialize_requires_authentication(self, client: TestClient) -> None:
-        """An unauthenticated request to the MCP transport is rejected with HTTP 401."""
+        """An unauthenticated ``initialize`` is rejected with 401 and no session is created.
+
+        The gateway's own ``authenticate`` dependency guards the transport, so the
+        rejection happens before the MCP session manager runs and no
+        ``mcp-session-id`` is handed out.
+
+        Ref: stdapi/auth.py:authenticate
+        """
         if not (SETTINGS.enable_mcp_streamable_http or SETTINGS.enable_mcp_sse):
             pytest.skip("MCP is not enabled")
         response = client.post(
@@ -280,6 +358,7 @@ class TestMCPIntegration:
             headers={"Accept": "application/json, text/event-stream"},
         )
         assert response.status_code == 401
+        assert "mcp-session-id" not in response.headers
 
     def test_failing_tool_call_produces_no_traceback(
         self,
@@ -288,10 +367,17 @@ class TestMCPIntegration:
         mcp_session_id: str,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """A failing MCP tool call must not produce a Python traceback in stdout."""
+        """A failing MCP tool call is answered in-band, with no Python traceback printed.
+
+        JSON-RPC carries tool errors inside a 200 response, so the transport must
+        still answer 200 while ``_McpLogHandler`` keeps the failure out of
+        stdout/stderr and inside the structured log.
+
+        Ref: stdapi/mcp.py:_McpLogHandler
+        """
         capsys.readouterr()
 
-        client.post(
+        response = client.post(
             "/mcp",
             json={
                 "jsonrpc": "2.0",
@@ -309,13 +395,20 @@ class TestMCPIntegration:
             },
         )
         captured = capsys.readouterr()
+        assert response.status_code == 200
         assert "Traceback" not in captured.out
         assert "Traceback" not in captured.err
 
     def test_tool_descriptions_have_no_response_docs_block(
         self, client: TestClient, api_key: str, mcp_session_id: str
     ) -> None:
-        """Tool descriptions must not carry the auto-generated '### Responses:' section."""
+        """No tool description carries fastapi_mcp's auto-generated '### Responses:' section.
+
+        That block restates the whole response schema for every tool and would
+        dominate an MCP client's context budget, so it is stripped at mount time.
+
+        Ref: stdapi/mcp.py:_strip_response_docs
+        """
         response = client.post(
             "/mcp",
             json={"jsonrpc": "2.0", "id": 40, "method": "tools/list", "params": {}},
@@ -335,7 +428,13 @@ class TestMCPIntegration:
     def test_mcp_response_has_request_id_header(
         self, client: TestClient, api_key: str, mcp_session_id: str
     ) -> None:
-        """POST /mcp response carries the x-request-id header."""
+        """POST /mcp response carries the x-request-id header.
+
+        /mcp is not tagged with a provider, so it falls back to the OpenAI
+        convention ``x-request-id`` rather than Anthropic's ``request-id``.
+
+        Ref: stdapi/api_providers/__init__.py:get_request_id_header
+        """
         response = client.post(
             "/mcp",
             json={

@@ -1,5 +1,16 @@
-"""OpenAI-compatible tests for Amazon Titan Image Generator editing."""
+"""``/v1/images/edits`` backed by Amazon Titan Image Generator V2.
 
+Titan caps ``text``/``negativeText`` at 512 characters and inputs at 1408 px on
+the longer side, which is why the tests stay at 512x512. The whole module is
+skipped: the model is deprecated.
+
+Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+     https://stdapi.ai/api_openai_images_edits/
+     https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-image.html
+     stdapi/routes/openai_images_edits.py:edit_images
+"""
+
+import base64
 from typing import TYPE_CHECKING
 
 import pytest
@@ -14,10 +25,26 @@ TITAN_ALL = (TITAN_V2,)
 TITAN_SAMPLE = (TITAN_V2,)
 
 
-class TestAmazonTitanEditing:
-    """Model-specific tests for Amazon Titan image editing.
+def _decoded_png(b64_json: str | None) -> bytes:
+    """Decode a base64 image payload and assert it carries a PNG signature.
 
-    Focus on Titan-specific parameters and features unique to this provider.
+    Args:
+        b64_json: Base64-encoded image data from an ``ImagesResponse``.
+
+    Returns:
+        The decoded image bytes.
+    """
+    assert b64_json is not None
+    data = base64.b64decode(b64_json, validate=True)
+    assert data.startswith(b"\x89PNG\r\n\x1a\n"), "expected a PNG image payload"
+    return data
+
+
+class TestAmazonTitanEditing:
+    """Titan ``taskType`` dispatch and provider extras on the edits route.
+
+    Ref: stdapi/models/image/amazon_titan_image_generator.py:_ImageGenerationJob._edit_image
+         stdapi/routes/_images_common.py:build_images_response
     """
 
     @pytest.mark.expensive
@@ -30,7 +57,18 @@ class TestAmazonTitanEditing:
         sample_mask_file: bytes,
         model_id: str,
     ) -> None:
-        """Test editing with Titan-specific negativeText parameter."""
+        """Provider extras are merged into the ``taskType``'s own parameter block.
+
+        ``negativeText``, ``seed`` and the AWS ``quality`` bucket have no OpenAI
+        equivalent; Bedrock rejects the invocation with a ``ValidationException``
+        when they are not nested under ``inPaintingParams`` /
+        ``imageGenerationConfig``. The echoed ``quality`` stays ``medium``
+        because the edits route never forwards an OpenAI quality tier, so the
+        AWS bucket passed as an extra does not leak into the response.
+
+        Ref: stdapi/models/image/amazon_titan_image_generator.py:_ImageGenerationJob._set_extra_config
+             stdapi/aws_bedrock.py:get_extra_model_parameters
+        """
         if use_official_api:
             pytest.skip("Amazon Titan is not available on the official OpenAI API")
 
@@ -43,7 +81,7 @@ class TestAmazonTitanEditing:
             n=1,
             response_format="b64_json",
             extra_body={
-                "inpaintingParams": {"negativeText": "blurry, distorted, low quality"},
+                "inPaintingParams": {"negativeText": "blurry, distorted, low quality"},
                 "imageGenerationConfig": {"seed": 42, "quality": "premium"},
             },
         )
@@ -51,8 +89,12 @@ class TestAmazonTitanEditing:
         assert response.created > 0
         assert response.data is not None
         assert len(response.data) == 1
-        assert response.data[0].b64_json is not None
+        _decoded_png(response.data[0].b64_json)
+        assert response.data[0].url is None
         assert response.size == "512x512"  # type: ignore[comparison-overlap]
+        assert response.output_format == "png"
+        assert response.background == "opaque"
+        assert response.quality == "medium"
 
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", TITAN_ALL)
@@ -64,7 +106,16 @@ class TestAmazonTitanEditing:
         sample_mask_file: bytes,
         model_id: str,
     ) -> None:
-        """Test basic editing with base64 response format."""
+        """A masked edit returns one base64 PNG, no URL, and a split token usage.
+
+        Titan defaults every edit to the ``INPAINTING`` task type. The fixture
+        mask is a plain black/white PNG with no alpha channel, so it reaches
+        Bedrock unchanged. Both the source image and the mask count as input
+        images, so at most two of the input tokens are attributed to images.
+
+        Ref: stdapi/utils.py:alpha_mask_to_bw
+             https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-image.html
+        """
         if use_official_api:
             pytest.skip("Amazon Titan is not available on the official OpenAI API")
 
@@ -78,18 +129,33 @@ class TestAmazonTitanEditing:
         )
 
         assert response.created > 0
-        assert response.size is not None
+        assert response.size == "512x512"  # type: ignore[comparison-overlap]
+        assert response.output_format == "png"
+        assert response.background == "opaque"
         assert response.data is not None
         assert len(response.data) == 1
         img = response.data[0]
         assert img.b64_json is not None
         assert img.url is None
+        _decoded_png(img.b64_json)
 
         assert response.usage is not None
         assert response.usage.input_tokens > 0
         assert response.usage.input_tokens_details.image_tokens > 0
+        assert response.usage.input_tokens_details.image_tokens <= 2, (
+            "only the source image and the mask are input images"
+        )
         assert response.usage.input_tokens_details.text_tokens >= 0
+        assert (
+            response.usage.input_tokens_details.image_tokens
+            + response.usage.input_tokens_details.text_tokens
+            == response.usage.input_tokens
+        )
         assert response.usage.output_tokens == 1
+        assert (
+            response.usage.total_tokens
+            == response.usage.input_tokens + response.usage.output_tokens
+        )
 
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
@@ -101,7 +167,14 @@ class TestAmazonTitanEditing:
         sample_mask_file: bytes,
         model_id: str,
     ) -> None:
-        """Test editing with OUTPAINTING taskType."""
+        """An explicit ``OUTPAINTING`` task type overrides the ``INPAINTING`` default.
+
+        The fixture mask is already a pure black/white PNG, so it is forwarded
+        verbatim; outpainting regenerates the white pixels where inpainting
+        would have regenerated the black ones.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-image.html
+        """
         if use_official_api:
             pytest.skip("Amazon Titan is not available on the official OpenAI API")
 
@@ -119,8 +192,10 @@ class TestAmazonTitanEditing:
         assert response.created > 0
         assert response.data is not None
         assert len(response.data) == 1
-        assert response.data[0].b64_json is not None
+        _decoded_png(response.data[0].b64_json)
+        assert response.data[0].url is None
         assert response.size == "512x512"  # type: ignore[comparison-overlap]
+        assert response.output_format == "png"
 
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
@@ -132,11 +207,17 @@ class TestAmazonTitanEditing:
         sample_alpha_mask_file: bytes,
         model_id: str,
     ) -> None:
-        """Test OUTPAINTING with an OpenAI-style alpha-transparency mask.
+        """``OUTPAINTING`` accepts an OpenAI-style alpha-transparency mask.
 
-        The mask's transparent (edit) region must be converted to Titan's
-        outpainting polarity (white=generate), not inpainting's
-        (black=edit), for Bedrock to accept the request.
+        Titan only takes an alpha-less mask whose pixels are (0,0,0) or
+        (255,255,255), so the RGBA mask must be converted — with the outpainting
+        polarity (white = generate) rather than inpainting's (black = edit) — for
+        the invocation to succeed. The resulting pixel values are asserted at
+        unit level in ``tests/test_models_image.py``; here the accepted request
+        and the returned image are the observable evidence.
+
+        Ref: stdapi/utils.py:alpha_mask_to_bw
+             https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-image.html
         """
         if use_official_api:
             pytest.skip("Amazon Titan is not available on the official OpenAI API")
@@ -155,7 +236,14 @@ class TestAmazonTitanEditing:
         assert response.created > 0
         assert response.data is not None
         assert len(response.data) == 1
-        assert response.data[0].b64_json is not None
+        _decoded_png(response.data[0].b64_json)
+        assert response.data[0].url is None
+        assert response.size == "512x512"  # type: ignore[comparison-overlap]
+        assert response.output_format == "png"
+        assert response.usage is not None
+        assert response.usage.input_tokens_details.image_tokens <= 2, (
+            "only the source image and the mask are input images"
+        )
 
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
@@ -166,7 +254,15 @@ class TestAmazonTitanEditing:
         sample_image_file: bytes,
         model_id: str,
     ) -> None:
-        """Test editing with BACKGROUND_REMOVAL taskType (no mask supported)."""
+        """``BACKGROUND_REMOVAL`` needs no mask and ignores the prompt.
+
+        The Bedrock request carries only ``backgroundRemovalParams.image``; a
+        mask would be rejected by the gateway before the invocation. This task
+        type exists on Titan V2 only.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-image.html
+             stdapi/models/image/amazon_titan_image_generator.py:_ImageGenerationJob._get_request_background_removal
+        """
         if use_official_api:
             pytest.skip("Amazon Titan is not available on the official OpenAI API")
 
@@ -183,8 +279,10 @@ class TestAmazonTitanEditing:
         assert response.created > 0
         assert response.data is not None
         assert len(response.data) == 1
-        assert response.data[0].b64_json is not None
+        _decoded_png(response.data[0].b64_json)
+        assert response.data[0].url is None
         assert response.size == "512x512"  # type: ignore[comparison-overlap]
+        assert response.output_format == "png"
 
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
@@ -195,7 +293,13 @@ class TestAmazonTitanEditing:
         sample_image_file: bytes,
         model_id: str,
     ) -> None:
-        """Test INPAINTING without mask (mask is optional)."""
+        """``INPAINTING`` accepts a ``maskPrompt`` instead of an uploaded mask.
+
+        Titan requires exactly one of ``maskPrompt`` or ``maskImage``, so the
+        request is only valid because no mask file was uploaded.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-image.html
+        """
         if use_official_api:
             pytest.skip("Amazon Titan is not available on the official OpenAI API")
 
@@ -215,8 +319,10 @@ class TestAmazonTitanEditing:
         assert response.created > 0
         assert response.data is not None
         assert len(response.data) == 1
-        assert response.data[0].b64_json is not None
+        _decoded_png(response.data[0].b64_json)
+        assert response.data[0].url is None
         assert response.size == "512x512"  # type: ignore[comparison-overlap]
+        assert response.output_format == "png"
 
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
@@ -227,7 +333,13 @@ class TestAmazonTitanEditing:
         sample_image_file: bytes,
         model_id: str,
     ) -> None:
-        """Test OUTPAINTING without mask (mask is optional)."""
+        """``OUTPAINTING`` accepts a ``maskPrompt`` instead of an uploaded mask.
+
+        The prompt-derived mask replaces ``maskImage``, which is mutually
+        exclusive with it.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-image.html
+        """
         if use_official_api:
             pytest.skip("Amazon Titan is not available on the official OpenAI API")
 
@@ -247,8 +359,10 @@ class TestAmazonTitanEditing:
         assert response.created > 0
         assert response.data is not None
         assert len(response.data) == 1
-        assert response.data[0].b64_json is not None
+        _decoded_png(response.data[0].b64_json)
+        assert response.data[0].url is None
         assert response.size == "512x512"  # type: ignore[comparison-overlap]
+        assert response.output_format == "png"
 
     @pytest.mark.parametrize("model_id", TITAN_SAMPLE)
     def test_edit_with_invalid_task_type(
@@ -259,7 +373,15 @@ class TestAmazonTitanEditing:
         sample_mask_file: bytes,
         model_id: str,
     ) -> None:
-        """Test that invalid taskType raises BadRequestError."""
+        """An unknown ``taskType`` is rejected locally as an ``invalid_request_error``.
+
+        The gateway dispatches on the ``taskType`` extra itself, so the request
+        never reaches Bedrock and the message lists the edit task types Titan
+        supports.
+
+        Ref: stdapi/models/image/amazon_titan_image_generator.py:_ImageGenerationJob._edit_image
+             stdapi/api_providers/openai.py:_format_error
+        """
         if use_official_api:
             pytest.skip("Amazon Titan is not available on the official OpenAI API")
 
@@ -273,11 +395,15 @@ class TestAmazonTitanEditing:
                 extra_body={"taskType": "INVALID_TASK_TYPE"},
             )
 
-        assert (
-            "taskType" in str(exc_info.value).lower()
-            or "INPAINTING" in str(exc_info.value)
-            or "OUTPAINTING" in str(exc_info.value)
-            or "BACKGROUND_REMOVAL" in str(exc_info.value)
+        assert exc_info.value.status_code == 400
+        # The OpenAI client unwraps the envelope: body is already the error object.
+        body = exc_info.value.body
+        assert isinstance(body, dict)
+        assert body["type"] == "invalid_request_error"
+        message = body["message"]
+        assert "taskType" in message
+        assert "BACKGROUND_REMOVAL" in message, (
+            f"expected the Titan edit task types, got: {message}"
         )
 
 

@@ -6,6 +6,19 @@ with native storage, the Anthropic Messages route, legacy completions, and
 the count_tokens proxy. Uses the cheapest verified models; the expensive
 Responses-only reasoning model (``openai.gpt-5.6-luna``) appears only where
 a Responses conversion target is required.
+
+Mantle serves Responses, Chat Completions and Messages (never Converse), each
+model on exactly one of the three disjoint path prefixes ``/v1``,
+``/openai/v1`` and ``/anthropic/v1/messages``. No API reports which prefix or
+which of the three wire formats a model accepts, so the gateway probes and
+learns both, and translates a request that arrived on one API into another when
+the model does not serve it natively.
+
+Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html
+     https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
+     stdapi/aws_bedrock_mantle.py
+     stdapi/models/chat/_mantle/_default.py:ChatModel
+     stdapi/models/chat/_mantle/_convert.py
 """
 
 from __future__ import annotations
@@ -51,17 +64,21 @@ def listed_model_ids(openai_client: OpenAI) -> set[str]:
 
 
 class TestMantleModelDiscovery:
-    """Mantle model discovery and registry merge behavior."""
+    """Mantle model discovery and registry merge behavior.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
+         stdapi/models/__init__.py:is_mantle_served
+         stdapi/models/__init__.py:is_mantle_preferred
+    """
 
     def test_mantle_models_registered(
         self, test_client: TestClientType | None, listed_model_ids: set[str]
     ) -> None:
-        """Mantle models are discovered, registered, and listed.
+        """Discovered Mantle models are Mantle-served and appear in ``GET /v1/models``.
 
-        Validates:
-            - MANTLE_MODELS is populated from the Mantle catalog
-            - The verified test models are present and Mantle-served
-            - Mantle-only models appear in the public model listing
+        Gemma 3 is dual-homed (present on both endpoints), so it is Mantle-served
+        only because the test environment lists it in
+        ``aws_bedrock_mantle_preferred_models``.
         """
         if test_client is None:
             pytest.skip("Requires local test server")
@@ -76,8 +93,6 @@ class TestMantleModelDiscovery:
             assert model_id in MANTLE_MODELS
             assert is_mantle_served(model_id), model_id
             assert model_id in listed_model_ids
-        # Gemma 3 is dual-homed: it is Mantle-served only because the test
-        # environment lists it in aws_bedrock_mantle_preferred_models.
         assert is_mantle_preferred(_GEMMA3)
 
     def test_dual_homed_models_stay_on_runtime(
@@ -85,9 +100,9 @@ class TestMantleModelDiscovery:
     ) -> None:
         """Models on both endpoints are served by bedrock-runtime by default.
 
-        Validates:
-            - Some Mantle catalog entries stay runtime-served (dual-homed)
-            - None of them are Mantle-preferred (which would flip priority)
+        Mantle discovery must not steal a model that bedrock-runtime can serve:
+        only an explicit ``aws_bedrock_mantle_preferred_models`` entry flips the
+        priority, so every dual-homed entry left on runtime is non-preferred.
         """
         if test_client is None:
             pytest.skip("Requires local test server")
@@ -107,10 +122,19 @@ class TestMantleModelDiscovery:
 
 
 class TestMantleChatCompletions:
-    """Chat Completions served by Mantle (passthrough and conversions)."""
+    """Chat Completions served by Mantle (passthrough and conversions).
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/inference-chat-completions-mantle.html
+         https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+         stdapi/models/chat/_mantle/_default.py:ChatModel._select_api
+    """
 
     def test_gemma3_passthrough(self, openai_client: OpenAI) -> None:
-        """Chat completion passthrough on the /v1 surface returns content and usage."""
+        """Chat completion passthrough returns assistant content and a coherent usage split.
+
+        Gemma 3 serves Chat Completions natively, so the request is relayed
+        untranslated and the upstream usage object is passed through.
+        """
         response = openai_client.chat.completions.create(
             model=_GEMMA3,
             messages=[{"role": "user", "content": "Say OK."}],
@@ -121,10 +145,17 @@ class TestMantleChatCompletions:
         assert response.usage is not None
         assert response.usage.prompt_tokens > 0
         assert response.usage.completion_tokens > 0
-        assert response.usage.total_tokens > 0
+        assert response.usage.total_tokens >= (
+            response.usage.prompt_tokens + response.usage.completion_tokens
+        )
 
     def test_gemma4_openai_v1_surface(self, openai_client: OpenAI) -> None:
-        """Chat completion passthrough on the /openai/v1 surface works."""
+        """Chat completion passthrough works for a Mantle-only Gemma 4 model.
+
+        Gemma 4 is reachable only on the ``/openai/v1`` prefix, so this covers
+        the non-default surface of the probe-and-learn selection (the learned
+        value itself is asserted by ``test_gemma4_surface_self_heal``).
+        """
         response = openai_client.chat.completions.create(
             model=_GEMMA4,
             messages=[{"role": "user", "content": "Say OK."}],
@@ -132,6 +163,7 @@ class TestMantleChatCompletions:
         )
         assert response.choices[0].message.content
         assert response.usage is not None
+        assert response.usage.prompt_tokens > 0
         assert response.usage.completion_tokens > 0
 
     def test_gemma3_streaming_usage_stripped(
@@ -142,7 +174,11 @@ class TestMantleChatCompletions:
     ) -> None:
         """Streaming without include_usage strips the forced usage chunk.
 
-        Usage is still recorded server-side from the stripped chunk.
+        The gateway always asks Mantle for a trailing usage chunk so it can bill
+        the request, then removes it from the client stream when the caller did
+        not set ``stream_options.include_usage``.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events
         """
         if test_client is None:
             pytest.skip("Requires local test server")
@@ -176,7 +212,10 @@ class TestMantleChatCompletions:
         test_client: TestClientType | None,
         capfd: pytest.CaptureFixture[str],
     ) -> None:
-        """Streaming with include_usage relays the final usage chunk."""
+        """Streaming with include_usage relays the final usage chunk exactly once.
+
+        Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events
+        """
         if test_client is None:
             pytest.skip("Requires local test server")
         capfd.readouterr()
@@ -202,11 +241,14 @@ class TestMantleChatCompletions:
     def test_gemma3_upstream_unsupported_parameter_error(
         self, openai_client: OpenAI
     ) -> None:
-        """An upstream-rejected parameter surfaces as a clean OpenAI-shaped 400.
+        """``logprobs`` is refused with a 400 naming the offending parameter.
 
-        Validates:
-            - Passthrough relays the upstream 4xx instead of a 500
-            - The error envelope carries the upstream message, param, and code
+        The gateway rejects ``logprobs`` in request validation for every model,
+        so the Mantle model is never called; the point of the check is that the
+        envelope carries ``param``/``code`` and not a bare 500.
+
+        Ref: stdapi/types/openai_chat_completions.py:CompletionCreateParams._unsupported
+             stdapi/api_errors.py:UnsupportedParameterError
         """
         with pytest.raises(BadRequestError) as bad_request:
             openai_client.chat.completions.create(
@@ -230,13 +272,17 @@ class TestMantleChatCompletions:
     ) -> None:
         """``parallel_tool_calls: false`` converts to a tool choice Mantle accepts.
 
-        Anthropic carries the switch as ``disable_parallel_tool_use`` on the
-        tool choice, so the conversion synthesises one; this checks the
-        upstream Messages API accepts it instead of returning a 400.
+        Anthropic carries the switch as ``disable_parallel_tool_use`` on the tool
+        choice, so the conversion synthesises the default ``auto`` choice and
+        sets the flag on it. A two-city question would otherwise produce two
+        parallel calls, so a single call is the observable consequence.
 
-        Validates:
-            - The converted request succeeds on the Anthropic upstream
-            - At most one tool call comes back
+        KNOWN FAILURE (issue #90): Mantle currently rejects the converted
+        request although it implements ``disable_parallel_tool_use``.
+
+        Ref: https://github.com/stdapi-ai/stdapi.ai/issues/90
+             https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
+             stdapi/models/chat/_mantle/_convert.py:_anthropic_tool_choice_from_chat
         """
         response = openai_client.chat.completions.create(
             model=_CLAUDE_MANTLE,
@@ -263,12 +309,23 @@ class TestMantleChatCompletions:
                 }
             ],
         )
-        assert len(response.choices[0].message.tool_calls or []) <= 1
+        tool_calls = response.choices[0].message.tool_calls or []
+        assert len(tool_calls) == 1, (
+            "parallel_tool_calls=false must collapse the two-city question "
+            "into a single tool call"
+        )
+        call = tool_calls[0]
+        assert call.type == "function"
+        assert call.function.name == "get_weather"
 
     def test_luna_converted_to_responses(self, openai_client: OpenAI) -> None:
-        """Chat completion on a Responses-only model is converted upstream.
+        """A chat completion on a Responses-only model is served via Responses.
 
-        Validates content and the Responses-to-Chat-Completions usage mapping.
+        Luna serves the Responses API only, so the request is translated and the
+        Responses usage object (``input_tokens``/``output_tokens``) is mapped
+        back onto Chat Completions' ``prompt_tokens``/``completion_tokens``.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_chat_usage_from_responses
         """
         response = openai_client.chat.completions.create(
             model=_LUNA,
@@ -287,8 +344,10 @@ class TestMantleChatCompletions:
     def test_luna_converted_streaming(self, openai_client: OpenAI) -> None:
         """A streamed chat completion on a Responses-only model converts back.
 
-        Validates the chat-inbound converted streaming cell: Responses events
-        from upstream are relayed as Chat Completions chunks with usage.
+        Upstream Responses SSE events are re-emitted as Chat Completions chunks,
+        with the trailing usage chunk synthesised from the Responses usage.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_chat_usage_from_responses
         """
         stream = openai_client.chat.completions.create(
             model=_LUNA,
@@ -311,7 +370,11 @@ class TestMantleChatCompletions:
 
 
 class TestMantleServiceHeader:
-    """Per-request Mantle routing via the gated ``x-stdapi-service`` header."""
+    """Per-request Mantle routing via the gated ``x-stdapi-service`` header.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
+         stdapi/models/chat/__init__.py:serves_via_mantle
+    """
 
     def test_header_routes_dual_homed_model_to_mantle(
         self,
@@ -322,9 +385,9 @@ class TestMantleServiceHeader:
     ) -> None:
         """The header flips a runtime-served dual-homed model onto Mantle.
 
-        Validates:
-            - Generation succeeds through the Mantle endpoint
-            - Billed usage is recorded under the bedrock-mantle service
+        The two endpoints have independent per-model token quotas, so the proof
+        that the header took effect is the service recorded on the billed usage
+        entry, not merely a successful generation.
         """
         if test_client is None:
             pytest.skip("Requires local test server")
@@ -346,10 +409,18 @@ class TestMantleServiceHeader:
             capfd.readouterr().out, service=_MANTLE_USAGE_SERVICE, model=_GEMMA3_DUAL
         )
         assert entries, "Expected the request to bill under bedrock-mantle"
+        assert sum(entry["output_tokens"] for entry in entries) > 0
 
 
 class TestMantleRecordedBilling:
-    """Server-side usage recording on the converted (non-passthrough) paths."""
+    """Server-side usage recording on the converted (non-passthrough) paths.
+
+    A converted request has no client-visible usage object to relay, so the
+    gateway must extract usage from the upstream wire format itself.
+
+    Ref: stdapi/aws_bedrock_mantle.py:usage_from_response
+         stdapi/aws_bedrock_mantle.py:usage_from_chat_completion
+    """
 
     @pytest.mark.slow
     def test_luna_conversion_records_usage(
@@ -358,7 +429,12 @@ class TestMantleRecordedBilling:
         test_client: TestClientType | None,
         capfd: pytest.CaptureFixture[str],
     ) -> None:
-        """A non-streaming chat-to-responses conversion records billed usage."""
+        """A non-streaming chat-to-responses conversion records billed usage once.
+
+        OpenAI-shaped input counts include cached tokens, so the extraction
+        subtracts them before billing; a single entry with non-zero counts is the
+        observable result.
+        """
         if test_client is None:
             pytest.skip("Requires local test server")
         capfd.readouterr()
@@ -381,7 +457,12 @@ class TestMantleRecordedBilling:
         test_client: TestClientType | None,
         capfd: pytest.CaptureFixture[str],
     ) -> None:
-        """A streamed responses-to-chat conversion records billed usage."""
+        """A streamed responses-to-chat conversion records billed usage.
+
+        The Chat Completions stream that actually served the request carries its
+        usage in a trailing chunk, which the converter must consume even though
+        the client only ever sees Responses events.
+        """
         if test_client is None:
             pytest.skip("Requires local test server")
         capfd.readouterr()
@@ -402,18 +483,28 @@ class TestMantleRecordedBilling:
 
 
 class TestMantleResponses:
-    """Responses API served by Mantle, including native storage."""
+    """Responses API served by Mantle, including native storage.
+
+    Mantle stored responses are region-local (30-day retention in the source
+    Region) and project-scoped, so the gateway's public ``resp_`` IDs embed a
+    crc32 fingerprint of the Region and are decoded back on every read.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html
+         https://developers.openai.com/api/reference/resources/responses
+         stdapi/aws_bedrock_mantle.py:encode_mantle_response_id
+    """
 
     def test_gemma4_stored_response_lifecycle(
         self, openai_client: OpenAI, test_client: TestClientType | None
     ) -> None:
         """store=True uses Mantle native storage with region-tagged IDs.
 
-        Validates:
-            - Created response ID is a region-tagged Mantle ID
-            - GET retrieves the stored response by public ID
-            - Chaining via previous_response_id recalls earlier info
-            - DELETE removes the stored response (404 afterwards)
+        The full lifecycle is covered in one pass: the created ID decodes to the
+        Region that served it, retrieval and chaining both work through the
+        public ID, and after DELETE the same ID is a 404.
+
+        Ref: stdapi/aws_bedrock_mantle.py:decode_mantle_response_id
+             stdapi/routes/openai_responses.py:_mantle_stored_response
         """
         first = openai_client.responses.create(
             model=_GEMMA4,
@@ -436,6 +527,7 @@ class TestMantleResponses:
 
             retrieved = openai_client.responses.retrieve(first.id)
             assert retrieved.id == first.id
+            assert retrieved.status == "completed"
 
             second = openai_client.responses.create(
                 model=_GEMMA4,
@@ -450,13 +542,20 @@ class TestMantleResponses:
             if second is not None:
                 openai_client.responses.delete(second.id)
             openai_client.responses.delete(first.id)
-        with pytest.raises(NotFoundError):
+        with pytest.raises(NotFoundError) as deleted:
             openai_client.responses.retrieve(first.id)
+        assert deleted.value.status_code == 404
 
     def test_gemma4_streamed_chained_public_previous_id(
         self, openai_client: OpenAI, test_client: TestClientType | None
     ) -> None:
-        """A streamed chained request echoes the public ID, never the native one."""
+        """A streamed chained request echoes the public ID, never the native one.
+
+        The native Mantle ID must stay server-side: leaking it would let a client
+        address the upstream store directly, bypassing the Region fingerprint.
+
+        Ref: stdapi/routes/openai_responses.py:_with_public_mantle_ids
+        """
         first = openai_client.responses.create(
             model=_GEMMA4,
             input="Remember this number: 7. Just say 'Noted.'",
@@ -494,6 +593,9 @@ class TestMantleResponses:
         The Mantle native store answers the cancel with the completed response
         unchanged (200), so the proxy must relay that provider-shaped body
         instead of failing with a server error.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/methods/cancel
+             stdapi/routes/openai_responses.py:cancel_response
         """
         first = openai_client.responses.create(
             model=_GEMMA4, input="Say OK.", store=True, max_output_tokens=32
@@ -507,7 +609,13 @@ class TestMantleResponses:
             openai_client.responses.delete(first.id)
 
     def test_gemma3_converted_to_chat_completions(self, openai_client: OpenAI) -> None:
-        """Responses on a chat-completions-only model are converted upstream."""
+        """Responses on a chat-completions-only model are converted upstream.
+
+        The Chat Completions usage object is translated back into the Responses
+        shape, so ``input_tokens``/``output_tokens`` must be populated.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_responses_usage_from_chat
+        """
         response = openai_client.responses.create(
             model=_GEMMA3, input="Say OK.", store=False, max_output_tokens=64
         )
@@ -522,10 +630,13 @@ class TestMantleResponses:
     ) -> None:
         """A chat-bound Mantle model stores responses in the local session store.
 
-        Validates:
-            - Once the chat binding is learned, store=True returns a local
-              ``resp-`` ID retrievable through the local response store
-            - previous_response_id continues the conversation via local merge
+        Once the model is known to serve Chat Completions only, Mantle has no
+        native store to use, so the gateway falls back to its own session store.
+        The ``resp-`` prefix (hyphen) is load-bearing: ``resp_`` IDs are parsed as
+        region-tagged Mantle IDs and are never looked up locally.
+
+        Ref: stdapi/routes/openai_responses.py:_require_local_response_id
+             stdapi/models/chat/_mantle/_default.py:ChatModel.native_store_supported
         """
         openai_client.responses.create(
             model=_GEMMA3, input="Say OK.", store=False, max_output_tokens=32
@@ -556,10 +667,12 @@ class TestMantleResponses:
     ) -> None:
         """A converted stream announces the route ID, not a minted Mantle-form one.
 
-        Validates:
-            - ``response.created`` is followed by ``response.in_progress``
-            - Every event carries the same route-assigned ``resp-`` ID (a
-              minted ``resp_`` one is parsed as Mantle-tagged and only 404s)
+        A ``resp_`` ID minted by the converter would be parsed as region-tagged and
+        could then only 404 on retrieval, so every event of the stream must carry
+        the single ``resp-`` ID the route assigned.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+             stdapi/routes/openai_responses.py:_require_local_response_id
         """
         events = list(
             openai_client.responses.create(
@@ -585,9 +698,12 @@ class TestMantleResponses:
     ) -> None:
         """store=True on a Responses-to-chat fallback is served without storage.
 
-        Validates:
-            - The request succeeds (no 400) despite store being unsupported
-            - The returned ID is not a region-tagged Mantle stored ID
+        The learned API binding is cleared so the optimistic Responses probe runs
+        and fails live; ``store`` must then be dropped rather than turned into a
+        400, and the response cannot carry a region-tagged Mantle ID because
+        nothing was stored upstream.
+
+        Ref: stdapi/models/chat/_mantle/_default.py:ChatModel._select_api
         """
         if test_client is None:
             pytest.skip("Requires local test server")
@@ -609,6 +725,9 @@ class TestMantleResponses:
         Bedrock Mantle native storage does not serve input item listings on
         either routing surface; the proxy reports it explicitly instead of a
         bare not-found.
+
+        Ref: https://developers.openai.com/api/reference/resources/responses/subresources/input_items/methods/list
+             stdapi/routes/openai_responses.py:list_response_input_items
         """
         first = openai_client.responses.create(
             model=_GEMMA4, input="Say OK.", store=True, max_output_tokens=32
@@ -616,6 +735,7 @@ class TestMantleResponses:
         try:
             with pytest.raises(NotFoundError) as missing:
                 openai_client.responses.input_items.list(first.id)
+            assert missing.value.status_code == 404
             assert "input item listings" in str(missing.value)
         finally:
             openai_client.responses.delete(first.id)
@@ -625,9 +745,13 @@ class TestMantleResponses:
     ) -> None:
         """A stale learned routing surface self-heals on the next request.
 
-        Validates:
-            - A request still succeeds after the learned surface is poisoned
-            - The learned surface is corrected back by the fallback probe
+        Hitting the wrong Mantle surface does not return a clean 404 — it returns
+        a "isn't supported on this route" message or a misleading 401 — so the
+        cache is poisoned to ``/v1`` to check the request still succeeds and the
+        learned value is corrected back to ``/openai/v1``.
+
+        Ref: stdapi/aws_bedrock_mantle.py:_map_error
+             stdapi/models/chat/_mantle/_default.py:ChatModel._api_paths
         """
         if test_client is None:
             pytest.skip("Requires local test server")
@@ -644,7 +768,17 @@ class TestMantleResponses:
 
 
 class TestMantleMessages:
-    """Anthropic Messages route served by Mantle via conversions."""
+    """Anthropic Messages route served by Mantle, natively and via conversions.
+
+    Mantle's Messages path ``/anthropic/v1/messages`` is absolute rather than
+    relative to a surface, and takes the version as the HTTP header
+    ``anthropic-version: 2023-06-01`` (bedrock-runtime instead wants the body
+    field ``anthropic_version: bedrock-2023-05-31``).
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html
+         https://platform.claude.com/docs/en/api/messages
+         stdapi/aws_bedrock_mantle.py:API_PATHS
+    """
 
     def test_claude_messages_passthrough(self, anthropic_client: Anthropic) -> None:
         """Messages passthrough on a Mantle-only Claude model returns content.
@@ -668,7 +802,14 @@ class TestMantleMessages:
     def test_claude_messages_passthrough_streaming(
         self, anthropic_client: Anthropic
     ) -> None:
-        """Streaming Messages passthrough relays the native event grammar."""
+        """Streaming Messages passthrough relays the native event grammar.
+
+        The SDK's ``stream`` helper only reassembles a final message when the
+        relayed SSE events form a valid Anthropic event sequence.
+
+        Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
+             stdapi/aws_bedrock_mantle.py:_iter_sse
+        """
         with anthropic_client.messages.stream(
             model=_CLAUDE_MANTLE,
             max_tokens=32,
@@ -683,7 +824,14 @@ class TestMantleMessages:
     def test_gemma3_converted_to_chat_completions(
         self, anthropic_client: Anthropic
     ) -> None:
-        """Messages on a chat-completions-only model are converted upstream."""
+        """Messages on a chat-completions-only model are converted upstream.
+
+        Anthropic's ``input_tokens`` already excludes cache reads, so the Chat
+        Completions counts are mapped across without the subtraction the
+        OpenAI-shaped paths need.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_messages_usage_from_chat
+        """
         message = anthropic_client.messages.create(
             model=_GEMMA3,
             max_tokens=64,
@@ -701,8 +849,11 @@ class TestMantleMessages:
     ) -> None:
         """A metadata.user_id above the OpenAI 64-char cap is hashed, not rejected.
 
-        The conversion replaces over-long IDs with their SHA-256 digest so the
-        upstream `user` field stays valid (previously a live 400).
+        OpenAI caps ``user`` at 64 characters while Anthropic allows longer IDs,
+        so the conversion substitutes the SHA-256 hex digest (exactly 64 chars,
+        deterministic per ID) instead of letting upstream 400 the request.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:_openai_user
         """
         message = anthropic_client.messages.create(
             model=_GEMMA3,
@@ -720,8 +871,11 @@ class TestMantleMessages:
     ) -> None:
         """A tool schema using `propertyNames` no longer empties the generation.
 
-        The unsupported keyword is stripped before reaching Mantle, which
-        previously returned a silently empty completion.
+        Open-weight tool templates emit an empty generation — not an error — when
+        the schema carries this keyword, so it is stripped recursively before the
+        request leaves the gateway.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:sanitize_tool_schema
         """
         message = anthropic_client.messages.create(
             model=_GEMMA4,
@@ -752,7 +906,15 @@ class TestMantleMessages:
     def test_gemma3_server_tool_rejected_on_conversion(
         self, anthropic_client: Anthropic
     ) -> None:
-        """An Anthropic server tool on a conversion path yields a clean 400."""
+        """An Anthropic server tool on a conversion path yields a clean 400.
+
+        Anthropic server tools such as ``web_search`` have no Chat Completions
+        equivalent, so a request that must be converted is refused up front
+        rather than silently losing the tool.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool
+             stdapi/models/chat/_mantle/_convert.py:_chat_tools_from_anthropic
+        """
         with pytest.raises(AnthropicBadRequestError) as bad_request:
             anthropic_client.messages.create(
                 model=_GEMMA3,
@@ -765,7 +927,13 @@ class TestMantleMessages:
 
     @pytest.mark.slow
     def test_luna_converted_to_responses(self, anthropic_client: Anthropic) -> None:
-        """Messages on a Responses-only model are converted upstream."""
+        """Messages on a Responses-only model are converted upstream.
+
+        Reasoning output must not be surfaced as the only content: an Anthropic
+        text block has to survive the Responses-to-Messages translation.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:messages_payload
+        """
         message = anthropic_client.messages.create(
             model=_LUNA,
             max_tokens=_LUNA_MAX_TOKENS,
@@ -779,7 +947,15 @@ class TestMantleMessages:
 
 
 class TestMantleCompletions:
-    """Legacy /v1/completions served by Mantle (always converted)."""
+    """Legacy /v1/completions served by Mantle (always converted).
+
+    Mantle serves no completions API, so the prompt is always folded into a chat
+    message; the legacy surface's ``finish_reason`` set is therefore limited to
+    ``stop``/``length``.
+
+    Ref: https://developers.openai.com/api/reference/resources/completions/methods/create
+         stdapi/models/chat/_mantle/_convert.py:text_completion_as_chat_payload
+    """
 
     def test_gemma3_legacy_completion(self, openai_client: OpenAI) -> None:
         """Legacy completions convert the prompt to chat messages upstream."""
@@ -793,7 +969,13 @@ class TestMantleCompletions:
         assert response.usage.completion_tokens > 0
 
     def test_gemma3_echo_rejected(self, openai_client: OpenAI) -> None:
-        """The unsupported `echo` option is rejected with the documented 400."""
+        """The unsupported `echo` option is rejected with the documented 400.
+
+        ``echo`` requires the prompt tokens back in the completion, which no
+        chat-shaped upstream can produce, so it is refused instead of ignored.
+
+        Ref: stdapi/models/chat/_mantle/_convert.py:text_completion_as_chat_payload
+        """
         with pytest.raises(BadRequestError) as bad_request:
             openai_client.completions.create(
                 model=_GEMMA3, prompt="Say OK.", max_tokens=16, echo=True
@@ -803,34 +985,51 @@ class TestMantleCompletions:
 
 
 class TestMantleResponsesSiblingGuards:
-    """Guard rails on the Responses sibling routes for Mantle models and IDs."""
+    """Guard rails on the Responses sibling routes for Mantle models and IDs.
+
+    Ref: stdapi/routes/openai_responses.py:count_input_tokens
+         stdapi/routes/openai_responses.py:_decode_mantle_id
+    """
 
     def test_input_tokens_and_undecodable_id_guards(
         self, openai_client: OpenAI
     ) -> None:
         """input_tokens rejects Mantle models (400); undecodable IDs are 404.
 
-        Validates:
-            - POST /v1/responses/input_tokens on a Mantle-only model returns a
-              clean 400 with the documented message
-            - GET /v1/responses/{id} with an undecodable ``resp_`` ID returns
-              404 instead of a server error
+        Token counting needs Bedrock ``CountTokens``, which exists on
+        bedrock-runtime only. And a ``resp_`` ID whose Region fingerprint does not
+        match any configured Mantle Region must be a 404, never a 500 or a
+        fall-through to the local store.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CountTokens.html
+             stdapi/aws_bedrock_mantle.py:decode_mantle_response_id
         """
         with pytest.raises(BadRequestError) as bad_request:
             openai_client.responses.input_tokens.count(model=_GEMMA3, input="Hello")
         assert bad_request.value.status_code == 400
         assert "not supported for Bedrock Mantle" in str(bad_request.value)
-        with pytest.raises(NotFoundError):
+        with pytest.raises(NotFoundError) as undecodable:
             openai_client.responses.retrieve("resp_notdecodable")
+        assert undecodable.value.status_code == 404
 
 
 class TestMantleCountTokens:
-    """Anthropic count_tokens proxied to the Mantle endpoint."""
+    """Anthropic count_tokens proxied to the Mantle endpoint.
+
+    Ref: https://platform.claude.com/docs/en/api/messages/count_tokens
+         stdapi/aws_bedrock_mantle.py:_map_error
+    """
 
     def test_count_tokens_upstream_error_shape(
         self, anthropic_client: Anthropic
     ) -> None:
-        """Models unsupported by the upstream counter yield a clean 400 error."""
+        """Models unsupported by the upstream counter yield a clean 400 error.
+
+        The failure is mapped into Anthropic's ``{"type": "error", "error": {...}}``
+        envelope rather than being relayed as a Mantle-shaped body or a 500.
+
+        Ref: https://platform.claude.com/docs/en/api/errors
+        """
         with pytest.raises(AnthropicBadRequestError) as exc_info:
             anthropic_client.messages.count_tokens(
                 model=_GEMMA3, messages=[{"role": "user", "content": "Hello"}]
@@ -840,4 +1039,5 @@ class TestMantleCountTokens:
         body = error.body
         assert isinstance(body, dict)
         assert body["type"] == "error"
+        assert body["error"]["type"] == "invalid_request_error"
         assert body["error"]["message"]

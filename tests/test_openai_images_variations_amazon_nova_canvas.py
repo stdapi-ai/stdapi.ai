@@ -1,4 +1,11 @@
-"""OpenAI-compatible tests for Amazon Nova Canvas image variations."""
+"""Amazon Nova Canvas backend of the OpenAI-compatible ``/v1/images/variations`` endpoint.
+
+The whole module is skipped: Nova Canvas is deprecated (see the module-level
+``pytest.skip`` below).
+
+Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
+     stdapi/models/image/amazon_nova_canvas.py:_ImageGenerationJob._create_image_variations
+"""
 
 from typing import TYPE_CHECKING
 
@@ -15,9 +22,11 @@ NOVA_CANVAS_SAMPLE = (NOVA_CANVAS_V1,)
 
 
 class TestAmazonNovaCanvasVariations:
-    """Model-specific tests for Amazon Nova Canvas image variations.
+    """Nova Canvas ``taskType`` selection on the variations route.
 
-    Focus on Nova Canvas-specific variation parameters and features.
+    The route defaults to ``IMAGE_VARIATION`` and additionally accepts
+    ``TEXT_IMAGE`` and ``COLOR_GUIDED_GENERATION``, which take the uploaded image
+    as a conditioning/reference image instead.
     """
 
     @pytest.mark.expensive
@@ -29,7 +38,14 @@ class TestAmazonNovaCanvasVariations:
         sample_image_file: bytes,
         model_id: str,
     ) -> None:
-        """Test basic variation with base64 response format."""
+        """The default ``IMAGE_VARIATION`` task returns one inline image and image-only usage.
+
+        Nova Canvas honours the requested pixel size, and the variation route
+        sends no prompt, so all reported input tokens are image tokens.
+
+        Ref: stdapi/models/image/amazon_nova_canvas.py:_get_request_image_variation
+             stdapi/routes/_images_common.py:build_images_response
+        """
         if use_official_api:
             pytest.skip(
                 "Amazon Nova Canvas is not available on the official OpenAI API"
@@ -55,6 +71,10 @@ class TestAmazonNovaCanvasVariations:
         assert response.usage.input_tokens_details.image_tokens > 0
         assert response.usage.input_tokens_details.text_tokens == 0
         assert response.usage.output_tokens == 1
+        assert (
+            response.usage.total_tokens
+            == response.usage.input_tokens + response.usage.output_tokens
+        )
 
     @pytest.mark.expensive
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_SAMPLE)
@@ -65,7 +85,10 @@ class TestAmazonNovaCanvasVariations:
         sample_image_file: bytes,
         model_id: str,
     ) -> None:
-        """Test variation with TEXT_IMAGE taskType (condition image generation)."""
+        """``taskType=TEXT_IMAGE`` uses the upload as a conditioning image.
+
+        Ref: stdapi/models/image/amazon_nova_canvas.py:_get_request_text_image
+        """
         if use_official_api:
             pytest.skip(
                 "Amazon Nova Canvas is not available on the official OpenAI API"
@@ -95,7 +118,14 @@ class TestAmazonNovaCanvasVariations:
         sample_image_file: bytes,
         model_id: str,
     ) -> None:
-        """Test variation with COLOR_GUIDED_GENERATION taskType."""
+        """``taskType=COLOR_GUIDED_GENERATION`` uses the upload as the reference image.
+
+        The requested colors are forwarded as
+        ``colorGuidedGenerationParams.colors`` and the missing prompt is replaced
+        by the gateway's default variation prompt.
+
+        Ref: stdapi/models/image/amazon_nova_canvas.py:_get_request_color_guided_generation
+        """
         if use_official_api:
             pytest.skip(
                 "Amazon Nova Canvas is not available on the official OpenAI API"
@@ -129,7 +159,10 @@ class TestAmazonNovaCanvasVariations:
         sample_image_file: bytes,
         model_id: str,
     ) -> None:
-        """Test that invalid taskType raises BadRequestError."""
+        """A ``taskType`` outside the route's allow-list is a 400 listing the legal values.
+
+        Ref: stdapi/models/image/amazon_nova_canvas.py:_ImageGenerationJob._create_image_variations
+        """
         if use_official_api:
             pytest.skip(
                 "Amazon Nova Canvas is not available on the official OpenAI API"
@@ -143,11 +176,13 @@ class TestAmazonNovaCanvasVariations:
                 extra_body={"taskType": "INVALID_TASK_TYPE"},
             )
 
-        assert (
-            "taskType" in str(exc_info.value).lower()
-            or "IMAGE_VARIATION" in str(exc_info.value)
-            or "TEXT_IMAGE" in str(exc_info.value)
-            or "COLOR_GUIDED_GENERATION" in str(exc_info.value)
+        body = exc_info.value.body
+        assert isinstance(body, dict)
+        assert exc_info.value.status_code == 400
+        assert body["type"] == "invalid_request_error"
+        assert body["message"] == (
+            '"taskType" value must be "IMAGE_VARIATION", "TEXT_IMAGE" '
+            'or "COLOR_GUIDED_GENERATION".'
         )
 
     @pytest.mark.parametrize("model_id", NOVA_CANVAS_SAMPLE)
@@ -158,7 +193,13 @@ class TestAmazonNovaCanvasVariations:
         sample_image_file: bytes,
         model_id: str,
     ) -> None:
-        """Test that COLOR_GUIDED_GENERATION without colors raises BadRequestError."""
+        """``COLOR_GUIDED_GENERATION`` without ``colors`` is a 400 naming the missing key.
+
+        Nova Canvas requires the color list; the gateway reports it before
+        invoking the model.
+
+        Ref: stdapi/models/image/amazon_nova_canvas.py:_get_request_color_guided_generation
+        """
         if use_official_api:
             pytest.skip(
                 "Amazon Nova Canvas is not available on the official OpenAI API"
@@ -175,7 +216,10 @@ class TestAmazonNovaCanvasVariations:
                 },
             )
 
-        assert "colorGuidedGenerationParams.colors" in str(exc_info.value)
+        body = exc_info.value.body
+        assert isinstance(body, dict)
+        assert exc_info.value.status_code == 400
+        assert "colorGuidedGenerationParams.colors" in body["message"]
 
 
 pytest.skip("Amazon Nova Canvas is deprecated", allow_module_level=True)

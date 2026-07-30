@@ -1,7 +1,17 @@
-"""Tests for the GET /search_models endpoint.
+"""The gateway's own GET /search_models and GET /model_pricing routes.
 
-Uses unittest.mock to inject deterministic test data so these tests are fast
-and do not require live AWS credentials.
+Both routes are stdapi.ai extensions with no upstream analogue, so they are
+exercised against an injected model catalogue and an injected price index: the
+Bedrock model registry and the AWS Price List loader are patched out, which
+makes every expectation below exact and offline.
+
+Errors on these routes use the default envelope ``{"error": "<message>"}``
+because the ``Models`` route tag has no provider-specific formatter.
+
+Ref: https://stdapi.ai/api_search_models/
+     https://stdapi.ai/api_model_pricing/
+     stdapi/routes/core_models.py
+     stdapi/api_providers/__init__.py:_default_formatter
 """
 
 from decimal import Decimal
@@ -95,9 +105,10 @@ def client(test_client: TestClient | None) -> TestClient:
 
 @pytest.fixture
 def fake_models(api_key: str) -> Generator[dict[str, str]]:
-    """Patch the two model functions used by the /search_models route.
+    """Serve the fake catalogue from /search_models and yield the auth headers.
 
-    Yields a dict with 'client_headers' for convenience.
+    Both the lazy Bedrock registry initialisation and the catalogue accessor are
+    replaced, so the route never touches AWS.
     """
 
     async def _noop_init() -> bool:
@@ -146,60 +157,100 @@ def _get_ids(
 
 
 class TestSearchModelsAuthentication:
-    """The /search_models route requires API-key authentication."""
+    """/search_models is gated by the shared API-key dependency.
+
+    The 401 message is flattened to ``Unauthorized`` so a missing key and a
+    wrong key are indistinguishable to the caller.
+
+    Ref: stdapi/auth.py:AuthenticationHandler.verify_credentials
+         stdapi/utils.py:hide_security_details
+    """
 
     def test_missing_api_key_returns_401(self, client: TestClient) -> None:
         """GET /search_models without credentials is rejected with HTTP 401."""
-        assert client.get("/search_models").status_code == 401
+        response = client.get("/search_models")
+        assert response.status_code == 401
+        assert response.json() == {"error": "Unauthorized"}
 
     def test_invalid_api_key_returns_401(self, client: TestClient) -> None:
-        """GET /search_models with a wrong API key is rejected with HTTP 401."""
+        """GET /search_models with a wrong API key is rejected with the same opaque 401."""
         response = client.get(
             "/search_models", headers={"Authorization": "Bearer wrong-key"}
         )
         assert response.status_code == 401
+        assert response.json() == {"error": "Unauthorized"}
 
 
 class TestSearchModels:
-    """Tests for GET /search_models without filters."""
+    """GET /search_models without filters returns the whole catalogue.
+
+    Ref: stdapi/routes/core_models.py:search_models
+    """
 
     def test_returns_200(self, client: TestClient, fake_models: dict[str, str]) -> None:
-        """GET /search_models returns HTTP 200."""
+        """GET /search_models returns HTTP 200 with a JSON array body."""
         response = client.get("/search_models", headers=fake_models)
         assert response.status_code == 200
+        assert isinstance(response.json(), list)
 
     def test_returns_all_models_sorted(
         self, client: TestClient, fake_models: dict[str, str]
     ) -> None:
-        """Unfiltered response contains all fake models sorted by ID."""
+        """Unfiltered response contains every catalogue model, sorted by ID.
+
+        Legacy models are advertised by default: ``legacy`` is only a filter, so
+        the legacy speech model is part of the unfiltered listing.
+
+        Ref: https://github.com/stdapi-ai/stdapi.ai/issues/94
+        """
         ids = _get_ids(client, {}, fake_models)
         assert ids == sorted(_FAKE_MODELS.keys())
+        assert _SPEECH_MODEL.legacy is True
+        assert _SPEECH_MODEL.id in ids
 
     def test_response_item_required_fields(
         self, client: TestClient, fake_models: dict[str, str]
     ) -> None:
-        """Each model in the response has the required ModelDetails fields."""
-        for item in _get(client, {}, fake_models):
+        """Every catalogue entry round-trips through ``ModelDetails`` unchanged.
+
+        The route returns registry objects directly, so each item must equal its
+        catalogue entry serialised with ``exclude_none``.
+        """
+        items = {str(item["id"]): item for item in _get(client, {}, fake_models)}
+        assert set(items) == set(_FAKE_MODELS)
+        for item in items.values():
             assert "id" in item
             assert "name" in item
             assert "provider" in item
             assert "input_modalities" in item
             assert "output_modalities" in item
             assert "regions" in item
+        for model_id, item in items.items():
+            assert item == _FAKE_MODELS[model_id].model_dump(
+                mode="json", exclude_none=True
+            )
 
     def test_none_fields_excluded(
         self, client: TestClient, fake_models: dict[str, str]
     ) -> None:
-        """Fields that are None must be absent from the response (response_model_exclude_none)."""
+        """Unset optional fields are omitted rather than serialised as ``null``.
+
+        The route sets ``response_model_exclude_none``, so the image model's
+        ``legacy=None`` and ``inference_profiles=None`` never reach the client,
+        while the fields that do have values stay present.
+        """
         items = {m["id"]: m for m in _get(client, {}, fake_models)}
-        # _IMAGE_MODEL has legacy=None
         assert "legacy" not in items[_IMAGE_MODEL.id]
-        # _IMAGE_MODEL has inference_profiles=None
         assert "inference_profiles" not in items[_IMAGE_MODEL.id]
+        assert items[_TEXT_MODEL.id]["legacy"] is False
+        assert items[_SPEECH_MODEL.id]["legacy"] is True
 
 
 class TestFilterByInputModality:
-    """Tests for input_modalities query parameter."""
+    """``input_modalities`` narrows the listing to models accepting a modality.
+
+    Ref: stdapi/routes/core_models.py:_filter_by_modality
+    """
 
     def test_text_input_returns_text_and_image_models(
         self, client: TestClient, fake_models: dict[str, str]
@@ -218,25 +269,36 @@ class TestFilterByInputModality:
     def test_input_modality_case_insensitive(
         self, client: TestClient, fake_models: dict[str, str]
     ) -> None:
-        """input_modalities matching is case-insensitive (lowercase 'text' works)."""
+        """A lowercase ``text`` is upper-cased before lookup and matches the same models.
+
+        The filter normalises with ``raw.strip().upper()``, so an unknown-casing
+        value would otherwise raise the 400 instead of matching.
+        """
         ids_upper = set(_get_ids(client, {"input_modalities": "TEXT"}, fake_models))
-        ids_lower = set(_get_ids(client, {"input_modalities": "text"}, fake_models))
+        ids_lower = set(_get_ids(client, {"input_modalities": " text "}, fake_models))
+        assert ids_lower == {"vendor.text-chat-v1", "vendor.image-gen-v1"}
         assert ids_upper == ids_lower
 
     def test_unknown_input_modality_returns_400(
         self, client: TestClient, fake_models: dict[str, str]
     ) -> None:
-        """input_modalities=INVALID returns HTTP 400."""
+        """An unknown input modality is a 400 naming the rejected modality."""
         response = client.get(
             "/search_models",
             params={"input_modalities": "INVALID"},
             headers=fake_models,
         )
         assert response.status_code == 400
+        assert response.json() == {
+            "error": "No model matching input modality: INVALID."
+        }
 
 
 class TestFilterByOutputModality:
-    """Tests for output_modalities query parameter."""
+    """``output_modalities`` narrows the listing to models producing a modality.
+
+    Ref: stdapi/routes/core_models.py:_filter_by_modality
+    """
 
     def test_text_output_returns_text_models(
         self, client: TestClient, fake_models: dict[str, str]
@@ -255,17 +317,27 @@ class TestFilterByOutputModality:
     def test_unknown_output_modality_returns_400(
         self, client: TestClient, fake_models: dict[str, str]
     ) -> None:
-        """output_modalities=INVALID returns HTTP 400."""
+        """An unknown output modality is a 400 that names the output direction."""
         response = client.get(
             "/search_models",
             params={"output_modalities": "INVALID"},
             headers=fake_models,
         )
         assert response.status_code == 400
+        assert response.json() == {
+            "error": "No model matching output modality: INVALID."
+        }
 
 
 class TestFilterByRoute:
-    """Tests for route query parameter — accepts both route paths and MCP tool names."""
+    """``route`` accepts a route path or an MCP tool name interchangeably.
+
+    A single parameter is matched against both ``supported_routes`` and
+    ``supported_mcp_tools``, so agents can filter with whichever identifier they
+    hold.
+
+    Ref: stdapi/routes/core_models.py:_filter_by_route_or_tool
+    """
 
     def test_filter_by_chat_route(
         self, client: TestClient, fake_models: dict[str, str]
@@ -284,9 +356,11 @@ class TestFilterByRoute:
     def test_filter_by_mcp_tool_name(
         self, client: TestClient, fake_models: dict[str, str]
     ) -> None:
-        """route=openai_chat (MCP tool name) returns the same models as the route path."""
+        """An MCP tool name selects the same models as the equivalent route path."""
         ids = set(_get_ids(client, {"route": "openai_chat"}, fake_models))
+        by_path = set(_get_ids(client, {"route": "/v1/chat/completions"}, fake_models))
         assert ids == {"vendor.text-chat-v1"}
+        assert ids == by_path
 
     def test_filter_by_image_mcp_tool_name(
         self, client: TestClient, fake_models: dict[str, str]
@@ -298,24 +372,33 @@ class TestFilterByRoute:
     def test_unknown_route_returns_400(
         self, client: TestClient, fake_models: dict[str, str]
     ) -> None:
-        """route=/v99/nonexistent returns HTTP 400."""
+        """An unmatched route path is a 400 naming the rejected value."""
         response = client.get(
             "/search_models", params={"route": "/v99/nonexistent"}, headers=fake_models
         )
         assert response.status_code == 400
+        assert response.json() == {
+            "error": "No model supporting route or MCP tool: /v99/nonexistent."
+        }
 
     def test_unknown_mcp_tool_returns_400(
         self, client: TestClient, fake_models: dict[str, str]
     ) -> None:
-        """route=nonexistent_tool returns HTTP 400."""
+        """An unmatched MCP tool name is rejected by the same combined check."""
         response = client.get(
             "/search_models", params={"route": "nonexistent_tool"}, headers=fake_models
         )
         assert response.status_code == 400
+        assert response.json() == {
+            "error": "No model supporting route or MCP tool: nonexistent_tool."
+        }
 
 
 class TestFilterByRegion:
-    """Tests for region query parameter."""
+    """``region`` narrows the listing to models accessible in one AWS region.
+
+    Ref: stdapi/routes/core_models.py:_filter_by_region
+    """
 
     def test_filter_by_us_east_1(
         self, client: TestClient, fake_models: dict[str, str]
@@ -334,22 +417,35 @@ class TestFilterByRegion:
     def test_filter_by_eu_west_1(
         self, client: TestClient, fake_models: dict[str, str]
     ) -> None:
-        """region=eu-west-1 returns models available in that region."""
+        """A secondary region in a model's ``regions`` list is matched too.
+
+        The speech model lists ``eu-west-1`` after ``us-east-1``, so matching is
+        membership-based rather than keyed on a primary region.
+        """
         ids = set(_get_ids(client, {"region": "eu-west-1"}, fake_models))
         assert ids == {"vendor.speech-v1"}
 
     def test_unknown_region_returns_400(
         self, client: TestClient, fake_models: dict[str, str]
     ) -> None:
-        """region=xx-invalid-99 returns HTTP 400."""
+        """A region no model is available in is a 400 naming that region."""
         response = client.get(
             "/search_models", params={"region": "xx-invalid-99"}, headers=fake_models
         )
         assert response.status_code == 400
+        assert response.json() == {
+            "error": "No model available in region: xx-invalid-99."
+        }
 
 
 class TestFilterByStreaming:
-    """Tests for streaming query parameter."""
+    """``streaming`` partitions the catalogue on ``response_streaming``.
+
+    The route uses an identity check (``m.response_streaming is streaming``), so
+    only explicit ``True``/``False`` flags participate.
+
+    Ref: stdapi/routes/core_models.py:search_models
+    """
 
     def test_streaming_true_returns_streaming_models(
         self, client: TestClient, fake_models: dict[str, str]
@@ -361,14 +457,9 @@ class TestFilterByStreaming:
     def test_streaming_false_returns_non_streaming_models(
         self, client: TestClient, fake_models: dict[str, str]
     ) -> None:
-        """streaming=false returns only models with response_streaming=False."""
+        """streaming=false returns exactly the models flagged response_streaming=False."""
         ids = set(_get_ids(client, {"streaming": "false"}, fake_models))
-        # _IMAGE_MODEL has response_streaming=False; _SPEECH_MODEL has response_streaming=False
-        # _TEXT_MODEL has response_streaming=True → excluded
-        # _IMAGE_MODEL.legacy is None so (None is True) is False → included
-        assert "vendor.image-gen-v1" in ids
-        assert "vendor.speech-v1" in ids
-        assert "vendor.text-chat-v1" not in ids
+        assert ids == {"vendor.image-gen-v1", "vendor.speech-v1"}
 
     def test_streaming_excludes_models_with_unset_streaming_support(
         self, client: TestClient, fake_models: dict[str, str]
@@ -376,7 +467,8 @@ class TestFilterByStreaming:
         """A model with response_streaming=None matches neither streaming=true nor =false.
 
         The route filter is an identity check (``m.response_streaming is
-        streaming``), so an unset value is excluded from both results.
+        streaming``), so an unset value is excluded from both results while the
+        models with an explicit flag still come back.
         """
         unset_model = ModelDetails(
             id="vendor.unset-streaming-v1",
@@ -403,10 +495,19 @@ class TestFilterByStreaming:
 
         assert unset_model.id not in true_ids
         assert unset_model.id not in false_ids
+        assert "vendor.text-chat-v1" in true_ids
+        assert "vendor.image-gen-v1" in false_ids
 
 
 class TestFilterByLegacy:
-    """Tests for legacy query parameter."""
+    """``legacy`` partitions the catalogue on the deprecation flag.
+
+    Unlike ``streaming``, the route coerces first (``(m.legacy is True) is
+    legacy``), so an unset flag counts as non-legacy instead of being dropped.
+
+    Ref: stdapi/routes/core_models.py:search_models
+         https://github.com/stdapi-ai/stdapi.ai/issues/94
+    """
 
     def test_legacy_true_returns_legacy_models(
         self, client: TestClient, fake_models: dict[str, str]
@@ -418,41 +519,52 @@ class TestFilterByLegacy:
     def test_legacy_false_returns_non_legacy_models(
         self, client: TestClient, fake_models: dict[str, str]
     ) -> None:
-        """legacy=false returns models where legacy is not True (False or None).
+        """legacy=false returns models whose legacy flag is False or unset.
 
-        The route uses ``(m.legacy is True) is legacy``, so legacy=False matches
-        models whose legacy flag is either explicitly False or None.
+        The coercion means the pair of results is a partition: ``legacy=true``
+        and ``legacy=false`` together cover the whole catalogue.
         """
         ids = set(_get_ids(client, {"legacy": "false"}, fake_models))
-        # _TEXT_MODEL (legacy=False) and _IMAGE_MODEL (legacy=None) both match
+        legacy_ids = set(_get_ids(client, {"legacy": "true"}, fake_models))
         assert ids == {"vendor.text-chat-v1", "vendor.image-gen-v1"}
+        assert ids | legacy_ids == set(_FAKE_MODELS)
+        assert not ids & legacy_ids
 
     def test_legacy_filter_includes_none(
         self, client: TestClient, fake_models: dict[str, str]
     ) -> None:
-        """legacy=false includes models where legacy is None.
-
-        The route filter ``(m.legacy is True) is False`` is True for both
-        legacy=False and legacy=None, so None-legacy models appear when legacy=false.
-        """
+        """A model with ``legacy=None`` is reported as non-legacy, never as legacy."""
+        assert _IMAGE_MODEL.legacy is None
         ids = set(_get_ids(client, {"legacy": "false"}, fake_models))
+        legacy_ids = set(_get_ids(client, {"legacy": "true"}, fake_models))
         assert _IMAGE_MODEL.id in ids
+        assert _IMAGE_MODEL.id not in legacy_ids
 
 
 class TestModelService:
-    """The ``service`` field is client-visible via /search_models."""
+    """The ``service`` field distinguishes Bedrock Runtime from Bedrock Mantle models.
+
+    Ref: stdapi/models/__init__.py:ModelDetails
+         stdapi/models/__init__.py:MANTLE_SERVICE
+    """
 
     def test_runtime_model_defaults_to_bedrock_runtime_service(
         self, client: TestClient, fake_models: dict[str, str]
     ) -> None:
         """A model with no explicit ``service`` reports the AWS Bedrock Runtime default."""
         body = _get(client, {"route": "/v1/chat/completions"}, fake_models)
+        assert [m["id"] for m in body] == ["vendor.text-chat-v1"]
+        assert _TEXT_MODEL.service == "AWS Bedrock Runtime"
         assert body[0]["service"] == "AWS Bedrock Runtime"
 
     def test_mantle_served_model_reports_mantle_service(
         self, client: TestClient, fake_models: dict[str, str]
     ) -> None:
-        """A model served by Bedrock Mantle round-trips its service through the listing."""
+        """A Mantle-served model reports its own service alongside runtime models.
+
+        The registry value is passed straight through, so a mixed listing shows
+        both services in one response.
+        """
         mantle_model = ModelDetails(
             id="vendor.mantle-chat-v1",
             name="Mantle Chat",
@@ -482,12 +594,19 @@ class TestModelService:
 
 
 class TestCombinedFilters:
-    """Tests that combine multiple query parameters."""
+    """Multiple filters combine with AND logic by intersecting the candidate set.
+
+    Ref: stdapi/routes/core_models.py:search_models
+    """
 
     def test_region_and_streaming(
         self, client: TestClient, fake_models: dict[str, str]
     ) -> None:
-        """Combining region=us-east-1 and streaming=true returns the intersection."""
+        """Region and streaming intersect rather than union.
+
+        Both the streaming chat model and the non-streaming speech model live in
+        ``us-east-1``, so a union would return two models instead of one.
+        """
         ids = set(
             _get_ids(client, {"region": "us-east-1", "streaming": "true"}, fake_models)
         )
@@ -496,7 +615,11 @@ class TestCombinedFilters:
     def test_input_and_output_modalities(
         self, client: TestClient, fake_models: dict[str, str]
     ) -> None:
-        """Combining input_modalities=TEXT and output_modalities=IMAGE returns image model only."""
+        """Input and output modality filters intersect across the two modality indexes.
+
+        Two models take TEXT input and two produce TEXT output, so only the model
+        satisfying both TEXT input and IMAGE output survives.
+        """
         ids = set(
             _get_ids(
                 client,
@@ -509,8 +632,11 @@ class TestCombinedFilters:
     def test_filters_that_yield_empty_intersection_return_empty_list(
         self, client: TestClient, fake_models: dict[str, str]
     ) -> None:
-        """Filters with no matching models return an empty list (not an error)."""
-        # speech input AND image output — no model has both
+        """A known-but-disjoint filter pair is an empty 200, not a 400.
+
+        Each modality exists in the catalogue, so neither triggers the unknown-
+        modality error; the empty intersection is a legitimate result.
+        """
         response = client.get(
             "/search_models",
             params={"input_modalities": "SPEECH", "output_modalities": "IMAGE"},
@@ -567,17 +693,31 @@ def priced_catalog(api_key: str, monkeypatch: pytest.MonkeyPatch) -> dict[str, s
 
 
 class TestModelPricingEndpoint:
-    """GET /model_pricing behavior against a seeded in-memory catalog."""
+    """GET /model_pricing against a seeded in-memory price index.
+
+    Ref: https://stdapi.ai/api_model_pricing/
+         stdapi/routes/core_models.py:model_pricing
+    """
 
     def test_missing_api_key_returns_401(self, client: TestClient) -> None:
-        """Requests without credentials are rejected."""
+        """Authentication is checked before cost tracking, so an anonymous call is a 401.
+
+        Ref: stdapi/auth.py:AuthenticationHandler.verify_credentials
+        """
         response = client.get("/model_pricing", params={"model": "x"})
         assert response.status_code == 401
+        assert response.json() == {"error": "Unauthorized"}
 
     def test_cost_tracking_disabled_hides_settings(
         self, client: TestClient, api_key: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """With cost tracking disabled, the 503 does not expose settings."""
+        """A disabled cost tracker yields a 503 that names no internal setting.
+
+        The operator-facing setting name is logged, not returned: the client only
+        learns to contact the administrator.
+
+        Ref: stdapi/routes/core_models.py:model_pricing
+        """
         monkeypatch.setattr(SETTINGS, "cost_tracking", False)
         response = client.get(
             "/model_pricing",
@@ -586,13 +726,23 @@ class TestModelPricingEndpoint:
         )
         assert response.status_code == 503
         message = response.json()["error"]
+        assert message == (
+            "Model pricing is not available on the current server. "
+            "Please contact the administrator to enable it."
+        )
         assert "administrator" in message
         assert "cost_tracking" not in message.lower()
 
     def test_catalog_not_loaded_returns_retry_later(
         self, client: TestClient, api_key: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """With the catalog still loading, the endpoint asks to retry later."""
+        """An empty price index is a distinct, retryable 503 from the disabled-tracking one.
+
+        ``price_catalog_ready()`` is False during the startup window before the
+        background Price List load completes.
+
+        Ref: stdapi/pricing.py:price_catalog_ready
+        """
         monkeypatch.setattr(SETTINGS, "cost_tracking", True)
         monkeypatch.setattr(pricing._state, "price_index", {})  # noqa: SLF001
         response = client.get(
@@ -601,12 +751,21 @@ class TestModelPricingEndpoint:
             headers={"Authorization": f"Bearer {api_key}"},
         )
         assert response.status_code == 503
-        assert "later" in response.json()["error"]
+        assert response.json() == {
+            "error": "The price catalog is not loaded yet. Please try again later."
+        }
 
     def test_default_card_reflects_server_configuration(
         self, client: TestClient, priced_catalog: dict[str, str]
     ) -> None:
-        """The default card keeps only the configured tier, region, and routing."""
+        """The default card keeps only the configured tier, region, and routing.
+
+        The seeded catalogue also holds a ``flex`` input-token row, which the
+        default (``all_prices=false``) card must drop while keeping the distinctly
+        priced ``5m`` cache-write variant.
+
+        Ref: stdapi/pricing.py:select_effective_rows
+        """
         response = client.get(
             "/model_pricing",
             params={"model": "amazon.pricedmodel-v1:0"},
@@ -639,7 +798,13 @@ class TestModelPricingEndpoint:
     def test_all_prices_returns_full_table(
         self, client: TestClient, priced_catalog: dict[str, str]
     ) -> None:
-        """all_prices=true returns every published row with exact prices."""
+        """all_prices=true adds back the rows the configuration-scoped card filters out.
+
+        The default card exposes three of the four seeded rows; the extra row is
+        the ``flex`` input-token variant, priced at half the standard rate.
+
+        Ref: stdapi/pricing.py:model_prices
+        """
         response = client.get(
             "/model_pricing",
             params={"model": "amazon.pricedmodel-v1:0", "all_prices": "true"},
@@ -649,7 +814,9 @@ class TestModelPricingEndpoint:
         (card,) = response.json()
         assert len(card["prices"]) == 4
         flex_input = next(row for row in card["prices"] if row["tier"] == "flex")
+        assert flex_input["dimension"] == "input_tokens"
         assert flex_input["unit_price"] == "0.0000015"
+        assert {row["tier"] for row in card["prices"]} == {"standard", "flex"}
         assert all(row["routing"] == "us-east-1" for row in card["prices"])
 
     def test_no_model_filter_prices_every_available_model(
@@ -658,7 +825,11 @@ class TestModelPricingEndpoint:
         priced_catalog: dict[str, str],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Omitting `model` returns one card per available model, sorted by ID."""
+        """Omitting `model` prices every available model, sorted by ID, priced or not.
+
+        The unpriced model still gets a card: an empty ``prices`` list means AWS
+        publishes no rows, not that the model is unknown.
+        """
 
         async def _models() -> dict[str, ModelDetails]:
             return {
@@ -682,6 +853,7 @@ class TestModelPricingEndpoint:
             "amazon.pricedmodel-v1:0",
         ]
         assert cards[0]["prices"] == []
+        assert cards[0]["service"] == "bedrock-runtime"
         assert len(cards[1]["prices"]) == 3
 
     def test_unpriced_mantle_model_reports_mantle_service(
@@ -690,7 +862,14 @@ class TestModelPricingEndpoint:
         priced_catalog: dict[str, str],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A Mantle-only model with zero priced rows still reports bedrock-mantle."""
+        """A Mantle-only model with zero priced rows still reports bedrock-mantle.
+
+        With no rows to read the service from, the card falls back to the
+        preferred service derived from the model's registry entry.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
+             stdapi/routes/core_models.py:model_pricing
+        """
 
         async def _models() -> dict[str, ModelDetails]:
             return {
@@ -722,7 +901,15 @@ class TestModelPricingEndpoint:
         priced_catalog: dict[str, str],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A configured default tier is shown, falling back where unpublished."""
+        """A per-model default tier selects its rows, falling back per dimension.
+
+        Only ``input_tokens`` has a published ``flex`` rate, so the card mixes the
+        flex input row with the standard output row — the same fallback billing
+        applies.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/service-tiers-inference.html
+             stdapi/pricing.py:select_effective_rows
+        """
         monkeypatch.setattr(
             SETTINGS, "default_model_service_tiers", {"amazon.pricedmodel-v1:0": "flex"}
         )
@@ -744,7 +931,12 @@ class TestModelPricingEndpoint:
         priced_catalog: dict[str, str],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Rows outside the configured Bedrock regions only show on demand."""
+        """Rows outside the configured Bedrock regions only show when asked for by region.
+
+        ``eu-west-1`` is published but not in ``aws_bedrock_regions``, so it is
+        invisible by default and reachable through an explicit ``region`` filter
+        (which also lifts the configured-region restriction).
+        """
         key = PriceKey(
             Service.BEDROCK,
             "pricedmodel",
@@ -778,7 +970,14 @@ class TestModelPricingEndpoint:
         priced_catalog: dict[str, str],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Rows show the geography prefix of the model's inference profile."""
+        """Rows show the geography prefix of the model's inference profile, not the region.
+
+        The model is reached through the ``us.`` cross-Region inference profile in
+        ``us-east-1``, so both the card default and each row report ``us``.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-support.html
+             stdapi/routes/core_models.py:_row_routing
+        """
         details = ModelDetails(
             id="amazon.pricedmodel-v1:0",
             name="Priced",
@@ -808,7 +1007,15 @@ class TestModelPricingEndpoint:
         priced_catalog: dict[str, str],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Multi-geography deployments list one routing per distinct profile."""
+        """Multi-geography deployments list one routing per distinct profile, in configured order.
+
+        ``aws_bedrock_regions`` is ordered ``eu-west-3`` then ``us-east-1``, and
+        the routings follow that order rather than being sorted or deduplicated
+        by region.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/cross-region-inference.html
+             stdapi/routes/core_models.py:_pricing_defaults
+        """
         monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", ["eu-west-3", "us-east-1"])
         details = ModelDetails(
             id="amazon.pricedmodel-v1:0",
@@ -841,7 +1048,15 @@ class TestModelPricingEndpoint:
         priced_catalog: dict[str, str],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A global profile prefers global rows and falls back to plain ones."""
+        """A global profile prefers the global-priced row and falls back per dimension.
+
+        Only ``input_tokens`` has a distinct ``global`` rate, so that row is billed
+        at the global price while ``output_tokens`` falls back to the plain
+        regional row.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-support.html
+             stdapi/pricing.py:select_effective_rows
+        """
         key = PriceKey(
             Service.BEDROCK,
             "pricedmodel",
@@ -886,7 +1101,12 @@ class TestModelPricingEndpoint:
     def test_variants_false_with_dimension_filter(
         self, client: TestClient, priced_catalog: dict[str, str]
     ) -> None:
-        """The base card composed with a dimension filter trims to one row."""
+        """variants=false drops the cache-TTL row, and the dimension filter leaves one row.
+
+        ``variants=false`` keeps only base rows (standard tier, no cache TTL /
+        routing / long-context variant), so the ``5m`` cache-write row disappears
+        even though its dimension is not filtered out.
+        """
         response = client.get(
             "/model_pricing",
             params={
@@ -898,11 +1118,19 @@ class TestModelPricingEndpoint:
         )
         (card,) = response.json()
         assert [row["unit_price"] for row in card["prices"]] == ["0.000003"]
+        assert card["prices"][0]["dimension"] == "input_tokens"
+        assert card["prices"][0]["tier"] == "standard"
+        assert "cache_ttl" not in card["prices"][0]
 
     def test_multi_model_order_dedupe_and_unknown_model(
         self, client: TestClient, priced_catalog: dict[str, str]
     ) -> None:
-        """Cards come back in request order, deduplicated; unknown models are empty."""
+        """Cards come back in request order, deduplicated; unknown models are empty.
+
+        Request order is preserved via ``dict.fromkeys``, so the unknown model
+        stays first even though sorting would place it last, and its repeat is
+        collapsed. An unknown model is a card with no rows, not a 404.
+        """
         response = client.get(
             "/model_pricing",
             params={
@@ -915,11 +1143,14 @@ class TestModelPricingEndpoint:
             headers=priced_catalog,
         )
         cards = response.json()
+        assert response.status_code == 200
         assert [card["id"] for card in cards] == [
             "vendor.unknown-v1:0",
             "amazon.pricedmodel-v1:0",
         ]
         assert cards[0]["prices"] == []
+        assert cards[0]["service"] == "bedrock-runtime"
+        assert len(cards[1]["prices"]) == 3
 
     @pytest.mark.parametrize(
         ("param", "value"),
@@ -934,19 +1165,35 @@ class TestModelPricingEndpoint:
     def test_invalid_enumerated_filter_returns_400(
         self, client: TestClient, priced_catalog: dict[str, str], param: str, value: str
     ) -> None:
-        """Unknown enumerated filter values are rejected with valid values listed."""
+        """Each enumerated filter rejects an unknown value with a 400 listing the valid ones.
+
+        ``currency`` is validated against the currencies present in the loaded
+        catalog rather than a fixed list, so ``XXX`` is rejected there too.
+
+        Ref: stdapi/routes/core_models.py:_validate_filter
+             stdapi/routes/core_models.py:_validated_dimensions
+        """
         response = client.get(
             "/model_pricing",
             params={"model": "amazon.pricedmodel-v1:0", param: value},
             headers=priced_catalog,
         )
         assert response.status_code == 400
-        assert "Valid values" in str(response.json())
+        message = response.json()["error"]
+        assert message.startswith(f"Invalid {param}: "), message
+        assert value in message
+        assert "Valid values: " in message
 
     def test_currency_filter_is_case_insensitive(
         self, client: TestClient, priced_catalog: dict[str, str]
     ) -> None:
-        """A lowercase catalog currency is accepted and matches its prices."""
+        """A lowercase currency is upper-cased before validation and matches its rows.
+
+        Without the normalisation the value would fail the catalog-currency check
+        and return a 400 instead of the priced card.
+
+        Ref: stdapi/pricing.py:available_currencies
+        """
         response = client.get(
             "/model_pricing",
             params={"model": "amazon.pricedmodel-v1:0", "currency": "usd"},
@@ -963,7 +1210,15 @@ class TestModelPricingEndpoint:
         priced_catalog: dict[str, str],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A price registered under both Bedrock services yields one Mantle row."""
+        """A price published under both Bedrock services yields one row, on the Mantle service.
+
+        Bedrock Runtime and Bedrock Mantle usage are priced independently, so the
+        same dimension can appear twice in the index. The card must resolve to the
+        model's preferred service instead of emitting both rows.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
+             stdapi/pricing.py:model_prices
+        """
         rows = {
             PriceKey(
                 service, "mantlemodel", "us-east-1", Dimension.INPUT_TOKENS, "standard"
@@ -999,3 +1254,5 @@ class TestModelPricingEndpoint:
         (card,) = response.json()
         assert card["service"] == "bedrock-mantle"
         assert len(card["prices"]) == 1
+        assert card["prices"][0]["dimension"] == "input_tokens"
+        assert card["prices"][0]["unit_price"] == "0.000002"

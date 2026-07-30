@@ -1,7 +1,13 @@
-"""Full integration tests for cost tracking: live catalog, pricing API, usage logs.
+"""End-to-end cost tracking over the real AWS Price List catalog: pricing routes and usage logs.
 
-These load the real AWS Price List catalog (and make one tiny Bedrock call),
-so they run only with ``--slow``, like the pricing coverage test.
+The prices the ``/model_pricing`` route publishes and the prices request
+billing resolves come from the same catalog, so the two must agree
+byte-for-byte. These tests load that catalog for real (and make one tiny
+Bedrock call), so they run only with ``--slow``.
+
+Ref: stdapi/pricing.py:_load_price_catalog
+     stdapi/routes/core_models.py:model_pricing
+     stdapi/usage.py:compute_costs
 """
 
 from decimal import Decimal
@@ -72,10 +78,22 @@ async def live_catalog(
 @pytest.mark.usefixtures("live_catalog")
 @pytest.mark.xdist_group("cost_tracking_integration")
 class TestCostTrackingIntegration:
-    """End-to-end over the real AWS Price List catalog (no fixtures/stubs)."""
+    """End-to-end over the real AWS Price List catalog (no seeded prices).
+
+    Ref: stdapi/routes/core_models.py:model_pricing
+         stdapi/pricing.py:resolve_price
+    """
 
     def test_search_then_price_workflow(self, client: TestClient, api_key: str) -> None:
-        """The documented agent workflow: search_models, then price the shortlist."""
+        """search_models then model_pricing returns the shortlist in order, priced per Region.
+
+        The documented agent workflow: discover models for a route, then price
+        the shortlist. Price cards come back one per requested model, in the
+        requested order, carrying only the requested Region, standard tier and
+        requested dimensions.
+
+        Ref: stdapi/routes/core_models.py:search_models
+        """
         headers = {"Authorization": f"Bearer {api_key}"}
         found = client.get(
             "/search_models",
@@ -115,7 +133,14 @@ class TestCostTrackingIntegration:
     def test_api_prices_match_resolve_price(
         self, client: TestClient, api_key: str
     ) -> None:
-        """API rows are byte-identical to what request billing would resolve."""
+        """A published price row is byte-identical to the price request billing resolves.
+
+        Both go through ``resolve_price`` and ``format_cost``, so a formatting
+        or fallback divergence between the route and billing would show up as
+        an unequal ``unit_price`` string.
+
+        Ref: stdapi/usage.py:format_cost
+        """
         response = client.get(
             "/model_pricing",
             params={
@@ -126,8 +151,10 @@ class TestCostTrackingIntegration:
             },
             headers={"Authorization": f"Bearer {api_key}"},
         )
+        assert response.status_code == 200
         (card,) = response.json()
         (row,) = card["prices"]
+        assert row["dimension"] == "input_tokens"
         billed = resolve_price(
             Service.BEDROCK, _CHAT_MODEL, "us-east-1", Dimension.INPUT_TOKENS
         )
@@ -138,7 +165,14 @@ class TestCostTrackingIntegration:
     def test_chat_completion_records_usage_and_cost(
         self, client: TestClient, api_key: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A real Bedrock call lands in the request log with usage and a cost."""
+        """A real Bedrock call logs one bedrock-runtime usage entry with a priced cost.
+
+        The request-level ``cost`` rollup is a per-currency total of the
+        entries, so with a single entry it must equal that entry exactly.
+
+        Ref: stdapi/usage.py:total_costs_by_currency
+             stdapi/monitoring.py:write_log_event
+        """
         written: list[EventLog] = []
         monkeypatch.setattr(monitoring, "write_log_event", written.append)
 
@@ -152,11 +186,21 @@ class TestCostTrackingIntegration:
             headers={"Authorization": f"Bearer {api_key}"},
         )
         assert response.status_code == 200
-        assert response.json()["usage"]["prompt_tokens"] > 0
+        reported_usage = response.json()["usage"]
+        assert reported_usage["prompt_tokens"] > 0
 
         (request_log,) = [w for w in written if w.get("type") == "request"]
         (entry,) = request_log["usage"]
         assert entry["service"] == "bedrock-runtime"
+        assert entry["model"] == _CHAT_MODEL
         assert entry["input_tokens"] > 0
         assert Decimal(entry["cost"]) > 0
         assert request_log["cost"] == {entry["currency"]: entry["cost"]}
+        # The log records Bedrock's own counters, where inputTokens excludes
+        # cache reads/writes, while OpenAI's prompt_tokens includes them.
+        cached = (reported_usage.get("prompt_tokens_details") or {}).get(
+            "cached_tokens", 0
+        )
+        assert reported_usage["prompt_tokens"] == (
+            entry["input_tokens"] + cached + entry.get("cache_write_tokens", 0)
+        )

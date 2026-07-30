@@ -1,9 +1,17 @@
-"""Integration tests for error payload structure on OpenAI, Anthropic and Cohere routes.
+"""Error envelopes emitted by the OpenAI, Anthropic and Cohere routes.
 
-Verifies that error responses match the official API envelope formats:
+Each provider surface carries its own wire shape, selected from the matched
+route's tag:
+
 - OpenAI: ``{"error": {"message", "type", "param", "code"}}``
 - Anthropic: ``{"type": "error", "error": {"type", "message"}, "request_id": <str>}``
 - Cohere: ``{"message": <str>, "id": <str>}``
+- No matched route: the minimal ``{"error": <message>}`` fallback.
+
+Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+     https://platform.claude.com/docs/en/api/errors
+     https://docs.cohere.com/reference/errors
+     stdapi/api_providers/__init__.py:format_http_error
 """
 
 import json
@@ -55,7 +63,9 @@ def _cohere_headers(api_key: str) -> dict[str, str]:
 def _assert_openai_error_shape(body: dict[str, Any]) -> dict[str, Any]:
     """Assert the response body matches the OpenAI error envelope and return the inner error.
 
-    The expected shape is::
+    The gateway always emits all four inner keys (``param``/``code`` possibly
+    null), matching the OpenAPI spec's ``required: [type, message, param, code]``
+    rather than the sparser bodies the live OpenAI API sometimes returns::
 
         {
             "error": {
@@ -65,9 +75,6 @@ def _assert_openai_error_shape(body: dict[str, Any]) -> dict[str, Any]:
                 "code": <str | None>,
             }
         }
-
-    Args:
-        body: Parsed JSON response body.
 
     Returns:
         The inner ``error`` dict for further assertions.
@@ -98,9 +105,6 @@ def _assert_anthropic_error_shape(body: dict[str, Any]) -> dict[str, Any]:
             "request_id": <str>,
         }
 
-    Args:
-        body: Parsed JSON response body.
-
     Returns:
         The inner ``error`` dict for further assertions.
     """
@@ -121,12 +125,10 @@ def _assert_anthropic_error_shape(body: dict[str, Any]) -> dict[str, Any]:
 def _assert_cohere_error_shape(body: dict[str, Any]) -> str:
     """Assert the response body matches the Cohere error envelope and return the message.
 
-    The expected shape is::
+    Cohere's own reference never specifies the error JSON, so the flat
+    ``{"message", "id"}`` shape is the gateway's contract::
 
         {"message": <str>, "id": <str>}
-
-    Args:
-        body: Parsed JSON response body.
 
     Returns:
         The ``message`` string for further assertions.
@@ -140,10 +142,13 @@ def _assert_cohere_error_shape(body: dict[str, Any]) -> str:
 
 
 class TestFormatErrorFunctions:
-    """Pure unit tests for the provider `_format_error` envelope builders.
+    """The per-provider ``_format_error`` builders map an HTTP status to an error type.
 
-    No server or test client involved — these exercise the status-to-type
-    mapping functions directly.
+    These call the envelope builders directly: no server, no test client.
+
+    Ref: stdapi/api_providers/openai.py:_format_error
+         stdapi/api_providers/anthropic.py:_format_error
+         stdapi/api_providers/cohere.py:_format_error
     """
 
     @pytest.mark.parametrize(
@@ -160,10 +165,19 @@ class TestFormatErrorFunctions:
     def test_openai_format_error_maps_status_to_type(
         self, status: int, expected_type: str
     ) -> None:
-        """`_format_error` maps each status code to the expected OpenAI error type."""
+        """Each status code maps to its OpenAI ``error.type``, and the status is unchanged.
+
+        529 is not an OpenAI status: the gateway maps it to ``server_error`` so
+        an Anthropic-style overload surfaced on an OpenAI route stays typed.
+
+        Ref: https://developers.openai.com/api/docs/guides/error-codes
+        """
         body, returned_status = openai_format_error(status, "boom")
         err = _assert_openai_error_shape(body)
         assert err["type"] == expected_type
+        assert err["message"] == "boom"
+        assert err["param"] is None
+        assert err["code"] is None
         assert returned_status == status
 
     @pytest.mark.parametrize(
@@ -182,21 +196,43 @@ class TestFormatErrorFunctions:
     def test_anthropic_format_error_maps_status_to_type(
         self, status: int, expected_type: str, expected_status: int
     ) -> None:
-        """`_format_error` maps each status code to type, remapping 503 to 529."""
+        """Each status maps to its Anthropic ``error.type``, and 503 is re-emitted as 529.
+
+        Anthropic's documented table has no 503 entry: the gateway rewrites an
+        upstream 503 to ``overloaded_error`` with HTTP 529, the status the
+        Anthropic SDKs treat as retryable overload. 502 likewise collapses to
+        ``api_error``. Neither remap is documented upstream.
+
+        Ref: https://platform.claude.com/docs/en/api/errors
+        """
         body, returned_status = anthropic_format_error(status, "boom")
         err = _assert_anthropic_error_shape(body)
         assert err["type"] == expected_type
+        assert err["message"] == "boom"
         assert returned_status == expected_status
 
     @pytest.mark.parametrize("status", [400, 401, 404, 429, 500])
     def test_cohere_format_error_returns_message_envelope(self, status: int) -> None:
-        """`_format_error` returns the flat Cohere envelope with the status unchanged."""
+        """The Cohere envelope carries the message verbatim and never rewrites the status.
+
+        Unlike the other two providers there is no status-to-type table: the
+        status alone conveys the error class.
+
+        Ref: https://docs.cohere.com/reference/errors
+        """
         body, returned_status = cohere_format_error(status, "boom")
         assert _assert_cohere_error_shape(body) == "boom"
         assert returned_status == status
 
     def test_anthropic_format_error_includes_body_request_id(self) -> None:
-        """`_format_error` echoes the current request ID as a top-level ``request_id`` field."""
+        """The active request ID is echoed as the top-level ``request_id`` field.
+
+        Anthropic's error object carries ``request_id`` in the body, not only in
+        the ``request-id`` header, so SDK users can quote it from a caught error.
+
+        Ref: https://platform.claude.com/docs/en/api/errors
+             stdapi/monitoring.py:REQUEST_ID
+        """
         from stdapi.monitoring import REQUEST_ID  # noqa: PLC0415
 
         token = REQUEST_ID.set("req_test123")
@@ -205,9 +241,13 @@ class TestFormatErrorFunctions:
         finally:
             REQUEST_ID.reset(token)
         assert body["request_id"] == "req_test123"
+        assert _assert_anthropic_error_shape(body)["type"] == "not_found_error"
 
     def test_cohere_format_error_includes_id(self) -> None:
-        """`_format_error` echoes the current request ID as the ``id`` field."""
+        """The active request ID is echoed as the Cohere envelope's ``id`` field.
+
+        Ref: stdapi/api_providers/cohere.py:_format_error
+        """
         from stdapi.monitoring import REQUEST_ID  # noqa: PLC0415
 
         token = REQUEST_ID.set("req_test456")
@@ -216,26 +256,33 @@ class TestFormatErrorFunctions:
         finally:
             REQUEST_ID.reset(token)
         assert body["id"] == "req_test456"
+        assert _assert_cohere_error_shape(body) == "boom"
 
 
 class TestOpenaiErrorPayloads:
-    """Verify OpenAI routes return the correct error envelope structure."""
+    """OpenAI-tagged routes return the OpenAI error envelope for every failure class.
+
+    Ref: https://developers.openai.com/api/docs/guides/error-codes
+         https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+         stdapi/api_providers/openai.py:_format_error
+    """
 
     @pytest.fixture(autouse=True)
     def _skip_non_local(self, test_client: TestClient) -> None:
-        """Skip web search tests when running against the official Anthropic API."""
+        """Skip the whole class unless the in-process test client is the target."""
         if not test_client:
             pytest.skip("Unittest only for local tests.")
 
     def test_invalid_model_returns_openai_envelope(
         self, test_client: TestClient, api_key: str
     ) -> None:
-        """A non-existent model on an OpenAI route must return 404 with the OpenAI error shape.
+        """An unknown model yields 404 ``invalid_request_error`` / ``model_not_found``.
 
-        Validates:
-            - HTTP 404 status code.
-            - ``{"error": {"message", "type", "param", "code"}}`` envelope.
-            - ``type`` is ``"invalid_request_error"`` and ``code`` is ``"model_not_found"``.
+        404 has no entry in the OpenAI status table, so it falls back to
+        ``invalid_request_error``; the machine-readable discriminator is
+        ``code``, carried from ``UnsupportedModelError.code``.
+
+        Ref: stdapi/api_errors.py:UnsupportedModelError
         """
         resp = test_client.post(
             "/v1/chat/completions",
@@ -249,17 +296,19 @@ class TestOpenaiErrorPayloads:
         err = _assert_openai_error_shape(resp.json())
         assert err["type"] == "invalid_request_error"
         assert err["code"] == "model_not_found"
-        assert "model" in err["message"].lower()
+        assert "nonexistent-model-xyz" in err["message"]
+        assert "does not exist" in err["message"]
 
     def test_validation_error_returns_openai_envelope(
         self, test_client: TestClient, api_key: str
     ) -> None:
-        """A Pydantic validation error on an OpenAI route must return 400 with the OpenAI shape.
+        """A request-body validation failure yields 400 ``invalid_request_error``.
 
-        Validates:
-            - HTTP 400 status code.
-            - Correct OpenAI error envelope structure.
-            - ``type`` is ``"invalid_request_error"``.
+        The handler flattens the first Pydantic error into a single
+        ``"Validation error at <loc>: <msg>"`` sentence naming the offending
+        field, and leaves ``param``/``code`` null.
+
+        Ref: stdapi/main.py:handle_validation_exception
         """
         resp = test_client.post(
             "/v1/chat/completions",
@@ -269,14 +318,18 @@ class TestOpenaiErrorPayloads:
         assert resp.status_code == 400
         err = _assert_openai_error_shape(resp.json())
         assert err["type"] == "invalid_request_error"
+        assert err["message"].startswith("Validation error")
+        assert "messages" in err["message"]
+        assert err["param"] is None
+        assert err["code"] is None
 
     def test_auth_error_returns_openai_envelope(self, test_client: TestClient) -> None:
-        """A missing/invalid API key on an OpenAI route must return 401 with the OpenAI shape.
+        """A wrong API key yields 401 ``authentication_error`` with a detail-free message.
 
-        Validates:
-            - HTTP 401 status code.
-            - Correct OpenAI error envelope structure.
-            - ``type`` is ``"authentication_error"``.
+        The message is fixed to ``"Unauthorized"``: ``hide_security_details``
+        strips every 401/403 detail so a rejected credential never leaks why.
+
+        Ref: stdapi/utils.py:hide_security_details
         """
         resp = test_client.post(
             "/v1/chat/completions",
@@ -286,29 +339,32 @@ class TestOpenaiErrorPayloads:
         assert resp.status_code == 401
         err = _assert_openai_error_shape(resp.json())
         assert err["type"] == "authentication_error"
+        assert err["message"] == "Unauthorized"
 
 
 class TestAnthropicErrorPayloads:
-    """Verify Anthropic routes return the correct error envelope structure."""
+    """Anthropic-tagged routes return the Anthropic error envelope for every failure class.
+
+    Ref: https://platform.claude.com/docs/en/api/errors
+         stdapi/api_providers/anthropic.py:_format_error
+    """
 
     @pytest.fixture(autouse=True)
     def _skip_non_local(self, test_client: TestClient) -> None:
-        """Skip web search tests when running against the official Anthropic API."""
+        """Skip the whole class unless the in-process test client is the target."""
         if not test_client:
             pytest.skip("Unittest only for local tests.")
 
     def test_invalid_model_returns_anthropic_envelope(
         self, test_client: TestClient, api_key: str
     ) -> None:
-        """A non-existent model on an Anthropic route must return 404 with the Anthropic error shape.
+        """An unknown model yields 404 ``not_found_error`` in the Anthropic envelope.
 
-        The official Anthropic API returns 404 ``not_found_error`` for
-        unknown models.
+        Anthropic maps 404 to ``not_found_error``, so the same gateway
+        ``UnsupportedModelError`` that OpenAI routes report as
+        ``invalid_request_error``/``model_not_found`` is typed differently here.
 
-        Validates:
-            - HTTP 404 status code.
-            - ``{"type": "error", "error": {"type", "message"}}`` envelope.
-            - Inner ``type`` is ``"not_found_error"``.
+        Ref: stdapi/api_errors.py:UnsupportedModelError
         """
         resp = test_client.post(
             "/anthropic/v1/messages",
@@ -322,17 +378,19 @@ class TestAnthropicErrorPayloads:
         assert resp.status_code == 404
         err = _assert_anthropic_error_shape(resp.json())
         assert err["type"] == "not_found_error"
-        assert "model" in err["message"].lower()
+        assert "nonexistent-model-xyz" in err["message"]
+        assert "does not exist" in err["message"]
 
     def test_validation_error_returns_anthropic_envelope(
         self, test_client: TestClient, api_key: str
     ) -> None:
-        """A Pydantic validation error on an Anthropic route must return 400 with the Anthropic shape.
+        """A request-body validation failure yields 400 ``invalid_request_error``.
 
-        Validates:
-            - HTTP 400 status code.
-            - Correct Anthropic error envelope structure.
-            - Inner ``type`` is ``"invalid_request_error"``.
+        400 has no entry in the Anthropic status table either, so it resolves
+        through the same default as OpenAI's — but wrapped in Anthropic's
+        ``{"type": "error", ...}`` envelope.
+
+        Ref: stdapi/main.py:handle_validation_exception
         """
         resp = test_client.post(
             "/anthropic/v1/messages",
@@ -342,16 +400,15 @@ class TestAnthropicErrorPayloads:
         assert resp.status_code == 400
         err = _assert_anthropic_error_shape(resp.json())
         assert err["type"] == "invalid_request_error"
+        assert err["message"].startswith("Validation error")
+        assert "messages" in err["message"]
 
     def test_auth_error_returns_anthropic_envelope(
         self, test_client: TestClient
     ) -> None:
-        """A missing/invalid API key on an Anthropic route must return 401 with the Anthropic shape.
+        """A wrong ``x-api-key`` yields 401 ``authentication_error``, detail-free.
 
-        Validates:
-            - HTTP 401 status code.
-            - Correct Anthropic error envelope structure.
-            - Inner ``type`` is ``"authentication_error"``.
+        Ref: stdapi/utils.py:hide_security_details
         """
         resp = test_client.post(
             "/anthropic/v1/messages",
@@ -365,26 +422,31 @@ class TestAnthropicErrorPayloads:
         assert resp.status_code == 401
         err = _assert_anthropic_error_shape(resp.json())
         assert err["type"] == "authentication_error"
+        assert err["message"] == "Unauthorized"
 
 
 class TestCohereErrorPayloads:
-    """Verify Cohere routes return the correct error envelope structure."""
+    """Cohere-tagged routes return the flat Cohere error envelope for every failure class.
+
+    The envelope has no ``type`` discriminator, so the HTTP status is the only
+    error classifier and the request ID travels in ``id``.
+
+    Ref: https://docs.cohere.com/reference/errors
+         stdapi/api_providers/cohere.py:_format_error
+    """
 
     @pytest.fixture(autouse=True)
     def _skip_non_local(self, test_client: TestClient) -> None:
-        """Skip web search tests when running against the official Anthropic API."""
+        """Skip the whole class unless the in-process test client is the target."""
         if not test_client:
             pytest.skip("Unittest only for local tests.")
 
     def test_invalid_model_returns_cohere_envelope(
         self, test_client: TestClient, api_key: str
     ) -> None:
-        """A non-existent model on a Cohere route must return 404 with the Cohere error shape.
+        """An unknown rerank model yields 404 with the requested ID named in ``message``.
 
-        Validates:
-            - HTTP 404 status code.
-            - ``{"message": <str>}`` envelope.
-            - The message mentions the model.
+        Ref: stdapi/api_errors.py:UnsupportedModelError
         """
         resp = test_client.post(
             "/cohere/v2/rerank",
@@ -393,16 +455,15 @@ class TestCohereErrorPayloads:
         )
         assert resp.status_code == 404
         message = _assert_cohere_error_shape(resp.json())
-        assert "model" in message.lower()
+        assert "nonexistent-model-xyz" in message
+        assert "does not exist" in message
 
     def test_validation_error_returns_cohere_envelope(
         self, test_client: TestClient, api_key: str
     ) -> None:
-        """A Pydantic validation error on a Cohere route must return 400 with the Cohere shape.
+        """A request-body validation failure yields 400 with the flattened Pydantic message.
 
-        Validates:
-            - HTTP 400 status code.
-            - Correct Cohere error envelope structure.
+        Ref: stdapi/main.py:handle_validation_exception
         """
         resp = test_client.post(
             "/cohere/v2/rerank",
@@ -410,14 +471,14 @@ class TestCohereErrorPayloads:
             headers=_cohere_headers(api_key),
         )
         assert resp.status_code == 400
-        _assert_cohere_error_shape(resp.json())
+        message = _assert_cohere_error_shape(resp.json())
+        assert message.startswith("Validation error")
+        assert "documents" in message
 
     def test_auth_error_returns_cohere_envelope(self, test_client: TestClient) -> None:
-        """A missing/invalid API key on a Cohere route must return 401 with the Cohere shape.
+        """A wrong API key on the rerank route yields 401 with a detail-free message.
 
-        Validates:
-            - HTTP 401 status code.
-            - Correct Cohere error envelope structure.
+        Ref: stdapi/utils.py:hide_security_details
         """
         resp = test_client.post(
             "/cohere/v2/rerank",
@@ -425,16 +486,17 @@ class TestCohereErrorPayloads:
             headers={"Authorization": "Bearer wrong-key"},
         )
         assert resp.status_code == 401
-        _assert_cohere_error_shape(resp.json())
+        assert _assert_cohere_error_shape(resp.json()) == "Unauthorized"
 
     def test_embed_auth_error_returns_cohere_envelope(
         self, test_client: TestClient
     ) -> None:
-        """A missing/invalid API key on the embed route must return 401 with the Cohere shape.
+        """A wrong API key on the embed route yields the same 401 Cohere envelope.
 
-        Validates:
-            - HTTP 401 status code.
-            - Correct Cohere error envelope structure.
+        Embed is mounted from a different router than rerank, so it needs its own
+        coverage that the Cohere tag (and therefore the envelope) is attached.
+
+        Ref: stdapi/routes/cohere_embed.py
         """
         resp = test_client.post(
             "/cohere/v2/embed",
@@ -442,28 +504,32 @@ class TestCohereErrorPayloads:
             headers={"Authorization": "Bearer wrong-key"},
         )
         assert resp.status_code == 401
-        _assert_cohere_error_shape(resp.json())
+        assert _assert_cohere_error_shape(resp.json()) == "Unauthorized"
 
 
 class TestCrossRouteConsistency:
-    """Verify the same logical error produces different envelopes per route type."""
+    """One gateway error is rendered in whichever envelope the matched route's tag selects.
+
+    Ref: stdapi/api_providers/__init__.py:format_http_error
+    """
 
     @pytest.fixture(autouse=True)
     def _skip_non_local(self, test_client: TestClient) -> None:
-        """Skip web search tests when running against the official Anthropic API."""
+        """Skip the whole class unless the in-process test client is the target."""
         if not test_client:
             pytest.skip("Unittest only for local tests.")
 
     def test_same_invalid_model_different_envelopes(
         self, test_client: TestClient, api_key: str
     ) -> None:
-        """The same non-existent model must produce OpenAI envelope on /v1 and Anthropic envelope on /anthropic/v1.
+        """One unknown model yields an OpenAI envelope on /v1 and an Anthropic one on /anthropic/v1.
 
-        Validates:
-            - Both routes return 404 (matching official APIs).
-            - OpenAI route has ``"error"`` top-level key only.
-            - Anthropic route has ``"type": "error"`` top-level key.
-            - Neither envelope leaks fields from the other format.
+        Both surfaces report 404 for the same ``UnsupportedModelError``, but
+        neither envelope may leak the other's fields: the OpenAI body has no
+        top-level ``type``, and the Anthropic inner error has no
+        ``param``/``code``.
+
+        Ref: stdapi/api_errors.py:UnsupportedModelError
         """
         openai_resp = test_client.post(
             "/v1/chat/completions",
@@ -491,20 +557,29 @@ class TestCrossRouteConsistency:
 
         # OpenAI envelope must NOT have top-level "type"
         assert "type" not in openai_body
-        _assert_openai_error_shape(openai_body)
+        openai_err = _assert_openai_error_shape(openai_body)
+        assert openai_err["code"] == "model_not_found"
 
         # Anthropic envelope must NOT have top-level "error.param" or "error.code"
-        _assert_anthropic_error_shape(anthropic_body)
+        anthropic_err = _assert_anthropic_error_shape(anthropic_body)
         assert "param" not in anthropic_body["error"]
         assert "code" not in anthropic_body["error"]
+        assert anthropic_err["type"] == "not_found_error"
+
+        # Same underlying error: both messages name the model that was rejected.
+        assert "nonexistent-model-xyz" in openai_err["message"]
+        assert "nonexistent-model-xyz" in anthropic_err["message"]
 
 
 class TestRoutingErrorPayloads:
-    """Verify Starlette-level routing failures (404/405) use an error envelope.
+    """Starlette-level routing failures (404/405) are rendered as an error envelope.
 
     Regression coverage for BUG-1: the base ``starlette.exceptions.HTTPException``
     raised by the router for no-route/method-not-allowed must not bypass the
     custom exception handler and fall back to Starlette's default ``{"detail": ...}``.
+
+    Ref: stdapi/main.py:handle_http_exception
+         stdapi/api_providers/__init__.py:format_http_error
     """
 
     @pytest.fixture(autouse=True)
@@ -516,30 +591,40 @@ class TestRoutingErrorPayloads:
     def test_wrong_method_returns_openai_envelope(
         self, test_client: TestClient
     ) -> None:
-        """GET on the POST-only OpenAI embeddings route returns a 405 OpenAI envelope."""
+        """GET on the POST-only OpenAI embeddings route returns a 405 OpenAI envelope.
+
+        The path matches partially, so the resolved route still carries the
+        OpenAI tag and the provider formatter is selected rather than the
+        route-less fallback.
+        """
         resp = test_client.get("/v1/embeddings")
         assert resp.status_code == 405
         assert "detail" not in resp.json()
         err = _assert_openai_error_shape(resp.json())
         assert err["type"] == "invalid_request_error"
+        assert "Method Not Allowed" in err["message"]
 
     def test_unknown_path_returns_error_envelope(self, test_client: TestClient) -> None:
-        """A request to an undefined path returns a 404 error envelope, not Starlette's default."""
+        """An undefined path returns the route-less ``{"error": <message>}`` fallback.
+
+        No route matches, so no provider tag is available and
+        ``_default_formatter`` emits the minimal envelope — still not
+        Starlette's ``{"detail": ...}``.
+
+        Ref: stdapi/api_providers/__init__.py:_default_formatter
+        """
         resp = test_client.get("/v1/nonexistent")
         assert resp.status_code == 404
         body = resp.json()
         assert "detail" not in body
-        assert "error" in body
+        assert set(body) == {"error"}
+        assert "Not Found" in body["error"]
 
 
 def _openai_request(
     method: str = "POST", path: str = "/v1/chat/completions"
 ) -> Request:
     """Return a request scoped to an OpenAI-tagged route.
-
-    Args:
-        method: HTTP method for the request scope.
-        path: URL path for the request scope.
 
     Returns:
         Starlette request whose resolved route carries the OpenAI tag, so
@@ -559,10 +644,6 @@ def _openai_request(
 def _client_error(code: str, message: str = "boom") -> ClientError:
     """Build a botocore ClientError carrying the given AWS error code.
 
-    Args:
-        code: AWS error code (e.g. ``"ThrottlingException"``).
-        message: Error message.
-
     Returns:
         A ``ClientError`` mimicking one raised by an AWS SDK call.
     """
@@ -570,10 +651,15 @@ def _client_error(code: str, message: str = "boom") -> ClientError:
 
 
 class TestBotocoreClientErrorEnvelope:
-    """Verify ``handle_botocore_client_error`` builds a correct OpenAI envelope.
+    """``handle_botocore_client_error`` maps an AWS error code onto the OpenAI envelope.
 
     Regression coverage for BUG-2 (bogus ``param``) and BUG-3 (S3 multipart
-    errors falling through to 502).
+    errors falling through to 502). The AWS error code is surfaced as ``code``,
+    never as ``param``, which OpenAI clients read as a request-field name.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/troubleshooting-api-error-codes.html
+         stdapi/main.py:handle_botocore_client_error
+         stdapi/aws_bedrock.py:AWS_ERROR_MAP
     """
 
     @pytest.fixture(autouse=True)
@@ -586,18 +672,30 @@ class TestBotocoreClientErrorEnvelope:
         REQUEST_LOG.reset(token)
 
     async def test_client_error_param_is_not_the_internal_error_type(self) -> None:
-        """The envelope's ``param`` must stay None; it must not leak the AWS_ERROR_MAP entry."""
+        """``ThrottlingException`` becomes a 429 whose ``param`` stays null.
+
+        The second element of the ``AWS_ERROR_MAP`` entry is the gateway's
+        internal error type, not a request field; leaking it as ``param`` would
+        make OpenAI clients report a non-existent parameter.
+        """
         response = await handle_botocore_client_error(
             _openai_request(), _client_error("ThrottlingException")
         )
         err = _assert_openai_error_shape(json.loads(bytes(response.body)))
         assert response.status_code == 429
+        assert err["type"] == "rate_limit_error"
         assert err["param"] is None
         assert err["code"] == "ThrottlingException"
 
     @pytest.mark.parametrize("code", ["EntityTooSmall", "InvalidPart"])
     async def test_s3_multipart_client_errors_map_to_400(self, code: str) -> None:
-        """S3 multipart-upload validation errors map to 400 invalid_request_error, not 502."""
+        """S3 multipart-upload validation errors map to 400 invalid_request_error, not 502.
+
+        These codes mean the *client* sent bad part data, so they must not fall
+        through to the ``(502, "server_error")`` default for unmapped AWS codes.
+
+        Ref: https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html
+        """
         response = await handle_botocore_client_error(
             _openai_request(), _client_error(code)
         )
@@ -610,9 +708,6 @@ class TestBotocoreClientErrorEnvelope:
 
 def _tagged_request(tag: str) -> Request:
     """Build a request whose resolved route carries the given API provider tag.
-
-    Args:
-        tag: Route tag identifying the API provider.
 
     Returns:
         Starlette request usable by the response-header stage.
@@ -629,10 +724,16 @@ def _tagged_request(tag: str) -> Request:
 
 
 class TestRetryAfterHeader:
-    """Verify 429 responses advertise the region router's quota backoff.
+    """429 responses advertise the region router's own quota backoff as ``retry-after``.
 
     ``retry-after`` is a standard HTTP header shared by all three provider
-    envelopes, so it is emitted by the common response-header stage.
+    envelopes, so it is emitted by the common response-header stage rather than
+    by a per-provider formatter. The value is the router's remaining backoff, so
+    SDKs wait the server-driven delay instead of guessing.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/troubleshooting-api-error-codes.html
+         stdapi/main.py:set_retry_after_header
+         stdapi/region_routing.py:quota_retry_after
     """
 
     @pytest.fixture(autouse=True)
@@ -662,7 +763,11 @@ class TestRetryAfterHeader:
 
     @pytest.mark.parametrize("tag", [TAG_OPENAI, TAG_ANTHROPIC, TAG_COHERE])
     def test_quota_backoff_is_advertised_on_429(self, tag: str) -> None:
-        """Every provider envelope gets the router backoff as ``retry-after`` on a 429."""
+        """Every provider envelope gets the router backoff as ``retry-after`` on a 429.
+
+        The header is provider-independent, so the same value is emitted whether
+        the failing route was tagged OpenAI, Anthropic or Cohere.
+        """
         request = _tagged_request(tag)
         self._mark_error(request, "ThrottlingException")
         response = Response(status_code=429)
@@ -673,26 +778,43 @@ class TestRetryAfterHeader:
 
     def test_no_header_when_no_backoff_was_applied(self) -> None:
         """Without a recorded quota backoff the header is omitted, not invented."""
+        request = _tagged_request(TAG_OPENAI)
+        assert quota_retry_after(request) is None
         response = Response(status_code=429)
-        set_retry_after_header(_tagged_request(TAG_OPENAI), response)
+        set_retry_after_header(request, response)
         assert "retry-after" not in response.headers
 
     def test_unavailability_backoff_is_not_advertised(self) -> None:
-        """Unavailability backoffs drive 503/529 responses and carry no ``retry-after``."""
+        """Unavailability backoffs drive 503/529 responses and carry no ``retry-after``.
+
+        Only quota (throttling) errors produce a delay a client can honour; an
+        unavailable region says nothing about when *this* request may be retried,
+        so no header is emitted even on a 429.
+        """
         request = _tagged_request(TAG_OPENAI)
         self._mark_error(request, "ServiceUnavailableException")
         assert quota_retry_after(request) is None
+        response = Response(status_code=429)
+        set_retry_after_header(request, response)
+        assert "retry-after" not in response.headers
 
     def test_header_only_on_rate_limited_responses(self) -> None:
-        """A successful response never carries ``retry-after``."""
+        """A successful response never carries ``retry-after``, even with a live backoff."""
         request = _tagged_request(TAG_OPENAI)
         self._mark_error(request, "ThrottlingException")
+        assert quota_retry_after(request) is not None, (
+            "precondition: a quota backoff must be recorded for this to be meaningful"
+        )
         response = Response(status_code=200)
         set_retry_after_header(request, response)
         assert "retry-after" not in response.headers
 
     def test_fractional_backoff_is_rounded_up(self) -> None:
-        """Sub-second precision rounds up so the client never retries too early."""
+        """Sub-second precision rounds up so the client never retries too early.
+
+        12.1 s becomes 13, not 12: ``retry-after`` only accepts whole seconds and
+        truncation would let the client retry while the region is still blocked.
+        """
         request = _tagged_request(TAG_OPENAI)
         request.scope["state"] = {"stdapi_quota_backoff_seconds": 12.1}
         assert quota_retry_after(request) == 13

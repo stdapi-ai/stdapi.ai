@@ -1,14 +1,20 @@
-"""Unit tests for grounding-tool usage counting in stdapi.models.
+"""Billing side of stdapi.models: turning Converse/ConverseStream responses into usage records.
 
-Covers ``_count_grounding_tool_uses`` (non-streaming Converse responses) and
-``_capture_stream_usage`` (ConverseStream events), which feed the
-``grounding_requests`` billed dimension (see tests/test_usage.py for its
-pricing/log-entry coverage). Also covers ``_record_converse_usage`` billing
-details (cacheDetails TTL breakdown, effective-tier pricing, concurrent-call
-region attribution, prompt-router invoked-model attribution), exactly-once
-recording across ``converse()`` failover, and ``_converse`` stripping the
-ConverseStream-only guardrail ``streamProcessingMode`` field before calling
-the non-streaming Converse API.
+Covers grounding-tool counting (``_count_grounding_tool_uses`` on non-streaming
+responses, ``_capture_stream_usage`` on stream events) feeding the
+``grounding_requests`` dimension, ``_record_converse_usage`` billing details
+(cacheDetails TTL breakdown, effective-tier pricing, per-call region/routing
+attribution, prompt-router invoked-model attribution), exactly-once recording
+across ``converse()`` failover, and ``_converse`` stripping the
+ConverseStream-only guardrail ``streamProcessingMode`` field that non-streaming
+Converse rejects. Pricing and log-entry coverage of those dimensions lives in
+tests/test_usage.py.
+
+All AWS calls are replaced by fakes: no Bedrock client is contacted.
+
+Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+     https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ConverseStream.html
+     stdapi/models/__init__.py:ModelBase._record_converse_usage
 """
 
 from asyncio import Event, create_task, gather, wait_for
@@ -55,10 +61,18 @@ def _usage_scope() -> Generator[None]:
 
 
 class TestCountGroundingToolUses:
-    """_count_grounding_tool_uses: counts billed-grounding toolUse blocks in a Converse response."""
+    """_count_grounding_tool_uses: counts billed-grounding toolUse blocks in a Converse response.
+
+    Amazon Nova's ``nova_grounding`` system tool bills per invocation on top of
+    inference, so its ``toolUse`` output blocks are counted while ordinary
+    client-side tool calls are not.
+
+    Ref: https://docs.aws.amazon.com/nova/latest/nova2-userguide/web-grounding.html
+         stdapi/models/__init__.py:_count_grounding_tool_uses
+    """
 
     def test_counts_only_billed_grounding_tool_blocks(self) -> None:
-        """Two nova_grounding toolUse blocks count; text and other tool blocks don't."""
+        """Two nova_grounding blocks count; a text block and another tool's block do not."""
         response: dict[str, Any] = {
             "output": {
                 "message": {
@@ -74,20 +88,29 @@ class TestCountGroundingToolUses:
         assert _count_grounding_tool_uses(response) == 2  # type: ignore[arg-type]
 
     def test_missing_output_returns_zero(self) -> None:
-        """A response with no `output` key must count as zero, not raise."""
+        """A response with no ``output`` key counts zero instead of raising KeyError."""
         assert _count_grounding_tool_uses(cast("ConverseResponseTypeDef", {})) == 0
 
     def test_empty_content_returns_zero(self) -> None:
-        """A response with empty output/message content must count as zero."""
+        """A response with empty output/message content counts zero."""
         response: dict[str, Any] = {"output": {"message": {"content": []}}}
         assert _count_grounding_tool_uses(response) == 0  # type: ignore[arg-type]
 
 
 class TestCaptureStreamUsage:
-    """_capture_stream_usage: counts contentBlockStart grounding-tool events across a stream."""
+    """_capture_stream_usage: usage is recorded from the stream's trailing metadata event.
+
+    ConverseStream reports usage and the serving tier only on the metadata
+    event, so grounding-tool calls seen in earlier contentBlockStart events are
+    accumulated and attached to that event's record. Events are passed through
+    unchanged.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ConverseStreamMetadataEvent.html
+         stdapi/models/__init__.py:ModelBase._capture_stream_usage
+    """
 
     async def test_grounding_tool_uses_are_recorded_at_the_metadata_event(self) -> None:
-        """Two nova_grounding contentBlockStart events feed GROUNDING_REQUESTS == 2."""
+        """Two nova_grounding contentBlockStart events bill 2 grounding requests."""
 
         async def fake_stream() -> AsyncIterator[dict[str, Any]]:
             yield {
@@ -122,16 +145,43 @@ class TestCaptureStreamUsage:
             )
         ]
 
-        assert len(events) == 4  # All events are yielded unmodified.
+        # Every upstream event is passed through, in order and unmodified.
+        assert events == [
+            {
+                "contentBlockStart": {
+                    "contentBlockIndex": 0,
+                    "start": {"toolUse": {"name": "nova_grounding", "toolUseId": "1"}},
+                }
+            },
+            {
+                "contentBlockStart": {
+                    "contentBlockIndex": 1,
+                    "start": {"toolUse": {"name": "nova_grounding", "toolUseId": "2"}},
+                }
+            },
+            {
+                "contentBlockStart": {
+                    "contentBlockIndex": 2,
+                    "start": {"toolUse": {"name": "other_tool", "toolUseId": "3"}},
+                }
+            },
+            {
+                "metadata": {
+                    "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2}
+                }
+            },
+        ]
         record = next(iter(usage.USAGE.get().values()))
         assert record.quantities[Dimension.GROUNDING_REQUESTS] == 2
+        assert record.quantities[Dimension.INPUT_TOKENS] == 1
 
     async def test_grounding_counter_resets_after_each_metadata_event(self) -> None:
-        """A second metadata event must not re-bill earlier grounding calls.
+        """A second metadata event bills its own tokens without re-billing earlier grounding calls.
 
         Live-verified (2026-07): AWS emits a single trailing metadata event
         even for multi-round server-tool streams; this guards the defensive
-        counter reset should that cardinality ever change.
+        counter reset should that cardinality ever change. Both events'
+        token counts still accumulate into the one record (1 + 3 input tokens).
         """
 
         async def fake_stream() -> AsyncIterator[dict[str, Any]]:
@@ -163,9 +213,13 @@ class TestCaptureStreamUsage:
         record = next(iter(usage.USAGE.get().values()))
         assert record.quantities[Dimension.GROUNDING_REQUESTS] == 1
         assert record.quantities[Dimension.INPUT_TOKENS] == 4
+        assert record.quantities[Dimension.OUTPUT_TOKENS] == 5
 
     async def test_metadata_service_tier_is_billed(self) -> None:
-        """The serviceTier reported on the metadata event drives the billed tier."""
+        """The serviceTier reported on the metadata event becomes the record's billed tier.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/service-tiers-inference.html
+        """
 
         async def fake_stream() -> AsyncIterator[dict[str, Any]]:
             yield {
@@ -183,12 +237,20 @@ class TestCaptureStreamUsage:
             )
         ]
 
-        assert next(iter(usage.USAGE.get())).tier == "flex"
+        key, record = next(iter(usage.USAGE.get().items()))
+        assert key.tier == "flex"
+        assert record.tier == "flex"
+        assert record.quantities[Dimension.INPUT_TOKENS] == 1
 
     async def test_closing_stream_early_still_records_trailing_metadata_usage(
         self,
     ) -> None:
-        """Closing the wrapper before the metadata event still drains and records it."""
+        """Closing the wrapper before the metadata event still drains and bills it.
+
+        A client disconnect must not lose the usage AWS already charged for.
+
+        Ref: stdapi/models/__init__.py:_DISCONNECT_DRAIN_MAX_EVENTS
+        """
 
         async def fake_stream() -> AsyncIterator[dict[str, Any]]:
             yield {"contentBlockDelta": {"delta": {"text": "hello"}}}
@@ -213,12 +275,20 @@ class TestCaptureStreamUsage:
 
 
 class TestIterInvokeStream:
-    """_iter_invoke_stream: the usage callback fires only for metrics-carrying chunks."""
+    """_iter_invoke_stream: the usage callback fires only for metrics-carrying chunks.
+
+    InvokeModelWithResponseStream reports token counts in a single chunk
+    carrying ``amazon-bedrock-invocationMetrics``; parsing every other chunk for
+    usage would bill repeatedly or on absent counters.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeModel.html
+         stdapi/models/__init__.py:_iter_invoke_stream
+    """
 
     async def test_usage_callback_skipped_for_chunks_without_invocation_metrics(
         self,
     ) -> None:
-        """Chunks lacking 'amazon-bedrock-invocationMetrics' don't invoke the callback."""
+        """Only the chunk carrying invocationMetrics invokes the callback; all chunks pass through."""
 
         async def fake_body() -> AsyncIterator[dict[str, Any]]:
             yield {"chunk": {"bytes": to_json({"text": "hello"})}}
@@ -239,14 +309,22 @@ class TestIterInvokeStream:
 
         assert len(chunks) == 3
         assert len(calls) == 1
-        assert "amazon-bedrock-invocationMetrics" in calls[0]
+        assert calls[0]["amazon-bedrock-invocationMetrics"] == {"inputTokenCount": 1}
 
 
 class TestRecordConverseUsageEffectiveTier:
-    """_record_converse_usage: the response's serviceTier overrides the requested one."""
+    """_record_converse_usage: the response's serviceTier overrides the requested one.
+
+    AWS echoes the tier that actually served the call, and a request can be
+    served on a different tier than asked for (Reserved overflows to Standard),
+    so billing follows the response rather than the request.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/service-tiers-inference.html
+         stdapi/models/__init__.py:ModelBase._record_converse_usage
+    """
 
     def test_response_service_tier_overrides_requested_tier(self) -> None:
-        """A flex request served at standard must be billed at standard."""
+        """A flex request served at standard is billed as standard."""
         usage.get_model_state("tieredmodel").service_tier = "flex"
         ModelBase("tieredmodel")._record_converse_usage(  # noqa: SLF001
             {  # type: ignore[typeddict-item]
@@ -257,7 +335,7 @@ class TestRecordConverseUsageEffectiveTier:
         assert next(iter(usage.USAGE.get())).tier == "standard"
 
     def test_requested_tier_is_used_when_response_reports_none(self) -> None:
-        """Without a response serviceTier, the requested tier still applies."""
+        """With no serviceTier in the response, the requested tier is billed."""
         usage.get_model_state("tieredmodel").service_tier = "priority"
         ModelBase("tieredmodel")._record_converse_usage(  # noqa: SLF001
             {"usage": {"inputTokens": 5, "outputTokens": 1, "totalTokens": 6}}  # type: ignore[typeddict-item]
@@ -266,12 +344,20 @@ class TestRecordConverseUsageEffectiveTier:
 
 
 class TestRecordConverseUsagePromptRouterAttribution:
-    """_record_converse_usage: bill the prompt router's actually-invoked model."""
+    """_record_converse_usage: bill the prompt router's actually-invoked model.
+
+    A prompt router picks a target model per request and reports it in
+    ``trace.promptRouter.invokedModelId``; the models differ in price, so usage
+    is keyed to the invoked model whenever it maps to a known catalog entry.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+         stdapi/models/__init__.py:_invoked_model_id
+    """
 
     def test_bills_the_trace_invoked_model_when_known(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Regression: usage is attributed to promptRouter.invokedModelId, not the router."""
+        """Usage is keyed to promptRouter.invokedModelId, not to the router's own ID."""
         monkeypatch.setitem(
             stdapi.models._ALL_MODELS,  # noqa: SLF001
             "anthropic.claude-3-haiku-20240307-v1:0",
@@ -290,13 +376,17 @@ class TestRecordConverseUsagePromptRouterAttribution:
                 },
             }
         )
-        key = next(iter(usage.USAGE.get()))
+        (key,) = usage.USAGE.get()
         assert key.model == "anthropic.claude-3-haiku-20240307-v1:0"
+        assert usage.USAGE.get()[key].quantities[Dimension.INPUT_TOKENS] == 5
 
     def test_bills_the_base_model_of_an_invoked_inference_profile(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Routers report an inference profile ARN: its geography prefix is stripped."""
+        """An invoked inference-profile ARN bills its base model, geography prefix stripped.
+
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-support.html
+        """
         monkeypatch.setitem(
             stdapi.models._ALL_MODELS,  # noqa: SLF001
             "anthropic.claude-3-haiku-20240307-v1:0",
@@ -315,11 +405,12 @@ class TestRecordConverseUsagePromptRouterAttribution:
                 },
             }
         )
-        key = next(iter(usage.USAGE.get()))
+        (key,) = usage.USAGE.get()
         assert key.model == "anthropic.claude-3-haiku-20240307-v1:0"
+        assert usage.USAGE.get()[key].quantities[Dimension.INPUT_TOKENS] == 5
 
     def test_falls_back_to_static_model_id_when_invoked_model_unknown(self) -> None:
-        """An invokedModelId naming an unrecognised model must not corrupt billing."""
+        """An invokedModelId naming an unknown model bills the requested model instead."""
         ModelBase("my-router")._record_converse_usage(  # noqa: SLF001
             {  # type: ignore[typeddict-item]
                 "usage": {"inputTokens": 5, "outputTokens": 1, "totalTokens": 6},
@@ -333,28 +424,33 @@ class TestRecordConverseUsagePromptRouterAttribution:
                 },
             }
         )
-        key = next(iter(usage.USAGE.get()))
+        (key,) = usage.USAGE.get()
         assert key.model == "my-router"
+        assert usage.USAGE.get()[key].quantities[Dimension.INPUT_TOKENS] == 5
 
     def test_falls_back_to_static_model_id_without_trace(self) -> None:
-        """A plain (non-router) Converse response bills as before, no trace needed."""
+        """A plain (non-router) Converse response bills the requested model."""
         ModelBase("plain-model")._record_converse_usage(  # noqa: SLF001
             {"usage": {"inputTokens": 5, "outputTokens": 1, "totalTokens": 6}}  # type: ignore[typeddict-item]
         )
-        key = next(iter(usage.USAGE.get()))
+        (key,) = usage.USAGE.get()
         assert key.model == "plain-model"
+        assert usage.USAGE.get()[key].quantities[Dimension.INPUT_TOKENS] == 5
 
 
 class TestPerCallAttribution:
-    """Explicit per-call region/routing must win over the shared model state.
+    """Explicit per-call region/routing wins over the shared model state.
 
     Concurrent same-model calls share one ModelInvocationState: a sibling
     call may overwrite it between invocation and recording, so recording
     relies on the explicitly threaded per-call values instead.
+
+    Ref: stdapi/usage.py:ModelInvocationState
+         stdapi/models/__init__.py:ModelBase._record_converse_usage
     """
 
     def test_explicit_region_and_routing_win_over_model_state(self) -> None:
-        """A record carries its own call's region/routing, not the state's."""
+        """A record carries its own call's region and routing, not the shared state's."""
         state = usage.get_model_state("racymodel")
         state.region = "eu-west-3"
         state.routing = "global"
@@ -373,12 +469,20 @@ async def _noop_prepare(_self: object, _request: object, _region: str) -> None:
 
 
 class TestConcurrentConverseAttribution:
-    """Two in-flight _converse calls must each bill their own serving region."""
+    """Two in-flight _converse calls each bill their own serving Region.
+
+    Ref: stdapi/models/__init__.py:ModelBase._converse
+         stdapi/usage.py:ModelInvocationState
+    """
 
     async def test_concurrent_calls_bill_two_distinct_regions(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A sibling overwrite of the shared model state must not leak into either record."""
+        """A sibling overwrite of the shared model state reaches neither in-flight record.
+
+        Both fake calls are held open until a third Region is written into the
+        shared state, so a record built from that state would be misattributed.
+        """
         started: dict[str, Event] = {"us-east-1": Event(), "eu-west-1": Event()}
         release = Event()
         tokens: dict[str, tuple[int, int]] = {
@@ -442,12 +546,20 @@ class TestConcurrentConverseAttribution:
 
 
 class TestConverseGuardrailStreamProcessingMode:
-    """_converse strips streamProcessingMode, which the non-streaming Converse API rejects."""
+    """_converse strips streamProcessingMode, which the non-streaming Converse API rejects.
+
+    streamProcessingMode exists only on ConverseStream's
+    GuardrailStreamConfiguration, so the shared guardrail config must be
+    trimmed before a non-streaming call.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-converse-api.html
+         stdapi/models/__init__.py:ModelBase._converse
+    """
 
     async def test_stream_processing_mode_is_stripped_before_the_converse_call(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A guardrailConfig carrying streamProcessingMode must not reach Converse."""
+        """StreamProcessingMode is dropped while the rest of guardrailConfig is passed through."""
         captured: dict[str, Any] = {}
 
         class _CapturingClient:
@@ -483,16 +595,25 @@ class TestConverseGuardrailStreamProcessingMode:
             single_region=True,
         )
 
-        guardrail_config = captured["guardrailConfig"]
-        assert "streamProcessingMode" not in guardrail_config
-        assert guardrail_config["guardrailIdentifier"] == "gr1"
+        assert captured["guardrailConfig"] == {
+            "guardrailIdentifier": "gr1",
+            "guardrailVersion": "1",
+        }
 
 
 class TestRecordConverseUsageCacheDetails:
-    """_record_converse_usage: cacheDetails feeds the per-TTL cache-write breakdown."""
+    """_record_converse_usage: cacheDetails feeds the per-TTL cache-write breakdown.
+
+    Bedrock reports cache reads and cache writes separately from
+    ``inputTokens`` (which excludes both), so each lands in its own dimension
+    and the ``cacheDetails`` TTL split becomes the cache-write breakdown.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_TokenUsage.html
+         stdapi/models/__init__.py:ModelBase._record_converse_usage
+    """
 
     def test_cache_details_populate_the_ttl_breakdown(self) -> None:
-        """Each cacheDetails entry maps its ttl to its inputTokens."""
+        """Each cacheDetails entry maps its ttl to its inputTokens, leaving inputTokens alone."""
         ModelBase("cachedetailmodel")._record_converse_usage(  # noqa: SLF001
             {  # type: ignore[typeddict-item]
                 "usage": {
@@ -511,9 +632,13 @@ class TestRecordConverseUsageCacheDetails:
         assert record.cache_write_tokens_by_ttl == {"5m": 500, "1h": 200}
         # The breakdown exactly covers the flat total: no deficit top-up.
         assert record.quantities[Dimension.CACHE_WRITE_TOKENS] == 700
+        # inputTokens excludes the cache writes: it is billed as-is, and no
+        # cache-read dimension appears when AWS reported none.
+        assert record.quantities[Dimension.INPUT_TOKENS] == 10
+        assert Dimension.CACHE_READ_TOKENS not in record.quantities
 
     def test_malformed_cache_details_entries_are_skipped(self) -> None:
-        """Entries missing 'ttl' or 'inputTokens' are dropped, not KeyError'd."""
+        """CacheDetails entries missing "ttl" or "inputTokens" are dropped, not raised on."""
         ModelBase("cachedetailmalformedmodel")._record_converse_usage(  # noqa: SLF001
             {  # type: ignore[typeddict-item]
                 "usage": {
@@ -531,13 +656,19 @@ class TestRecordConverseUsageCacheDetails:
         )
         record = next(iter(usage.USAGE.get().values()))
         assert record.cache_write_tokens_by_ttl == {"5m": 500}
+        # The dropped entries leave the flat cache-write total unchanged.
+        assert record.quantities[Dimension.CACHE_WRITE_TOKENS] == 500
 
 
 class TestEffectiveTierPricing:
-    """The response-reported tier must drive pricing, not the requested one."""
+    """The response-reported tier drives pricing, not the requested one.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/service-tiers-inference.html
+         stdapi/pricing.py:resolve_price
+    """
 
     def test_flex_request_served_standard_is_priced_at_the_standard_rate(self) -> None:
-        """With both tiers priced, a flex request served at standard bills the standard rate."""
+        """With both tiers priced, a flex request served at standard bills 1000 * 0.000004."""
         state = usage.get_model_state("tierpricemodel")
         state.region = "us-east-1"
         state.service_tier = "flex"
@@ -568,12 +699,19 @@ class TestEffectiveTierPricing:
 
 
 class TestConverseFailoverUsage:
-    """converse() failover must bill exactly once, keyed to the serving region."""
+    """converse() failover bills exactly once, keyed to the serving Region.
+
+    A ThrottlingException (HTTP 429) is retried in the next candidate Region;
+    the throttled attempt produced no tokens and must leave no record behind.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/troubleshooting-api-error-codes.html
+         stdapi/models/__init__.py:ModelBase.converse
+    """
 
     async def test_throttled_region_is_not_billed_and_failover_records_once(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A throttled first region leaves one record keyed to the failover region."""
+        """A throttled first Region leaves a single record keyed to the failover Region."""
         calls: list[str] = []
 
         class _FlakyClient:

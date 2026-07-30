@@ -1,4 +1,9 @@
-"""Unit tests for image models: ``image_spec`` pricing buckets and invoke-path billing."""
+"""Image-model internals: pricing-spec buckets, mask polarity, invoke billing, streaming.
+
+Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase
+     stdapi/models/image/amazon_titan_image_generator.py:image_spec
+     stdapi/usage.py:record_bedrock_usage
+"""
 
 from asyncio import CancelledError, Event, sleep, wait_for
 from decimal import Decimal
@@ -58,7 +63,11 @@ def _usage_scope() -> Generator[None]:
 
 
 class TestImageSpecTitanTiers:
-    """Titan Image Generator default bucketing (tiers=2, low_tier_max=512)."""
+    """Titan Image Generator pricing buckets: two doubling tiers from a 512 px low tier.
+
+    Ref: stdapi/models/image/amazon_titan_image_generator.py:image_spec
+         https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-image.html
+    """
 
     @pytest.mark.parametrize(
         ("width", "height", "expected_resolution"),
@@ -76,14 +85,27 @@ class TestImageSpecTitanTiers:
     def test_max_dimension_selects_smallest_covering_tier(
         self, width: int, height: int, expected_resolution: int
     ) -> None:
-        """The larger of width/height picks the smallest tier that covers it."""
+        """The larger of width/height picks the smallest tier that covers it.
+
+        With the Titan defaults there are only two buckets (512 and 1024), so
+        anything above 1024 px still bills at the largest published one.
+        """
         assert image_spec(width, height, "standard") == (
             f"{expected_resolution}:standard"
         )
 
 
 class TestImageSpecNovaCanvasTiers:
-    """Nova Canvas bucketing (tiers=3, low_tier_max=1024, up to 4096px)."""
+    """Nova Canvas pricing buckets: three doubling tiers from a 1024 px low tier.
+
+    Nova Canvas accepts sides up to 4096 px, so its invoke path calls
+    ``image_spec`` with ``low_tier_max=1024, tiers=3`` instead of Titan's
+    defaults.
+
+    Ref: stdapi/models/image/amazon_titan_image_generator.py:image_spec
+         stdapi/models/image/amazon_nova_canvas.py:_ImageGenerationJob._invoke_and_process_response
+         https://docs.aws.amazon.com/nova/latest/userguide/image-gen-access.html
+    """
 
     @pytest.mark.parametrize(
         ("width", "height", "expected_resolution"),
@@ -107,7 +129,11 @@ class TestImageSpecNovaCanvasTiers:
 
 
 class TestImageSpecQuality:
-    """Quality propagation into the "<resolution>:<quality>" label."""
+    """Quality propagation into the ``"<resolution>:<quality>"`` pricing label.
+
+    Ref: stdapi/models/image/amazon_titan_image_generator.py:image_spec
+         https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-image.html
+    """
 
     @pytest.mark.parametrize("quality", ["standard", "premium"])
     def test_quality_is_propagated_into_the_spec_label(self, quality: str) -> None:
@@ -120,7 +146,12 @@ class TestImageSpecQuality:
 
 
 class TestTitanResponseQualityEcho:
-    """_set_extra_config: response quality mirrors the requested tier, not the AWS bucket."""
+    """The echoed response quality mirrors the requested tier, not the AWS bucket.
+
+    Ref: stdapi/models/image/amazon_titan_image_generator.py:_ImageGenerationJob._set_extra_config
+         stdapi/models/image/amazon_titan_image_generator.py:AMZ_QUALITY_MAP
+         https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-image.html
+    """
 
     @pytest.mark.parametrize(
         ("requested", "expected"),
@@ -129,7 +160,11 @@ class TestTitanResponseQualityEcho:
     def test_response_quality_matches_request(
         self, requested: str, expected: str
     ) -> None:
-        """Both `low` and `medium` map to AWS `standard`, but must echo distinctly."""
+        """Both ``low`` and ``medium`` map to AWS ``standard`` but echo distinctly.
+
+        The Bedrock request only carries the two AWS buckets, so the requested
+        OpenAI tier has to be remembered separately for the response.
+        """
         job = _ImageGenerationJob(
             model=cast("Any", None),
             prompt="a cat",
@@ -151,6 +186,9 @@ class TestTitanResponseQualityEcho:
         )
         job._set_extra_config(request, "textToImageParams")  # noqa: SLF001
         assert job.quality == expected
+        assert request["imageGenerationConfig"]["quality"] == (
+            "premium" if requested == "high" else "standard"
+        ), "Bedrock must receive the AWS bucket, not the OpenAI quality tier"
 
 
 def _b64_rgba_png(alpha: int) -> str:
@@ -168,10 +206,22 @@ def _b64_rgb_png() -> str:
 
 
 class TestMaskAlphaConversion:
-    """_get_request_inpainting/_get_request_outpainting: OpenAI alpha mask -> B/W RGB."""
+    """An OpenAI alpha-transparency mask becomes the Bedrock pure black/white RGB mask.
+
+    OpenAI marks the region to edit with alpha 0, while Titan and Nova Canvas
+    take an alpha-less mask where black is inside the mask; outpainting then
+    alters the white pixels instead, hence the inverted polarity.
+
+    Ref: stdapi/utils.py:alpha_mask_to_bw
+         https://docs.aws.amazon.com/nova/latest/userguide/image-gen-access.html
+         https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-image.html
+    """
 
     async def test_titan_inpainting_mask_with_alpha_is_converted_to_bw(self) -> None:
-        """A transparent Titan inpainting mask is converted to pure black."""
+        """A transparent Titan inpainting mask is converted to pure black.
+
+        Ref: stdapi/models/image/amazon_titan_image_generator.py:_ImageGenerationJob._get_request_inpainting
+        """
         job = _ImageGenerationJob(
             model=cast("Any", None),
             prompt="a cat",
@@ -186,14 +236,23 @@ class TestMaskAlphaConversion:
         )
         config = _ImageGenerationConfig(width=512, height=512, numberOfImages=1)
         request = await job._get_request_inpainting(config, "image", _b64_rgba_png(0))  # noqa: SLF001
+        assert request["taskType"] == "INPAINTING"
+        assert request["inPaintingParams"]["image"] == "image"
         mask = request["inPaintingParams"]["maskImage"]
+        assert mask != _b64_rgba_png(0), "an alpha mask must not be forwarded as-is"
 
         with BytesIO(pybase64_b64decode(mask)) as buffer, Image.open(buffer) as image:
             assert image.mode == "RGB"
             assert image.getpixel((0, 0)) == (0, 0, 0)
 
     async def test_titan_outpainting_mask_without_alpha_passes_through(self) -> None:
-        """A Titan outpainting mask with no alpha channel is forwarded unchanged."""
+        """A Titan outpainting mask with no alpha channel is forwarded unchanged.
+
+        A pure black/white PNG is already a native Bedrock mask, so the
+        conversion is a no-op passthrough.
+
+        Ref: stdapi/models/image/amazon_titan_image_generator.py:_ImageGenerationJob._get_request_outpainting
+        """
         job = _ImageGenerationJob(
             model=cast("Any", None),
             prompt="a cat",
@@ -209,6 +268,8 @@ class TestMaskAlphaConversion:
         config = _ImageGenerationConfig(width=512, height=512, numberOfImages=1)
         mask_input = _b64_rgb_png()
         request = await job._get_request_outpainting(config, "image", mask_input)  # noqa: SLF001
+        assert request["taskType"] == "OUTPAINTING"
+        assert request["outPaintingParams"]["image"] == "image"
         assert request["outPaintingParams"]["maskImage"] == mask_input
 
     async def test_titan_outpainting_mask_with_alpha_uses_inverted_polarity(
@@ -218,6 +279,8 @@ class TestMaskAlphaConversion:
 
         Outpainting uses the opposite mask polarity from inpainting: white
         marks the region to generate, black the region to preserve.
+
+        Ref: stdapi/models/image/amazon_titan_image_generator.py:_ImageGenerationJob._get_request_outpainting
         """
         job = _ImageGenerationJob(
             model=cast("Any", None),
@@ -233,6 +296,7 @@ class TestMaskAlphaConversion:
         )
         config = _ImageGenerationConfig(width=512, height=512, numberOfImages=1)
         request = await job._get_request_outpainting(config, "image", _b64_rgba_png(0))  # noqa: SLF001
+        assert request["taskType"] == "OUTPAINTING"
         mask = request["outPaintingParams"]["maskImage"]
 
         with BytesIO(pybase64_b64decode(mask)) as buffer, Image.open(buffer) as image:
@@ -242,7 +306,10 @@ class TestMaskAlphaConversion:
     async def test_nova_canvas_inpainting_mask_with_alpha_is_converted_to_bw(
         self,
     ) -> None:
-        """A transparent Nova Canvas inpainting mask is converted to pure black."""
+        """A transparent Nova Canvas inpainting mask is converted to pure black.
+
+        Ref: stdapi/models/image/amazon_nova_canvas.py:_ImageGenerationJob._get_request_inpainting
+        """
         job = nova_canvas._ImageGenerationJob(  # noqa: SLF001
             model=cast("Any", None),
             prompt="a cat",
@@ -259,7 +326,10 @@ class TestMaskAlphaConversion:
             width=1024, height=1024, numberOfImages=1
         )
         request = await job._get_request_inpainting(config, "image", _b64_rgba_png(0))  # noqa: SLF001
+        assert request["taskType"] == "INPAINTING"
+        assert request["inPaintingParams"]["image"] == "image"
         mask = request["inPaintingParams"]["maskImage"]
+        assert mask != _b64_rgba_png(0), "an alpha mask must not be forwarded as-is"
 
         with BytesIO(pybase64_b64decode(mask)) as buffer, Image.open(buffer) as image:
             assert image.mode == "RGB"
@@ -268,7 +338,10 @@ class TestMaskAlphaConversion:
     async def test_nova_canvas_outpainting_mask_without_alpha_passes_through(
         self,
     ) -> None:
-        """A Nova Canvas outpainting mask with no alpha channel is forwarded unchanged."""
+        """A Nova Canvas outpainting mask with no alpha channel is forwarded unchanged.
+
+        Ref: stdapi/models/image/amazon_nova_canvas.py:_ImageGenerationJob._get_request_outpainting
+        """
         job = nova_canvas._ImageGenerationJob(  # noqa: SLF001
             model=cast("Any", None),
             prompt="a cat",
@@ -286,6 +359,8 @@ class TestMaskAlphaConversion:
         )
         mask_input = _b64_rgb_png()
         request = await job._get_request_outpainting(config, "image", mask_input)  # noqa: SLF001
+        assert request["taskType"] == "OUTPAINTING"
+        assert request["outPaintingParams"]["image"] == "image"
         assert request["outPaintingParams"]["maskImage"] == mask_input
 
     async def test_nova_canvas_outpainting_mask_with_alpha_uses_inverted_polarity(
@@ -295,6 +370,8 @@ class TestMaskAlphaConversion:
 
         Outpainting uses the opposite mask polarity from inpainting: white
         marks the region to generate, black the region to preserve.
+
+        Ref: stdapi/models/image/amazon_nova_canvas.py:_ImageGenerationJob._get_request_outpainting
         """
         job = nova_canvas._ImageGenerationJob(  # noqa: SLF001
             model=cast("Any", None),
@@ -312,6 +389,7 @@ class TestMaskAlphaConversion:
             width=1024, height=1024, numberOfImages=1
         )
         request = await job._get_request_outpainting(config, "image", _b64_rgba_png(0))  # noqa: SLF001
+        assert request["taskType"] == "OUTPAINTING"
         mask = request["outPaintingParams"]["maskImage"]
 
         with BytesIO(pybase64_b64decode(mask)) as buffer, Image.open(buffer) as image:
@@ -332,7 +410,12 @@ class _FakeBody:
 
 
 class TestInvokeImageBilling:
-    """ImageModelBase.invoke(): a stubbed InvokeModel response drives image billing."""
+    """A stubbed InvokeModel response drives per-image billing at the spec rate.
+
+    Ref: stdapi/models/image/__init__.py:ImageModelBase._record_invoke_usage
+         stdapi/usage.py:record_bedrock_usage
+         https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeModel.html
+    """
 
     @pytest.fixture(autouse=True)
     def _request_context(self) -> Generator[None]:
@@ -346,7 +429,12 @@ class TestInvokeImageBilling:
     async def test_stubbed_invoke_bills_images_by_spec_region_and_price(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Two returned images bill output_images == 2 in the serving region at the spec rate."""
+        """Two returned images bill ``output_images == 2`` in the serving region.
+
+        The number of images actually billed comes from the response ``images``
+        list, and the per-image rate is looked up with the ``IMAGE_SPEC``
+        resolution/quality bucket rather than the model's flat rate.
+        """
 
         class _FakeInvokeClient:
             """Fake Bedrock runtime client returning a Nova Canvas-style body."""
@@ -405,6 +493,8 @@ class TestInvokeImageBilling:
         assert len(records) == 1
         key, record = next(iter(records.items()))
         assert key.region == "eu-west-1"
+        assert key.model == "canvasstylemodel"
+        assert record.quantities[Dimension.INPUT_TOKENS] == 10
         assert record.quantities[Dimension.OUTPUT_IMAGES] == 2
         assert record.output_images_by_spec == {"1024:standard": 2}
         # The override clears IMAGE_SPEC to avoid leaking into later calls.
@@ -415,12 +505,19 @@ class TestInvokeImageBilling:
 
 
 class TestStreamCancelsAbandonedJobs:
-    """_stream_completed_images: an early close cancels the in-flight image jobs."""
+    """An abandoned image stream cancels the jobs that are still in flight.
+
+    Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase._stream_completed_images
+    """
 
     async def test_early_close_cancels_pending_tasks(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Closing the stream after one image must cancel the remaining jobs."""
+        """Closing the stream after one image cancels the remaining jobs.
+
+        An image completing after the last usage drain would record billed
+        usage that nothing ever reads, so the pending tasks must be cancelled.
+        """
         cancelled = Event()
         first_image = ImageGenerationResponse(image="aaa", index=0)
 
@@ -451,7 +548,13 @@ class TestStreamCancelsAbandonedJobs:
 
 
 class TestStabilityMultiImageTokenAccumulation:
-    """StabilityImageGenerationJobBase: n>1 fan-out sums tokens across per-image calls."""
+    """Stability ``n>1`` fan-out sums token counts across the per-image calls.
+
+    Stability models generate one image per invocation, unlike the single-invoke
+    Amazon models, so token counts are accumulated instead of overwritten.
+
+    Ref: stdapi/models/image/_stability.py:StabilityImageGenerationJobBase._get_image_from_response
+    """
 
     async def test_tokens_sum_across_per_image_invocations(self) -> None:
         """Three per-image invoke() calls, one reporting no usage, still sum correctly."""
@@ -482,8 +585,12 @@ class TestStabilityMultiImageTokenAccumulation:
         job._input_tokens = None  # noqa: SLF001
         job._output_tokens = None  # noqa: SLF001
 
-        for index in range(3):
+        images = [
             await job._get_image_from_response({}, index)  # type: ignore[arg-type]  # noqa: SLF001
+            for index in range(3)
+        ]
 
+        assert [image.image for image in images] == ["a", "b", "c"]
+        assert [image.index for image in images] == [0, 1, 2]
         assert job.input_tokens == 15
         assert job.output_tokens == 27

@@ -3,11 +3,20 @@
 Covers the transport helpers (:mod:`stdapi.aws_bedrock_mantle`), the Mantle
 chat family API selection (:mod:`stdapi.models.chat._mantle._default`), and
 the Mantle configuration validation — all without any AWS call.
+
+Mantle is plain HTTPS/JSON with no botocore service model, so wire details
+beyond the user guide are only defined by the gateway implementation; those
+tests cite the implementing symbol rather than an upstream document.
+
+Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html
+     https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
+     stdapi/aws_bedrock_mantle.py
+     stdapi/models/chat/_mantle/_default.py
 """
 
 from __future__ import annotations
 
-from base64 import b32encode, urlsafe_b64encode
+from base64 import b32encode, b64decode, urlsafe_b64encode
 from binascii import crc32
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -94,15 +103,29 @@ def _mantle_region() -> RegionName:
 
 
 class TestMantleResponseIdCodec:
-    """Region-tagged Mantle response ID encoding and decoding."""
+    """Region-tagged Mantle response ID encoding and decoding.
+
+    Mantle stores responses in the source Region only, so the gateway's public
+    ID embeds a crc32 fingerprint of the serving Region and decoding resolves
+    it against the configured Mantle Regions.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html
+         stdapi/aws_bedrock_mantle.py:encode_mantle_response_id
+         stdapi/aws_bedrock_mantle.py:decode_mantle_response_id
+    """
 
     def test_round_trip(self) -> None:
-        """Encoding then decoding returns the original region and native ID."""
+        """Encoding then decoding returns the original region and native ID.
+
+        The public form is ``resp_`` plus unpadded lowercase base32, so it
+        survives case-insensitive handling and carries no base32 padding.
+        """
         region = _mantle_region()
         native_id = "resp_abc123XYZ-native"
         public_id = encode_mantle_response_id(region, native_id)
         assert public_id.startswith("resp_")
         assert public_id == public_id.lower()
+        assert "=" not in public_id, "base32 padding must be stripped"
         assert decode_mantle_response_id(public_id) == (region, native_id)
 
     def test_unknown_region_fingerprint_returns_none(self) -> None:
@@ -163,7 +186,19 @@ class TestMantleResponseIdCodec:
 
 
 class TestMantleUsageExtractors:
-    """Usage extraction from the three Mantle wire formats."""
+    """Usage extraction from the three Mantle wire formats.
+
+    Bedrock bills fresh input tokens separately from cache reads and writes,
+    while the OpenAI wire formats fold cached tokens into ``prompt_tokens`` /
+    ``input_tokens``; the OpenAI-shaped extractors therefore subtract the
+    cached share and the Anthropic one does not.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_TokenUsage.html
+         https://developers.openai.com/api/docs/guides/prompt-caching
+         https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+         stdapi/aws_bedrock_mantle.py:_openai_usage
+         stdapi/aws_bedrock_mantle.py:usage_from_message
+    """
 
     def test_chat_completion_subtracts_cached_share(self) -> None:
         """OpenAI prompt_tokens includes cached tokens; the share is subtracted."""
@@ -287,7 +322,17 @@ def _error_body(message: str) -> str:
 
 
 class TestMapError:
-    """Mantle HTTP error mapping (:func:`stdapi.aws_bedrock_mantle._map_error`)."""
+    """Mantle HTTP error mapping (:func:`stdapi.aws_bedrock_mantle._map_error`).
+
+    The marker strings the mapping keys on are empirical Mantle behavior: a
+    model/surface mismatch answers either with "isn't supported on this route"
+    on any status or with a misleading 401 "is not enabled", which is textually
+    close to a genuine 403 permission denial.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/troubleshooting-api-error-codes.html
+         stdapi/aws_bedrock_mantle.py:_map_error
+         stdapi/aws_bedrock_mantle.py:MantleError
+    """
 
     @pytest.mark.parametrize("status", [429, 500, 503])
     def test_throttling_and_5xx_are_failover(self, status: int) -> None:
@@ -412,7 +457,14 @@ class TestMapError:
 
 
 class TestIterSseLineTooLong:
-    """Oversized SSE lines are mapped to a shaped 502 :class:`MantleError`."""
+    """Oversized SSE lines are mapped to a shaped 502 :class:`MantleError`.
+
+    A single Mantle SSE event can carry the whole response JSON, so the reader
+    catches ``aiohttp``'s ``LineTooLong`` — an ``HttpProcessingError`` that
+    sits outside ``ClientError`` and would otherwise escape unmapped.
+
+    Ref: stdapi/aws_bedrock_mantle.py:_iter_sse
+    """
 
     async def test_line_too_long_maps_to_502(self) -> None:
         """An ``aiohttp`` ``LineTooLong`` mid-stream raises a 502 ``MantleError``."""
@@ -485,20 +537,34 @@ def _message_payload() -> dict[str, Any]:
 
 
 class TestMantleModelClassResolution:
-    """Model IDs, including future versions, bind to the right Mantle class."""
+    """Model IDs, including future versions, bind to the right Mantle class.
+
+    The bound class is what seeds the routing surface and the API set, and no
+    Mantle API reports either: ``/openai/v1`` serves the newer Mantle-only
+    models while ``/v1`` serves the legacy catalog, so a mis-bound family
+    probes the wrong prefix first.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
+         stdapi/models/chat/_mantle/__init__.py:get_mantle_chat_model
+         stdapi/models/chat/_mantle/_default.py:ChatModel._api_paths
+    """
 
     @pytest.mark.parametrize(
         "model_id", ["openai.gpt-5.6-sol", "openai.gpt-6-nova", "openai.gpt-10.1-vega"]
     )
     def test_numbered_gpt_versions_use_the_gpt_class(self, model_id: str) -> None:
         """GPT-5 and future numbered GPT versions resolve to the GPT class."""
-        assert isinstance(get_mantle_chat_model(model_id), GptChatModel)
+        model = get_mantle_chat_model(model_id)
+        assert isinstance(model, GptChatModel)
+        assert model._api_paths("responses")[0] == "/openai/v1/responses"  # noqa: SLF001
+        assert model.native_store_supported() is True
 
     def test_gpt_oss_is_not_matched_by_the_numbered_gpt_class(self) -> None:
         """gpt-oss models keep resolving to their own class."""
         model = get_mantle_chat_model("openai.gpt-oss-120b")
         assert isinstance(model, GptOssChatModel)
         assert not isinstance(model, GptChatModel)
+        assert model._api_paths("responses")[0] == "/v1/responses"  # noqa: SLF001
 
     @pytest.mark.parametrize(
         "model_id",
@@ -506,7 +572,13 @@ class TestMantleModelClassResolution:
     )
     def test_gemma_4_and_later_use_the_gemma_class(self, model_id: str) -> None:
         """Gemma 4 and future Gemma versions resolve to the Gemma class."""
-        assert isinstance(get_mantle_chat_model(model_id), GemmaChatModel)
+        model = get_mantle_chat_model(model_id)
+        assert isinstance(model, GemmaChatModel)
+        assert (
+            model._api_paths("chat_completions")[0]  # noqa: SLF001
+            == "/openai/v1/chat/completions"
+        )
+        assert model.native_store_supported() is True
 
     @pytest.mark.parametrize(
         "model_id", ["google.gemma-3-4b-it", "google.gemma-3n-e2b"]
@@ -516,10 +588,23 @@ class TestMantleModelClassResolution:
         model = get_mantle_chat_model(model_id)
         assert isinstance(model, OpenWeightChatModel)
         assert not isinstance(model, GemmaChatModel)
+        assert (
+            model._api_paths("chat_completions")[0] == "/v1/chat/completions"  # noqa: SLF001
+        )
+        assert model.native_store_supported() is False
 
 
 class TestMantleSystemMessageAsMessages:
-    """Native mid-conversation system message support is scoped per model family."""
+    """Native mid-conversation system message support is scoped per model family.
+
+    Anthropic's Messages API takes the system prompt as a top-level field, so a
+    mid-conversation ``system`` role must be folded inline unless the served
+    model handles it natively.
+
+    Ref: https://platform.claude.com/docs/en/api/messages
+         stdapi/models/chat/_mantle/_default.py:ChatModel._system_message_as_messages
+         stdapi/models/chat/_mantle/anthropic_claude.py:ChatModel
+    """
 
     @pytest.mark.parametrize(
         "model_id",
@@ -556,7 +641,16 @@ class TestMantleSystemMessageAsMessages:
 
 
 class TestValidatePruningExtras:
-    """Extra-field pruning validation for upstream passthrough payloads."""
+    """Extra-field pruning validation for upstream passthrough payloads.
+
+    Passthrough responses are validated against ``extra="forbid"`` models, so
+    provider extensions (e.g. a ``billing`` block) would break relaying; they
+    are dropped in place over bounded re-validation rounds while any other
+    validation failure becomes a 502.
+
+    Ref: stdapi/aws_bedrock_mantle.py:validate_pruning_extras
+         stdapi/aws_bedrock_mantle.py:_resolve_error_loc
+    """
 
     def test_prunes_top_level_and_nested_extras(self) -> None:
         """Unknown top-level and nested fields are dropped, then validated."""
@@ -601,7 +695,16 @@ class TestValidatePruningExtras:
 
 
 class TestSelectApi:
-    """Mantle upstream API selection and learned-binding behavior."""
+    """Mantle upstream API selection and learned-binding behavior.
+
+    No Mantle API reports which of Responses / Chat Completions / Messages a
+    model serves, so the binding is seeded per family and demoted along
+    ``responses -> chat_completions -> messages`` from upstream rejections.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
+         stdapi/models/chat/_mantle/_default.py:ChatModel._select_api
+         stdapi/models/chat/_mantle/_default.py:_API_FALLBACK_ORDER
+    """
 
     def test_inbound_api_preferred_when_supported(self) -> None:
         """The inbound API is used directly when the model supports it."""
@@ -632,6 +735,7 @@ class TestSelectApi:
                 "responses", {"responses", "chat_completions", "messages"}
             )
         assert exc_info.value.status == 400
+        assert "cannot serve this request on Bedrock Mantle" in str(exc_info.value)
 
     def test_learned_apis_override_seed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A learned binding takes precedence over the seeded NATIVE_APIS."""
@@ -652,7 +756,15 @@ class TestSelectApi:
 
 
 class TestSurfaceCacheLru:
-    """Bounded LRU behavior of the stored-response surface cache."""
+    """Bounded LRU behavior of the stored-response surface cache.
+
+    A stored response must be retrieved on the same surface that created it,
+    so its native ID is remembered; the map is bounded and evicts by insertion
+    order, with a read refreshing recency.
+
+    Ref: stdapi/aws_bedrock_mantle.py:cache_response_surface
+         stdapi/aws_bedrock_mantle.py:cached_response_surface
+    """
 
     def _reset(self, monkeypatch: pytest.MonkeyPatch, max_size: int) -> None:
         """Reset the surface cache to empty with a small capacity for the test."""
@@ -696,7 +808,17 @@ class TestSurfaceCacheLru:
 
 
 class TestApiPathsSelfHeal:
-    """Candidate request paths self-heal via a same-request alternate surface."""
+    """Candidate request paths self-heal via a same-request alternate surface.
+
+    The known surface is tried first and the other one kept as a fallback, so a
+    stale learned or seeded surface recovers within the request instead of
+    failing until restart. The Messages API is not surface-relative: its path
+    is the absolute third prefix ``/anthropic/v1/messages``.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html
+         stdapi/models/chat/_mantle/_default.py:ChatModel._api_paths
+         stdapi/aws_bedrock_mantle.py:API_PATHS
+    """
 
     def test_learned_surface_first_alternate_second(
         self, monkeypatch: pytest.MonkeyPatch
@@ -732,11 +854,20 @@ class TestApiPathsSelfHeal:
     def test_messages_api_has_single_path(self) -> None:
         """The Anthropic Messages API always uses its single fixed path."""
         model = mantle_default.ChatModel("test.unseeded-surface-model")
-        assert model._api_paths("messages") == [API_PATHS["messages"]]  # noqa: SLF001
+        assert model._api_paths("messages") == ["/anthropic/v1/messages"]  # noqa: SLF001
+        assert API_PATHS["messages"] == "/anthropic/v1/messages"
 
 
 class TestMantleSettings:
-    """Mantle configuration fields and validation."""
+    """Mantle configuration fields and validation.
+
+    Bedrock Guardrails are a bedrock-runtime feature and do not apply to
+    Mantle-served requests, so letting a caller pick the Mantle transport
+    per request would be a guardrail bypass and is rejected at load time.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
+         stdapi/config.py:_Settings
+    """
 
     def test_mantle_enabled_by_default(self) -> None:
         """Mantle support is enabled unless explicitly turned off."""
@@ -744,19 +875,26 @@ class TestMantleSettings:
 
     def test_service_header_requires_mantle_enabled(self) -> None:
         """The per-request service header cannot be enabled without Mantle."""
-        with pytest.raises(ValidationError, match="aws_bedrock_mantle_service_header"):
+        with pytest.raises(ValidationError) as exc_info:
             _Settings(
                 aws_bedrock_mantle_service_header=True, aws_bedrock_mantle_enabled=False
             )
+        assert (
+            "aws_bedrock_mantle_service_header requires aws_bedrock_mantle_enabled"
+            in str(exc_info.value)
+        )
 
     def test_service_header_incompatible_with_guardrails(self) -> None:
         """The per-request service header cannot bypass configured guardrails."""
-        with pytest.raises(ValidationError, match="aws_bedrock_mantle_service_header"):
+        with pytest.raises(ValidationError) as exc_info:
             _Settings(
                 aws_bedrock_mantle_service_header=True,
                 aws_bedrock_guardrail_identifier="test-guardrail",
                 aws_bedrock_guardrail_version="1",
             )
+        message = str(exc_info.value)
+        assert "aws_bedrock_mantle_service_header" in message
+        assert "incompatible with Amazon Bedrock Guardrails" in message
 
     def test_service_header_valid_with_mantle_enabled(self) -> None:
         """The service header validates when Mantle is enabled, guardrails off."""
@@ -780,7 +918,16 @@ class TestMantleSettings:
 
 
 class TestMantleCatalogRobustness:
-    """Mantle model catalog fetch tolerates malformed entries and region failures."""
+    """Mantle model catalog fetch tolerates malformed entries and region failures.
+
+    The catalog comes from Mantle's ``GET /models`` per Region; a Region that
+    cannot be listed (permissions, outage) is recorded as a failed Region so
+    startup still serves the models the other Regions returned.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/inference-chat-completions-mantle.html
+         stdapi/models/__init__.py:_get_mantle_models_from_region
+         stdapi/models/__init__.py:_collect_mantle_models
+    """
 
     async def test_null_data_returns_no_models(
         self, monkeypatch: pytest.MonkeyPatch
@@ -904,7 +1051,16 @@ def _responses_stream_events() -> list[SseEvent]:
 
 
 class TestMantleStreamRelay:
-    """Stream relaying: conversion billing and stored-ID rewrites."""
+    """Stream relaying: conversion billing and stored-ID rewrites.
+
+    Usage is observed on the raw upstream events before any wire conversion, so
+    a request served by a different API than the inbound route is still billed
+    exactly once and with the upstream usage keys.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events
+         stdapi/models/chat/_mantle/_default.py:ChatModel._relay_stream
+         stdapi/models/chat/_mantle/_default.py:ChatModel._observe_stream
+    """
 
     @pytest.mark.parametrize("strip_usage_chunk", [False, True])
     async def test_converted_stream_records_usage_once(
@@ -966,7 +1122,15 @@ class TestMantleStreamRelay:
 
 
 class TestObserveStreamChatCompletionsUsage:
-    """Chat Completions stream usage is billed once, using the last cumulative value."""
+    """Chat Completions stream usage is billed once, using the last cumulative value.
+
+    Streamed usage chunks may repeat cumulative counters, so summing them would
+    over-bill; billing is deferred to the end of the stream and uses the last
+    value seen.
+
+    Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events
+         stdapi/models/chat/_mantle/_default.py:ChatModel._tap_usage
+    """
 
     async def test_last_cumulative_usage_wins(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1026,7 +1190,11 @@ class TestObserveStreamChatCompletionsUsage:
 
 
 class TestObserveStreamMalformedFrames:
-    """Malformed relayed frames are tolerated instead of crashing the stream."""
+    """Malformed relayed frames are tolerated instead of crashing the stream.
+
+    Ref: stdapi/models/chat/_mantle/_default.py:ChatModel._observe_stream
+         stdapi/models/chat/_mantle/_default.py:_is_usage_chunk
+    """
 
     async def test_malformed_usage_frame_relayed_without_crash(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1068,7 +1236,11 @@ class TestObserveStreamMalformedFrames:
 
 
 class TestServeValidatedBilling:
-    """Non-streaming conversion billing (:meth:`ChatModel._serve_validated`)."""
+    """Non-streaming conversion billing (:meth:`ChatModel._serve_validated`).
+
+    Ref: stdapi/models/chat/_mantle/_default.py:ChatModel._serve_validated
+         stdapi/models/chat/_mantle/_convert.py:convert_response
+    """
 
     async def test_usage_recorded_from_upstream_shape(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1126,7 +1298,12 @@ def _capture_log_response_params(monkeypatch: pytest.MonkeyPatch) -> list[object
 
 
 class TestNonStreamResponseLogging:
-    """Non-streaming Mantle serve paths log their response, like the classic adapters."""
+    """Non-streaming Mantle serve paths log their response, like the classic adapters.
+
+    Ref: stdapi/models/chat/_mantle/_default.py:ChatModel.create_completion
+         stdapi/models/chat/_mantle/_default.py:ChatModel.create_text_completion
+         stdapi/models/chat/_mantle/_default.py:ChatModel.create_response
+    """
 
     async def test_create_completion_logs_response(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1274,7 +1451,15 @@ def _failed_response_raw(
 
 
 class TestSyncResponseFailureSurfaced:
-    """A synchronous Responses failure surfaces as an error, not a 200 empty body."""
+    """A synchronous Responses failure surfaces as an error, not a 200 empty body.
+
+    Upstream reports a terminal ``status="failed"`` with the reason in ``error``
+    and no usable output; a background request must keep that state for polling
+    while a synchronous one must not answer 200 with empty output.
+
+    Ref: https://developers.openai.com/api/docs/guides/background
+         stdapi/models/chat/_mantle/_default.py:_failed_response_error
+    """
 
     async def test_failed_status_raises_for_synchronous_request(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1342,7 +1527,15 @@ async def _fake_invoke_api_demoting_responses(
 
 
 class TestServeStoreFallbackWarning:
-    """``_serve`` drops ``store`` with a warning when it falls back off Responses."""
+    """``_serve`` drops ``store`` with a warning when it falls back off Responses.
+
+    Native storage only exists on the Responses API; agent harnesses set
+    ``store`` unconditionally, so demoting the binding drops it with a warning
+    rather than failing the request.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html
+         stdapi/models/chat/_mantle/_default.py:ChatModel._serve
+    """
 
     async def test_store_dropped_and_warned_on_fallback(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1400,13 +1593,22 @@ class TestServeStoreFallbackWarning:
 
 
 class TestResponsesRouteGuards:
-    """Stored-response route helpers guarding Mantle-form identifiers."""
+    """Stored-response route helpers guarding Mantle-form identifiers.
+
+    The ID prefix is load-bearing: locally stored responses use ``resp-`` while
+    region-tagged Mantle responses use ``resp_``, and Mantle decoding is gated
+    on Mantle being enabled.
+
+    Ref: stdapi/routes/openai_responses.py:_require_local_response_id
+         stdapi/routes/openai_responses.py:_decode_mantle_id
+    """
 
     def test_undecodable_mantle_form_id_is_not_found(self) -> None:
         """An undecodable ``resp_`` ID never reaches the local store (404)."""
         with pytest.raises(ApiError) as exc_info:
             _require_local_response_id("resp_notdecodable")
         assert exc_info.value.status == 404
+        assert "resp_notdecodable" in str(exc_info.value)
 
     def test_decode_gated_on_mantle_enabled(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1419,7 +1621,17 @@ class TestResponsesRouteGuards:
 
 
 class TestMantleCompactionItemGuard:
-    """Compaction input items on the Mantle Responses passthrough payload."""
+    """Compaction input items on the Mantle Responses passthrough payload.
+
+    ``encrypted_content`` is opaque to the client but not to the gateway: a
+    locally produced compaction item carries the gateway's own marker and is
+    meaningless upstream, while an upstream-produced one must round-trip byte
+    for byte.
+
+    Ref: https://developers.openai.com/api/docs/guides/compaction
+         stdapi/models/chat/_mantle/_convert.py:responses_payload
+         stdapi/models/chat/_adapters/_openai_responses.py:encode_compaction_content
+    """
 
     async def test_local_marker_prefixed_item_is_rejected(self) -> None:
         """A locally-produced compaction item fails with 400 before upstream."""
@@ -1456,7 +1668,16 @@ class TestMantleCompactionItemGuard:
 
 
 class TestMantleModerationParamGuard:
-    """The stdapi ``moderation`` parameter on Mantle passthrough payloads."""
+    """The stdapi ``moderation`` parameter on Mantle passthrough payloads.
+
+    The gateway's ``moderation`` extension is implemented with Bedrock
+    Guardrails, which are a bedrock-runtime feature: on a Mantle-served model
+    it is rejected rather than silently ignored.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
+         stdapi/models/chat/_mantle/_convert.py:chat_completions_payload
+         stdapi/models/chat/_mantle/_convert.py:responses_payload
+    """
 
     async def test_chat_moderation_param_is_rejected(self) -> None:
         """A Chat Completions request with ``moderation`` fails with 400."""
@@ -1491,7 +1712,17 @@ class TestMantleModerationParamGuard:
 
 
 class TestStreamErrorEvents:
-    """In-band upstream stream errors raise a shaped 502 during conversion."""
+    """In-band upstream stream errors raise a shaped 502 during conversion.
+
+    A converted stream cannot relay a foreign-shaped error frame to the client,
+    so the error is raised instead; detection is keyed on the frame carrying an
+    ``error`` member, never on the word appearing in generated text.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+         https://platform.claude.com/docs/en/build-with-claude/streaming
+         stdapi/models/chat/_mantle/_convert.py:convert_stream
+         stdapi/models/chat/_mantle/_convert.py:_stream_error_message
+    """
 
     async def _consume(self, stream: AsyncGenerator[SseEvent]) -> None:
         """Drain *stream*, discarding its events."""
@@ -1532,15 +1763,19 @@ class TestStreamErrorEvents:
             [("error", dumps({"type": "error", "message": "boom", "code": "x"}))]
         )
         stream = mantle_convert.convert_stream("responses", "chat_completions", events)
-        with pytest.raises(MantleError, match="boom"):
+        with pytest.raises(MantleError) as exc_info:
             await self._consume(stream)
+        assert exc_info.value.status == 502
+        assert "boom" in str(exc_info.value)
 
     async def test_unnamed_error_payload_raises(self) -> None:
         """A chat-shaped ``{"error": ...}`` data payload aborts the stream."""
         events = _fake_stream([(None, dumps({"error": {"message": "bad thing"}}))])
         stream = mantle_convert.convert_stream("responses", "chat_completions", events)
-        with pytest.raises(MantleError, match="bad thing"):
+        with pytest.raises(MantleError) as exc_info:
             await self._consume(stream)
+        assert exc_info.value.status == 502
+        assert "bad thing" in str(exc_info.value)
 
     async def test_messages_error_event_raises(self) -> None:
         """An Anthropic ``error`` event aborts the converted stream."""
@@ -1558,23 +1793,24 @@ class TestStreamErrorEvents:
             ]
         )
         stream = mantle_convert.convert_stream("messages", "chat_completions", events)
-        with pytest.raises(MantleError, match="busy"):
+        with pytest.raises(MantleError) as exc_info:
             await self._consume(stream)
+        assert exc_info.value.status == 502
+        assert "busy" in str(exc_info.value)
 
     async def test_text_delta_containing_error_word_is_not_an_error(self) -> None:
         """Regular deltas whose text mentions "error" stream through fine."""
+        text = 'the "error" word is fine'
         events = _fake_stream(
             [
                 ("response.created", dumps({"response": {"id": "resp_1"}})),
-                (
-                    "response.output_text.delta",
-                    dumps({"delta": 'the "error" word is fine'}),
-                ),
+                ("response.output_text.delta", dumps({"delta": text})),
             ]
         )
         stream = mantle_convert.convert_stream("responses", "chat_completions", events)
         chunks = [loads(data) async for _, data in stream]
         assert len(chunks) == 2
+        assert chunks[-1]["choices"][0]["delta"]["content"] == text
 
     async def test_malformed_responses_frame_is_skipped_not_fatal(self) -> None:
         """A malformed frame interleaved in a converted Responses stream is skipped."""
@@ -1630,19 +1866,49 @@ class TestStreamErrorEvents:
 
 
 class TestConversionFieldLists:
-    """Cross-shape field allow/strip lists."""
+    """Cross-shape field allow/strip lists.
+
+    Ref: https://developers.openai.com/api/docs/guides/safety-best-practices#implement-safety-identifiers
+         stdapi/models/chat/_mantle/_convert.py:_OPENAI_COMMON_FIELDS
+         stdapi/models/chat/_mantle/_convert.py:_CHAT_EXTENSION_FIELDS
+    """
 
     def test_safety_identifier_is_a_common_field(self) -> None:
         """``safety_identifier`` survives Chat Completions <-> Responses."""
         assert "safety_identifier" in mantle_convert._OPENAI_COMMON_FIELDS  # noqa: SLF001
+        out = mantle_convert._chat_to_responses_request(  # noqa: SLF001
+            {"model": "m", "messages": [], "safety_identifier": "caller-1"}
+        )
+        assert out["safety_identifier"] == "caller-1"
 
-    def test_store_stripped_from_chat_passthrough(self) -> None:
+    async def test_store_stripped_from_chat_passthrough(self) -> None:
         """``store`` is stripped: chat completions are persisted locally."""
         assert "store" in mantle_convert._CHAT_EXTENSION_FIELDS  # noqa: SLF001
+        request = ChatCompletionCreateParams.model_validate(
+            {
+                "model": "ignored",
+                "messages": [{"role": "user", "content": "hi"}],
+                "store": True,
+            }
+        )
+        payload = await mantle_convert.chat_completions_payload(request, "model-id")
+        assert "store" not in payload
 
 
 class TestServiceTierAndEffortMapping:
-    """service_tier and reasoning effort mapping across wire shapes."""
+    """service_tier and reasoning effort mapping across wire shapes.
+
+    Only ``auto`` exists on both sides: Anthropic's request-side tier set is
+    ``auto`` / ``standard_only`` while OpenAI's is ``auto`` / ``default`` /
+    ``flex`` / ``priority``, so every other value is dropped rather than
+    guessed. Reasoning effort maps onto Anthropic's ``output_config.effort``,
+    whose ``format`` member Mantle rejects and is therefore never emitted.
+
+    Ref: https://platform.claude.com/docs/en/api/messages
+         https://developers.openai.com/api/docs/guides/reasoning
+         stdapi/models/chat/_mantle/_convert.py:_chat_to_messages_request
+         stdapi/models/chat/_mantle/_convert.py:_messages_to_chat_request
+    """
 
     def test_auto_tier_kept_toward_messages(self) -> None:
         """OpenAI ``service_tier=auto`` maps verbatim to the Anthropic shape."""
@@ -1736,7 +2002,15 @@ class TestServiceTierAndEffortMapping:
 
 
 class TestAnthropicServerTools:
-    """Anthropic server tools rejection during conversion toward OpenAI shapes."""
+    """Anthropic server tools rejection during conversion toward OpenAI shapes.
+
+    Anthropic-hosted server tools have no Chat Completions or Responses
+    equivalent, so a request mixing them with client tools is rejected instead
+    of losing the server tool silently.
+
+    Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
+         stdapi/models/chat/_mantle/_convert.py:_messages_to_chat_request
+    """
 
     def test_server_tool_raises(self) -> None:
         """A server tool in the request fails with a clear 400."""
@@ -1766,7 +2040,16 @@ class TestAnthropicServerTools:
 
 
 class TestChatStreamAsTextCompletion:
-    """SSE wrapper converting a Chat Completions stream to text-completion chunks."""
+    """SSE wrapper converting a Chat Completions stream to text-completion chunks.
+
+    Mantle has no legacy completions endpoint, so the legacy route is always
+    served as chat and re-shaped on the way out: the leading role-only chunk has
+    no legacy equivalent and is dropped, while usage-only chunks keep their
+    empty ``choices``.
+
+    Ref: https://developers.openai.com/api/reference/resources/completions/methods/create
+         stdapi/models/chat/_mantle/_convert.py:chat_stream_as_text_completion
+    """
 
     async def _collect(
         self, events: list[ServerSentEvent], completion_id: str = "cmpl-1"
@@ -1831,7 +2114,15 @@ class TestChatStreamAsTextCompletion:
 
 
 class TestScrubErrorEvent:
-    """Passthrough error event scrubbing (:func:`_default._scrub_error_event`)."""
+    """Passthrough error event scrubbing (:func:`_default._scrub_error_event`).
+
+    Relayed error events reach the client verbatim, so an upstream message that
+    names the task role's IAM ARN must be rewritten while the payload shape and
+    error ``type`` stay intact.
+
+    Ref: stdapi/models/chat/_mantle/_default.py:_scrub_error_event
+         stdapi/utils.py:hide_security_details
+    """
 
     def test_arn_redacted_in_error_message(self) -> None:
         """ARNs in an upstream error message are redacted before relaying."""
@@ -1855,7 +2146,16 @@ class TestScrubErrorEvent:
 
 
 def test_alias_collision_prefers_runtime_service() -> None:
-    """A dual-named model keeps its bedrock-runtime ID for the shared alias."""
+    """A dual-named model keeps its bedrock-runtime ID for the shared alias.
+
+    The same model can be listed on both endpoints under different IDs; the
+    short alias resolves to the bedrock-runtime one so guardrails, Converse
+    features and cross-Region profiles stay available by default.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
+         stdapi/models/__init__.py:ModelBase.get_aliases
+         stdapi/models/__init__.py:_order_ids_mantle_first
+    """
     aliases = OpenAiGptChatModel.get_aliases(
         {
             "openai.gpt-oss-120b": _model_details(
@@ -1872,7 +2172,15 @@ def test_alias_collision_prefers_runtime_service() -> None:
 
 
 def test_claude_alias_prefers_runtime_over_mantle_undated() -> None:
-    """A Mantle-held direct alias yields to a competing bedrock-runtime dated model."""
+    """A Mantle-held direct alias yields to a competing bedrock-runtime dated model.
+
+    Mantle lists Claude under undated IDs while bedrock-runtime uses dated ones;
+    both derive the same short alias, and the dated bedrock-runtime ID wins so
+    the alias keeps the Converse feature set.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
+         stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel.get_aliases
+    """
     mantle_id = "anthropic.claude-haiku-4-5"
     runtime_id = "anthropic.claude-haiku-4-5-20251001-v1:0"
     aliases = AnthropicClaudeChatModel.get_aliases(
@@ -1886,7 +2194,10 @@ def test_claude_alias_prefers_runtime_over_mantle_undated() -> None:
 
 
 def test_claude_alias_uses_mantle_id_without_runtime_competitor() -> None:
-    """A lone Mantle-held undated ID keeps the direct alias."""
+    """A lone Mantle-held undated ID keeps the direct alias.
+
+    Ref: stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel.get_aliases
+    """
     mantle_id = "anthropic.claude-haiku-4-5"
     aliases = AnthropicClaudeChatModel.get_aliases(
         {mantle_id: _model_details(mantle_id, MANTLE_SERVICE)}
@@ -1895,14 +2206,20 @@ def test_claude_alias_uses_mantle_id_without_runtime_competitor() -> None:
 
 
 def test_map_error_nonstring_message_coerced() -> None:
-    """A structured (non-string) upstream message maps without raising."""
+    """A structured (non-string) upstream message maps without raising.
+
+    Ref: stdapi/aws_bedrock_mantle.py:_map_error
+    """
     error = _map_error(400, '{"error": {"message": {"detail": "nested"}}}', "us-east-1")
     assert error.status == 400
     assert "nested" in str(error)
 
 
 def test_scrub_error_event_responses_shapes() -> None:
-    """Responses-shaped and response.failed error payloads are scrubbed."""
+    """Responses-shaped and response.failed error payloads are scrubbed.
+
+    Ref: stdapi/models/chat/_mantle/_default.py:_scrub_error_event
+    """
     flat = _scrub_error_event(
         '{"type": "error", "code": "server_error",'
         ' "message": "boom arn:aws:iam::123456789012:role/x"}'
@@ -1916,7 +2233,10 @@ def test_scrub_error_event_responses_shapes() -> None:
 
 
 def test_scrub_error_event_structured_message() -> None:
-    """A structured (non-string) error message is serialized and scrubbed."""
+    """A structured (non-string) error message is serialized and scrubbed.
+
+    Ref: stdapi/models/chat/_mantle/_default.py:_scrub_error_event
+    """
     scrubbed = _scrub_error_event(
         '{"error": {"message": {"detail": "boom arn:aws:iam::123456789012:role/x"}}}'
     )
@@ -1941,7 +2261,15 @@ def _request_context(headers: Mapping[str, str]) -> Iterator[None]:
 
 
 class TestServesViaMantleHeaderDispatch:
-    """Per-request ``x-stdapi-service`` header dispatch to Bedrock Mantle."""
+    """Per-request ``x-stdapi-service`` header dispatch to Bedrock Mantle.
+
+    The header only selects between the two Bedrock inference endpoints for a
+    model that both host; it is inert unless explicitly enabled, and can never
+    reach a model missing from the Mantle catalog.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
+         stdapi/models/chat/__init__.py:serves_via_mantle
+    """
 
     def test_header_disabled_returns_false_even_with_matching_header(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1999,13 +2327,25 @@ class TestServesViaMantleHeaderDispatch:
         assert serves_via_mantle(model_id) is False
 
     def test_get_chat_model_classic_model_is_not_mantle(self) -> None:
-        """A classic bedrock-runtime model id resolves outside the Mantle family."""
+        """A classic bedrock-runtime model id resolves outside the Mantle family.
+
+        Ref: stdapi/models/chat/__init__.py:get_chat_model
+        """
         model = get_chat_model("amazon.nova-micro-v1:0")
         assert not getattr(model, "IS_MANTLE", False)
+        assert not isinstance(model, mantle_default.ChatModel)
 
 
 class TestPreviousResponseIdFallback:
-    """Serving demoted off the Responses API rejects a chained conversation."""
+    """Serving demoted off the Responses API rejects a chained conversation.
+
+    The stored history behind ``previous_response_id`` lives upstream on the
+    Responses API only, so converting the request to another API would silently
+    drop the conversation; the request fails instead.
+
+    Ref: https://developers.openai.com/api/docs/guides/conversation-state#passing-context-from-the-previous-response
+         stdapi/models/chat/_mantle/_default.py:ChatModel._serve
+    """
 
     async def test_previous_response_id_cannot_be_honored_on_fallback(
         self, monkeypatch: pytest.MonkeyPatch
@@ -2045,7 +2385,11 @@ class TestPreviousResponseIdFallback:
 
 
 class TestLearnedBindingSkipsSecondProbe:
-    """A learned API binding is reused directly, skipping the failed probe."""
+    """A learned API binding is reused directly, skipping the failed probe.
+
+    Ref: stdapi/models/chat/_mantle/_default.py:_LEARNED_APIS
+         stdapi/models/chat/_mantle/_default.py:ChatModel._serve
+    """
 
     async def test_learned_binding_used_directly_on_second_call(
         self, monkeypatch: pytest.MonkeyPatch
@@ -2091,7 +2435,12 @@ class TestLearnedBindingSkipsSecondProbe:
 
 
 class TestMantleDisabled:
-    """Behavior when Bedrock Mantle support is disabled."""
+    """Behavior when Bedrock Mantle support is disabled.
+
+    Ref: stdapi/models/__init__.py:_merge_mantle_models
+         stdapi/models/chat/__init__.py:serves_via_mantle
+         stdapi/config.py:_Settings
+    """
 
     async def test_merge_skips_catalog_fetch_when_disabled(
         self, monkeypatch: pytest.MonkeyPatch
@@ -2126,7 +2475,15 @@ class TestMantleDisabled:
 
 
 class TestMantleRegionsPinning:
-    """Region candidate selection: pinned region vs. catalog vs. default list."""
+    """Region candidate selection: pinned region vs. catalog vs. default list.
+
+    A stored response can only be read in the Region that created it, so a
+    pinned Region must short-circuit the candidate list instead of being merely
+    preferred.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html
+         stdapi/models/chat/_mantle/_default.py:ChatModel._mantle_regions
+    """
 
     def test_pinned_region_is_returned_as_sole_candidate(self) -> None:
         """A pinned region short-circuits to a single-element candidate list."""
@@ -2166,7 +2523,15 @@ class TestMantleRegionsPinning:
 
 
 class TestRouteAndExecuteMantleFailover:
-    """``MantleError.failover`` drives (or blocks) cross-region retry directly."""
+    """``MantleError.failover`` drives (or blocks) cross-region retry directly.
+
+    Throttling and capacity errors are the only ones worth another Region; a
+    400 is deterministic and retrying it would multiply the latency and the
+    upstream load for the same failure.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/troubleshooting-api-error-codes.html
+         stdapi/models/__init__.py:route_and_execute
+    """
 
     async def test_failover_error_retries_next_call(self) -> None:
         """A failover-eligible ``MantleError`` is retried by a further call."""
@@ -2205,7 +2570,15 @@ class TestRouteAndExecuteMantleFailover:
 
 
 class TestInvokeApiSurfaceLearningWritePath:
-    """The learned-surface cache self-heals and is then reused on later calls."""
+    """The learned-surface cache self-heals and is then reused on later calls.
+
+    Nothing upstream reports whether a model answers on ``/v1`` or
+    ``/openai/v1``, so the surface is discovered by probing and remembered per
+    model to keep the extra round trip to the first request only.
+
+    Ref: stdapi/models/chat/_mantle/_default.py:_LEARNED_SURFACE
+         stdapi/models/chat/_mantle/_default.py:ChatModel._invoke_api
+    """
 
     async def test_first_surface_fails_second_succeeds_and_is_learned(
         self, monkeypatch: pytest.MonkeyPatch
@@ -2251,7 +2624,12 @@ class TestInvokeApiSurfaceLearningWritePath:
 
 
 class TestInvokeApiRetriesWhenRouterDisabled:
-    """Router-disabled multi-region calls still get in-region retries (see F5)."""
+    """Router-disabled multi-region calls still get in-region retries.
+
+    Ref: stdapi/models/chat/_mantle/_default.py:ChatModel._invoke_api
+         stdapi/aws_bedrock_mantle.py:_request_with_retry
+         stdapi/models/__init__.py:route_and_execute
+    """
 
     async def test_router_disabled_multi_region_retries_in_region(
         self, monkeypatch: pytest.MonkeyPatch
@@ -2302,7 +2680,15 @@ class TestInvokeApiRetriesWhenRouterDisabled:
 
 
 class TestInvokeApiSurfaceLearning:
-    """Surface-learning side effects of ``_invoke_api``."""
+    """Surface-learning side effects of ``_invoke_api``.
+
+    Only the OpenAI-shaped APIs are surface-relative: the Messages API has one
+    absolute path, so serving it must not record a surface, and a model rejected
+    on both OpenAI surfaces must not leave a learned one behind either.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html
+         stdapi/models/chat/_mantle/_default.py:ChatModel._invoke_api
+    """
 
     async def test_messages_api_success_does_not_write_learned_surface(
         self, monkeypatch: pytest.MonkeyPatch
@@ -2332,28 +2718,38 @@ class TestInvokeApiSurfaceLearning:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """When every OpenAI surface rejects the model, the last error propagates."""
+        model_id = "test.both-surfaces-unsupported-model"
+        calls: list[str] = []
 
         async def fake_invoke(
             region: RegionName,  # noqa: ARG001
-            path: str,  # noqa: ARG001
+            path: str,
             payload: Mapping[str, Any],  # noqa: ARG001
             *,
             single_region: bool,  # noqa: ARG001
             headers: Mapping[str, str] | None = None,  # noqa: ARG001
         ) -> dict[str, Any]:
+            calls.append(path)
             msg = "This model isn't supported on this route."
             raise MantleSurfaceUnsupportedError(msg, status=400)
 
         monkeypatch.setattr(mantle_default, "invoke", fake_invoke)
-        model = mantle_default.ChatModel("test.both-surfaces-unsupported-model")
-        with pytest.raises(MantleSurfaceUnsupportedError):
+        model = mantle_default.ChatModel(model_id)
+        with pytest.raises(MantleSurfaceUnsupportedError) as exc_info:
             await model._invoke_api(  # noqa: SLF001
                 "chat_completions", {"model": "m", "messages": []}, stream=False
             )
+        assert exc_info.value.status == 400
+        assert "isn't supported on this route" in str(exc_info.value)
+        assert calls == ["/openai/v1/chat/completions", "/v1/chat/completions"]
+        assert model_id not in mantle_default._LEARNED_SURFACE  # noqa: SLF001
 
 
 class TestCreateResponseModerationBuilder:
-    """The ``moderation_builder`` callback sets the non-streamed response moderation."""
+    """The ``moderation_builder`` callback sets the non-streamed response moderation.
+
+    Ref: stdapi/models/chat/_mantle/_default.py:ChatModel.create_response
+    """
 
     async def test_moderation_builder_result_attached_to_response(
         self, monkeypatch: pytest.MonkeyPatch
@@ -2408,7 +2804,15 @@ class TestCreateResponseModerationBuilder:
 
 
 class TestCreateResponseConvertedId:
-    """Converted (non-native) responses carry the server-assigned response ID."""
+    """Converted (non-native) responses carry the server-assigned response ID.
+
+    A model served by Chat Completions has no upstream stored response, so the
+    result must keep the route's local-store ``resp-`` ID: returning the
+    upstream ``chatcmpl-`` ID would make GET/DELETE and chaining unusable.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/methods/retrieve
+         stdapi/models/chat/_mantle/_default.py:ChatModel.create_response
+    """
 
     async def test_converted_response_uses_local_response_id(
         self, monkeypatch: pytest.MonkeyPatch
@@ -2496,21 +2900,32 @@ class TestCreateResponseConvertedId:
 
 
 class TestStreamWrapBranches:
-    """Streaming legacy-completion and message routes reach their wrap branch."""
+    """Streaming legacy-completion and message routes reach their wrap branch.
+
+    Neither route exists on Mantle for the default family: the legacy prompt is
+    converted to messages and both are served on the probed OpenAI surface with
+    streaming forced on upstream.
+
+    Ref: stdapi/models/chat/_mantle/_default.py:ChatModel._stream_serve
+         stdapi/models/chat/_mantle/_convert.py:text_completion_as_chat_payload
+         stdapi/models/chat/_mantle/_convert.py:enable_stream_usage
+    """
 
     async def test_create_text_completion_stream_returns_event_source(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A streaming legacy completion returns a wrapped ``EventSourceResponse``."""
+        sent: list[tuple[str, Mapping[str, Any]]] = []
 
         async def fake_invoke_stream(
             region: RegionName,  # noqa: ARG001
-            path: str,  # noqa: ARG001
-            payload: Mapping[str, Any],  # noqa: ARG001
+            path: str,
+            payload: Mapping[str, Any],
             *,
             single_region: bool,  # noqa: ARG001
             headers: Mapping[str, str] | None = None,  # noqa: ARG001
         ) -> AsyncGenerator[SseEvent]:
+            sent.append((path, payload))
             return _fake_stream(
                 [
                     (
@@ -2540,20 +2955,29 @@ class TestStreamWrapBranches:
         )
         result = await model.create_text_completion(request, "cmpl-1", 0)
         assert isinstance(result, EventSourceResponse)
+        (path, payload) = sent[0]
+        assert path == "/openai/v1/responses"
+        assert payload["stream"] is True
+        assert "prompt" not in payload, (
+            "the legacy prompt is converted, never forwarded"
+        )
+        assert payload["input"] == [{"role": "user", "content": "hi"}]
 
     async def test_create_message_stream_returns_event_source(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A streaming Anthropic message request returns an ``EventSourceResponse``."""
+        sent: list[tuple[str, Mapping[str, Any]]] = []
 
         async def fake_invoke_stream(
             region: RegionName,  # noqa: ARG001
-            path: str,  # noqa: ARG001
-            payload: Mapping[str, Any],  # noqa: ARG001
+            path: str,
+            payload: Mapping[str, Any],
             *,
             single_region: bool,  # noqa: ARG001
             headers: Mapping[str, str] | None = None,  # noqa: ARG001
         ) -> AsyncGenerator[SseEvent]:
+            sent.append((path, payload))
             return _fake_stream(
                 [("message_start", dumps({"message": {"id": "msg_1"}}))]
             )
@@ -2567,10 +2991,22 @@ class TestStreamWrapBranches:
         )
         result = await model.create_message(request, "msg_public")
         assert isinstance(result, EventSourceResponse)
+        (path, payload) = sent[0]
+        assert path == "/openai/v1/responses"
+        assert payload["stream"] is True
 
 
 class TestStreamedResponseIdPlumbing:
-    """A converted Responses stream carries the route-assigned response ID."""
+    """A converted Responses stream carries the route-assigned response ID.
+
+    A converted stream has no upstream stored response, so minting a ``resp_``
+    ID would advertise a region-tagged Mantle object that does not exist; the
+    route's local ``resp-`` ID is stamped on the synthesized events instead.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+         stdapi/models/chat/_mantle/_default.py:ChatModel.create_response
+         stdapi/models/chat/_mantle/_convert.py:convert_stream
+    """
 
     async def test_create_response_stream_uses_the_route_id(
         self, monkeypatch: pytest.MonkeyPatch
@@ -2637,7 +3073,10 @@ class TestStreamedResponseIdPlumbing:
 
 
 class TestScrubErrorEventResidualBranches:
-    """Residual ``_scrub_error_event`` shapes not covered by the classes above."""
+    """Residual ``_scrub_error_event`` shapes not covered by the classes above.
+
+    Ref: stdapi/models/chat/_mantle/_default.py:_scrub_error_event
+    """
 
     def test_non_json_data_returned_unchanged(self) -> None:
         """A payload that fails to parse as JSON is relayed verbatim."""
@@ -2658,7 +3097,15 @@ class TestScrubErrorEventResidualBranches:
 
 
 class TestEventUsageMessagesAccumulation:
-    """``_event_usage`` accumulates Anthropic input usage across stream events."""
+    """``_event_usage`` accumulates Anthropic input usage across stream events.
+
+    Anthropic reports input tokens on ``message_start`` and output tokens on
+    ``message_delta``, so neither event alone can be billed: the two are merged
+    before recording.
+
+    Ref: https://platform.claude.com/docs/en/build-with-claude/streaming
+         stdapi/models/chat/_mantle/_default.py:_event_usage
+    """
 
     def test_message_start_then_delta_merges_usage(self) -> None:
         """``message_start`` seeds input usage; ``message_delta`` merges and returns it."""
@@ -2688,7 +3135,15 @@ class TestEventUsageMessagesAccumulation:
 
 
 class TestEventUsageResponsesTerminalEvents:
-    """``_event_usage`` extracts usage from every terminal Responses event."""
+    """``_event_usage`` extracts usage from every terminal Responses event.
+
+    A Responses stream can end on ``completed``, ``incomplete`` or ``failed``,
+    and all three carry the usage block: billing only ``completed`` would lose
+    the tokens of every truncated or failed generation.
+
+    Ref: https://developers.openai.com/api/reference/resources/responses/streaming-events
+         stdapi/models/chat/_mantle/_default.py:_event_usage
+    """
 
     @pytest.mark.parametrize(
         "event", ["response.completed", "response.incomplete", "response.failed"]
@@ -2713,7 +3168,11 @@ class TestEventUsageResponsesTerminalEvents:
 
 
 class TestObserveStreamResponsesIncompleteBilling:
-    """A native Responses stream truncated at max_output_tokens is still billed."""
+    """A native Responses stream truncated at max_output_tokens is still billed.
+
+    Ref: stdapi/models/chat/_mantle/_default.py:ChatModel._observe_stream
+         stdapi/models/chat/_mantle/_default.py:_event_usage
+    """
 
     async def test_incomplete_terminal_event_bills_usage(
         self, monkeypatch: pytest.MonkeyPatch
@@ -2747,7 +3206,11 @@ class TestObserveStreamResponsesIncompleteBilling:
 
 
 class TestRelayStreamErrorScrubbing:
-    """``_relay_stream`` scrubs security details from error-named events."""
+    """``_relay_stream`` scrubs security details from error-named events.
+
+    Ref: stdapi/models/chat/_mantle/_default.py:ChatModel._relay_stream
+         stdapi/models/chat/_mantle/_default.py:_scrub_error_event
+    """
 
     async def test_error_event_is_scrubbed(self) -> None:
         """An in-band ``error`` event has its message scrubbed before relay."""
@@ -2777,7 +3240,14 @@ class TestRelayStreamErrorScrubbing:
 
 
 class TestEndpointUrl:
-    """Mantle endpoint URL resolution: configured template vs. default."""
+    """Mantle endpoint URL resolution: configured template vs. default.
+
+    Mantle lives on its own host family, ``bedrock-mantle.{region}.api.aws``,
+    not on the ``bedrock-runtime.{region}.amazonaws.com`` endpoint.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html
+         stdapi/aws_bedrock_mantle.py:endpoint_url
+    """
 
     def test_configured_template_formatted_and_stripped(
         self, monkeypatch: pytest.MonkeyPatch
@@ -2808,7 +3278,14 @@ async def _fake_bearer_token(region: RegionName) -> str:  # noqa: ARG001
 
 
 class TestBearerTokenNoCredentials:
-    """Bearer token minting fails cleanly without AWS credentials."""
+    """Bearer token minting fails cleanly without AWS credentials.
+
+    A missing credential chain is a server-side misconfiguration, so it maps to
+    a 500 rather than surfacing as an unhandled exception or a 401.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys.html
+         stdapi/aws_bedrock_mantle.py:bearer_token
+    """
 
     async def test_no_credentials_raises_api_error_500(
         self, monkeypatch: pytest.MonkeyPatch
@@ -2823,6 +3300,7 @@ class TestBearerTokenNoCredentials:
         with pytest.raises(ApiError) as exc_info:
             await aws_bedrock_mantle.bearer_token("us-east-1")
         assert exc_info.value.status == 500
+        assert "No AWS credentials available" in str(exc_info.value)
 
 
 @dataclass(slots=True)
@@ -2846,7 +3324,17 @@ class _FakeCredentials:
 
 
 class TestBearerTokenMintingAndCaching:
-    """Bearer token minting shape, caching, and TTL-based refresh."""
+    """Bearer token minting shape, caching, and TTL-based refresh.
+
+    The token is not an AWS-issued API key: it is a locally presigned SigV4
+    query URL for ``POST https://bedrock.amazonaws.com/?Action=CallWithBearerToken``,
+    base64-encoded with ``&Version=1`` appended, reproducing what
+    ``aws-bedrock-token-generator`` emits. It is cached per Region and re-minted
+    on expiry so rotated session credentials are picked up.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys.html
+         stdapi/aws_bedrock_mantle.py:bearer_token
+    """
 
     def _install_fake_credentials(self, monkeypatch: pytest.MonkeyPatch) -> list[int]:
         """Install fake AWS credentials; returns a mutable mint-call counter."""
@@ -2871,6 +3359,12 @@ class TestBearerTokenMintingAndCaching:
         self._install_fake_credentials(monkeypatch)
         token = await aws_bedrock_mantle.bearer_token("us-east-1")
         assert token.startswith("bedrock-api-key-")
+        decoded = b64decode(token.removeprefix("bedrock-api-key-")).decode()
+        assert decoded.startswith("bedrock.amazonaws.com/?")
+        assert "Action=CallWithBearerToken" in decoded
+        assert "X-Amz-Signature=" in decoded
+        assert decoded.endswith("&Version=1")
+        assert "fakesecretkey" not in decoded, "the secret key is never in the token"
 
     async def test_cached_token_reused_without_reminting(
         self, monkeypatch: pytest.MonkeyPatch
@@ -2896,7 +3390,10 @@ class TestBearerTokenMintingAndCaching:
 
 
 class TestRequestConnectionFailure:
-    """``_request`` maps aiohttp connection failures to a failover-eligible error."""
+    """``_request`` maps aiohttp connection failures to a failover-eligible error.
+
+    Ref: stdapi/aws_bedrock_mantle.py:_request
+    """
 
     async def test_connection_error_maps_to_503_failover(
         self, monkeypatch: pytest.MonkeyPatch
@@ -2918,7 +3415,11 @@ class TestRequestConnectionFailure:
 
 
 class TestRequestErrorBodyReadFailure:
-    """``_request`` degrades gracefully when the error body cannot be read."""
+    """``_request`` degrades gracefully when the error body cannot be read.
+
+    Ref: stdapi/aws_bedrock_mantle.py:_request
+         stdapi/aws_bedrock_mantle.py:_map_error
+    """
 
     async def test_unreadable_error_body_maps_with_empty_body(
         self, monkeypatch: pytest.MonkeyPatch
@@ -2949,7 +3450,15 @@ class TestRequestErrorBodyReadFailure:
 
 
 class TestRequestWithRetry:
-    """In-region retry behavior of ``_request_with_retry`` for single-region calls."""
+    """In-region retry behavior of ``_request_with_retry`` for single-region calls.
+
+    Mantle has no botocore retry layer, so the transport owns the retry budget:
+    throttling and capacity errors are retried in-region with a sleep between
+    attempts, deterministic errors are not.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/troubleshooting-api-error-codes.html
+         stdapi/aws_bedrock_mantle.py:_request_with_retry
+    """
 
     async def test_failover_errors_retried_until_success(
         self, monkeypatch: pytest.MonkeyPatch
@@ -3013,7 +3522,10 @@ class TestRequestWithRetry:
 
 
 class TestReadJsonFailure:
-    """``_read_json`` maps unparsable bodies to a shaped 502."""
+    """``_read_json`` maps unparsable bodies to a shaped 502.
+
+    Ref: stdapi/aws_bedrock_mantle.py:_read_json
+    """
 
     async def test_json_decode_error_maps_to_502(self) -> None:
         """A response whose ``.json()`` raises ``JSONDecodeError`` maps to 502."""
@@ -3066,7 +3578,14 @@ class _LinesResponse:
 
 
 class TestIterSseParsing:
-    """Line-level SSE parsing edge cases in ``_iter_sse``."""
+    """Line-level SSE parsing edge cases in ``_iter_sse``.
+
+    Only ``data:`` and ``event:`` fields are meaningful to the relay; the
+    ``[DONE]`` sentinel is suppressed here because each inbound wire format
+    decides on its own whether to emit one.
+
+    Ref: stdapi/aws_bedrock_mantle.py:_iter_sse
+    """
 
     async def test_done_sentinel_yields_no_events(self) -> None:
         """A ``[DONE]`` data line yields no event, matching upstream's own sentinel."""
@@ -3107,7 +3626,10 @@ class TestIterSseParsing:
 
 
 class TestInvokeStreamAbandonedGenerator:
-    """``invoke_stream`` releases the upstream connection even if never iterated."""
+    """``invoke_stream`` releases the upstream connection even if never iterated.
+
+    Ref: stdapi/aws_bedrock_mantle.py:invoke_stream
+    """
 
     async def test_unstarted_generator_gc_closes_response(
         self, monkeypatch: pytest.MonkeyPatch
@@ -3152,7 +3674,10 @@ class TestInvokeStreamAbandonedGenerator:
 
 
 class TestResolveErrorLocResidual:
-    """Additional unresolvable path shapes for ``_resolve_error_loc``."""
+    """Additional unresolvable path shapes for ``_resolve_error_loc``.
+
+    Ref: stdapi/aws_bedrock_mantle.py:_resolve_error_loc
+    """
 
     def test_list_index_out_of_range_returns_none(self) -> None:
         """An out-of-range list index does not resolve."""
@@ -3168,7 +3693,14 @@ class TestResolveErrorLocResidual:
 
 
 class TestCatalog403Degradation:
-    """A permission-mapped Mantle catalog failure degrades gracefully."""
+    """A permission-mapped Mantle catalog failure degrades gracefully.
+
+    Missing ``bedrock-mantle`` permissions must not fail startup: the Region is
+    reported as failed and its models are simply absent from the catalog.
+
+    Ref: stdapi/models/__init__.py:_collect_mantle_models
+         stdapi/aws_bedrock_mantle.py:_map_error
+    """
 
     async def test_permission_failure_recorded_in_failed_regions(
         self, monkeypatch: pytest.MonkeyPatch
@@ -3192,7 +3724,14 @@ class TestCatalog403Degradation:
 
 
 class TestClaudePreFourLatestAlias:
-    """Claude < 4 ``-latest`` alias picks the most recently dated runtime ID."""
+    """Claude < 4 ``-latest`` alias picks the most recently dated runtime ID.
+
+    Pre-4 Claude models get a ``-latest`` alias instead of a bare date-stripped
+    one, matching Anthropic's own naming for those generations.
+
+    Ref: https://platform.claude.com/docs/en/api/models/list
+         stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel.get_aliases
+    """
 
     def test_latest_alias_prefers_newest_date(self) -> None:
         """The ``-latest`` alias resolves to the newest of two dated runtime IDs."""
@@ -3206,7 +3745,15 @@ class TestClaudePreFourLatestAlias:
 
 
 class TestGuardrailMantleStartupWarning:
-    """Startup warns when Bedrock Guardrails are configured with Mantle-served models."""
+    """Startup warns when Bedrock Guardrails are configured with Mantle-served models.
+
+    Guardrails are a bedrock-runtime feature, so a configured guardrail silently
+    does not apply to any Mantle-served model; the operator is warned at startup
+    rather than discovering it from unfiltered traffic.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/models-endpoint-availability.html
+         stdapi/models/__init__.py:_warn_bedrock_refresh_issues
+    """
 
     def _start_event(self) -> EventLog:
         """Build a minimal "start" event log for the warning helper."""
@@ -3242,7 +3789,15 @@ class TestGuardrailMantleStartupWarning:
 
 
 class TestServeValidatedBillingService:
-    """``_serve_validated`` billing always tags the Mantle service and forwards tier."""
+    """``_serve_validated`` billing always tags the Mantle service and forwards tier.
+
+    Mantle traffic is priced and quota-tracked separately from bedrock-runtime,
+    so usage must be attributed to the Mantle service and carry the tier the
+    response reports as served.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/service-tiers-inference.html
+         stdapi/models/chat/_mantle/_default.py:ChatModel._record_usage
+    """
 
     async def test_usage_recorded_with_mantle_service_and_tier(
         self, monkeypatch: pytest.MonkeyPatch
@@ -3278,7 +3833,20 @@ class TestServeValidatedBillingService:
 
 
 class TestMantleProject:
-    """Mantle project/workspace selection and outbound header injection (offline)."""
+    """Mantle project/workspace selection and outbound header injection (offline).
+
+    Projects and Workspaces are one Bedrock resource with two header names:
+    ``anthropic-workspace`` on ``/anthropic/v1/messages`` and ``OpenAI-Project``
+    on the OpenAI surfaces, carrying the same identifier. Honoring an inbound
+    header is gated, since the project is a cost-attribution and access-control
+    boundary.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/projects.html
+         https://docs.aws.amazon.com/bedrock/latest/userguide/workspaces.html
+         https://docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html
+         stdapi/aws_bedrock_mantle.py:set_mantle_project
+         stdapi/aws_bedrock_mantle.py:mantle_request_headers
+    """
 
     @pytest.fixture(autouse=True)
     def _reset_project(self) -> Iterator[None]:
@@ -3355,3 +3923,5 @@ class TestMantleProject:
         with pytest.raises(ApiError) as exc:
             set_mantle_project(Headers({"OpenAI-Project": "bad id!"}))
         assert exc.value.status == 400
+        assert "Invalid Bedrock Mantle project identifier" in str(exc.value)
+        assert MANTLE_PROJECT_VAR.get() == ""

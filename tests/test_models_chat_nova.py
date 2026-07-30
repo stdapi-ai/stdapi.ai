@@ -1,4 +1,13 @@
-"""Unit tests for the Amazon Nova 2 chat model (no AWS calls)."""
+"""Converse request building for the Amazon Nova 2 chat model (no AWS calls).
+
+Nova 2 rejects a Converse request that combines ``inferenceConfig.maxTokens``
+with ``reasoningConfig.maxReasoningEffort: high``, so the model class drops the
+token limit and records a warning in the request log instead of letting Bedrock
+fail the call.
+
+Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+     stdapi/models/chat/amazon_nova_2.py:ChatModel._prepare_converse_request
+"""
 
 from typing import TYPE_CHECKING, cast
 
@@ -32,12 +41,19 @@ def request_log() -> Generator[EventLog]:
 
 
 class TestPrepareConverseRequestReasoningMaxTokens:
-    """``_prepare_converse_request`` drops ``maxTokens`` only for high-effort reasoning."""
+    """``_prepare_converse_request`` drops ``maxTokens`` only for high-effort reasoning.
+
+    Ref: stdapi/models/chat/amazon_nova_2.py:ChatModel._prepare_converse_request
+    """
 
     async def test_high_effort_reasoning_drops_max_tokens(
         self, request_log: EventLog
     ) -> None:
-        """High reasoning effort strips 'maxTokens' from the inference config and warns."""
+        """High reasoning effort strips 'maxTokens' from the inference config and warns.
+
+        Only the token limit is removed: the ``reasoningConfig`` that triggered
+        the conflict is still forwarded in ``additionalModelRequestFields``.
+        """
         inference_cfg: InferenceConfigurationTypeDef = {"maxTokens": 1000}
         request = await _MODEL._prepare_converse_request(  # noqa: SLF001
             bedrock_messages=[],
@@ -50,11 +66,15 @@ class TestPrepareConverseRequestReasoningMaxTokens:
             service_tier=None,
         )
         assert "maxTokens" not in request["inferenceConfig"]
+        assert request["additionalModelRequestFields"]["reasoningConfig"] == {
+            "type": "enabled",
+            "maxReasoningEffort": "high",
+        }
         assert request_log["level"] == "warning"
         assert any(
             "max_tokens" in str(detail)
             for detail in request_log.get("error_detail", [])
-        )
+        ), "the dropped token limit must be reported in the request log"
 
     async def test_medium_effort_reasoning_preserves_max_tokens(
         self, request_log: EventLog
