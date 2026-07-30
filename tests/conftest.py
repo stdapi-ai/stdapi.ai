@@ -337,6 +337,8 @@ MODEL_MAPPINGS = {
     },
 }
 _CACHE_DIR = Path(__file__).parent / ".cache"
+#: Repository checkout root, for tests that must reference real source paths.
+REPO_ROOT = Path(__file__).resolve().parent.parent
 SAMPLES_DIR = Path(__file__).parent / "samples"
 OUTPUT_DIR = Path(__file__).parent / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
@@ -375,6 +377,13 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     )
     parser.addoption(
         "--agentic", action="store_true", default=False, help="Run agentic tests"
+    )
+    parser.addoption(
+        "--agentic-rebuild",
+        action="store_true",
+        default=False,
+        help="Rebuild the agentic CLI container image, re-resolving the tools' "
+        "'@latest' versions instead of reusing the cached image",
     )
     parser.addoption(
         "--slow", action="store_true", default=False, help="Run slow tests"
@@ -588,6 +597,49 @@ def test_client(request: pytest.FixtureRequest) -> Generator[TestClient | None]:
             yield test_client
     else:
         yield None
+
+
+@pytest.fixture
+def app_client(api_key: str) -> TestClient:
+    """Pre-authenticated ASGI client that does **not** run the app lifespan.
+
+    Unit tests that only exercise routing, validation and error shaping use this
+    instead of ``test_client``: skipping the lifespan skips the AWS startup work,
+    so they stay in-process and free. Use ``test_client`` when the app's startup
+    state (authentication init, MCP mounting) is part of what is under test.
+    """
+    from stdapi.main import app  # noqa: PLC0415
+
+    return TestClient(app, headers={"Authorization": f"Bearer {api_key}"})
+
+
+@pytest.fixture
+def anthropic_app_client(api_key: str) -> TestClient:
+    """``app_client`` with the Anthropic route's own auth and version headers."""
+    from stdapi.main import app  # noqa: PLC0415
+
+    return TestClient(
+        app, headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"}
+    )
+
+
+@pytest.fixture
+def request_log() -> Generator[dict[str, Any]]:
+    """Bind a request-log context for code that writes into it outside a request.
+
+    ``set_effective_region`` and the usage/metering helpers append to the
+    ``REQUEST_LOG`` context variable, which only exists inside a real request.
+    Calling them directly raises ``LookupError`` without this.
+
+    Yields:
+        The mutable log dict, so a test can assert what the code under test wrote.
+    """
+    from stdapi.monitoring import REQUEST_LOG  # noqa: PLC0415
+
+    log: dict[str, Any] = {"level": "info"}
+    token = REQUEST_LOG.set(log)  # type: ignore[arg-type]
+    yield log
+    REQUEST_LOG.reset(token)
 
 
 @pytest.fixture(scope="session")

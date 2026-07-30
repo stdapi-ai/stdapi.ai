@@ -1,0 +1,317 @@
+"""Shared execution, assertions and metrics for every agentic tool.
+
+This is the half of the agentic lane that does not vary per CLI: launching a run in
+the sandbox, normalising failures, checking that the traffic really reached the model
+under test, and printing comparable benchmark lines.
+
+Ref: tests/agentic/_tools.py:AgenticTool
+     tests/agentic/_podman.py:run_in_container
+     stdapi/models/__init__.py:validate_model
+"""
+
+from __future__ import annotations
+
+import subprocess
+import uuid
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+import pytest
+
+from ._podman import run_in_container
+from ._server import REPO_ROOT
+from ._tools import SRC_MOUNT, AgenticResult, Invocation
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
+    from pathlib import Path
+
+    from ._server import AgenticServer
+    from ._tools import AgenticTool
+
+#: Only the gateway package is mounted: the CLI never sees tests/.env, .git or
+#: the virtualenv, so no credential on this machine is reachable from a run.
+SOURCE_MOUNTS: Mapping[Path, str] = {REPO_ROOT / "stdapi": f"{SRC_MOUNT}/stdapi"}
+
+#: Result text shorter than this means the CLI produced no real answer.
+_MIN_RESULT_CHARS = 10
+
+#: Model IDs a CLI may legitimately call for its own background work.
+_AUXILIARY_MODEL_PREFIXES = ("anthropic.claude-opus-", "anthropic.claude-haiku-")
+
+#: Session IDs whose CLI run completed during the current test.
+_completed_runs: list[str] = []
+
+
+def reset_run_tracking() -> None:
+    """Forget the previous test's completed runs."""
+    _completed_runs.clear()
+
+
+def any_run_completed() -> bool:
+    """True when at least one CLI run finished successfully in the current test."""
+    return bool(_completed_runs)
+
+
+@dataclass(frozen=True)
+class ModelConfig:
+    """One model a tool is exercised against.
+
+    Attributes:
+        model: Bedrock model ID routed by the gateway.
+        extra_env: CLI environment overrides (capabilities, caching, thinking).
+        supports_effort: Whether the CLI's effort levels apply to this model.
+        timeout: Seconds allowed per run.
+        flaky: Whether content-quality failures downgrade to xfail. Set only for
+            models known to answer inconsistently; every other failure signature
+            still fails the test, so real regressions stay visible.
+    """
+
+    model: str
+    extra_env: Mapping[str, str] = field(default_factory=dict)
+    supports_effort: bool = False
+    timeout: int = 300
+    flaky: bool = False
+
+
+def xfail_if_flaky(config: ModelConfig, signature: str) -> None:
+    """Downgrade a known-flaky failure signature to an xfail (best effort).
+
+    Args:
+        config: Model under test.
+        signature: Short label of the matched failure signature.
+    """
+    if config.flaky:
+        pytest.xfail(f"known-flaky {signature} on {config.model} (best effort)")
+
+
+def session_id(model: str, test_name: str) -> str:
+    """Return a stable UUID5 for a (model, test) pair.
+
+    Deterministic so a run's requests can be correlated with the server log
+    across sessions, and so a rerun reuses the same identifier.
+    """
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{model}:{test_name}"))
+
+
+def run_agent(
+    *,
+    tool: AgenticTool,
+    server: AgenticServer,
+    image: str,
+    config: ModelConfig,
+    prompt: str,
+    workdir: Path,
+    test_name: str,
+    effort: str | None = None,
+) -> AgenticResult:
+    """Run one agentic CLI in the sandbox and return its normalised result.
+
+    Args:
+        tool: CLI to drive.
+        server: Gateway the CLI is pointed at.
+        image: Container image holding the CLI.
+        config: Model under test.
+        prompt: Task handed to the agent.
+        workdir: Per-test writable directory, bind-mounted into the container.
+        test_name: Logical test name, used to derive the session identifier.
+        effort: Optional effort level, for CLIs and models that support one.
+
+    Returns:
+        The parsed result of the run.
+
+    Raises:
+        subprocess.TimeoutExpired: If the run exceeds the model's timeout and the
+            model is not marked flaky.
+    """
+    invocation = Invocation(
+        workdir=workdir,
+        port=server.forward_port or 0,
+        api_key=server.api_key,
+        model=config.model,
+        prompt=prompt,
+        session_id=session_id(config.model, test_name),
+        effort=effort,
+        extra_env=config.extra_env,
+    )
+    tool.prepare_workdir(invocation)
+    command = tool.build(invocation)
+
+    try:
+        process = run_in_container(
+            image=image,
+            argv=command.argv,
+            workdir=workdir,
+            mounts=SOURCE_MOUNTS,
+            env=command.env,
+            forward_port=server.forward_port,
+            timeout=config.timeout,
+            stdin=command.stdin,
+        )
+    except subprocess.TimeoutExpired:
+        xfail_if_flaky(config, "CLI timeout")
+        raise
+
+    if process.returncode != 0:
+        xfail_if_flaky(config, f"CLI exit code {process.returncode}")
+        pytest.fail(
+            f"{tool.id} exited with code {process.returncode}\n"
+            f"stdout: {process.stdout[:1500]}\nstderr: {process.stderr[:500]}"
+        )
+    try:
+        result = tool.parse(process.stdout)
+    except ValueError as exc:
+        xfail_if_flaky(config, "unparsable output")
+        pytest.fail(str(exc))
+    _completed_runs.append(invocation.session_id)
+    return result
+
+
+def assert_result(
+    result: AgenticResult,
+    *,
+    config: ModelConfig,
+    min_steps: int = 0,
+    contains: str | None = None,
+    any_of: Sequence[str] = (),
+) -> str:
+    """Assert an agentic run produced a real, codebase-derived answer.
+
+    The step floor is what distinguishes a genuine run from an answer recited
+    from the model's own knowledge: the task cannot be completed without reading
+    files, so too few steps means the tool-use round trip never carried file
+    contents back through the gateway. It is deliberately far below the ~10 calls
+    the prompts target, because the weaker models vary in how many they need.
+
+    Args:
+        result: Normalised run result.
+        config: Model under test, for flaky-signature scoping.
+        min_steps: Minimum turns (Claude Code) or shell executions (Codex).
+        contains: Substring that must appear in the answer, case-insensitive.
+        any_of: Substrings of which at least one must appear, case-insensitive.
+
+    Returns:
+        The answer text.
+    """
+    if result.is_error:
+        xfail_if_flaky(config, "CLI-reported error")
+        pytest.fail(f"{config.model} reported an error: {result.error_detail}")
+    if len(result.text) <= _MIN_RESULT_CHARS:
+        xfail_if_flaky(config, "empty result")
+        pytest.fail(f"result is unexpectedly short: {result.text!r}")
+    lowered = result.text.lower()
+    if contains and contains.lower() not in lowered:
+        xfail_if_flaky(config, "content assertion")
+        pytest.fail(f"Expected {contains!r} in result text:\n{result.text}")
+    if any_of and not any(keyword.lower() in lowered for keyword in any_of):
+        xfail_if_flaky(config, "content assertion")
+        pytest.fail(f"Expected one of {list(any_of)} in result:\n{result.text}")
+    if min_steps > 0 and result.steps < min_steps:
+        xfail_if_flaky(config, "step-count assertion")
+        pytest.fail(
+            f"Expected at least {min_steps} steps (the model must explore the "
+            f"source to answer), got {result.steps} — response:\n{result.text[:300]}"
+        )
+    return result.text
+
+
+def log_metrics(
+    tool: AgenticTool, result: AgenticResult, config: ModelConfig, test_name: str
+) -> None:
+    """Print one benchmark line per run, visible with ``pytest -s``.
+
+    Token counts are reported rather than cost: a CLI's own cost estimate uses
+    its vendor's pricing regardless of which Bedrock model was actually routed,
+    which makes cross-model cost comparison meaningless.
+
+    Collect a whole run with e.g.::
+
+        pytest --agentic -s 2>&1 | grep CC-METRICS
+    """
+    cache = ""
+    if result.cache_read or result.cache_created:
+        cache = (
+            f" [cache_read={result.cache_read} cache_created={result.cache_created}]"
+        )
+    print(  # noqa: T201
+        f"\n{tool.metrics_prefix} | {config.model:<30} | {test_name:<40} "
+        f"| steps={result.steps:>3} "
+        f"| in={result.input_tokens:>6} out={result.output_tokens:>5}{cache}"
+    )
+
+
+def assert_model_identity(
+    *,
+    tool: AgenticTool,
+    server: AgenticServer,
+    log_start: int,
+    config: ModelConfig,
+    test_name: str,
+    ran: bool,
+) -> None:
+    """Assert every request this test produced targeted the model under test.
+
+    Without this a test would still pass if the CLI silently fell back to its own
+    default model, so the run would prove nothing about the gateway routing the
+    model named in the parametrization.
+
+    Requests are attributed to the test by session identifier when the CLI
+    propagates one (``request_user_id``); otherwise only positionally, ignoring
+    entries that arrive before the first expected-model entry, because a
+    previously timed-out CLI's orphaned streams can still be draining.
+
+    Args:
+        tool: CLI that was driven.
+        server: Gateway whose log is inspected.
+        log_start: Log index captured before the test ran.
+        config: Model the requests must target.
+        test_name: Logical test name, to rebuild the session identifier.
+        ran: Whether a CLI run completed successfully during the test.
+    """
+    if server.process is None:
+        return  # External server: no log to inspect.
+
+    expected = session_id(config.model, test_name)
+    model_ids = [
+        str(entry["model_id"])
+        for entry in server.log_entries(log_start)
+        if entry.get("model_id")
+        and (
+            not tool.attributes_sessions
+            or expected in str(entry.get("request_user_id") or "")
+        )
+    ]
+
+    if not model_ids:
+        # A completed run with no attributable request means attribution itself
+        # broke and the check silently stopped covering anything.
+        assert not (ran and tool.attributes_sessions), (
+            "No server-log request was attributed to this test's session ID "
+            f"although {tool.id} completed successfully: attribution via "
+            "request_user_id is broken."
+        )
+        return
+
+    prefix = config.model.split(":", maxsplit=1)[0]
+    if not tool.attributes_sessions:
+        first = next(
+            (i for i, mid in enumerate(model_ids) if mid.startswith(prefix)), None
+        )
+        if first is None:
+            return  # Never reached the model; nothing this test can assert.
+        model_ids = model_ids[first:]
+
+    unexpected = [mid for mid in model_ids if not mid.startswith(prefix)]
+    if unexpected and any(mid.startswith(prefix) for mid in model_ids):
+        # A CLI's own background calls are tolerated once the conversation itself
+        # reached the expected model. Auxiliary prefixes that the expected model's
+        # own prefix matches are not dropped, so a mis-route to another build of
+        # the same family is still caught.
+        auxiliary = tuple(
+            p for p in _AUXILIARY_MODEL_PREFIXES if not prefix.startswith(p)
+        )
+        unexpected = [mid for mid in unexpected if not mid.startswith(auxiliary)]
+    assert not unexpected, (
+        f"Model identity mismatch: expected requests to {config.model!r}, "
+        f"but saw {list(dict.fromkeys(unexpected))} in server logs."
+    )
