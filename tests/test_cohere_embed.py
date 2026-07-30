@@ -18,15 +18,17 @@ import pytest
 from stdapi.api_errors import UnsupportedModelError
 from stdapi.config import SETTINGS
 from stdapi.input_file import InputFile
-from stdapi.models import ModelDetails
 from stdapi.models.embedding import EmbeddingImageDescription, EmbeddingResponse
 from stdapi.routes import cohere_embed, cohere_embed_v1
+from tests._helpers import make_model_details
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
     from cohere.types import EmbedByTypeResponse
     from starlette.testclient import TestClient
+
+    from stdapi.models import ModelDetails
 
 #: Model aliases resolved by the stubbed ``validate_model``.
 _MODEL_ALIASES = {"embed-multilingual": "cohere.embed-multilingual-v3"}
@@ -76,14 +78,7 @@ def embed_backend(monkeypatch: pytest.MonkeyPatch) -> _StubEmbeddingModel:
         if model_id == "unknown-model":
             raise UnsupportedModelError(model_id)
         resolved_id = _MODEL_ALIASES.get(model_id, model_id)
-        return ModelDetails(
-            id=resolved_id,
-            name=resolved_id,
-            provider="Vendor",
-            input_modalities=["TEXT"],
-            output_modalities=["EMBEDDING"],
-            regions=["us-east-1"],
-        )
+        return make_model_details(resolved_id, output_modalities=["EMBEDDING"])
 
     stub = _StubEmbeddingModel()
     for module in (cohere_embed, cohere_embed_v1):
@@ -1098,11 +1093,9 @@ class TestCohereEmbedIntegration:
             "a text-only request must not be billed as an image"
         )
 
+    @pytest.mark.gateway("Bedrock-specific model")
     def test_embed_texts_non_cohere_model(
-        self,
-        cohere_client: cohere.ClientV2,
-        embedding_model: str,
-        use_official_api: bool,
+        self, cohere_client: cohere.ClientV2, embedding_model: str
     ) -> None:
         """The required input_type is accepted (and dropped) for non-Cohere models.
 
@@ -1111,8 +1104,6 @@ class TestCohereEmbedIntegration:
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html
         """
-        if use_official_api:
-            pytest.skip("Bedrock-specific model")
         response = self._embed(cohere_client, embedding_model)
         assert response.response_type == "embeddings_by_type"
         assert response.embeddings.float_ is not None
@@ -1178,11 +1169,9 @@ class TestCohereEmbedIntegration:
         assert len(decoded) % 4 == 0, "base64 embeddings are packed float32 values"
         assert len(decoded) // 4 in _COHERE_V4_DIMENSIONS
 
+    @pytest.mark.gateway("Bedrock-specific model")
     def test_binary_embedding_type_for_titan_model(
-        self,
-        cohere_client: cohere.ClientV2,
-        embedding_model: str,
-        use_official_api: bool,
+        self, cohere_client: cohere.ClientV2, embedding_model: str
     ) -> None:
         """embedding_types=["binary"] is served by Titan Embed v2 as `binary`.
 
@@ -1192,8 +1181,6 @@ class TestCohereEmbedIntegration:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html
              stdapi/types/cohere_embed.py:build_embeddings_by_type
         """
-        if use_official_api:
-            pytest.skip("Bedrock-specific model")
         response = cohere_client.embed(
             model=embedding_model,
             input_type="search_document",
@@ -1344,18 +1331,14 @@ class TestCohereEmbedV1Integration:
         assert response.meta.billed_units is not None
         assert (response.meta.billed_units.input_tokens or 0) > 0
 
+    @pytest.mark.gateway("Bedrock-specific model")
     def test_embed_texts_non_cohere_model(
-        self,
-        cohere_client_v1: cohere.Client,
-        embedding_model: str,
-        use_official_api: bool,
+        self, cohere_client_v1: cohere.Client, embedding_model: str
     ) -> None:
         """A non-Cohere model works without the Cohere-specific parameters.
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html
         """
-        if use_official_api:
-            pytest.skip("Bedrock-specific model")
         response = cohere_client_v1.embed(model=embedding_model, texts=[_SAMPLE_TEXT])
         assert response.response_type == "embeddings_floats"
         (vector,) = response.embeddings

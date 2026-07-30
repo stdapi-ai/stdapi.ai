@@ -25,6 +25,8 @@ if TYPE_CHECKING:
     from openai.types.responses import Response as SdkResponse
     from starlette.testclient import TestClient as TestClientType
 
+    from stdapi.models import ModelDetails
+
 #: Deterministic context long enough to exceed the minimum cacheable prompt size.
 _CACHEABLE_CONTEXT = (
     "Amazon Bedrock is a fully managed service offering a choice of "
@@ -1612,8 +1614,12 @@ class TestResponses:
         assert len(response.output) > 0
         assert len(response.output_text) > 0
 
+    @pytest.mark.gateway(
+        "gpt-5-nano rejects prompt_cache_options: 'prompt_cache_options "
+        "is not supported on this model'"
+    )
     def test_explicit_prompt_cache_breakpoint(
-        self, openai_client: OpenAI, responses_model: str, use_official_api: bool
+        self, openai_client: OpenAI, responses_model: str
     ) -> None:
         """An explicit ``prompt_cache_breakpoint`` makes the next identical call a cache read.
 
@@ -1631,12 +1637,6 @@ class TestResponses:
              https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html
              stdapi/models/chat/_adapters/_openai_responses.py:map_input
         """
-        if use_official_api:
-            pytest.skip(
-                "gpt-5-nano rejects prompt_cache_options: 'prompt_cache_options "
-                "is not supported on this model'"
-            )
-
         first, second = [
             openai_client.responses.create(
                 model=responses_model,
@@ -1687,8 +1687,11 @@ class TestUnsupportedFeatures:
          stdapi/types/openai_responses.py:ResponseCreateParams
     """
 
+    @pytest.mark.gateway(
+        "official API supports these tools; the drop is gateway-specific"
+    )
     def test_unsupported_tools_are_ignored(
-        self, openai_client: OpenAI, responses_model: str, use_official_api: bool
+        self, openai_client: OpenAI, responses_model: str
     ) -> None:
         """Tool types without a backend equivalent are accepted, echoed and dropped.
 
@@ -1701,10 +1704,6 @@ class TestUnsupportedFeatures:
         Ref: https://developers.openai.com/api/docs/guides/tools
              stdapi/models/chat/_adapters/_openai_responses.py:_build_tool_config
         """
-        if use_official_api:
-            pytest.skip(
-                "official API supports these tools; the drop is gateway-specific"
-            )
         tools: list[Any] = [
             {"type": "file_search", "vector_store_ids": ["vs_123"]},
             {"type": "computer"},
@@ -1744,12 +1743,11 @@ class TestUnsupportedFeatures:
         ],
         ids=["tool", "tool_choice"],
     )
+    @pytest.mark.gateway(
+        "official API serves programmatic tool calling on capable models"
+    )
     def test_programmatic_tool_calling_accepted_and_dropped(
-        self,
-        openai_client: OpenAI,
-        responses_model: str,
-        use_official_api: bool,
-        extra: dict[str, object],
+        self, openai_client: OpenAI, responses_model: str, extra: dict[str, object]
     ) -> None:
         """``programmatic_tool_calling`` is accepted as tool or tool_choice and dropped.
 
@@ -1760,10 +1758,6 @@ class TestUnsupportedFeatures:
         Ref: https://developers.openai.com/api/docs/guides/tools-programmatic-tool-calling
              stdapi/models/chat/_adapters/_openai_responses.py:_build_tool_config
         """
-        if use_official_api:
-            pytest.skip(
-                "official API serves programmatic tool calling on capable models"
-            )
         response = openai_client.responses.create(  # type: ignore[call-overload]
             model=responses_model, input="Reply with OK.", **extra
         )
@@ -1784,13 +1778,11 @@ class TestUnsupportedFeatures:
             ("max_tool_calls", 3),
         ],
     )
+    @pytest.mark.gateway(
+        "official API supports these params; restriction is gateway-specific"
+    )
     def test_unsupported_param_returns_400(
-        self,
-        openai_client: OpenAI,
-        responses_model: str,
-        use_official_api: bool,
-        param: str,
-        value: object,
+        self, openai_client: OpenAI, responses_model: str, param: str, value: object
     ) -> None:
         """Parameters marked unsupported are rejected with ``unsupported_parameter``.
 
@@ -1803,10 +1795,6 @@ class TestUnsupportedFeatures:
         Ref: https://developers.openai.com/api/reference/resources/responses/methods/create
              stdapi/api_errors.py:UnsupportedParameterError
         """
-        if use_official_api:
-            pytest.skip(
-                "official API supports these params; restriction is gateway-specific"
-            )
         with pytest.raises(BadRequestError) as excinfo:
             openai_client.responses.create(  # type: ignore[call-overload]
                 model=responses_model, input="Hello.", **{param: value}
@@ -2204,20 +2192,13 @@ class TestInputTokensMantleRejection:
 
         Ref: stdapi/aws_bedrock_mantle.py:serves_via_mantle
         """
-        from stdapi.models import ModelDetails  # noqa: PLC0415
         from stdapi.routes import openai_responses  # noqa: PLC0415
+        from tests._helpers import make_model_details  # noqa: PLC0415
 
         async def _validate_model(
             model_id: str, *_args: object, **_kwargs: object
         ) -> ModelDetails:
-            return ModelDetails(
-                id=model_id,
-                name=model_id,
-                provider="Vendor",
-                input_modalities=["TEXT"],
-                output_modalities=["TEXT"],
-                regions=["us-east-1"],
-            )
+            return make_model_details(model_id)
 
         counted: list[str] = []
 

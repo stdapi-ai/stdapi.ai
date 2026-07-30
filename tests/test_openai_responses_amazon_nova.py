@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 NOVA_ALL = ("amazon.nova-2-lite-v1:0",)
 
 
+@pytest.mark.gateway("Amazon Nova is not supported on the official API")
 class TestNovaResponses:
     """Nova reasoning configuration driven by the Responses ``reasoning`` object.
 
@@ -28,9 +29,7 @@ class TestNovaResponses:
     """
 
     @pytest.mark.parametrize("model", NOVA_ALL)
-    def test_reasoning_effort(
-        self, openai_client: OpenAI, use_official_api: bool, model: str
-    ) -> None:
+    def test_reasoning_effort(self, openai_client: OpenAI, model: str) -> None:
         """``reasoning.effort="low"`` yields a reasoning item before the message.
 
         The gateway maps the effort onto Nova's
@@ -45,8 +44,6 @@ class TestNovaResponses:
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ReasoningContentBlock.html
              stdapi/models/chat/_adapters/_openai_responses.py:_build_reasoning_item
         """
-        if use_official_api:
-            pytest.skip("Amazon Nova is not supported on the official API")
         resp = openai_client.responses.create(
             model=model, input="Reply with OK.", reasoning={"effort": "low"}
         )
@@ -68,7 +65,7 @@ class TestNovaResponses:
 
     @pytest.mark.parametrize("model", NOVA_ALL)
     def test_reasoning_effort_none_explicit_disable(
-        self, openai_client: OpenAI, use_official_api: bool, model: str
+        self, openai_client: OpenAI, model: str
     ) -> None:
         """``reasoning.effort="none"`` disables reasoning, leaving no reasoning item.
 
@@ -80,8 +77,6 @@ class TestNovaResponses:
         Ref: https://developers.openai.com/api/docs/guides/reasoning
              stdapi/models/chat/_adapters/_openai_responses.py:extract_reasoning
         """
-        if use_official_api:
-            pytest.skip("Amazon Nova is not supported on the official API")
         resp = openai_client.responses.create(
             model=model, input="Reply with OK.", reasoning={"effort": "none"}
         )

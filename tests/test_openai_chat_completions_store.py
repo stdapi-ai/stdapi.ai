@@ -26,9 +26,11 @@ if TYPE_CHECKING:
 
     from openai import OpenAI
     from starlette.testclient import TestClient
-from stdapi.models import ModelDetails
+
+    from stdapi.models import ModelDetails
 from stdapi.routes import openai_chat_completions
 from stdapi.types.openai_chat_completions import ChatCompletion, CompletionCreateParams
+from tests._helpers import make_model_details
 
 
 def _canned_completion(completion_id: str, model: str) -> ChatCompletion:
@@ -160,14 +162,7 @@ def backend(monkeypatch: pytest.MonkeyPatch) -> _StubChatBackend:
     async def _validate_model(
         model_id: str, *_args: object, **_kwargs: object
     ) -> ModelDetails:
-        return ModelDetails(
-            id=model_id,
-            name=model_id,
-            provider="Vendor",
-            input_modalities=["TEXT"],
-            output_modalities=["TEXT"],
-            regions=["us-east-1"],
-        )
+        return make_model_details(model_id)
 
     stub = _StubChatBackend()
     monkeypatch.setattr(openai_chat_completions, "validate_model", _validate_model)
@@ -1224,16 +1219,13 @@ class TestStoredChatCompletionsLive:
          https://docs.aws.amazon.com/bedrock/latest/userguide/sessions.html
     """
 
-    def test_store_lifecycle(
-        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
-    ) -> None:
+    @pytest.mark.gateway("official API stores completions asynchronously (delayed)")
+    def test_store_lifecycle(self, openai_client: OpenAI, chat_model: str) -> None:
         """store=true persists; retrieve, messages, list, update, and delete work.
 
         ``/messages`` returns the *request* messages, so the prompt text is the
         deterministic thing to assert on rather than the generated answer.
         """
-        if use_official_api:
-            pytest.skip("official API stores completions asynchronously (delayed)")
         from openai import NotFoundError  # noqa: PLC0415
 
         marker = uuid4().hex

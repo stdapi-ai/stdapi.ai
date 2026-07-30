@@ -27,6 +27,7 @@ from stdapi.aws import (
     service_regions,
 )
 from stdapi.config import AWS_SESSION, SETTINGS
+from tests._helpers import make_client_error
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -38,14 +39,6 @@ if TYPE_CHECKING:
 
 #: All tests in this module exercise the local implementation in-process.
 pytestmark = pytest.mark.local
-
-
-def _client_error(code: str, status: int = 400, message: str = "") -> ClientError:
-    response: Any = {
-        "Error": {"Code": code, "Message": message or code},
-        "ResponseMetadata": {"HTTPStatusCode": status},
-    }
-    return ClientError(response, "SomeOperation")
 
 
 def _patch_get_client(monkeypatch: pytest.MonkeyPatch) -> list[str]:
@@ -129,7 +122,7 @@ class TestIsFailoverError:
 
         Ref: https://docs.aws.amazon.com/transcribe/latest/dg/what-is.html
         """
-        assert is_failover_error(_client_error(code, status=400)) is True
+        assert is_failover_error(make_client_error(code, status=400)) is True
 
     def test_http_5xx_fails_over(self) -> None:
         """An unlisted error code still fails over when the HTTP status is 5xx.
@@ -137,7 +130,10 @@ class TestIsFailoverError:
         A 5xx is server-side by definition, so the code allow-list is only the fast
         path: an unknown backend failure must not become a fatal caller error.
         """
-        assert is_failover_error(_client_error("WeirdBackendError", status=503)) is True
+        assert (
+            is_failover_error(make_client_error("WeirdBackendError", status=503))
+            is True
+        )
 
     def test_service_missing_from_the_region_fails_over(self) -> None:
         """Comprehend's ``NotAuthorizedException`` outside its regions fails over.
@@ -148,7 +144,7 @@ class TestIsFailoverError:
 
         Ref: https://docs.aws.amazon.com/comprehend/latest/dg/guidelines-and-limits.html
         """
-        error = _client_error(
+        error = make_client_error(
             "NotAuthorizedException",
             message="Your account is not authorized to make this call.",
         )
@@ -160,7 +156,7 @@ class TestIsFailoverError:
         The same ``InvalidRequestException`` code is used for genuine bad input, so
         only the message prefix distinguishes a region gap from a fatal error.
         """
-        error = _client_error(
+        error = make_client_error(
             "InvalidRequestException",
             message="UNSUPPORTED_OPERATION: This operation is not supported in this region",
         )
@@ -181,7 +177,7 @@ class TestIsFailoverError:
         Retrying these in every candidate region only multiplies the latency and the
         CloudTrail noise of a request that can never succeed.
         """
-        assert is_failover_error(_client_error(code, status=400)) is False
+        assert is_failover_error(make_client_error(code, status=400)) is False
 
     def test_plain_invalid_request_does_not_fail_over(self) -> None:
         """``InvalidRequestException`` without the ``UNSUPPORTED_OPERATION`` prefix stays fatal.
@@ -189,7 +185,9 @@ class TestIsFailoverError:
         The counterpart of the region-gap case: the code is shared, so a plain
         validation message must not be mistaken for a regional capability gap.
         """
-        error = _client_error("InvalidRequestException", message="Invalid text segment")
+        error = make_client_error(
+            "InvalidRequestException", message="Invalid text segment"
+        )
         assert is_failover_error(error) is False
 
 
@@ -230,7 +228,7 @@ class TestCallWithRegionFailover:
 
         async def _call(_client: object, region: RegionName) -> str:
             if region == "us-east-1":
-                error = _client_error("ThrottlingException")
+                error = make_client_error("ThrottlingException")
                 raise error
             return "served"
 
@@ -269,7 +267,7 @@ class TestCallWithRegionFailover:
         requested = _patch_get_client(monkeypatch)
 
         async def _call(_client: object, _region: RegionName) -> str:
-            error = _client_error("ValidationException")
+            error = make_client_error("ValidationException")
             raise error
 
         with pytest.raises(ClientError, match="ValidationException") as exc_info:
@@ -291,7 +289,7 @@ class TestCallWithRegionFailover:
         _patch_get_client(monkeypatch)
 
         async def _call(_client: object, region: RegionName) -> str:
-            error = _client_error(
+            error = make_client_error(
                 "ThrottlingException", status=400 if region == "us-east-1" else 503
             )
             raise error
@@ -313,7 +311,7 @@ class TestCallWithRegionFailover:
         requested = _patch_get_client(monkeypatch)
 
         async def _call(_client: object, _region: RegionName) -> str:
-            error = _client_error("ThrottlingException")
+            error = make_client_error("ThrottlingException")
             raise error
 
         with pytest.raises(ClientError) as exc_info:
@@ -369,7 +367,7 @@ class TestOnFailedRegionHook:
 
         async def _call(_client: object, region: RegionName) -> str:
             if region == "us-east-1":
-                error = _client_error("ThrottlingException")
+                error = make_client_error("ThrottlingException")
                 raise error
             return "served"
 
@@ -394,7 +392,7 @@ class TestOnFailedRegionHook:
         calls: list[tuple[object, str]] = []
 
         async def _call(_client: object, _region: RegionName) -> str:
-            error = _client_error("ThrottlingException")
+            error = make_client_error("ThrottlingException")
             raise error
 
         with pytest.raises(ClientError, match="ThrottlingException"):
@@ -420,7 +418,7 @@ class TestOnFailedRegionHook:
         calls: list[tuple[object, str]] = []
 
         async def _call(_client: object, _region: RegionName) -> str:
-            error = _client_error("ValidationException")
+            error = make_client_error("ValidationException")
             raise error
 
         with pytest.raises(ClientError, match="ValidationException"):
@@ -445,13 +443,13 @@ class TestOnFailedRegionHook:
 
         async def _call(_client: object, region: RegionName) -> str:
             if region == "us-east-1":
-                error = _client_error("ThrottlingException")
+                error = make_client_error("ThrottlingException")
                 raise error
             return "served"
 
         async def _hook(_client: object, region: RegionName) -> None:
             hook_calls.append(region)
-            error = _client_error("BadRequestException")
+            error = make_client_error("BadRequestException")
             raise error
 
         result, region = await call_with_region_failover(
@@ -474,7 +472,7 @@ class TestFailoverWarningLog:
     @staticmethod
     async def _failing_then_serving_call(_client: object, region: RegionName) -> str:
         if region == "us-east-1":
-            error = _client_error("ThrottlingException")
+            error = make_client_error("ThrottlingException")
             raise error
         return "served"
 
@@ -570,7 +568,7 @@ class _FakeClientCM:
 
     async def __aenter__(self) -> Self:
         if self._fail:
-            error = _client_error("ThrottlingException")
+            error = make_client_error("ThrottlingException")
             raise error
         self.entered = True
         return self
@@ -641,7 +639,7 @@ class TestRaiseFirstException:
         message are inlined so a single traceback explains the whole fan-out.
         """
         first = ValueError("first error")
-        second = _client_error("ThrottlingException")
+        second = make_client_error("ThrottlingException")
         with pytest.raises(ValueError, match="first error") as exc_info:
             raise_first_exception(["ok", first, second])
         assert exc_info.value is first

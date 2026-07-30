@@ -21,6 +21,7 @@ from stdapi.types.openai_images import ImageEditParams
 from .test_openai_images_generations import (
     validate_base64_image,
     validate_error_response,
+    validate_image_usage,
     validate_streaming_image_response,
     validate_timestamp,
     validate_url_format,
@@ -81,19 +82,8 @@ class TestImagesEditsBasic:
 
         # Validate usage metadata
         assert response.usage is not None
-        assert response.usage.input_tokens > 0
         assert response.usage.output_tokens > 0
-        assert response.usage.total_tokens > 0
-        assert (
-            response.usage.total_tokens
-            == response.usage.input_tokens + response.usage.output_tokens
-        )
-
-        # Check input tokens details - edits should have both text and image tokens
-        details = response.usage.input_tokens_details
-        assert details.text_tokens >= 0
-        assert details.image_tokens > 0
-        assert details.image_tokens + details.text_tokens == response.usage.input_tokens
+        validate_image_usage(response.usage)
 
     @pytest.mark.expensive
     def test_edit_image_b64_json_with_mask(
@@ -324,12 +314,11 @@ class TestImagesEditsBasic:
         assert exc_info.value.type == "invalid_request_error"
         assert "Exactly one image must be provided." in str(exc_info.value)
 
+    @pytest.mark.gateway(
+        "Amazon Nova Canvas is not available on the official OpenAI API"
+    )
     def test_mask_not_supported_error(
-        self,
-        openai_client: OpenAI,
-        sample_image_file: bytes,
-        sample_mask_file: bytes,
-        use_official_api: bool,
+        self, openai_client: OpenAI, sample_image_file: bytes, sample_mask_file: bytes
     ) -> None:
         """A mask sent to a model with no mask input is rejected as unsupported.
 
@@ -339,11 +328,6 @@ class TestImagesEditsBasic:
         Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase._validate_no_mask
              stdapi/models/image/stability_stable_image_remove_background.py:_RemoveBackgroundJob
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova Canvas is not available on the official OpenAI API"
-            )
-
         # Use a model that doesn't support masks (like background removal or upscale)
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.images.edit(
@@ -357,8 +341,11 @@ class TestImagesEditsBasic:
         assert exc_info.value.type == "invalid_request_error"
         assert '"mask" parameter is not supported' in str(exc_info.value)
 
+    @pytest.mark.gateway(
+        "Amazon Nova Canvas is not available on the official OpenAI API"
+    )
     def test_mask_required_error(
-        self, openai_client: OpenAI, sample_image_file: bytes, use_official_api: bool
+        self, openai_client: OpenAI, sample_image_file: bytes
     ) -> None:
         """VIRTUAL_TRY_ON without a mask is rejected because the mask is the reference image.
 
@@ -369,11 +356,6 @@ class TestImagesEditsBasic:
         Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
              stdapi/models/image/amazon_nova_canvas.py:_get_request_virtual_try_on
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova Canvas is not available on the official OpenAI API"
-            )
-
         # Use VIRTUAL_TRY_ON taskType which requires a mask
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.images.edit(
@@ -585,13 +567,9 @@ class TestImagesEditsJsonBody:
          stdapi/types/openai_images.py:ImageEditJsonBody
     """
 
-    @pytest.fixture(autouse=True)
-    def _skip_on_official_api(self, use_official_api: bool) -> None:
-        """Skip when running against the official API (model not available there)."""
-        if use_official_api:
-            pytest.skip(
-                "stability.stable-image-inpaint-v1:0 not available on the official OpenAI API"
-            )
+    pytestmark = pytest.mark.gateway(
+        "stability.stable-image-inpaint-v1:0 not available on the official OpenAI API"
+    )
 
     @pytest.mark.expensive
     def test_edit_with_image_url(

@@ -24,12 +24,8 @@ if TYPE_CHECKING:
 
 PEGASUS_MODEL = "twelvelabs.pegasus-1-2-v1:0"
 
-
-@pytest.fixture(autouse=True)
-def _skip_official_api(use_official_api: bool) -> None:
-    """Skip the module against the official API: Pegasus is Bedrock-only."""
-    if use_official_api:
-        pytest.skip("Pegasus is not supported on the official API")
+#: Pegasus is Bedrock-only: skip the whole module against the official API.
+pytestmark = pytest.mark.gateway("Pegasus is not supported on the official API")
 
 
 @pytest.fixture

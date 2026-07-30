@@ -248,11 +248,11 @@ class TestAnthropicFiles:
 
     # --- Content ---
 
+    @pytest.mark.gateway("the official API only allows downloading API-created files")
     def test_download_content(
         self,
         anthropic_client: Anthropic,
         upload_file: Callable[[str, bytes, str], FileMetadata],
-        use_official_api: bool,
     ) -> None:
         """Uploaded bytes are served back byte-for-byte by ``/v1/files/{id}/content``.
 
@@ -263,8 +263,6 @@ class TestAnthropicFiles:
         Ref: stdapi/routes/anthropic_files.py:get_content
              stdapi/routes/anthropic_files.py:_to_file_metadata
         """
-        if use_official_api:
-            pytest.skip("the official API only allows downloading API-created files")
         content = b"Anthropic Files API content test!"
         f = upload_file("dl.txt", content, "text/plain")
         assert f.downloadable is True
@@ -296,13 +294,13 @@ class TestAnthropicFiles:
 
     # --- Chat integration ---
 
+    @pytest.mark.gateway("this endpoint does not accept `file` document sources")
     def test_file_in_anthropic_message(
         self,
         anthropic_client: Anthropic,
         anthropic_chat_model: str,
         upload_file: Callable[[str, bytes, str], FileMetadata],
         sample_pdf_file: bytes,
-        use_official_api: bool,
     ) -> None:
         """A ``document`` block sourced from ``{"type": "file", "file_id": ...}`` is resolved and answered.
 
@@ -313,8 +311,6 @@ class TestAnthropicFiles:
         Ref: https://platform.claude.com/docs/en/build-with-claude/files
              stdapi/models/chat/_adapters/_anthropic_message.py:translate_request
         """
-        if use_official_api:
-            pytest.skip("this endpoint does not accept `file` document sources")
         f = upload_file("doc.pdf", sample_pdf_file, "application/pdf")
         response = anthropic_client.beta.messages.create(
             model=anthropic_chat_model,
@@ -344,13 +340,13 @@ class TestAnthropicFiles:
         assert response.usage.input_tokens > 0
         assert response.usage.output_tokens > 0
 
+    @pytest.mark.gateway("this endpoint does not accept `file` image sources")
     def test_image_file_id_source_reaches_model(
         self,
         anthropic_client: Anthropic,
         anthropic_chat_vision_model: str,
         upload_file: Callable[[str, bytes, str], FileMetadata],
         sample_image_file: bytes,
-        use_official_api: bool,
     ) -> None:
         """A ``file`` source inside an ``image`` block is resolved into a Bedrock image block.
 
@@ -363,8 +359,6 @@ class TestAnthropicFiles:
         Ref: https://platform.claude.com/docs/en/build-with-claude/files
              stdapi/models/chat/_adapters/_anthropic_message.py:_map_image_to_bedrock
         """
-        if use_official_api:
-            pytest.skip("this endpoint does not accept `file` image sources")
         f = upload_file("pic.png", sample_image_file, "image/png")
         response = anthropic_client.beta.messages.create(
             model=anthropic_chat_vision_model,
@@ -392,6 +386,7 @@ class TestAnthropicFiles:
         )
 
 
+@pytest.mark.gateway("JSON body input not supported by the official Anthropic API")
 class TestAnthropicFilesJsonBody:
     """POST /anthropic/v1/files with an ``application/json`` body instead of multipart.
 
@@ -402,12 +397,6 @@ class TestAnthropicFilesJsonBody:
     Ref: stdapi/routes/anthropic_files.py:upload
          stdapi/types/anthropic_files.py:AnthropicFileUploadJsonBody
     """
-
-    @pytest.fixture(autouse=True)
-    def _skip_on_official_api(self, use_official_api: bool) -> None:
-        """JSON body input is an extension not supported by the official API."""
-        if use_official_api:
-            pytest.skip("JSON body input not supported by the official Anthropic API")
 
     def test_json_body_missing_file_returns_400(
         self, openai_client: OpenAI, anthropic_client: Anthropic

@@ -20,7 +20,6 @@ from base64 import b32encode, b64decode, urlsafe_b64encode
 from binascii import crc32
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from gc import collect as gc_collect
 from json import JSONDecodeError, dumps, loads
 from typing import TYPE_CHECKING, Any, NoReturn, cast
@@ -75,6 +74,7 @@ from stdapi.types.openai_chat_completions import (
 )
 from stdapi.types.openai_completions import CompletionCreateParams
 from stdapi.types.openai_responses import Response, ResponseCreateParams
+from tests._helpers import make_event_log, make_model_details
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Iterator, Mapping
@@ -980,13 +980,11 @@ class TestMantleCatalogRobustness:
                 error_message = "boom"
                 raise KeyError(error_message)
             return [
-                ModelDetails(
-                    id="prov.ok-model",
+                make_model_details(
+                    "prov.ok-model",
                     name="ok-model",
                     provider="Prov",
                     service=MANTLE_SERVICE,
-                    input_modalities=["TEXT"],
-                    output_modalities=["TEXT"],
                     regions=[region],
                 )
             ]
@@ -1001,14 +999,7 @@ class TestMantleCatalogRobustness:
 
 def _model_details(model_id: str, service: str | None = None) -> ModelDetails:
     """Build minimal model details for alias tests."""
-    details = ModelDetails(
-        id=model_id,
-        name=model_id,
-        provider="OpenAI",
-        input_modalities=["TEXT"],
-        output_modalities=["TEXT"],
-        regions=["us-east-1"],
-    )
+    details = make_model_details(model_id, provider="OpenAI")
     if service:
         details.service = service
     return details
@@ -2488,14 +2479,8 @@ class TestMantleRegionsPinning:
         monkeypatch.setitem(
             MANTLE_MODELS,
             model_id,
-            ModelDetails(
-                id=model_id,
-                name=model_id,
-                provider="Test",
-                service=MANTLE_SERVICE,
-                input_modalities=["TEXT"],
-                output_modalities=["TEXT"],
-                regions=regions,
+            make_model_details(
+                model_id, provider="Test", service=MANTLE_SERVICE, regions=regions
             ),
         )
         model = mantle_default.ChatModel(model_id)
@@ -3741,13 +3726,7 @@ class TestGuardrailMantleStartupWarning:
 
     def _start_event(self) -> EventLog:
         """Build a minimal "start" event log for the warning helper."""
-        return EventLog(
-            type="start",
-            level="info",
-            date=datetime.now(UTC),
-            server_id="test",
-            server_version="0.0.0",
-        )
+        return make_event_log(type="start")
 
     async def test_guardrail_configured_with_mantle_models_warns_at_startup(
         self,

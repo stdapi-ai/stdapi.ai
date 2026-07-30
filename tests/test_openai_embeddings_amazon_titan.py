@@ -9,10 +9,11 @@ Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan
      stdapi/models/embedding/amazon_titan_embed.py:EmbeddingModel
 """
 
-from math import hypot
 from typing import TYPE_CHECKING
 
 import pytest
+
+from tests._helpers import assert_embedding_list
 
 if TYPE_CHECKING:
     from openai import OpenAI
@@ -32,20 +33,13 @@ _DEFAULT_DIMENSIONS = 1024
 _TEXT_DIMENSIONS = {TITAN_V1_TEXT: 1536, TITAN_V2_TEXT: _DEFAULT_DIMENSIONS}
 
 
+@pytest.mark.gateway("Amazon Titan models are not available on the official OpenAI API")
 class TestAmazonTitanEmbeddings:
     """Text and image behavior of the Titan embedding families.
 
     Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-text.html
          stdapi/models/embedding/amazon_titan_embed.py:EmbeddingModel.embed_text
     """
-
-    @pytest.fixture(autouse=True)
-    def _skip_on_official_api(self, use_official_api: bool) -> None:
-        """Skip the whole class when the target is the official OpenAI API."""
-        if use_official_api:
-            pytest.skip(
-                "Amazon Titan models are not available on the official OpenAI API"
-            )
 
     @pytest.mark.parametrize("model_id", TITAN_TEXT_SAMPLE)
     def test_text_extra_params_normalize(
@@ -65,15 +59,12 @@ class TestAmazonTitanEmbeddings:
             input="Hello from Titan text embeddings.",
             extra_body={"normalize": True},
         )
-        assert response.object == "list"
-        assert len(response.data) == 1
-        item = response.data[0]
-        assert item.object == "embedding"
-        assert item.index == 0
-        assert isinstance(item.embedding, list)
-        assert len(item.embedding) == _DEFAULT_DIMENSIONS
-        assert hypot(*item.embedding) == pytest.approx(1.0, abs=0.05), (
-            "normalize=true did not return an L2-normalized vector"
+        assert_embedding_list(
+            response,
+            count=1,
+            dimensions=_DEFAULT_DIMENSIONS,
+            nonzero=False,
+            normalized=True,
         )
 
     @pytest.mark.parametrize("model_id", TITAN_TEXT_ALL)
@@ -90,14 +81,7 @@ class TestAmazonTitanEmbeddings:
         response = openai_client.embeddings.create(
             model=model_id, input="Hello from Titan text embeddings."
         )
-        assert response.object == "list"
-        assert len(response.data) == 1
-        item = response.data[0]
-        assert item.object == "embedding"
-        assert item.index == 0
-        assert isinstance(item.embedding, list)
-        assert len(item.embedding) == _TEXT_DIMENSIONS[model_id]
-        assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
+        assert_embedding_list(response, count=1, dimensions=_TEXT_DIMENSIONS[model_id])
         assert response.usage.prompt_tokens > 0, "no input tokens billed for text input"
 
     @pytest.mark.parametrize("model_id", TITAN_TEXT_SAMPLE)
@@ -115,13 +99,7 @@ class TestAmazonTitanEmbeddings:
         response = openai_client.embeddings.create(
             model=model_id, input="Dimensions parameter test.", dimensions=dimensions
         )
-        assert response.object == "list"
-        assert len(response.data) == 1
-        item = response.data[0]
-        assert item.object == "embedding"
-        assert isinstance(item.embedding, list)
-        assert len(item.embedding) == dimensions
-        assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
+        assert_embedding_list(response, count=1, dimensions=dimensions)
 
     @pytest.mark.parametrize("model_id", TITAN_IMAGE_SAMPLE)
     def test_image_single(
@@ -139,11 +117,4 @@ class TestAmazonTitanEmbeddings:
         response = openai_client.embeddings.create(
             model=model_id, input=sample_image_file_base64
         )
-        assert response.object == "list"
-        assert len(response.data) == 1
-        item = response.data[0]
-        assert item.object == "embedding"
-        assert item.index == 0
-        assert isinstance(item.embedding, list)
-        assert len(item.embedding) == _DEFAULT_DIMENSIONS
-        assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
+        assert_embedding_list(response, count=1, dimensions=_DEFAULT_DIMENSIONS)

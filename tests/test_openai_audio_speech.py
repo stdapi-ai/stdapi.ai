@@ -7,7 +7,6 @@ Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
 
 import json
 from base64 import b64decode
-from datetime import UTC, datetime
 from inspect import AGEN_CLOSED, getasyncgenstate
 from typing import TYPE_CHECKING, Any
 
@@ -19,9 +18,10 @@ from starlette.requests import Request
 
 from stdapi.api_errors import ApiError
 from stdapi.models.audio import TTSResponse
-from stdapi.monitoring import REQUEST, REQUEST_ID, REQUEST_LOG, EventLog
+from stdapi.monitoring import REQUEST, REQUEST_ID, REQUEST_LOG
 from stdapi.routes import openai_audio_speech
 from stdapi.types.openai_audio import SpeechCreateParams
+from tests._helpers import make_event_log
 from tests.conftest import SAMPLES_DIR, logged_usage_entries
 
 if TYPE_CHECKING:
@@ -107,13 +107,10 @@ class TestAudioSpeech:
         assert response.response.headers.get("content-type") == "audio/mpeg"
         _assert_is_mp3(audio_data)
 
+    @pytest.mark.gateway("Amazon Polly is not available on the official OpenAI API")
     @pytest.mark.parametrize("sample_rate", ["8000", "24000"])
     def test_speech_with_extra_polly_sample_rate(
-        self,
-        openai_client: OpenAI,
-        speech_standard_model: str,
-        use_official_api: bool,
-        sample_rate: str,
+        self, openai_client: OpenAI, speech_standard_model: str, sample_rate: str
     ) -> None:
         """The Polly ``SampleRate`` extra parameter sets the encoded output rate.
 
@@ -125,8 +122,6 @@ class TestAudioSpeech:
         Ref: https://docs.aws.amazon.com/polly/latest/APIReference/API_SynthesizeSpeech.html
              stdapi/models/audio/amazon_polly.py:AudioModel.tts
         """
-        if use_official_api:
-            pytest.skip("Amazon Polly is not available on the official OpenAI API")
         response = openai_client.audio.speech.create(
             model=speech_standard_model,
             voice="alloy",
@@ -141,8 +136,9 @@ class TestAudioSpeech:
         assert response.response.headers.get("content-type") == "audio/flac"
         assert _flac_sample_rate(audio_data) == int(sample_rate)
 
+    @pytest.mark.gateway("Amazon Polly is not available on the official OpenAI API")
     def test_speech_pcm_default_resamples_to_24khz(
-        self, openai_client: OpenAI, speech_standard_model: str, use_official_api: bool
+        self, openai_client: OpenAI, speech_standard_model: str
     ) -> None:
         """Default pcm output follows OpenAI's 24 kHz contract, not Polly's 16 kHz.
 
@@ -153,9 +149,6 @@ class TestAudioSpeech:
         Ref: https://stdapi.ai/api_openai_audio_speech/
              stdapi/models/audio/amazon_polly.py:AudioModel.tts
         """
-        if use_official_api:
-            pytest.skip("Amazon Polly is not available on the official OpenAI API")
-
         default_response = openai_client.audio.speech.create(
             model=speech_standard_model,
             voice="alloy",
@@ -178,8 +171,9 @@ class TestAudioSpeech:
         assert default_len / native_len == pytest.approx(1.5, rel=0.15)
         assert default_response.response.headers.get("content-type") == "audio/pcm"
 
+    @pytest.mark.gateway("Amazon Polly is not available on the official OpenAI API")
     def test_speech_marks_returns_json_lines(
-        self, openai_client: OpenAI, speech_standard_model: str, use_official_api: bool
+        self, openai_client: OpenAI, speech_standard_model: str
     ) -> None:
         """``SpeechMarkTypes`` returns ordered timing marks instead of audio.
 
@@ -190,9 +184,6 @@ class TestAudioSpeech:
         Ref: https://docs.aws.amazon.com/polly/latest/dg/speechmarks.html
              stdapi/models/audio/amazon_polly.py:AudioModel.tts
         """
-        if use_official_api:
-            pytest.skip("Amazon Polly is not available on the official OpenAI API")
-
         response = openai_client.audio.speech.create(
             model=speech_standard_model,
             voice="alloy",
@@ -215,8 +206,9 @@ class TestAudioSpeech:
         assert "hello" in values
         assert "you" in values
 
+    @pytest.mark.gateway("Amazon Polly is not available on the official OpenAI API")
     def test_speech_with_extra_invalid_parameter(
-        self, openai_client: OpenAI, speech_standard_model: str, use_official_api: bool
+        self, openai_client: OpenAI, speech_standard_model: str
     ) -> None:
         """Polly extra parameters are validated: bad type and unknown name are 400s.
 
@@ -228,9 +220,6 @@ class TestAudioSpeech:
              stdapi/models/audio/amazon_polly.py:_PollyExtraParams
              stdapi/main.py:handle_validation_exception
         """
-        if use_official_api:
-            pytest.skip("Amazon Polly is not available on the official OpenAI API")
-
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.audio.speech.create(
                 model=speech_standard_model,
@@ -290,13 +279,12 @@ class TestAudioSpeech:
         assert response.response.headers.get("content-type") == "audio/mpeg"
         _assert_is_mp3(audio_data)
 
+    @pytest.mark.gateway(
+        "Amazon Polly models are not available on the official OpenAI API"
+    )
     @pytest.mark.parametrize("voice", ["Amy", "amy"])
     def test_polly_voices_compatibility(
-        self,
-        openai_client: OpenAI,
-        speech_standard_model: str,
-        voice: str,
-        use_official_api: bool,
+        self, openai_client: OpenAI, speech_standard_model: str, voice: str
     ) -> None:
         """A native Polly voice ID is accepted case-insensitively.
 
@@ -307,10 +295,6 @@ class TestAudioSpeech:
         Ref: https://docs.aws.amazon.com/polly/latest/dg/available-voices.html
              stdapi/models/audio/amazon_polly.py:_select_voice
         """
-        if use_official_api:
-            pytest.skip(
-                "Amazon Polly models are not available on the official OpenAI API"
-            )
         response = openai_client.audio.speech.create(
             model=speech_standard_model, voice=voice, input="Test."
         )
@@ -655,8 +639,11 @@ class TestAudioSpeech:
         assert error_body["type"] == "invalid_request_error"
         assert "input" in str(error_body["message"]).lower()
 
+    @pytest.mark.gateway(
+        "CreateSpeechRequest: stream_format='sse' is not supported for tts-1"
+    )
     def test_stream_format_functionality(
-        self, openai_client: OpenAI, speech_standard_model: str, use_official_api: bool
+        self, openai_client: OpenAI, speech_standard_model: str
     ) -> None:
         """``stream_format`` selects between a raw audio body and SSE audio events.
 
@@ -669,11 +656,6 @@ class TestAudioSpeech:
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
              stdapi/routes/openai_audio_speech.py:_speech_audio_sse
         """
-        if use_official_api:
-            pytest.skip(
-                "CreateSpeechRequest: stream_format='sse' is not supported for tts-1"
-            )
-
         # Test default "audio" stream format
         response_audio = openai_client.audio.speech.create(
             model=speech_standard_model,
@@ -864,15 +846,7 @@ class TestAudioSpeechContentType:
     @pytest.fixture(autouse=True)
     def _request_context(self) -> Generator[None]:
         """Provide the request-scoped context vars the route logs into."""
-        log_token = REQUEST_LOG.set(
-            EventLog(
-                type="start",
-                level="info",
-                date=datetime.now(UTC),
-                server_id="test",
-                server_version="0.0.0",
-            )
-        )
+        log_token = REQUEST_LOG.set(make_event_log(type="start"))
         id_token = REQUEST_ID.set("test-request")
         request_token = REQUEST.set(
             Request(

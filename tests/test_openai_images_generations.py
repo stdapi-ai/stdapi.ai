@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     from openai.types import ImageEditCompletedEvent, ImageEditPartialImageEvent
     from openai.types.image_gen_completed_event import ImageGenCompletedEvent
     from openai.types.image_gen_partial_image_event import ImageGenPartialImageEvent
+    from openai.types.images_response import Usage
     from starlette.testclient import TestClient as TestClientType
 
     type ImageStreamEvent = (
@@ -300,6 +301,31 @@ def validate_streaming_image_response(
         f"Missing completion event. Event types seen: {event_types_seen}"
     )
     return events
+
+
+def validate_image_usage(usage: Usage | None) -> None:
+    """Assert an image usage report's counters are internally consistent.
+
+    Requires ``input_tokens`` and ``total_tokens`` positive, ``total_tokens``
+    equal to ``input_tokens + output_tokens``, and the input token detail
+    breakdown (image + text) summing back to ``input_tokens``.
+
+    Args:
+        usage: The response's ``usage`` field.
+
+    Raises:
+        AssertionError: If any counter is missing or the totals don't add up.
+    """
+    assert usage is not None
+    assert usage.input_tokens > 0
+    assert usage.input_tokens_details.text_tokens >= 0
+    assert usage.input_tokens_details.image_tokens > 0
+    assert usage.total_tokens > 0
+    assert usage.total_tokens == usage.input_tokens + usage.output_tokens
+    assert (
+        usage.input_tokens_details.image_tokens + usage.input_tokens_details.text_tokens
+        == usage.input_tokens
+    )
 
 
 class TestImageGeneration:
@@ -978,9 +1004,11 @@ class TestImageGeneration:
             expected_param="input" if use_official_api else "partial_images",
         )
 
-    def test_model_not_supporting_text_to_image(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    @pytest.mark.gateway(
+        "Bedrock model catalog (variations-only models) is gateway-specific; "
+        "no equivalent model exists on the official API"
+    )
+    def test_model_not_supporting_text_to_image(self, openai_client: OpenAI) -> None:
         """An edit-only model is rejected on the text-to-image route.
 
         Upscale models expose no text-to-image job, so the shared base
@@ -988,11 +1016,6 @@ class TestImageGeneration:
 
         Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase._generate_images_from_text
         """
-        if use_official_api:
-            pytest.skip(
-                "Bedrock model catalog (variations-only models) is gateway-specific; "
-                "no equivalent model exists on the official API"
-            )
         # Use a model that only supports variations (not text-to-image)
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.images.generate(

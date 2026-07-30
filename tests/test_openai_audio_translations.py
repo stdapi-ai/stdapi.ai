@@ -13,7 +13,7 @@ Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
 import io
 from base64 import b64encode
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import pytest
 from openai import BadRequestError, NotFoundError, OpenAI
@@ -23,20 +23,11 @@ from stdapi.api_errors import ApiError
 from stdapi.input_file import InputFile
 from stdapi.models.audio.amazon_transcribe import AudioModel
 from tests.conftest import logged_usage_entries
+from tests.test_openai_audio_transcriptions import _stub_transcribe
 
 if TYPE_CHECKING:
     from openai.types.audio import Translation
     from starlette.testclient import TestClient as TestClientType
-
-#: Stubbed AWS Transcribe job result (English source, so translate() is a no-op).
-_STUB_TRANSCRIPT_DATA: dict[str, Any] = {
-    "transcripts": [{"transcript": "hello world"}],
-    "audio_segments": [
-        {"id": 0, "start_time": "0.0", "end_time": "1.0", "transcript": "hello"},
-        {"id": 1, "start_time": "1.0", "end_time": "2.0", "transcript": "world"},
-    ],
-    "language_code": "en-US",
-}
 
 
 @pytest.fixture(scope="module")
@@ -369,6 +360,7 @@ class TestAudioTranslations:
         )
 
 
+@pytest.mark.gateway("JSON body input not supported by the official OpenAI API")
 class TestAudioTranslationsJsonBody:
     """POST /v1/audio/translations with an application/json body (gateway extension).
 
@@ -379,12 +371,6 @@ class TestAudioTranslationsJsonBody:
     Ref: https://stdapi.ai/api_openai_audio_translations/
          stdapi/types/openai_audio.py:AudioTranslationJsonBody
     """
-
-    @pytest.fixture(autouse=True)
-    def _skip_on_official_api(self, use_official_api: bool) -> None:
-        """JSON body input is an extension not supported by the official API."""
-        if use_official_api:
-            pytest.skip("JSON body input not supported by the official OpenAI API")
 
     def test_json_body_missing_file_returns_400(
         self, openai_client: OpenAI, transcription_model: str
@@ -514,13 +500,7 @@ class TestAudioTranslationsResponseFormatBugs:
         The stubbed transcript is English, so AWS Translate is skipped and the
         returned body is exactly the concatenated transcript.
         """
-
-        async def _fake_transcribe(
-            _self: AudioModel, *_args: object, **_kwargs: object
-        ) -> dict[str, Any]:
-            return _STUB_TRANSCRIPT_DATA
-
-        monkeypatch.setattr(AudioModel, "_transcribe", _fake_transcribe)
+        _stub_transcribe(monkeypatch)
 
         response = test_client.post(
             "/v1/audio/translations",
@@ -585,13 +565,7 @@ class TestTranslateUnsupportedParameters:
         The stubbed transcript is English, so AWS Translate short-circuits and
         the text is returned unchanged.
         """
-
-        async def _fake_transcribe(
-            _self: AudioModel, *_args: object, **_kwargs: object
-        ) -> dict[str, Any]:
-            return _STUB_TRANSCRIPT_DATA
-
-        monkeypatch.setattr(AudioModel, "_transcribe", _fake_transcribe)
+        _stub_transcribe(monkeypatch)
 
         response = await AudioModel("amazon.transcribe").stt_translate(
             self._audio(), "json", prompt=None, temperature=0.0

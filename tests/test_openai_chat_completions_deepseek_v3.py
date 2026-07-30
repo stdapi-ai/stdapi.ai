@@ -24,18 +24,13 @@ DEEPSEEK_SAMPLE = ("deepseek.v3.2",)
 _FINISH_REASONS = frozenset({"stop", "length", "content_filter", "tool_calls"})
 
 
+@pytest.mark.gateway("Deepseek is not supported on the official API")
 class TestDeepseekChatCompletions:
     """Deepseek chat completions tests.
 
     Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-deepseek.html
          stdapi/models/chat/deepseek_v3.py:ChatModel
     """
-
-    @pytest.fixture(autouse=True)
-    def _skip_official_api(self, use_official_api: bool) -> None:
-        """Skip the whole class: DeepSeek models are not served by the official OpenAI API."""
-        if use_official_api:
-            pytest.skip("Deepseek is not supported on the official API")
 
     @pytest.mark.parametrize("model", DEEPSEEK_SAMPLE)
     def test_reasoning_effort_parameter(

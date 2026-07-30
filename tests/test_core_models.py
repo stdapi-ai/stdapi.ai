@@ -25,6 +25,7 @@ from stdapi.config import SETTINGS
 from stdapi.models import MANTLE_SERVICE, ModelDetails
 from stdapi.pricing import Dimension, Price, PriceKey, Service
 from stdapi.routes import core_models
+from tests._helpers import make_model_details
 from tests.conftest import set_test_price
 
 if TYPE_CHECKING:
@@ -39,24 +40,18 @@ pytestmark = pytest.mark.local
 # Fake model catalogue used across all tests
 # ---------------------------------------------------------------------------
 
-_TEXT_MODEL = ModelDetails(
-    id="vendor.text-chat-v1",
+_TEXT_MODEL = make_model_details(
+    "vendor.text-chat-v1",
     name="Text Chat",
-    provider="Vendor",
-    input_modalities=["TEXT"],
-    output_modalities=["TEXT"],
     response_streaming=True,
     legacy=False,
-    regions=["us-east-1"],
     supported_routes=["/v1/chat/completions"],
     supported_mcp_tools=["openai_chat"],
 )
 
-_IMAGE_MODEL = ModelDetails(
-    id="vendor.image-gen-v1",
+_IMAGE_MODEL = make_model_details(
+    "vendor.image-gen-v1",
     name="Image Generator",
-    provider="Vendor",
-    input_modalities=["TEXT"],
     output_modalities=["IMAGE"],
     response_streaming=False,
     legacy=None,
@@ -65,12 +60,10 @@ _IMAGE_MODEL = ModelDetails(
     supported_mcp_tools=["openai_image_gen"],
 )
 
-_SPEECH_MODEL = ModelDetails(
-    id="vendor.speech-v1",
+_SPEECH_MODEL = make_model_details(
+    "vendor.speech-v1",
     name="Speech",
-    provider="Vendor",
     input_modalities=["SPEECH"],
-    output_modalities=["TEXT"],
     response_streaming=False,
     legacy=True,
     regions=["us-east-1", "eu-west-1"],
@@ -471,14 +464,8 @@ class TestFilterByStreaming:
         streaming``), so an unset value is excluded from both results while the
         models with an explicit flag still come back.
         """
-        unset_model = ModelDetails(
-            id="vendor.unset-streaming-v1",
-            name="Unset Streaming",
-            provider="Vendor",
-            input_modalities=["TEXT"],
-            output_modalities=["TEXT"],
-            response_streaming=None,
-            regions=["us-east-1"],
+        unset_model = make_model_details(
+            "vendor.unset-streaming-v1", name="Unset Streaming", response_streaming=None
         )
         models = {**_FAKE_MODELS, unset_model.id: unset_model}
 
@@ -566,14 +553,10 @@ class TestModelService:
         The registry value is passed straight through, so a mixed listing shows
         both services in one response.
         """
-        mantle_model = ModelDetails(
-            id="vendor.mantle-chat-v1",
+        mantle_model = make_model_details(
+            "vendor.mantle-chat-v1",
             name="Mantle Chat",
-            provider="Vendor",
             service="AWS Bedrock Mantle",
-            input_modalities=["TEXT"],
-            output_modalities=["TEXT"],
-            regions=["us-east-1"],
             supported_routes=["/v1/chat/completions"],
         )
         models = {**_FAKE_MODELS, mantle_model.id: mantle_model}
@@ -823,14 +806,7 @@ class TestModelPricingEndpoint:
 
         async def _models() -> dict[str, ModelDetails]:
             return {
-                model_id: ModelDetails(
-                    id=model_id,
-                    name=model_id,
-                    provider="Amazon",
-                    input_modalities=["TEXT"],
-                    output_modalities=["TEXT"],
-                    regions=["us-east-1"],
-                )
+                model_id: make_model_details(model_id, provider="Amazon")
                 for model_id in ("amazon.pricedmodel-v1:0", "amazon.freemodel-v1:0")
             }
 
@@ -863,14 +839,11 @@ class TestModelPricingEndpoint:
 
         async def _models() -> dict[str, ModelDetails]:
             return {
-                "openai.gpt-oss-mantle": ModelDetails(
-                    id="openai.gpt-oss-mantle",
+                "openai.gpt-oss-mantle": make_model_details(
+                    "openai.gpt-oss-mantle",
                     name="GPT OSS",
                     provider="OpenAI",
                     service=MANTLE_SERVICE,
-                    input_modalities=["TEXT"],
-                    output_modalities=["TEXT"],
-                    regions=["us-east-1"],
                 )
             }
 
@@ -968,13 +941,10 @@ class TestModelPricingEndpoint:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-support.html
              stdapi/routes/core_models.py:_row_routing
         """
-        details = ModelDetails(
-            id="amazon.pricedmodel-v1:0",
+        details = make_model_details(
+            "amazon.pricedmodel-v1:0",
             name="Priced",
             provider="Amazon",
-            input_modalities=["TEXT"],
-            output_modalities=["TEXT"],
-            regions=["us-east-1"],
             inference_profiles={"us-east-1": "us.amazon.pricedmodel-v1:0"},
         )
 
@@ -1007,12 +977,10 @@ class TestModelPricingEndpoint:
              stdapi/routes/core_models.py:_pricing_defaults
         """
         monkeypatch.setattr(SETTINGS, "aws_bedrock_regions", ["eu-west-3", "us-east-1"])
-        details = ModelDetails(
-            id="amazon.pricedmodel-v1:0",
+        details = make_model_details(
+            "amazon.pricedmodel-v1:0",
             name="Priced",
             provider="Amazon",
-            input_modalities=["TEXT"],
-            output_modalities=["TEXT"],
             regions=["eu-west-3", "us-east-1"],
             inference_profiles={
                 "eu-west-3": "eu.amazon.pricedmodel-v1:0",
@@ -1061,13 +1029,10 @@ class TestModelPricingEndpoint:
             key,
             Price(Decimal("0.0000028"), "USD"),
         )
-        details = ModelDetails(
-            id="amazon.pricedmodel-v1:0",
+        details = make_model_details(
+            "amazon.pricedmodel-v1:0",
             name="Priced",
             provider="Amazon",
-            input_modalities=["TEXT"],
-            output_modalities=["TEXT"],
-            regions=["us-east-1"],
             inference_profiles={"us-east-1": "global.amazon.pricedmodel-v1:0"},
         )
 
@@ -1223,14 +1188,11 @@ class TestModelPricingEndpoint:
 
         async def _models() -> dict[str, ModelDetails]:
             return {
-                "amazon.mantlemodel-v1:0": ModelDetails(
-                    id="amazon.mantlemodel-v1:0",
+                "amazon.mantlemodel-v1:0": make_model_details(
+                    "amazon.mantlemodel-v1:0",
                     name="mantlemodel",
                     provider="Amazon",
                     service="AWS Bedrock Mantle",
-                    input_modalities=["TEXT"],
-                    output_modalities=["TEXT"],
-                    regions=["us-east-1"],
                 )
             }
 

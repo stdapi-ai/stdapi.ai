@@ -20,7 +20,7 @@ from botocore.exceptions import ClientError
 import stdapi.main  # noqa: F401  (registers every route capability)
 from stdapi.api_errors import ApiError, UnsupportedModelError
 from stdapi.config import SETTINGS
-from stdapi.models import ModelDetails, _compute_model_capabilities, video
+from stdapi.models import _compute_model_capabilities, video
 from stdapi.models.video import (
     ReferenceImage,
     VideoJob,
@@ -31,9 +31,10 @@ from stdapi.models.video import (
 )
 from stdapi.models.video.amazon_nova_reel import VideoModel as NovaReelModel
 from stdapi.models.video.luma_ray import VideoModel as LumaRayModel
-from stdapi.monitoring import REQUEST_ID, REQUEST_LOG, EventLog
+from stdapi.monitoring import REQUEST_ID
 from stdapi.pricing import Dimension
 from stdapi.usage import USAGE, init_model_state, init_usage
+from tests._helpers import make_model_details
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Iterable
@@ -109,13 +110,8 @@ class TestVideoSupportedRoutes:
 
         Ref: stdapi/models/video/__init__.py:VideoModelBase.get_supported_operations
         """
-        details = ModelDetails(
-            id=model_id,
-            name=model_id,
-            provider="Vendor",
-            input_modalities=["TEXT", "IMAGE"],
-            output_modalities=["VIDEO"],
-            regions=["us-east-1"],
+        details = make_model_details(
+            model_id, input_modalities=["TEXT", "IMAGE"], output_modalities=["VIDEO"]
         )
         routes, tools = _compute_model_capabilities(model_id, details)
         assert routes == [f"{SETTINGS.openai_routes_prefix}/v1/videos"]
@@ -127,14 +123,7 @@ class TestVideoSupportedRoutes:
         Ref: stdapi/models/capabilities.py:register_route_capability
         """
         model_id = "anthropic.claude-3-5-haiku-20241022-v1:0"
-        details = ModelDetails(
-            id=model_id,
-            name=model_id,
-            provider="Vendor",
-            input_modalities=["TEXT"],
-            output_modalities=["TEXT"],
-            regions=["us-east-1"],
-        )
+        details = make_model_details(model_id)
         routes, tools = _compute_model_capabilities(model_id, details)
         assert "openai_video_generation" not in tools
         assert not any(route.endswith("/v1/videos") for route in routes)
@@ -514,16 +503,6 @@ class _StubS3Client:
         return {"Body": _StubStreamingBody()}
 
 
-def _new_log() -> EventLog:
-    return EventLog(
-        type="request",
-        level="info",
-        date=datetime.now(UTC),
-        server_id="test",
-        server_version="0.0.0",
-    )
-
-
 class TestStartVideoGeneration:
     """VideoModelBase.start_video_generation: async invoke request and usage.
 
@@ -536,15 +515,13 @@ class TestStartVideoGeneration:
     """
 
     @pytest.fixture(autouse=True)
-    def _request_context(self) -> Generator[None]:
-        """Provide request ID/log and fresh usage state for each test."""
+    def _request_context(self, request_log: dict[str, Any]) -> Generator[None]:
+        """Provide the request ID and fresh usage state for each test."""
         id_token = REQUEST_ID.set("req1")
-        log_token = REQUEST_LOG.set(_new_log())
         usage_token = init_usage()
         init_model_state()
         yield
         USAGE.reset(usage_token)
-        REQUEST_LOG.reset(log_token)
         REQUEST_ID.reset(id_token)
 
     @staticmethod
@@ -1055,7 +1032,7 @@ class TestVideoJobAccess:
         assert exc_info.value.status == 404
 
     async def test_open_video_content_access_denied_is_not_found(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
     ) -> None:
         """AccessDenied (missing key under least-privilege IAM) maps to 404 + warning.
 
@@ -1071,17 +1048,14 @@ class TestVideoJobAccess:
             )
         )
         monkeypatch.setattr(video, "get_client", lambda _service, _region: s3)
-        log = _new_log()
-        token = REQUEST_LOG.set(log)
-        try:
-            with pytest.raises(ApiError, match="not found") as exc_info:
-                await open_video_content(self._job())
-        finally:
-            REQUEST_LOG.reset(token)
+        with pytest.raises(ApiError, match="not found") as exc_info:
+            await open_video_content(self._job())
         assert exc_info.value.status == 404
         # The warning keeps a real S3 permission misconfiguration diagnosable.
-        assert any("permissions" in str(detail) for detail in log["error_detail"])
-        assert log["level"] == "warning"
+        assert any(
+            "permissions" in str(detail) for detail in request_log["error_detail"]
+        )
+        assert request_log["level"] == "warning"
 
     async def test_open_video_content_other_s3_error_propagates(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1241,7 +1215,7 @@ class TestVideoJobAccess:
         ]
 
     async def test_delete_video_output_warns_on_failed_keys(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
     ) -> None:
         """Per-key deletion failures keep the delete succeeding, with a warning.
 
@@ -1261,14 +1235,9 @@ class TestVideoJobAccess:
             },
         )
         monkeypatch.setattr(video, "get_client", lambda _service, _region: s3)
-        log = _new_log()
-        token = REQUEST_LOG.set(log)
-        try:
-            await delete_video_output(self._job())
-        finally:
-            REQUEST_LOG.reset(token)
-        assert any("1 object" in str(detail) for detail in log["error_detail"])
-        assert log["level"] == "warning"
+        await delete_video_output(self._job())
+        assert any("1 object" in str(detail) for detail in request_log["error_detail"])
+        assert request_log["level"] == "warning"
 
 
 class TestToVideoJob:
@@ -1648,7 +1617,7 @@ class TestListVideoJobsMultiRegion:
         ]
 
     async def test_failed_region_is_skipped_with_warning(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
     ) -> None:
         """A region failing with a ClientError is skipped and logged as a warning.
 
@@ -1670,22 +1639,17 @@ class TestListVideoJobsMultiRegion:
             ),
         }
         self._patch_clients(monkeypatch, clients)
-        log = _new_log()
-        token = REQUEST_LOG.set(log)
-        try:
-            listings, _ = await video.list_video_jobs()
-        finally:
-            REQUEST_LOG.reset(token)
+        listings, _ = await video.list_video_jobs()
 
         assert [listing.job.invocation_arn for listing in listings] == [
             _arn("bbb", "us-west-2")
         ]
-        (detail,) = log["error_detail"]
+        (detail,) = request_log["error_detail"]
         assert isinstance(detail, dict)
         unreachable_regions = detail["unreachable_bedrock_regions"]
         assert isinstance(unreachable_regions, dict)
         assert "us-east-1" in unreachable_regions
-        assert log["level"] == "warning"
+        assert request_log["level"] == "warning"
 
     async def test_all_regions_failing_raises_first_error(
         self, monkeypatch: pytest.MonkeyPatch

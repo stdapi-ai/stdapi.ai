@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from tests._helpers import assert_embedding_list
+
 if TYPE_CHECKING:
     from openai import OpenAI
 
@@ -27,20 +29,13 @@ NOVA_MODELS = [NOVA_V1]
 _SUPPORTED_DIMENSIONS = frozenset({256, 384, 1024, 3072})
 
 
+@pytest.mark.gateway("Amazon Nova models are not available on the official OpenAI API")
 class TestAmazonNovaEmbeddings:
     """Live behavior of Amazon Nova multimodal embeddings.
 
     Ref: https://docs.aws.amazon.com/nova/latest/userguide/embeddings-schema.html
          stdapi/models/embedding/amazon_nova_embed.py:EmbeddingModel.embed_text
     """
-
-    @pytest.fixture(autouse=True)
-    def _skip_on_official_api(self, use_official_api: bool) -> None:
-        """Skip the whole class when the target is the official OpenAI API."""
-        if use_official_api:
-            pytest.skip(
-                "Amazon Nova models are not available on the official OpenAI API"
-            )
 
     @pytest.mark.parametrize("model_id", NOVA_MODELS)
     def test_text_single(self, openai_client: OpenAI, model_id: str) -> None:
@@ -52,14 +47,8 @@ class TestAmazonNovaEmbeddings:
         response = openai_client.embeddings.create(
             model=model_id, input="Hello from Amazon Nova multimodal embeddings."
         )
-        assert response.object == "list"
-        assert len(response.data) == 1
-        item = response.data[0]
-        assert item.object == "embedding"
-        assert item.index == 0
-        assert isinstance(item.embedding, list)
-        assert len(item.embedding) in _SUPPORTED_DIMENSIONS
-        assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
+        (vector,) = assert_embedding_list(response, count=1)
+        assert len(vector) in _SUPPORTED_DIMENSIONS
 
     @pytest.mark.parametrize("model_id", NOVA_MODELS)
     def test_text_batch(self, openai_client: OpenAI, model_id: str) -> None:
@@ -77,18 +66,8 @@ class TestAmazonNovaEmbeddings:
             "Third entry to complete batch.",
         ]
         response = openai_client.embeddings.create(model=model_id, input=inputs)
-        assert response.object == "list"
-        assert len(response.data) == len(inputs)
-        for i, item in enumerate(response.data):
-            assert item.index == i
-            assert item.object == "embedding"
-            assert isinstance(item.embedding, list)
-            assert len(item.embedding) in _SUPPORTED_DIMENSIONS
-
-        vectors = [item.embedding for item in response.data]
-        assert len({len(vector) for vector in vectors}) == 1, (
-            "batch returned vectors of different widths"
-        )
+        vectors = assert_embedding_list(response, count=len(inputs), nonzero=False)
+        assert all(len(vector) in _SUPPORTED_DIMENSIONS for vector in vectors)
         assert len({tuple(vector) for vector in vectors}) == len(inputs), (
             "distinct inputs produced identical vectors"
         )
@@ -109,13 +88,7 @@ class TestAmazonNovaEmbeddings:
             input="Test sentence for dimensions parameter.",
             dimensions=dimensions,
         )
-        assert response.object == "list"
-        assert len(response.data) == 1
-        item = response.data[0]
-        assert item.object == "embedding"
-        assert isinstance(item.embedding, list)
-        assert len(item.embedding) == dimensions
-        assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
+        assert_embedding_list(response, count=1, dimensions=dimensions)
 
     @pytest.mark.parametrize("model_id", NOVA_MODELS)
     def test_extra_params_embedding_purpose(
@@ -136,14 +109,8 @@ class TestAmazonNovaEmbeddings:
             input="Classification test sentence.",
             extra_body={"embeddingPurpose": "CLASSIFICATION"},
         )
-        assert response.object == "list"
-        assert len(response.data) == 1
-        item = response.data[0]
-        assert item.object == "embedding"
-        assert item.index == 0
-        assert isinstance(item.embedding, list)
-        assert len(item.embedding) in _SUPPORTED_DIMENSIONS
-        assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
+        (vector,) = assert_embedding_list(response, count=1)
+        assert len(vector) in _SUPPORTED_DIMENSIONS
 
     @pytest.mark.parametrize("model_id", NOVA_MODELS)
     def test_image_single(
@@ -160,14 +127,8 @@ class TestAmazonNovaEmbeddings:
         response = openai_client.embeddings.create(
             model=model_id, input=sample_image_file_base64
         )
-        assert response.object == "list"
-        assert len(response.data) == 1
-        item = response.data[0]
-        assert item.object == "embedding"
-        assert item.index == 0
-        assert isinstance(item.embedding, list)
-        assert len(item.embedding) in _SUPPORTED_DIMENSIONS
-        assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
+        (vector,) = assert_embedding_list(response, count=1)
+        assert len(vector) in _SUPPORTED_DIMENSIONS
 
     @pytest.mark.parametrize("model_id", NOVA_MODELS)
     def test_image_batch(
@@ -180,18 +141,8 @@ class TestAmazonNovaEmbeddings:
         """
         inputs = [sample_image_file_base64, sample_image_file_base64]
         response = openai_client.embeddings.create(model=model_id, input=inputs)
-        assert response.object == "list"
-        assert len(response.data) == len(inputs)
-        for i, item in enumerate(response.data):
-            assert item.index == i
-            assert item.object == "embedding"
-            assert isinstance(item.embedding, list)
-            assert len(item.embedding) in _SUPPORTED_DIMENSIONS
-            assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
-
-        assert len({len(item.embedding) for item in response.data}) == 1, (
-            "batch returned vectors of different widths"
-        )
+        vectors = assert_embedding_list(response, count=len(inputs))
+        assert all(len(vector) in _SUPPORTED_DIMENSIONS for vector in vectors)
 
     @pytest.mark.parametrize("model_id", NOVA_MODELS)
     def test_mixed_text_image_batch(
@@ -211,19 +162,9 @@ class TestAmazonNovaEmbeddings:
             "Another text input.",
         ]
         response = openai_client.embeddings.create(model=model_id, input=inputs)
-        assert response.object == "list"
-        assert len(response.data) == len(inputs)
-        for i, item in enumerate(response.data):
-            assert item.index == i
-            assert item.object == "embedding"
-            assert isinstance(item.embedding, list)
-            assert len(item.embedding) in _SUPPORTED_DIMENSIONS
-            assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
-
-        assert len({len(item.embedding) for item in response.data}) == 1, (
-            "text and image vectors are not in the same space"
-        )
-        assert len({tuple(item.embedding) for item in response.data}) == len(inputs), (
+        vectors = assert_embedding_list(response, count=len(inputs))
+        assert all(len(vector) in _SUPPORTED_DIMENSIONS for vector in vectors)
+        assert len({tuple(vector) for vector in vectors}) == len(inputs), (
             "distinct inputs produced identical vectors"
         )
 
@@ -333,13 +274,7 @@ class TestAmazonNovaEmbeddings:
         response = openai_client.embeddings.create(
             model=model_id, input=sample_image_file_base64, dimensions=dimensions
         )
-        assert response.object == "list"
-        assert len(response.data) == 1
-        item = response.data[0]
-        assert item.object == "embedding"
-        assert isinstance(item.embedding, list)
-        assert len(item.embedding) == dimensions
-        assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
+        assert_embedding_list(response, count=1, dimensions=dimensions)
 
     @pytest.mark.parametrize("model_id", NOVA_MODELS)
     def test_clustering_purpose(self, openai_client: OpenAI, model_id: str) -> None:
@@ -359,15 +294,11 @@ class TestAmazonNovaEmbeddings:
         response = openai_client.embeddings.create(
             model=model_id, input=inputs, extra_body={"embeddingPurpose": "CLUSTERING"}
         )
-        assert response.object == "list"
-        assert len(response.data) == len(inputs)
-        for i, item in enumerate(response.data):
-            assert item.index == i
-            assert item.object == "embedding"
-            assert isinstance(item.embedding, list)
-            assert len(item.embedding) in _SUPPORTED_DIMENSIONS
-
-        assert len({tuple(item.embedding) for item in response.data}) == len(inputs), (
+        vectors = assert_embedding_list(
+            response, count=len(inputs), nonzero=False, uniform_width=False
+        )
+        assert all(len(vector) in _SUPPORTED_DIMENSIONS for vector in vectors)
+        assert len({tuple(vector) for vector in vectors}) == len(inputs), (
             "distinct inputs produced identical vectors"
         )
 
@@ -390,14 +321,8 @@ class TestAmazonNovaEmbeddings:
             input=sample_image_file_base64,
             extra_body={"force_s3_data": True},
         )
-        assert response.object == "list"
-        assert len(response.data) == 1
-        item = response.data[0]
-        assert item.object == "embedding"
-        assert item.index == 0
-        assert isinstance(item.embedding, list)
-        assert len(item.embedding) in _SUPPORTED_DIMENSIONS
-        assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
+        (vector,) = assert_embedding_list(response, count=1)
+        assert len(vector) in _SUPPORTED_DIMENSIONS
 
     @pytest.mark.parametrize("model_id", NOVA_MODELS)
     def test_force_s3_data_with_audio(

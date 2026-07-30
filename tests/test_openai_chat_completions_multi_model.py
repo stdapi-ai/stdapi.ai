@@ -16,16 +16,15 @@ Ref: https://developers.openai.com/api/reference/resources/chat/subresources/com
      stdapi/models/chat/_adapters/_openai_chat_completion.py:format_response
 """
 
-import base64
 import json
-import struct
-import zlib
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
 from openai import BadRequestError
 
+from tests._helpers import red_png_b64
+from tests._multi_model import VISION_MODELS_OPENAI, with_marks
 from tests.conftest import REPO_ROOT
 
 if TYPE_CHECKING:
@@ -664,37 +663,18 @@ class TestStructuredOutput:
 # ---------------------------------------------------------------------------
 
 
-def _make_1x1_red_png_b64() -> str:
-    """Return a base64-encoded minimal valid 1x1 red PNG."""
-
-    def _chunk(name: bytes, data: bytes) -> bytes:
-        length = struct.pack(">I", len(data))
-        crc = struct.pack(">I", zlib.crc32(name + data) & 0xFFFFFFFF)
-        return length + name + data + crc
-
-    signature = b"\x89PNG\r\n\x1a\n"
-    ihdr = _chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
-    idat = _chunk(b"IDAT", zlib.compress(b"\x00\xff\x00\x00"))
-    iend = _chunk(b"IEND", b"")
-    return base64.b64encode(signature + ihdr + idat + iend).decode()
-
-
 #: Vision-capable models tested on the OpenAI route.
 _VISION_MODELS = pytest.mark.parametrize(
     "model",
-    [
-        "anthropic.claude-haiku-4-5-20251001-v1:0",  # Claude (reference)
-        "amazon.nova-lite-v1:0",  # Amazon Nova
-        pytest.param(
-            "mistral.pixtral-large-2502-v1:0",
-            marks=pytest.mark.xfail(
+    with_marks(
+        VISION_MODELS_OPENAI,
+        {
+            "mistral.pixtral-large-2502-v1:0": pytest.mark.xfail(
                 strict=False,
                 reason="Pixtral non-deterministically misidentifies colour of 1x1 PNG",
-            ),
-        ),  # Mistral Pixtral Large
-        "qwen.qwen3-vl-235b-a22b",  # Qwen3 VL 235B
-        "writer.palmyra-vision-7b",  # Writer Palmyra Vision 7B
-    ],
+            )
+        },
+    ),
 )
 
 
@@ -729,7 +709,7 @@ class TestVision:
                         {
                             "type": "image_url",
                             "image_url": {
-                                "url": f"data:image/png;base64,{_make_1x1_red_png_b64()}"
+                                "url": f"data:image/png;base64,{red_png_b64()}"
                             },
                         },
                         {

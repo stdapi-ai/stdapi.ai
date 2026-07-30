@@ -46,18 +46,13 @@ def _video_messages(video_url: str, text: str) -> list[Any]:
     ]
 
 
+@pytest.mark.gateway("Pegasus is not supported on the official API")
 class TestTwelveLabsPegasusChatCompletions:
     """Chat completions tests for TwelveLabs Pegasus video model.
 
     Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-pegasus.html
          stdapi/models/chat/twelvelabs_pegasus.py:ChatModel
     """
-
-    @pytest.fixture(autouse=True)
-    def _skip_official_api(self, use_official_api: bool) -> None:
-        """Skip the whole class: Pegasus is a Bedrock-only model."""
-        if use_official_api:
-            pytest.skip("Pegasus is not supported on the official API")
 
     @pytest.fixture
     def video_url(self, sample_video_file_base64: str) -> str:

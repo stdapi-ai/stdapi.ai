@@ -96,19 +96,17 @@ _NON_CLAUDE_MODEL = "amazon.nova-micro-v1:0"
 
 
 @pytest.fixture(scope="module")
-def envelope_completion(
-    openai_client: OpenAI, use_official_api: bool
-) -> ChatCompletion:
+def envelope_completion(openai_client: OpenAI) -> ChatCompletion:
     """One cheap completion shared by the request-independent envelope assertions.
 
     ``id``, ``object`` and ``created`` are minted by the gateway rather than by the
-    model, so a single billable call is enough to assert all of them.
+    model, so a single billable call is enough to assert all of them. Only used by
+    ``TestAnthropicClaudeChatCompletions``, which carries the ``gateway`` marker, so
+    this fixture is never requested against the official API.
 
     Ref: https://developers.openai.com/api/reference/resources/chat.md
          stdapi/routes/openai_chat_completions.py:create_chat_completion
     """
-    if use_official_api:
-        pytest.skip("Anthropic Claude is not supported on the official API")
     return openai_client.chat.completions.create(
         model=_CLAUDE_CHEAP,
         messages=[{"role": "user", "content": "Hi."}],
@@ -133,6 +131,7 @@ def _tool_call_args(tool_call: object) -> dict[str, object]:
 # ===========================================================================
 
 
+@pytest.mark.gateway("Anthropic Claude is not supported on the official API")
 class TestTextEditorTool:
     """The ``str_replace_based_edit_tool`` Anthropic tool driven through OpenAI ``tools``.
 
@@ -147,7 +146,7 @@ class TestTextEditorTool:
 
     # --- acceptance ---
 
-    def test_accepted(self, openai_client: OpenAI, use_official_api: bool) -> None:
+    def test_accepted(self, openai_client: OpenAI) -> None:
         """A schema-less ``str_replace_based_edit_tool`` entry yields a normal completion.
 
         The reserved name alone is enough: the gateway supplies the versioned type and
@@ -156,8 +155,6 @@ class TestTextEditorTool:
 
         Ref: stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
         """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
         tools: list[dict[str, object]] = [_TEXT_EDITOR_TOOL]
         resp = openai_client.chat.completions.create(
             model=_CLAUDE_CHEAP,
@@ -177,9 +174,7 @@ class TestTextEditorTool:
 
     # --- view command ---
 
-    def test_view_file_triggers_tool_use(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_view_file_triggers_tool_use(self, openai_client: OpenAI) -> None:
         """A ``view`` request surfaces as one ``tool_calls`` entry keeping the tool name.
 
         ``tool_choice="required"`` becomes Bedrock ``toolChoice {"any": {}}``, which the
@@ -191,8 +186,6 @@ class TestTextEditorTool:
              stdapi/models/chat/_anthropic_claude.py:_forward_tool_choice_to_additional_request_fields
              stdapi/models/chat/_adapters/_openai_chat_completion.py:extract_tool_calls
         """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
         tools: list[dict[str, object]] = [_TEXT_EDITOR_TOOL]
         resp = openai_client.chat.completions.create(  # type: ignore[call-overload]
             model=_CLAUDE_CHEAP,
@@ -217,9 +210,7 @@ class TestTextEditorTool:
         assert resp.usage is not None
         assert resp.usage.completion_tokens > 0
 
-    def test_view_directory_triggers_tool_use(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_view_directory_triggers_tool_use(self, openai_client: OpenAI) -> None:
         """Listing a directory is expressed as the editor's ``view`` command.
 
         The text editor has no dedicated listing command: ``view`` on a directory path is
@@ -228,8 +219,6 @@ class TestTextEditorTool:
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
         """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
         tools: list[dict[str, object]] = [_TEXT_EDITOR_TOOL]
         resp = openai_client.chat.completions.create(  # type: ignore[call-overload]
             model=_CLAUDE_CHEAP,
@@ -250,7 +239,7 @@ class TestTextEditorTool:
         assert args.get("path")
 
     def test_view_file_with_range_emits_view_command(
-        self, openai_client: OpenAI, use_official_api: bool
+        self, openai_client: OpenAI
     ) -> None:
         """A line-range request still resolves to the ``view`` command.
 
@@ -259,8 +248,6 @@ class TestTextEditorTool:
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
         """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
         tools: list[dict[str, object]] = [_TEXT_EDITOR_TOOL]
         resp = openai_client.chat.completions.create(  # type: ignore[call-overload]
             model=_CLAUDE_CHEAP,
@@ -280,9 +267,7 @@ class TestTextEditorTool:
         assert args.get("command") == "view"
         assert args.get("path")
 
-    def test_view_multiturn(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_view_multiturn(self, openai_client: OpenAI) -> None:
         """A ``role: "tool"`` result closes an editor turn without an Anthropic tool_result.
 
         Turn 2 keeps the tool declared, so the gateway takes the multi-turn stub path: the
@@ -297,8 +282,6 @@ class TestTextEditorTool:
              stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
              stdapi/models/chat/_adapters/_openai_common.py:parse_tool_content
         """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
         tools: list[dict[str, object]] = [_TEXT_EDITOR_TOOL]
         user_prompt = "View the file /etc/hostname"
 
@@ -359,9 +342,7 @@ class TestTextEditorTool:
 
     # --- str_replace command ---
 
-    def test_str_replace_command_shape(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_str_replace_command_shape(self, openai_client: OpenAI) -> None:
         """An editing turn reaches an edit command, with ``str_replace`` carrying both strings.
 
         Without ``tool_choice`` the model picks its own path: it may edit straight away or
@@ -378,8 +359,6 @@ class TestTextEditorTool:
              stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
              stdapi/models/chat/_adapters/_openai_chat_completion.py:extract_tool_calls
         """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
         tools: list[dict[str, object]] = [_TEXT_EDITOR_TOOL]
         user_prompt = "Fix the syntax error in /tmp/primes.py"
 
@@ -480,9 +459,7 @@ class TestTextEditorTool:
 
     # --- create command ---
 
-    def test_create_command_shape(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_create_command_shape(self, openai_client: OpenAI) -> None:
         """Writing a new file emits ``create`` with ``path`` and ``file_text``.
 
         ``create`` is the only command that carries the whole file body, under the
@@ -490,8 +467,6 @@ class TestTextEditorTool:
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
         """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
         tools: list[dict[str, object]] = [_TEXT_EDITOR_TOOL]
         resp = openai_client.chat.completions.create(  # type: ignore[call-overload]
             model=_CLAUDE_CHEAP,
@@ -523,9 +498,7 @@ class TestTextEditorTool:
 
     # --- insert command ---
 
-    def test_insert_command_shape(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_insert_command_shape(self, openai_client: OpenAI) -> None:
         """Prepending a line reaches an edit command, and ``insert`` carries a line number.
 
         The ``insert`` command is the only one taking ``insert_line`` — an integer line
@@ -539,8 +512,6 @@ class TestTextEditorTool:
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
              stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
         """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
         tools: list[dict[str, object]] = [_TEXT_EDITOR_TOOL]
         user_prompt = "Add a module docstring at the top of /tmp/primes.py"
 
@@ -629,9 +600,7 @@ class TestTextEditorTool:
 
     # --- error result ---
 
-    def test_error_tool_result_accepted(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_error_tool_result_accepted(self, openai_client: OpenAI) -> None:
         """A failure reported as ordinary tool text is accepted in the next turn.
 
         OpenAI ``role: "tool"`` messages have no ``is_error`` flag, unlike Anthropic
@@ -647,8 +616,6 @@ class TestTextEditorTool:
              stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
              stdapi/models/chat/_adapters/_openai_common.py:parse_tool_content
         """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
         tools: list[dict[str, object]] = [_TEXT_EDITOR_TOOL]
         user_prompt = "View the file /nonexistent/path.py"
 
@@ -722,9 +689,7 @@ class TestTextEditorTool:
 
     # --- max_characters ---
 
-    def test_max_characters_accepted(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_max_characters_accepted(self, openai_client: OpenAI) -> None:
         """``max_characters`` smuggled through ``function.parameters`` is accepted.
 
         ``max_characters`` is a ``text_editor_20250728``-only tool option with no place in
@@ -736,8 +701,6 @@ class TestTextEditorTool:
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
              stdapi/models/chat/_anthropic_claude.py:_req_extract_server_tools
         """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
         tools: list[dict[str, object]] = [
             {
                 "type": "function",
@@ -763,9 +726,7 @@ class TestTextEditorTool:
             == resp.usage.prompt_tokens + resp.usage.completion_tokens
         )
 
-    def test_max_characters_triggers_tool_use(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_max_characters_triggers_tool_use(self, openai_client: OpenAI) -> None:
         """``max_characters`` leaves the emitted ``tool_calls`` shape unchanged.
 
         The extra option is consumed on the request side only: the tool still comes back
@@ -775,8 +736,6 @@ class TestTextEditorTool:
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
              stdapi/models/chat/_anthropic_claude.py:_req_extract_server_tools
         """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
         tools: list[dict[str, object]] = [
             {
                 "type": "function",
@@ -806,9 +765,7 @@ class TestTextEditorTool:
         assert args.get("path")
         assert "max_characters" not in args
 
-    def test_max_characters_multiturn(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_max_characters_multiturn(self, openai_client: OpenAI) -> None:
         """A ``max_characters`` editor tool round-trips a tool result and stops.
 
         Turn 2 declares the same tool with the extra option while the history already
@@ -821,8 +778,6 @@ class TestTextEditorTool:
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool
              stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
         """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
         tools: list[dict[str, object]] = [
             {
                 "type": "function",
@@ -893,6 +848,7 @@ class TestTextEditorTool:
 # ===========================================================================
 
 
+@pytest.mark.gateway("Anthropic Claude is not supported on the official API")
 class TestBashTool:
     """The Anthropic ``bash`` tool driven through OpenAI ``tools``.
 
@@ -904,13 +860,11 @@ class TestBashTool:
          stdapi/models/chat/anthropic_claude_37_to_45.py:ChatModel
     """
 
-    def test_accepted(self, openai_client: OpenAI, use_official_api: bool) -> None:
+    def test_accepted(self, openai_client: OpenAI) -> None:
         """A schema-less ``bash`` entry yields a normal completion.
 
         Ref: stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
         """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
         tools: list[dict[str, object]] = [_BASH_TOOL]
         resp = openai_client.chat.completions.create(
             model=_CLAUDE_CHEAP,
@@ -928,9 +882,7 @@ class TestBashTool:
             == resp.usage.prompt_tokens + resp.usage.completion_tokens
         )
 
-    def test_accepted_via_function_format(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_accepted_via_function_format(self, openai_client: OpenAI) -> None:
         """An inline ``{"type": "function", "function": {"name": "bash"}}`` tool is usable.
 
         This is the shape OpenAI SDKs and agent frameworks emit naturally; detection is by
@@ -940,8 +892,6 @@ class TestBashTool:
         Ref: https://developers.openai.com/api/reference/resources/chat.md
              stdapi/models/chat/_anthropic_claude.py:_req_extract_server_tools
         """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
         tools: list[dict[str, object]] = [
             {"type": "function", "function": {"name": "bash"}}
         ]
@@ -961,9 +911,7 @@ class TestBashTool:
         assert tc.function.name == "bash"
         assert _tool_call_args(tc), "bash input must not be an empty object"
 
-    def test_triggers_tool_use(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_triggers_tool_use(self, openai_client: OpenAI) -> None:
         """A forced ``bash`` call comes back as a single ``tool_calls`` entry with input.
 
         The gateway resets the promoted tool's Bedrock ``inputSchema`` to a bare
@@ -973,8 +921,6 @@ class TestBashTool:
         Ref: https://developers.openai.com/api/docs/guides/function-calling#tool-choice
              stdapi/models/chat/_anthropic_claude.py:_req_extract_server_tools
         """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
         tools: list[dict[str, object]] = [_BASH_TOOL]
         resp = openai_client.chat.completions.create(  # type: ignore[call-overload]
             model=_CLAUDE_CHEAP,
@@ -995,7 +941,7 @@ class TestBashTool:
         assert isinstance(args, dict), "arguments must decode to a JSON object"
         assert args, "bash input must not be an empty object"
 
-    def test_multiturn(self, openai_client: OpenAI, use_official_api: bool) -> None:
+    def test_multiturn(self, openai_client: OpenAI) -> None:
         """Command stdout returned as a ``role: "tool"`` message ends the bash turn.
 
         Bedrock requires the ``toolSpec`` stub to stay in ``toolConfig`` once the history
@@ -1007,8 +953,6 @@ class TestBashTool:
         Ref: stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
              stdapi/models/chat/_adapters/_openai_common.py:parse_tool_content
         """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
         tools: list[dict[str, object]] = [_BASH_TOOL]
         user_prompt = "Run: echo hello_test"
 
@@ -1061,9 +1005,7 @@ class TestBashTool:
             "that Turn 1 was billed for"
         )
 
-    def test_command_error_output_accepted(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_command_error_output_accepted(self, openai_client: OpenAI) -> None:
         """Command stderr returned as tool text is accepted in the next turn.
 
         A non-zero exit is indistinguishable from success at the wire level on the OpenAI
@@ -1076,8 +1018,6 @@ class TestBashTool:
              stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
              stdapi/models/chat/_adapters/_openai_common.py:parse_tool_content
         """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
         tools: list[dict[str, object]] = [_BASH_TOOL]
         user_prompt = "Run: cat /nonexistent_file.txt"
 
@@ -1132,9 +1072,7 @@ class TestBashTool:
             "that Turn 1 was billed for"
         )
 
-    def test_restart_tool_result_accepted(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_restart_tool_result_accepted(self, openai_client: OpenAI) -> None:
         """A restart acknowledgement returned as tool text is accepted in the next turn.
 
         ``bash`` accepts a ``restart`` input whose result is a bare acknowledgement instead
@@ -1146,8 +1084,6 @@ class TestBashTool:
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/bash-tool
              stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
         """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
         tools: list[dict[str, object]] = [_BASH_TOOL]
         user_prompt = "Run: echo hello"
 
@@ -1208,6 +1144,7 @@ class TestBashTool:
 # ===========================================================================
 
 
+@pytest.mark.gateway("Anthropic Claude is not supported on the official API")
 class TestMemoryTool:
     """The Anthropic ``memory`` tool driven through OpenAI ``tools``.
 
@@ -1219,13 +1156,11 @@ class TestMemoryTool:
          stdapi/models/chat/anthropic_claude_37_to_45.py:ChatModel
     """
 
-    def test_accepted(self, openai_client: OpenAI, use_official_api: bool) -> None:
+    def test_accepted(self, openai_client: OpenAI) -> None:
         """A schema-less ``memory`` entry yields a normal completion.
 
         Ref: stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
         """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
         tools: list[dict[str, object]] = [_MEMORY_TOOL]
         resp = openai_client.chat.completions.create(
             model=_CLAUDE_CHEAP,
@@ -1243,9 +1178,7 @@ class TestMemoryTool:
             == resp.usage.prompt_tokens + resp.usage.completion_tokens
         )
 
-    def test_auto_views_directory_first(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_auto_views_directory_first(self, openai_client: OpenAI) -> None:
         """The memory tool's first action is a ``view`` of the ``/memories`` directory.
 
         The ``memory_20250818`` tool prompt directs Claude to inspect its memory directory
@@ -1253,8 +1186,6 @@ class TestMemoryTool:
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference
         """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
         tools: list[dict[str, object]] = [_MEMORY_TOOL]
         resp = openai_client.chat.completions.create(  # type: ignore[call-overload]
             model=_CLAUDE_CHEAP,
@@ -1279,16 +1210,12 @@ class TestMemoryTool:
         assert args.get("command") == "view"
         assert args.get("path") == "/memories"
 
-    def test_triggers_tool_use(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_triggers_tool_use(self, openai_client: OpenAI) -> None:
         """A forced ``memory`` call comes back under its own name with a command payload.
 
         Ref: https://developers.openai.com/api/docs/guides/function-calling#tool-choice
              stdapi/models/chat/_adapters/_openai_chat_completion.py:extract_tool_calls
         """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
         tools: list[dict[str, object]] = [_MEMORY_TOOL]
         resp = openai_client.chat.completions.create(  # type: ignore[call-overload]
             model=_CLAUDE_CHEAP,
@@ -1313,7 +1240,7 @@ class TestMemoryTool:
         assert isinstance(args, dict), "arguments must decode to a JSON object"
         assert args.get("command"), "memory input must name a command"
 
-    def test_multiturn(self, openai_client: OpenAI, use_official_api: bool) -> None:
+    def test_multiturn(self, openai_client: OpenAI) -> None:
         """A ``/memories`` listing returned as tool text is accepted in the next turn.
 
         The listing is the literal shape the ``memory`` tool expects back from a ``view`` of
@@ -1326,8 +1253,6 @@ class TestMemoryTool:
              stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
              stdapi/models/chat/_adapters/_openai_common.py:parse_tool_content
         """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
         tools: list[dict[str, object]] = [_MEMORY_TOOL]
         user_prompt = "Remember: project name is 'stdapi'"
 
@@ -1389,6 +1314,7 @@ class TestMemoryTool:
 # ===========================================================================
 
 
+@pytest.mark.gateway("Anthropic Claude is not supported on the official API")
 class TestMixedServerAndCustomTools:
     """Anthropic system tools mixed with user-defined function tools in one request.
 
@@ -1401,9 +1327,7 @@ class TestMixedServerAndCustomTools:
          stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
     """
 
-    def test_server_tool_with_custom_tool(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_server_tool_with_custom_tool(self, openai_client: OpenAI) -> None:
         """``bash`` and a custom function tool coexist in one request.
 
         The custom ``get_time`` tool keeps ``toolConfig`` non-empty, so the request exercises
@@ -1412,8 +1336,6 @@ class TestMixedServerAndCustomTools:
 
         Ref: stdapi/models/chat/_adapters/_openai_chat_completion.py:build_tool_config
         """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
         tools: list[dict[str, object]] = [
             _BASH_TOOL,
             {
@@ -1443,9 +1365,7 @@ class TestMixedServerAndCustomTools:
             == resp.usage.prompt_tokens + resp.usage.completion_tokens
         )
 
-    def test_multiple_server_tools_together(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_multiple_server_tools_together(self, openai_client: OpenAI) -> None:
         """``bash`` and the text editor are promoted together in one request.
 
         Both names resolve to different versioned types and both need the
@@ -1454,8 +1374,6 @@ class TestMixedServerAndCustomTools:
 
         Ref: stdapi/models/chat/_anthropic_claude.py:_req_configure_tools
         """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
         tools: list[dict[str, object]] = [_BASH_TOOL, _TEXT_EDITOR_TOOL]
         resp = openai_client.chat.completions.create(
             model=_CLAUDE_CHEAP,
@@ -1484,6 +1402,7 @@ class TestMixedServerAndCustomTools:
 # ===========================================================================
 
 
+@pytest.mark.gateway("Anthropic Claude is not supported on the official API")
 class TestAnthropicClaudeChatCompletions:
     """Claude reasoning configuration and response envelope on the Chat Completions route.
 
@@ -1502,7 +1421,7 @@ class TestAnthropicClaudeChatCompletions:
     @pytest.mark.expensive
     @pytest.mark.parametrize("model", CLAUDE_ALL)
     def test_reasoning_effort_parameter(
-        self, openai_client: OpenAI, use_official_api: bool, model: str
+        self, openai_client: OpenAI, model: str
     ) -> None:
         """``reasoning_effort="minimal"`` is honored across the whole Claude matrix.
 
@@ -1514,8 +1433,6 @@ class TestAnthropicClaudeChatCompletions:
         Ref: stdapi/models/chat/anthropic_claude_37_to_45.py:ChatModel._req_configure_reasoning
              https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html
         """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
         try:
             resp = openai_client.chat.completions.create(
                 model=model,
@@ -1541,9 +1458,7 @@ class TestAnthropicClaudeChatCompletions:
             == resp.usage.prompt_tokens + resp.usage.completion_tokens
         )
 
-    def test_reasoning_effort_medium(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_reasoning_effort_medium(self, openai_client: OpenAI) -> None:
         """``reasoning_effort="medium"`` makes Claude emit ``reasoning_content``.
 
         On Haiku 4.5 the effort becomes a budget of half of ``max_completion_tokens``, so
@@ -1553,8 +1468,6 @@ class TestAnthropicClaudeChatCompletions:
         Ref: stdapi/models/chat/anthropic_claude_37_to_45.py:ChatModel._req_configure_reasoning
              stdapi/models/chat/_adapters/_openai_chat_completion.py:extract_output_text
         """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
         resp = openai_client.chat.completions.create(
             model=_CLAUDE_CHEAP,
             messages=[{"role": "user", "content": "Reply with OK."}],
@@ -1572,9 +1485,7 @@ class TestAnthropicClaudeChatCompletions:
             == resp.usage.prompt_tokens + resp.usage.completion_tokens
         )
 
-    def test_claude_streaming_with_reasoning(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_claude_streaming_with_reasoning(self, openai_client: OpenAI) -> None:
         """A reasoning stream is a ``chat.completion.chunk`` sequence led by a role-only delta.
 
         The gateway opens every stream with a synthetic ``delta={"role": "assistant"}`` chunk
@@ -1587,8 +1498,6 @@ class TestAnthropicClaudeChatCompletions:
              https://platform.claude.com/docs/en/build-with-claude/extended-thinking
              stdapi/models/chat/_adapters/_openai_chat_completion.py:format_stream
         """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
         response = openai_client.chat.completions.create(
             model=_CLAUDE_CHEAP,
             messages=[{"role": "user", "content": "Reply with OK."}],
@@ -1627,7 +1536,7 @@ class TestAnthropicClaudeChatCompletions:
         assert finish_reasons[0] in {"stop", "length"}
 
     def test_reasoning_effort_none_explicit_disable(
-        self, openai_client: OpenAI, use_official_api: bool
+        self, openai_client: OpenAI
     ) -> None:
         """``reasoning_effort="none"`` suppresses thinking on Haiku 4.5.
 
@@ -1640,8 +1549,6 @@ class TestAnthropicClaudeChatCompletions:
         Ref: stdapi/models/chat/_adapters/_openai_chat_completion.py:extract_reasoning
              stdapi/models/chat/anthropic_claude_37_to_45.py:ChatModel._req_configure_reasoning
         """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
         resp = openai_client.chat.completions.create(
             model=_CLAUDE_CHEAP,
             messages=[{"role": "user", "content": "Reply with OK."}],
@@ -1664,7 +1571,7 @@ class TestAnthropicClaudeChatCompletions:
     @pytest.mark.expensive
     @pytest.mark.parametrize("model", CLAUDE_SWEEP)
     def test_reasoning_effort_none_explicit_disable_all_models(
-        self, openai_client: OpenAI, use_official_api: bool, model: str
+        self, openai_client: OpenAI, model: str
     ) -> None:
         """``reasoning_effort="none"`` is accepted by every Claude model, reasoner or not.
 
@@ -1678,8 +1585,6 @@ class TestAnthropicClaudeChatCompletions:
         Ref: stdapi/models/chat/anthropic_claude_fable_mythos.py:ChatModel
              https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html
         """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
         try:
             resp = openai_client.chat.completions.create(
                 model=model,
@@ -1737,9 +1642,7 @@ class TestAnthropicClaudeChatCompletions:
             "created must be a Unix timestamp in seconds"
         )
 
-    def test_user_parameter_accepted(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    def test_user_parameter_accepted(self, openai_client: OpenAI) -> None:
         """The deprecated ``user`` field is accepted and never echoed back.
 
         Upstream has superseded ``user`` by ``safety_identifier`` and ``prompt_cache_key``;
@@ -1749,8 +1652,6 @@ class TestAnthropicClaudeChatCompletions:
         Ref: https://developers.openai.com/api/docs/guides/safety-best-practices#implement-safety-identifiers
              stdapi/routes/openai_chat_completions.py:create_chat_completion
         """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
         resp = openai_client.chat.completions.create(
             model=_CLAUDE_CHEAP,
             messages=[{"role": "user", "content": "Hi."}],

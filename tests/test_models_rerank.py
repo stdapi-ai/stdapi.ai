@@ -5,11 +5,9 @@ Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_R
      stdapi/models/rerank/__init__.py:get_rerank_model
 """
 
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from botocore.exceptions import ClientError
 
 import stdapi.aws
 import stdapi.main
@@ -26,9 +24,10 @@ from stdapi.models import (
 from stdapi.models.capabilities import Capability
 from stdapi.models.rerank import bedrock_rerank, get_rerank_model
 from stdapi.models.rerank.bedrock_rerank import RerankModel
-from stdapi.monitoring import REQUEST_ID, REQUEST_LOG, EventLog
+from stdapi.monitoring import REQUEST_ID
 from stdapi.pricing import Dimension
 from stdapi.usage import USAGE, init_model_state, init_usage
+from tests._helpers import make_client_error, make_model_details
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -90,14 +89,7 @@ class TestRerankSupportedRoutes:
 
     @staticmethod
     def _details(model_id: str, output_modalities: list[str]) -> ModelDetails:
-        return ModelDetails(
-            id=model_id,
-            name=model_id,
-            provider="Vendor",
-            input_modalities=["TEXT"],
-            output_modalities=output_modalities,
-            regions=["us-east-1"],
-        )
+        return make_model_details(model_id, output_modalities=output_modalities)
 
     @pytest.mark.parametrize("model_id", RERANK_MODELS)
     def test_reranking_output_modality_advertised(self, model_id: str) -> None:
@@ -178,24 +170,6 @@ def _bedrock_config(request: dict[str, Any]) -> dict[str, Any]:
     return request["rerankingConfiguration"]["bedrockRerankingConfiguration"]  # type: ignore[no-any-return]
 
 
-def _throttling_error() -> ClientError:
-    response: Any = {
-        "Error": {"Code": "ThrottlingException", "Message": "Throttled"},
-        "ResponseMetadata": {"HTTPStatusCode": 429},
-    }
-    return ClientError(response, "Rerank")
-
-
-def _new_log() -> EventLog:
-    return EventLog(
-        type="request",
-        level="info",
-        date=datetime.now(UTC),
-        server_id="test",
-        server_version="0.0.0",
-    )
-
-
 class TestRerankCall:
     """RerankModel.rerank: request building, pagination, usage recording.
 
@@ -207,15 +181,13 @@ class TestRerankCall:
     """
 
     @pytest.fixture(autouse=True)
-    def _request_context(self) -> Generator[None]:
-        """Provide request ID/log and fresh usage state for each test."""
+    def _request_context(self, request_log: dict[str, Any]) -> Generator[None]:
+        """Provide request ID and fresh usage state for each test; request_log binds REQUEST_LOG."""
         id_token = REQUEST_ID.set("req1")
-        log_token = REQUEST_LOG.set(_new_log())
         usage_token = init_usage()
         init_model_state()
         yield
         USAGE.reset(usage_token)
-        REQUEST_LOG.reset(log_token)
         REQUEST_ID.reset(id_token)
 
     @pytest.fixture
@@ -344,7 +316,13 @@ class TestRerankCall:
              stdapi/models/rerank/bedrock_rerank.py:agent_runtime_client
         """
         regions = ["us-east-1", "us-west-2"]
-        throttled = _StubAgentRuntimeClient([_throttling_error()])
+        throttled = _StubAgentRuntimeClient(
+            [
+                make_client_error(
+                    "ThrottlingException", "Rerank", message="Throttled", status=429
+                )
+            ]
+        )
         serving = _StubAgentRuntimeClient(
             [{"results": [{"index": 0, "relevanceScore": 0.7}]}]
         )

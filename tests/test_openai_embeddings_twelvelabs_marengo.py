@@ -15,6 +15,8 @@ from typing import Any
 import pytest
 from openai import BadRequestError, OpenAI
 
+from tests._helpers import assert_embedding_list
+
 #: Only Marengo generation currently reachable on Bedrock.
 MARANGO_V3 = "twelvelabs.marengo-embed-3-0-v1:0"
 
@@ -28,20 +30,13 @@ MARANGO_MODELS = [MARANGO_V3]
 _MIN_DIMENSIONS = 256
 
 
+@pytest.mark.gateway("TwelveLabs models are not available on the official OpenAI API")
 class TestTwelveLabsMarengoEmbeddings:
     """Live behavior of the TwelveLabs Marengo embedding families.
 
     Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-marengo-3.html
          stdapi/models/embedding/twelvelabs_marengo_embed.py:EmbeddingModel.embed_text
     """
-
-    @pytest.fixture(autouse=True)
-    def _skip_on_official_api(self, use_official_api: bool) -> None:
-        """Skip the whole class when the target is the official OpenAI API."""
-        if use_official_api:
-            pytest.skip(
-                "TwelveLabs models are not available on the official OpenAI API"
-            )
 
     @pytest.mark.parametrize("model_id", MARANGO_MODELS)
     def test_text_single(self, openai_client: OpenAI, model_id: str) -> None:
@@ -56,14 +51,7 @@ class TestTwelveLabsMarengoEmbeddings:
         response = openai_client.embeddings.create(
             model=model_id, input="Hello from TwelveLabs Marengo embeddings."
         )
-        assert response.object == "list"
-        assert len(response.data) == 1
-        item = response.data[0]
-        assert item.object == "embedding"
-        assert item.index == 0
-        assert isinstance(item.embedding, list)
-        assert len(item.embedding) >= _MIN_DIMENSIONS
-        assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
+        assert_embedding_list(response, count=1, min_dimensions=_MIN_DIMENSIONS)
 
     @pytest.mark.parametrize("model_id", MARANGO_MODELS)
     def test_image_single(
@@ -80,14 +68,7 @@ class TestTwelveLabsMarengoEmbeddings:
         response = openai_client.embeddings.create(
             model=model_id, input=sample_image_file_base64
         )
-        assert response.object == "list"
-        assert len(response.data) == 1
-        item = response.data[0]
-        assert item.object == "embedding"
-        assert item.index == 0
-        assert isinstance(item.embedding, list)
-        assert len(item.embedding) >= _MIN_DIMENSIONS
-        assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
+        assert_embedding_list(response, count=1, min_dimensions=_MIN_DIMENSIONS)
 
     @pytest.mark.slow
     @pytest.mark.parametrize("model_id", MARANGO_MODELS)
@@ -164,14 +145,7 @@ class TestTwelveLabsMarengoEmbeddings:
             input=sample_image_file_base64,
             extra_body={"force_s3_data": True},
         )
-        assert response.object == "list"
-        assert len(response.data) == 1
-        item = response.data[0]
-        assert item.object == "embedding"
-        assert item.index == 0
-        assert isinstance(item.embedding, list)
-        assert len(item.embedding) >= _MIN_DIMENSIONS
-        assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
+        assert_embedding_list(response, count=1, min_dimensions=_MIN_DIMENSIONS)
 
     @pytest.mark.slow
     @pytest.mark.parametrize("model_id", MARANGO_MODELS)
@@ -287,14 +261,8 @@ class TestTwelveLabsMarengoEmbeddings:
         inputs = ["A beautiful sunset over the ocean.", sample_image_file_base64]
         response = openai_client.embeddings.create(model=model_id, input=inputs)
 
-        assert response.object == "list"
-        assert len(response.data) == 1  # Combined into single text_image embedding
-        item = response.data[0]
-        assert item.object == "embedding"
-        assert item.index == 0
-        assert isinstance(item.embedding, list)
-        assert len(item.embedding) >= _MIN_DIMENSIONS
-        assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
+        # Combined into a single text_image embedding.
+        assert_embedding_list(response, count=1, min_dimensions=_MIN_DIMENSIONS)
 
 
 @pytest.mark.local

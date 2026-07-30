@@ -143,6 +143,11 @@ class TestImagesVariationsBasic:
 class TestImagesVariationsErrors:
     """Rejections specific to variations: unknown, non-image and non-variation models."""
 
+    @pytest.mark.gateway(
+        "dall-e-2 was the only OpenAI model with a variations endpoint and it has "
+        "been retired, so /v1/images/variations answers an HTML 5xx upstream "
+        "instead of resolving a model at all"
+    )
     def test_invalid_model(
         self, openai_client: OpenAI, sample_image_file: bytes
     ) -> None:
@@ -172,8 +177,12 @@ class TestImagesVariationsErrors:
         else:
             assert error.status_code == 404
 
+    @pytest.mark.gateway(
+        "Bedrock model catalog (generation/editing-only models) is "
+        "gateway-specific; no equivalent model exists on the official API"
+    )
     def test_unsupported_model_for_variations(
-        self, openai_client: OpenAI, sample_image_file: bytes, use_official_api: bool
+        self, openai_client: OpenAI, sample_image_file: bytes
     ) -> None:
         """A model whose job class implements no variation operation is rejected.
 
@@ -184,11 +193,6 @@ class TestImagesVariationsErrors:
         Ref: stdapi/models/image/__init__.py:ImageGenerationJobBase._create_image_variations
              stdapi/models/image/stability_stable_fast_upscale.py:_FastUpscaleJob
         """
-        if use_official_api:
-            pytest.skip(
-                "Bedrock model catalog (generation/editing-only models) is "
-                "gateway-specific; no equivalent model exists on the official API"
-            )
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.images.create_variation(
                 image=sample_image_file,
@@ -202,8 +206,12 @@ class TestImagesVariationsErrors:
         assert "image variations are not supported by" in body["message"].lower()
         assert "stability.stable-fast-upscale-v1:0" in body["message"]
 
+    @pytest.mark.gateway(
+        "Bedrock chat model catalog is gateway-specific; no equivalent "
+        "model exists on the official API"
+    )
     def test_non_image_model_for_variations(
-        self, openai_client: OpenAI, sample_image_file: bytes, use_official_api: bool
+        self, openai_client: OpenAI, sample_image_file: bytes
     ) -> None:
         """A text-output chat model is rejected on the IMAGE output modality check.
 
@@ -212,11 +220,6 @@ class TestImagesVariationsErrors:
 
         Ref: stdapi/models/__init__.py:validate_model
         """
-        if use_official_api:
-            pytest.skip(
-                "Bedrock chat model catalog is gateway-specific; no equivalent "
-                "model exists on the official API"
-            )
         # Use a chat model which doesn't support image variations at all
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.images.create_variation(
@@ -238,11 +241,7 @@ class TestImagesVariationsProviderParams:
          stdapi/routes/openai_images_variations.py:_KNOWN_PARAMS
     """
 
-    @pytest.fixture(autouse=True)
-    def _skip_non_local(self, use_official_api: bool) -> None:
-        """Skip when running against the official API (Bedrock-only extra parameters)."""
-        if use_official_api:
-            pytest.skip("Unittest only for local tests.")
+    pytestmark = pytest.mark.gateway("Unittest only for local tests.")
 
     @pytest.mark.expensive
     def test_variation_with_strength(
@@ -314,14 +313,10 @@ class TestImagesVariationsJsonBody:
     Ref: stdapi/types/openai_images.py:ImageVariationJsonBody
     """
 
-    @pytest.fixture(autouse=True)
-    def _skip_on_official_api(self, use_official_api: bool) -> None:
-        """Skip when running against the official API (variations removed, model unavailable)."""
-        if use_official_api:
-            pytest.skip(
-                "Variations endpoint removed from official OpenAI API; "
-                "stability.sd3-5-large-v1:0 not available there."
-            )
+    pytestmark = pytest.mark.gateway(
+        "Variations endpoint removed from official OpenAI API; "
+        "stability.sd3-5-large-v1:0 not available there."
+    )
 
     @pytest.mark.expensive
     def test_variation_with_image_url(

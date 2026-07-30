@@ -1487,12 +1487,12 @@ class TestChatCompletions:
         assert response.usage is not None
         assert response.usage.prompt_tokens > 0, "The audio is billed as input tokens"
 
+    @pytest.mark.gateway("Audio file handling as file not supported by OpenAI API")
     def test_file_part_audio_as_file(
         self,
         openai_client: OpenAI,
         chat_audio_model: str,
         sample_audio_mp3_file_base64: str,
-        use_official_api: bool,
     ) -> None:
         """An audio payload sent through a ``file`` part is routed to the audio block.
 
@@ -1503,9 +1503,6 @@ class TestChatCompletions:
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ContentBlock.html
              stdapi/input_file.py:InputFile.to_bedrock_content_block
         """
-        if use_official_api:
-            pytest.skip("Audio file handling as file not supported by OpenAI API")
-
         response = openai_client.chat.completions.create(
             model=chat_audio_model,
             messages=[
@@ -1609,13 +1606,10 @@ class TestChatCompletions:
         assert body["type"] == "invalid_request_error"
         assert "base64" in body["message"].lower() or "data" in body["message"].lower()
 
+    @pytest.mark.gateway("File content part shape is implementation-specific here")
     @pytest.mark.parametrize("bad_b64", ["@@@", "!", "==?"])
     def test_file_part_invalid_base64_error(
-        self,
-        openai_client: OpenAI,
-        chat_model: str,
-        bad_b64: str,
-        use_official_api: bool,
+        self, openai_client: OpenAI, chat_model: str, bad_b64: str
     ) -> None:
         """A ``file`` part whose ``file_data`` is undecodable base64 is a 400.
 
@@ -1628,8 +1622,6 @@ class TestChatCompletions:
         Ref: stdapi/input_file.py:_Base64Source._read
              stdapi/utils.py:b64decode
         """
-        if use_official_api:
-            pytest.skip("File content part shape is implementation-specific here")
         file_data = b64encode(b"A short text document.\n").decode("utf-8") + bad_b64
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.chat.completions.create(
@@ -1656,8 +1648,9 @@ class TestChatCompletions:
         assert "base64" in message, f"Unexpected rejection reason: {body['message']}"
         assert bad_b64 not in body["message"], "Payload echoed in the error message"
 
+    @pytest.mark.gateway("File content part shape is implementation-specific here")
     def test_file_part_unsupported_mime_error(
-        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
+        self, openai_client: OpenAI, chat_model: str
     ) -> None:
         """A file whose sniffed MIME type is not a Bedrock document format is a 400.
 
@@ -1669,8 +1662,6 @@ class TestChatCompletions:
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_DocumentBlock.html
              stdapi/input_file.py:InputFile.to_bedrock_content_block
         """
-        if use_official_api:
-            pytest.skip("File content part shape is implementation-specific here")
         # Create a minimal glTF binary header to trigger model/gltf-binary detection
         # Magic: glTF (0x46546C67), version: 2, length: 20 bytes
         gltf_bytes = (
@@ -1707,8 +1698,9 @@ class TestChatCompletions:
         )
         assert body["code"] is None
 
+    @pytest.mark.gateway("Project-specific restriction: parallel_tool_calls=False")
     def test_validation_parallel_tool_calls_false_error(
-        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
+        self, openai_client: OpenAI, chat_model: str
     ) -> None:
         """``parallel_tool_calls=False`` is rejected with a 400 on this backend.
 
@@ -1719,8 +1711,6 @@ class TestChatCompletions:
         Ref: https://developers.openai.com/api/docs/guides/function-calling#parallel-function-calling
              stdapi/types/openai_chat_completions.py:CompletionCreateParams._unsupported
         """
-        if use_official_api:
-            pytest.skip("Project-specific restriction: parallel_tool_calls=False")
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.chat.completions.create(
                 model=chat_model,
@@ -1735,8 +1725,9 @@ class TestChatCompletions:
         assert "parallel_tool_calls" in body["message"].lower()
         assert body["code"] is None
 
+    @pytest.mark.gateway("Project-specific restriction: stream with n>1 unsupported")
     def test_validation_stream_n_gt1_error(
-        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
+        self, openai_client: OpenAI, chat_model: str
     ) -> None:
         """``n>1`` together with ``stream=True`` is rejected with a 400.
 
@@ -1746,8 +1737,6 @@ class TestChatCompletions:
 
         Ref: stdapi/types/openai_chat_completions.py:CompletionCreateParams._unsupported
         """
-        if use_official_api:
-            pytest.skip("Project-specific restriction: stream with n>1 unsupported")
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.chat.completions.create(
                 model=chat_model,
@@ -1763,8 +1752,11 @@ class TestChatCompletions:
         assert "stream" in body["message"].lower()
         assert body["code"] is None
 
+    @pytest.mark.gateway(
+        "Bedrock outputConfig is not available on the official OpenAI API"
+    )
     def test_response_format_json_object(
-        self, openai_client: OpenAI, chat_reasoning_model: str, use_official_api: bool
+        self, openai_client: OpenAI, chat_reasoning_model: str
     ) -> None:
         """A one-property ``json_schema`` response format yields exactly that JSON object.
 
@@ -1775,10 +1767,6 @@ class TestChatCompletions:
         Ref: https://developers.openai.com/api/docs/guides/structured-outputs
              stdapi/models/chat/_adapters/_openai_chat_completion.py:build_output_config
         """
-        if use_official_api:
-            pytest.skip(
-                "Bedrock outputConfig is not available on the official OpenAI API"
-            )
         schema = {
             "type": "object",
             "properties": {"status": {"type": "string"}},
@@ -1805,8 +1793,9 @@ class TestChatCompletions:
         assert parsed.get("status") == "ok"
         assert response.choices[0].finish_reason in ("stop", "length")
 
+    @pytest.mark.gateway("Unsupported fields are project-specific here")
     def test_unsupported_seed_error(
-        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
+        self, openai_client: OpenAI, chat_model: str
     ) -> None:
         """``seed`` is accepted by the gateway but rejected by the model as a 400.
 
@@ -1817,8 +1806,6 @@ class TestChatCompletions:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/troubleshooting-api-error-codes.html
              stdapi/aws_bedrock.py:AWS_ERROR_MAP
         """
-        if use_official_api:
-            pytest.skip("Unsupported fields are project-specific here")
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.chat.completions.create(
                 model=chat_model, messages=[{"role": "user", "content": "Hi"}], seed=123
@@ -1851,13 +1838,9 @@ class TestChatCompletions:
             ),
         ],
     )
+    @pytest.mark.gateway("Unsupported fields are project-specific here")
     def test_unsupported_parameter_error(
-        self,
-        openai_client: OpenAI,
-        chat_model: str,
-        use_official_api: bool,
-        param: str,
-        value: object,
+        self, openai_client: OpenAI, chat_model: str, param: str, value: object
     ) -> None:
         """Blocklisted upstream parameters are refused up front, naming the field.
 
@@ -1870,8 +1853,6 @@ class TestChatCompletions:
              https://developers.openai.com/api/docs/guides/predicted-outputs
              stdapi/types/openai_chat_completions.py:CompletionCreateParams._UNSUPPORTED
         """
-        if use_official_api:
-            pytest.skip("Unsupported fields are project-specific here")
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.chat.completions.create(  # type: ignore[call-overload]
                 model=chat_model,
@@ -1889,8 +1870,9 @@ class TestChatCompletions:
             "The gateway envelope always carries all four keys"
         )
 
+    @pytest.mark.gateway("Unsupported fields are project-specific here")
     def test_unsupported_top_logprobs_error(
-        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
+        self, openai_client: OpenAI, chat_model: str
     ) -> None:
         """``top_logprobs`` is forwarded to the model, which rejects it as a 400.
 
@@ -1901,8 +1883,6 @@ class TestChatCompletions:
         Ref: https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
              stdapi/aws_bedrock.py:AWS_ERROR_MAP
         """
-        if use_official_api:
-            pytest.skip("Unsupported fields are project-specific here")
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.chat.completions.create(
                 model=chat_model,
@@ -2049,8 +2029,12 @@ class TestChatCompletions:
             "prompt_tokens must include the cached prefix"
         )
 
+    @pytest.mark.gateway(
+        "gpt-5-nano rejects prompt_cache_options with "
+        "'prompt_cache_options is not supported on this model'"
+    )
     def test_prompt_cache_explicit_breakpoint(
-        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
+        self, openai_client: OpenAI, chat_model: str
     ) -> None:
         """An explicit ``prompt_cache_breakpoint`` caches the marked prompt prefix.
 
@@ -2064,11 +2048,6 @@ class TestChatCompletions:
              https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html
              stdapi/models/chat/_adapters/_openai_common.py:resolve_cache_ttl
         """
-        if use_official_api:
-            pytest.skip(
-                "gpt-5-nano rejects prompt_cache_options with "
-                "'prompt_cache_options is not supported on this model'"
-            )
         messages: list[Any] = [
             {
                 "role": "system",
@@ -2100,8 +2079,9 @@ class TestChatCompletions:
             "prompt_tokens must include the cached prefix"
         )
 
+    @pytest.mark.gateway("requestMetadata limits are a Bedrock-specific feature")
     def test_metadata_over_bedrock_limits_rejected(
-        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
+        self, openai_client: OpenAI, chat_model: str
     ) -> None:
         """Metadata breaking the Bedrock ``requestMetadata`` limits returns a clean 400.
 
@@ -2113,8 +2093,6 @@ class TestChatCompletions:
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
              stdapi/monitoring.py:build_metadata
         """
-        if use_official_api:
-            pytest.skip("requestMetadata limits are a Bedrock-specific feature")
         with pytest.raises(BadRequestError) as too_many:
             openai_client.chat.completions.create(
                 model=chat_model,
@@ -2139,8 +2117,13 @@ class TestChatCompletions:
         assert bad_charset_body["type"] == "invalid_request_error"
         assert bad_charset_body["code"] == "ValidationException"
 
+    @pytest.mark.gateway(
+        "gpt-5-nano rejects reasoning_effort='max' with an "
+        "unsupported_value error: it only accepts 'minimal', 'low', "
+        "'medium' and 'high'"
+    )
     def test_reasoning_effort_max_parameter(
-        self, openai_client: OpenAI, chat_reasoning_model: str, use_official_api: bool
+        self, openai_client: OpenAI, chat_reasoning_model: str
     ) -> None:
         """The upstream ``max`` effort level is accepted and answered.
 
@@ -2151,12 +2134,6 @@ class TestChatCompletions:
         Ref: https://developers.openai.com/api/docs/guides/reasoning#reasoning-effort
              stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel._req_configure_reasoning
         """
-        if use_official_api:
-            pytest.skip(
-                "gpt-5-nano rejects reasoning_effort='max' with an "
-                "unsupported_value error: it only accepts 'minimal', 'low', "
-                "'medium' and 'high'"
-            )
         response = openai_client.chat.completions.create(
             model=chat_reasoning_model,
             messages=[{"role": "user", "content": "Reply with OK."}],
@@ -2193,8 +2170,9 @@ class TestChatCompletions:
         assert response.choices[0].message.content
         assert response.choices[0].logprobs is None
 
+    @pytest.mark.gateway("Custom tools unsupported only on this backend")
     def test_custom_tools_in_tools_unsupported(
-        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
+        self, openai_client: OpenAI, chat_model: str
     ) -> None:
         """A ``custom`` tool definition in ``tools`` is rejected with a 400.
 
@@ -2204,8 +2182,6 @@ class TestChatCompletions:
         Ref: https://developers.openai.com/api/docs/guides/function-calling#custom-tools
              stdapi/types/openai_chat_completions.py:CompletionCreateParams._validate_no_custom_tools
         """
-        if use_official_api:
-            pytest.skip("Custom tools unsupported only on this backend")
         tools = [
             {
                 "type": "custom",
@@ -2228,8 +2204,9 @@ class TestChatCompletions:
         assert body["type"] == "invalid_request_error"
         assert "custom" in body["message"].lower()
 
+    @pytest.mark.gateway("Custom tool_choice unsupported only on this backend")
     def test_tool_choice_custom_unsupported(
-        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
+        self, openai_client: OpenAI, chat_model: str
     ) -> None:
         """A ``custom`` ``tool_choice`` is rejected with a 400 even without custom tools.
 
@@ -2239,8 +2216,6 @@ class TestChatCompletions:
         Ref: https://developers.openai.com/api/docs/guides/function-calling#custom-tools
              stdapi/types/openai_chat_completions.py:CompletionCreateParams._validate_no_custom_tools
         """
-        if use_official_api:
-            pytest.skip("Custom tool_choice unsupported only on this backend")
         tool_choice = {"type": "custom", "custom": {"name": "my_custom"}}
         with pytest.raises(BadRequestError) as exc_info:
             openai_client.chat.completions.create(  # type: ignore[call-overload]
@@ -2320,8 +2295,11 @@ class TestChatCompletions:
         assert resp.usage is not None
         assert resp.usage.completion_tokens > 0
 
+    @pytest.mark.gateway(
+        "Qwen thinking response parameter is not supported on the official API"
+    )
     def test_qwen_thinking_effort_parameter(
-        self, openai_client: OpenAI, chat_reasoning_model: str, use_official_api: bool
+        self, openai_client: OpenAI, chat_reasoning_model: str
     ) -> None:
         """The Qwen ``enable_thinking``/``thinking_budget`` extras drive native reasoning.
 
@@ -2332,11 +2310,6 @@ class TestChatCompletions:
         Ref: stdapi/types/openai_chat_completions.py:CompletionCreateParams
              stdapi/models/chat/_anthropic_claude.py:AnthropicClaudeChatModel._req_configure_reasoning
         """
-        if use_official_api:
-            pytest.skip(
-                "Qwen thinking response parameter is not supported on the official API"
-            )
-
         resp = openai_client.chat.completions.create(
             model=chat_reasoning_model,
             messages=[{"role": "user", "content": "Reply with OK."}],
@@ -2352,8 +2325,11 @@ class TestChatCompletions:
         assert resp.usage is not None
         assert resp.usage.completion_tokens > 0
 
+    @pytest.mark.gateway(
+        "Qwen thinking response parameter is not supported on the official API"
+    )
     def test_unsupported_thinking_param_combinations(
-        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
+        self, openai_client: OpenAI, chat_model: str
     ) -> None:
         """Contradictory thinking parameters are each rejected with a naming 400.
 
@@ -2365,11 +2341,6 @@ class TestChatCompletions:
         Ref: stdapi/types/openai_chat_completions.py:CompletionCreateParams._validate_thinking_options
              stdapi/models/chat/deepseek_v3.py:ChatModel._req_configure_reasoning
         """
-        if use_official_api:
-            pytest.skip(
-                "Qwen thinking response parameter is not supported on the official API"
-            )
-
         # reasoning_effort + thinking_budget
         with pytest.raises(BadRequestError) as both_budgets:
             openai_client.chat.completions.create(
@@ -2412,9 +2383,10 @@ class TestChatCompletions:
         assert "thinking_budget" in budget_unsupported_body["message"]
 
     @pytest.mark.slow
-    def test_deepseek_reasoning_response_parameter(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    @pytest.mark.gateway(
+        "Deepseek reasoning response parameter is not supported on the official API"
+    )
+    def test_deepseek_reasoning_response_parameter(self, openai_client: OpenAI) -> None:
         """DeepSeek reasoning maps to a categorical effort and round-trips ``reasoning_content``.
 
         DeepSeek takes a string ``reasoning_config`` rather than a token budget, and
@@ -2425,12 +2397,6 @@ class TestChatCompletions:
         Ref: stdapi/models/chat/deepseek_v3.py:ChatModel._req_configure_reasoning
              stdapi/models/chat/_adapters/_openai_chat_completion.py:extract_output_text
         """
-        if use_official_api:
-            pytest.skip(
-                "Deepseek reasoning response parameter "
-                "is not supported on the official API"
-            )
-
         # Test reasoning effort
         resp = openai_client.chat.completions.create(
             model="deepseek.v3-v1:0",
@@ -2846,12 +2812,9 @@ class TestChatCompletions:
             assert choice.finish_reason == "tool_calls"
 
     @pytest.mark.slow
+    @pytest.mark.gateway("Application inference profiles are AWS Bedrock specific")
     async def test_inference_profile_as_model(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        aws_region: str,
-        aws_account_id: str,
+        self, openai_client: OpenAI, aws_region: str, aws_account_id: str
     ) -> None:
         """An application inference profile ARN is accepted as the ``model`` value.
 
@@ -2862,9 +2825,6 @@ class TestChatCompletions:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-use.html
              stdapi/models/__init__.py:validate_model
         """
-        if use_official_api:
-            pytest.skip("Application inference profiles are AWS Bedrock specific")
-
         inference_profile_arn = None
         async with get_session().create_client("bedrock") as bedrock:
             try:
@@ -2917,12 +2877,9 @@ class TestChatCompletions:
                         inferenceProfileIdentifier=inference_profile_arn
                     )
 
+    @pytest.mark.gateway("Prompt routers are AWS Bedrock specific")
     async def test_prompt_router_as_model(
-        self,
-        openai_client: OpenAI,
-        use_official_api: bool,
-        aws_region: str,
-        aws_account_id: str,
+        self, openai_client: OpenAI, aws_region: str, aws_account_id: str
     ) -> None:
         """A default prompt-router ARN works as a ``model``, and a bogus ARN is a 400.
 
@@ -2934,9 +2891,6 @@ class TestChatCompletions:
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
              stdapi/models/__init__.py:_validate_model_from_arn
         """
-        if use_official_api:
-            pytest.skip("Prompt routers are AWS Bedrock specific")
-
         # Test using the prompt router as model parameter
         response = openai_client.chat.completions.create(
             model=f"arn:aws:bedrock:{aws_region}:{aws_account_id}:default-prompt-router/amazon.nova:1",
@@ -3194,9 +3148,10 @@ class TestChatCompletions:
         assert response.usage
         assert response.usage.completion_tokens <= max_tokens
 
-    def test_deprecated_model_fallback(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    @pytest.mark.gateway(
+        "Deprecated model fallback is not available on the official OpenAI API"
+    )
+    def test_deprecated_model_fallback(self, openai_client: OpenAI) -> None:
         """A deprecated model ID is transparently served by its replacement model.
 
         ``amazon.titan-text-lite-v1`` no longer exists in the Bedrock catalogue; the
@@ -3207,11 +3162,6 @@ class TestChatCompletions:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle.html
              stdapi/models/__init__.py:_resolve_deprecated
         """
-        if use_official_api:
-            pytest.skip(
-                "Deprecated model fallback is not available on the official OpenAI API"
-            )
-
         response = openai_client.chat.completions.create(
             model="amazon.titan-text-lite-v1",
             messages=[{"role": "user", "content": "Say hello."}],
@@ -3224,8 +3174,11 @@ class TestChatCompletions:
             "The response must name the replacement model that served the request"
         )
 
+    @pytest.mark.gateway(
+        "Bedrock outputConfig is not available on the official OpenAI API"
+    )
     def test_response_format_json_schema(
-        self, openai_client: OpenAI, chat_reasoning_model: str, use_official_api: bool
+        self, openai_client: OpenAI, chat_reasoning_model: str
     ) -> None:
         """A multi-property ``json_schema`` response format is enforced by the model.
 
@@ -3236,10 +3189,6 @@ class TestChatCompletions:
         Ref: https://developers.openai.com/api/docs/guides/structured-outputs#supported-schemas
              stdapi/models/chat/_adapters/_openai_chat_completion.py:build_output_config
         """
-        if use_official_api:
-            pytest.skip(
-                "Bedrock outputConfig is not available on the official OpenAI API"
-            )
         schema = {
             "type": "object",
             "properties": {
@@ -3271,9 +3220,8 @@ class TestChatCompletions:
         assert isinstance(parsed["capital"], str)
         assert "paris" in parsed["capital"].lower()
 
-    def test_metadata_accepted(
-        self, openai_client: OpenAI, chat_model: str, use_official_api: bool
-    ) -> None:
+    @pytest.mark.gateway("requestMetadata is a Bedrock-specific feature")
+    def test_metadata_accepted(self, openai_client: OpenAI, chat_model: str) -> None:
         """``metadata`` is forwarded as Bedrock ``requestMetadata`` and echoed back.
 
         The pairs are attached to the Bedrock invocation for log filtering, and the
@@ -3283,8 +3231,6 @@ class TestChatCompletions:
         Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
              stdapi/routes/openai_chat_completions.py:create_chat_completion
         """
-        if use_official_api:
-            pytest.skip("requestMetadata is a Bedrock-specific feature")
         metadata = {"test-key": "test-value", "session": "unit-test"}
         response = openai_client.chat.completions.create(
             model=chat_model,

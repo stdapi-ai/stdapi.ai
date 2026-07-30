@@ -57,24 +57,6 @@ _WEATHER_TOOL: dict[str, object] = {
 }
 
 
-@pytest.fixture
-def _skip_system_role_on_official_api(use_official_api: bool) -> None:
-    """Skip when the target is the official API, which has no system-role messages.
-
-    Upstream carries the system prompt only in the top-level ``system`` field; a
-    ``system`` role inside ``messages`` is a stdapi extension.
-    """
-    if use_official_api:
-        pytest.skip("system-role messages in `messages` are a stdapi extension")
-
-
-@pytest.fixture
-def _skip_non_claude_on_official_api(use_official_api: bool) -> None:
-    """Skip when the target is the official API, which only serves Claude models."""
-    if use_official_api:
-        pytest.skip("Only Claude models are supported by official API")
-
-
 def _register_test_model(
     monkeypatch: pytest.MonkeyPatch, model_id: str, name: str, **extra: object
 ) -> ModelDetails:
@@ -265,7 +247,7 @@ class TestAnthropicMessages:
         assert response.content[0].type == "text"
         assert "teal" in response.content[0].text.lower()
 
-    @pytest.mark.usefixtures("_skip_system_role_on_official_api")
+    @pytest.mark.gateway("system-role messages in `messages` are a stdapi extension")
     def test_system_role_in_messages(
         self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
@@ -295,7 +277,7 @@ class TestAnthropicMessages:
         assert response.content[0].type == "text"
         assert "teal" in response.content[0].text.lower()
 
-    @pytest.mark.usefixtures("_skip_system_role_on_official_api")
+    @pytest.mark.gateway("system-role messages in `messages` are a stdapi extension")
     def test_system_role_merged_with_system_field(
         self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
@@ -323,7 +305,7 @@ class TestAnthropicMessages:
         assert response.content[0].type == "text"
         assert "teal" in response.content[0].text.lower()
 
-    @pytest.mark.usefixtures("_skip_system_role_on_official_api")
+    @pytest.mark.gateway("system-role messages in `messages` are a stdapi extension")
     def test_system_role_list_content_in_messages(
         self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
@@ -358,7 +340,7 @@ class TestAnthropicMessages:
         assert response.content[0].type == "text"
         assert "teal" in response.content[0].text.lower()
 
-    @pytest.mark.usefixtures("_skip_system_role_on_official_api")
+    @pytest.mark.gateway("system-role messages in `messages` are a stdapi extension")
     def test_system_role_passthrough_as_message(
         self, anthropic_client: Anthropic, anthropic_system_as_messages_model: str
     ) -> None:
@@ -394,7 +376,7 @@ class TestAnthropicMessages:
         )
         assert response.stop_reason in {"end_turn", "max_tokens"}
 
-    @pytest.mark.usefixtures("_skip_system_role_on_official_api")
+    @pytest.mark.gateway("system-role messages in `messages` are a stdapi extension")
     def test_system_role_forwarded_between_user_and_assistant_turns(
         self, anthropic_client: Anthropic, anthropic_system_as_messages_model: str
     ) -> None:
@@ -901,7 +883,7 @@ class TestAnthropicMessages:
         assert len(text_blocks) >= 1
         assert "405" in text_blocks[0].text
 
-    @pytest.mark.usefixtures("_skip_non_claude_on_official_api")
+    @pytest.mark.gateway("Only Claude models are supported by official API")
     def test_extended_thinking_non_claude_enabled(
         self, anthropic_client: Anthropic
     ) -> None:
@@ -932,7 +914,7 @@ class TestAnthropicMessages:
         assert len(text_blocks) >= 1
         assert "405" in text_blocks[0].text
 
-    @pytest.mark.usefixtures("_skip_non_claude_on_official_api")
+    @pytest.mark.gateway("Only Claude models are supported by official API")
     def test_output_config_effort_without_thinking(
         self, anthropic_client: Anthropic
     ) -> None:
@@ -994,7 +976,7 @@ class TestAnthropicMessages:
             "thinking must be streamed before the answer text"
         )
 
-    @pytest.mark.usefixtures("_skip_non_claude_on_official_api")
+    @pytest.mark.gateway("Only Claude models are supported by official API")
     def test_extended_thinking_non_claude_streaming(
         self, anthropic_client: Anthropic
     ) -> None:
@@ -1204,11 +1186,9 @@ class TestAnthropicMessages:
         if not use_anthropic_api:
             assert excinfo.value.type == "invalid_request_error"
 
+    @pytest.mark.gateway("the AWS-hosted official endpoint accepts max_tokens=0")
     def test_invalid_max_tokens_error(
-        self,
-        anthropic_client: Anthropic,
-        anthropic_chat_basic_model: str,
-        use_official_api: bool,
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
         """``max_tokens: 0`` is rejected by this gateway with HTTP 400.
 
@@ -1221,8 +1201,6 @@ class TestAnthropicMessages:
              stdapi/types/anthropic_messages.py:MessageCreateParams
              stdapi/main.py:handle_validation_exception
         """
-        if use_official_api:
-            pytest.skip("the AWS-hosted official endpoint accepts max_tokens=0")
         with pytest.raises(BadRequestError) as excinfo:
             anthropic_client.messages.create(
                 model=anthropic_chat_basic_model,
@@ -3215,7 +3193,7 @@ class TestAnthropicCountTokens:
             f"a one-sentence system prompt cannot cost {response.input_tokens} tokens"
         )
 
-    @pytest.mark.usefixtures("_skip_system_role_on_official_api")
+    @pytest.mark.gateway("system-role messages in `messages` are a stdapi extension")
     def test_count_tokens_system_role_in_messages(
         self, anthropic_client: Anthropic, anthropic_count_tokens_model: str
     ) -> None:
@@ -3246,7 +3224,7 @@ class TestAnthropicCountTokens:
         assert response_without.input_tokens > 0
         assert response_with.input_tokens > response_without.input_tokens
 
-    @pytest.mark.usefixtures("_skip_system_role_on_official_api")
+    @pytest.mark.gateway("system-role messages in `messages` are a stdapi extension")
     def test_count_tokens_system_role_equivalent_to_system_field(
         self, anthropic_client: Anthropic, anthropic_count_tokens_model: str
     ) -> None:

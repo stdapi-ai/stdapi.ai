@@ -18,7 +18,6 @@ Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Convers
 """
 
 from asyncio import Event, create_task, gather, wait_for
-from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 
@@ -30,7 +29,6 @@ import stdapi.models
 from stdapi import usage
 from stdapi.config import SETTINGS
 from stdapi.models import ModelBase, _count_grounding_tool_uses, _iter_invoke_stream
-from stdapi.monitoring import REQUEST_LOG, EventLog
 from stdapi.pricing import Dimension, Price, PriceKey, Service, _state
 from stdapi.region_routing import RegionRouter
 from stdapi.usage import compute_costs
@@ -708,6 +706,7 @@ class TestConverseFailoverUsage:
          stdapi/models/__init__.py:ModelBase.converse
     """
 
+    @pytest.mark.usefixtures("request_log")
     async def test_throttled_region_is_not_billed_and_failover_records_once(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -752,21 +751,9 @@ class TestConverseFailoverUsage:
         )
 
         # mark_error logs the throttling warning into the request log.
-        log_token = REQUEST_LOG.set(
-            EventLog(
-                type="request",
-                level="info",
-                date=datetime.now(UTC),
-                server_id="test",
-                server_version="0.0.0",
-            )
+        response = await ModelBase("failovermodel").converse(
+            {"modelId": "failovermodel"}
         )
-        try:
-            response = await ModelBase("failovermodel").converse(
-                {"modelId": "failovermodel"}
-            )
-        finally:
-            REQUEST_LOG.reset(log_token)
 
         assert calls == ["us-east-1", "eu-west-1"]
         assert response["usage"]["inputTokens"] == 7

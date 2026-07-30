@@ -9,7 +9,6 @@ Ref: https://docs.aws.amazon.com/transcribe/latest/APIReference/API_StartTranscr
      stdapi/models/audio/amazon_transcribe.py:AudioModel
 """
 
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -38,12 +37,13 @@ from stdapi.models.audio.amazon_transcribe import (
     initialize_transcribe_models,
     transcribe_job_candidates,
 )
-from stdapi.monitoring import REQUEST_ID, REQUEST_LOG, EventLog
+from stdapi.monitoring import REQUEST_ID, REQUEST_LOG
 from stdapi.types.openai_audio import (
     TranscriptionVerbose,
     TranslationVerbose,
     UsageDuration,
 )
+from tests._helpers import make_client_error
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -53,16 +53,6 @@ if TYPE_CHECKING:
 
 #: All tests in this module exercise the local implementation in-process.
 pytestmark = pytest.mark.local
-
-
-def _new_log() -> EventLog:
-    return EventLog(
-        type="request",
-        level="info",
-        date=datetime.now(UTC),
-        server_id="test",
-        server_version="0.0.0",
-    )
 
 
 class TestGetAudioDuration:
@@ -83,28 +73,22 @@ class TestGetAudioDuration:
         }
         assert _get_audio_duration(data) == 42.75  # type: ignore[arg-type]
 
-    def test_missing_segments_warns_and_returns_zero(self) -> None:
+    def test_missing_segments_warns_and_returns_zero(
+        self, request_log: dict[str, Any]
+    ) -> None:
         """No segments: return 0.0 (15s minimum billed) and warn in the request log."""
-        log = _new_log()
-        token = REQUEST_LOG.set(log)
-        try:
-            assert _get_audio_duration({}) == 0.0
-        finally:
-            REQUEST_LOG.reset(token)
-        assert log["level"] == "warning"
-        assert any("15-second minimum" in str(d) for d in log["error_detail"])
+        assert _get_audio_duration({}) == 0.0
+        assert request_log["level"] == "warning"
+        assert any("15-second minimum" in str(d) for d in request_log["error_detail"])
 
-    def test_empty_segments_list_warns_and_returns_zero(self) -> None:
+    def test_empty_segments_list_warns_and_returns_zero(
+        self, request_log: dict[str, Any]
+    ) -> None:
         """An empty segment list must behave like a missing one."""
-        log = _new_log()
-        token = REQUEST_LOG.set(log)
-        try:
-            data: dict[str, Any] = {"audio_segments": []}
-            assert _get_audio_duration(data) == 0.0  # type: ignore[arg-type]
-        finally:
-            REQUEST_LOG.reset(token)
-        assert log["level"] == "warning"
-        assert any("15-second minimum" in str(d) for d in log["error_detail"])
+        data: dict[str, Any] = {"audio_segments": []}
+        assert _get_audio_duration(data) == 0.0  # type: ignore[arg-type]
+        assert request_log["level"] == "warning"
+        assert any("15-second minimum" in str(d) for d in request_log["error_detail"])
 
 
 class TestTranscribeJobCandidates:
@@ -203,11 +187,6 @@ class _StubTranscribeClient:
         }
 
 
-def _client_error(code: str, message: str = "x") -> ClientError:
-    response: Any = {"Error": {"Code": code, "Message": message}}
-    return ClientError(response, "StartTranscriptionJob")
-
-
 class TestStartTranscriptionWithFailover:
     """_start_transcription_with_failover: whole-job region failover.
 
@@ -221,12 +200,10 @@ class TestStartTranscriptionWithFailover:
     """
 
     @pytest.fixture(autouse=True)
-    def _request_context(self) -> Generator[None]:
-        """Provide the request ID and log the job tags are built from."""
+    def _request_context(self, request_log: dict[str, Any]) -> Generator[None]:
+        """Provide the request ID the job tags are built from."""
         id_token = REQUEST_ID.set("job1")
-        log_token = REQUEST_LOG.set(_new_log())
         yield
-        REQUEST_LOG.reset(log_token)
         REQUEST_ID.reset(id_token)
 
     @staticmethod
@@ -282,7 +259,9 @@ class TestStartTranscriptionWithFailover:
     ) -> None:
         """A throttled first region copies the audio and starts in the second."""
         clients = {
-            "us-east-1": _StubTranscribeClient(_client_error("ThrottlingException")),
+            "us-east-1": _StubTranscribeClient(
+                make_client_error("ThrottlingException", "StartTranscriptionJob")
+            ),
             "eu-west-1": _StubTranscribeClient(),
         }
         copies = self._patch_infra(monkeypatch, clients)
@@ -315,7 +294,11 @@ class TestStartTranscriptionWithFailover:
         """
         clients = {
             "us-east-1": _StubTranscribeClient(
-                _client_error("BadRequestException", "unsupported languageCode")
+                make_client_error(
+                    "BadRequestException",
+                    "StartTranscriptionJob",
+                    message="unsupported languageCode",
+                )
             ),
             "eu-west-1": _StubTranscribeClient(),
         }
@@ -340,8 +323,12 @@ class TestStartTranscriptionWithFailover:
     ) -> None:
         """When every candidate fails, the last region's error is raised."""
         clients = {
-            "us-east-1": _StubTranscribeClient(_client_error("ThrottlingException")),
-            "eu-west-1": _StubTranscribeClient(_client_error("ThrottlingException")),
+            "us-east-1": _StubTranscribeClient(
+                make_client_error("ThrottlingException", "StartTranscriptionJob")
+            ),
+            "eu-west-1": _StubTranscribeClient(
+                make_client_error("ThrottlingException", "StartTranscriptionJob")
+            ),
         }
         copies = self._patch_infra(monkeypatch, clients)
 
@@ -394,7 +381,9 @@ class TestStartTranscriptionWithFailover:
     ) -> None:
         """A timed-out first region gets a best-effort job deletion."""
         clients = {
-            "us-east-1": _StubTranscribeClient(_client_error("RequestTimeout")),
+            "us-east-1": _StubTranscribeClient(
+                make_client_error("RequestTimeout", "StartTranscriptionJob")
+            ),
             "eu-west-1": _StubTranscribeClient(),
         }
         self._patch_infra(monkeypatch, clients)
@@ -415,8 +404,12 @@ class TestStartTranscriptionWithFailover:
     ) -> None:
         """Every failed region, including the last one, gets the job deletion."""
         clients = {
-            "us-east-1": _StubTranscribeClient(_client_error("RequestTimeout")),
-            "eu-west-1": _StubTranscribeClient(_client_error("RequestTimeout")),
+            "us-east-1": _StubTranscribeClient(
+                make_client_error("RequestTimeout", "StartTranscriptionJob")
+            ),
+            "eu-west-1": _StubTranscribeClient(
+                make_client_error("RequestTimeout", "StartTranscriptionJob")
+            ),
         }
         self._patch_infra(monkeypatch, clients)
 
@@ -450,7 +443,7 @@ class TestSttDurationComputedOnce:
     """
 
     async def test_empty_segments_warn_exactly_once(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
     ) -> None:
         """A transcript with no audio segments emits the missing-duration warning once.
 
@@ -476,18 +469,15 @@ class TestSttDurationComputedOnce:
             amazon_transcribe, "record_transcribe_usage", lambda *_a, **_k: 15
         )
 
-        log = _new_log()
-        token = REQUEST_LOG.set(log)
-        try:
-            response = await AudioModel(AWS_TRANSCRIBE_MODEL_ID).stt(
-                _FakeAudioContent(),  # type: ignore[arg-type]
-                "verbose_json",
-                logprobs=False,
-            )
-        finally:
-            REQUEST_LOG.reset(token)
+        response = await AudioModel(AWS_TRANSCRIBE_MODEL_ID).stt(
+            _FakeAudioContent(),  # type: ignore[arg-type]
+            "verbose_json",
+            logprobs=False,
+        )
 
-        warnings = [d for d in log["error_detail"] if "15-second minimum" in str(d)]
+        warnings = [
+            d for d in request_log["error_detail"] if "15-second minimum" in str(d)
+        ]
         assert len(warnings) == 1
 
         assert isinstance(response, TranscriptionVerbose)
@@ -510,6 +500,7 @@ class TestServedRegionStickiness:
          stdapi/models/audio/amazon_transcribe.py:_SERVED_REGION
     """
 
+    @pytest.mark.usefixtures("request_log")
     async def test_polling_and_usage_use_the_serving_region(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -565,7 +556,6 @@ class TestServedRegionStickiness:
         monkeypatch.setattr(amazon_transcribe, "record_transcribe_usage", _fake_usage)
 
         id_token = REQUEST_ID.set("job2")
-        log_token = REQUEST_LOG.set(_new_log())
         try:
             await AudioModel(AWS_TRANSCRIBE_MODEL_ID).stt(
                 _FakeAudioContent(),  # type: ignore[arg-type]
@@ -573,7 +563,6 @@ class TestServedRegionStickiness:
                 logprobs=False,
             )
         finally:
-            REQUEST_LOG.reset(log_token)
             REQUEST_ID.reset(id_token)
 
         assert client_regions == ["eu-west-1"]
@@ -669,21 +658,18 @@ class TestNoCandidateRegions:
     Ref: stdapi/models/audio/amazon_transcribe.py:AudioModel._transcribe
     """
 
+    @pytest.mark.usefixtures("request_log")
     async def test_request_raises_documented_404(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A request without any candidate region fails with the 404 guard."""
         monkeypatch.setattr(amazon_transcribe, "transcribe_job_candidates", list)
-        log_token = REQUEST_LOG.set(_new_log())
-        try:
-            with pytest.raises(ApiError) as excinfo:
-                await AudioModel(AWS_TRANSCRIBE_MODEL_ID).stt(
-                    _FakeAudioContent(),  # type: ignore[arg-type]
-                    "json",
-                    logprobs=False,
-                )
-        finally:
-            REQUEST_LOG.reset(log_token)
+        with pytest.raises(ApiError) as excinfo:
+            await AudioModel(AWS_TRANSCRIBE_MODEL_ID).stt(
+                _FakeAudioContent(),  # type: ignore[arg-type]
+                "json",
+                logprobs=False,
+            )
         assert excinfo.value.status == 404
         assert "not available" in str(excinfo.value)
 
@@ -1080,12 +1066,10 @@ class TestBuildTranscriptionJobParamsExtra:
     """
 
     @pytest.fixture(autouse=True)
-    def _request_context(self) -> Generator[None]:
-        """Provide the request ID and log the job tags are built from."""
+    def _request_context(self, request_log: dict[str, Any]) -> Generator[None]:
+        """Provide the request ID the job tags are built from."""
         id_token = REQUEST_ID.set("job1")
-        log_token = REQUEST_LOG.set(_new_log())
         yield
-        REQUEST_LOG.reset(log_token)
         REQUEST_ID.reset(id_token)
 
     def test_content_redaction_is_forwarded(self) -> None:

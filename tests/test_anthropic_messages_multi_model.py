@@ -25,16 +25,14 @@ Ref: https://platform.claude.com/docs/en/api/messages
      stdapi/models/chat/_adapters/_anthropic_message.py:format_response
 """
 
-import base64
 import json
-import struct
-import zlib
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
 from anthropic import BadRequestError
 
+from tests._helpers import red_png_b64
 from tests.conftest import REPO_ROOT
 
 if TYPE_CHECKING:
@@ -941,21 +939,6 @@ class TestStructuredOutput:
 # ---------------------------------------------------------------------------
 
 
-def _make_1x1_red_png_b64() -> str:
-    """Return a base64-encoded minimal valid 1x1 red PNG."""
-
-    def _chunk(name: bytes, data: bytes) -> bytes:
-        length = struct.pack(">I", len(data))
-        crc = struct.pack(">I", zlib.crc32(name + data) & 0xFFFFFFFF)
-        return length + name + data + crc
-
-    signature = b"\x89PNG\r\n\x1a\n"
-    ihdr = _chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
-    idat = _chunk(b"IDAT", zlib.compress(b"\x00\xff\x00\x00"))
-    iend = _chunk(b"IEND", b"")
-    return base64.b64encode(signature + ihdr + idat + iend).decode()
-
-
 #: Vision-capable models tested on the Anthropic route.
 _VISION_MODELS = pytest.mark.parametrize(
     "model",
@@ -1003,7 +986,7 @@ class TestVision:
                             "source": {
                                 "type": "base64",
                                 "media_type": "image/png",
-                                "data": _make_1x1_red_png_b64(),
+                                "data": red_png_b64(),
                             },
                         },
                         {

@@ -427,6 +427,8 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 _OPENAI_ORGANIZATION = "tests_stdapi.ai"
 #: Markers whose tests are collected only when the matching ``--<marker>`` flag is passed.
 _OPT_IN_MARKERS = ("expensive", "agentic", "slow", "video")
+#: Fallback skip reason for a ``gateway`` marker that names none of its own.
+_GATEWAY_SKIP_REASON = "Exercises a gateway-only capability (official API selected)"
 #: Root fixtures reaching a live service; a test whose closure holds one cannot run offline.
 _LIVE_FIXTURES = frozenset(
     {
@@ -509,6 +511,11 @@ def pytest_collection_modifyitems(
     them but the upstream vendors cannot; the ``_OPT_IN_MARKERS`` tests are
     skipped unless their matching flag is passed.
 
+    ``gateway`` takes an optional reason -- ``@pytest.mark.gateway("Amazon Polly
+    is not available on the official OpenAI API")`` -- so a whole module or class
+    can declare once what a per-test ``if use_official_api: pytest.skip(...)``
+    body used to spell out, without losing why it is skipped.
+
     ``--offline`` keeps only the tests that need neither AWS credentials nor a
     vendor API key, by skipping every test whose fixture closure contains one of
     ``_LIVE_FIXTURES``. Deriving the set from the closure rather than a marker
@@ -531,13 +538,18 @@ def pytest_collection_modifyitems(
         """Whether *item* pulls a live AWS/vendor/gateway fixture into its closure."""
         return bool(_LIVE_FIXTURES.intersection(getattr(item, "fixturenames", ())))
 
+    def skip_gateway_only() -> None:
+        """Skip ``gateway`` items, preferring the reason the marker carries."""
+        for item in items:
+            marker = item.get_closest_marker("gateway")
+            if marker is not None:
+                reason = str(marker.args[0]) if marker.args else _GATEWAY_SKIP_REASON
+                item.add_marker(pytest.mark.skip(reason=reason))
+
     if config.getoption("--server-url") or config.getoption("--use-official-api"):
         skip("Tests the local implementation (remote target selected)", marked("local"))
     if config.getoption("--use-official-api"):
-        skip(
-            "Exercises a gateway-only capability (official API selected)",
-            marked("gateway"),
-        )
+        skip_gateway_only()
     if config.getoption("--offline"):
         skip("Needs a live service (--offline selected)", needs_live_service)
     for opt_in in _OPT_IN_MARKERS:

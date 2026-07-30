@@ -29,13 +29,15 @@ from stdapi.models import (
     _merge_candidate,
     _trigger_price_catalog_refresh,
 )
-from stdapi.monitoring import REQUEST_LOG, EventLog
+from tests._helpers import make_client_error, make_event_log, make_model_details
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
     from pydantic import JsonValue
     from types_aiobotocore_bedrock.literals import RegionName
+
+    from stdapi.monitoring import EventLog
 
 
 #: All tests in this module exercise the local implementation in-process.
@@ -46,14 +48,7 @@ def _make_model(
     model_id: str = "vendor.some-model-v1", region: RegionName = "us-east-1"
 ) -> ModelDetails:
     """Build a minimal ModelDetails instance with a single region."""
-    return ModelDetails(
-        id=model_id,
-        name=model_id,
-        provider="Vendor",
-        input_modalities=["TEXT"],
-        output_modalities=["TEXT"],
-        regions=[region],
-    )
+    return make_model_details(model_id, regions=[region])
 
 
 class _StubBedrockClient:
@@ -95,14 +90,6 @@ def _stub_client(
     client = _StubBedrockClient(availability)
     monkeypatch.setattr(
         stdapi.models, "get_client", lambda _service, _region=None: client
-    )
-
-
-def _client_error() -> ClientError:
-    """Build a throttling ClientError for the availability API."""
-    return ClientError(
-        {"Error": {"Code": "ThrottlingException", "Message": "slow down"}},
-        "GetFoundationModelAvailability",
     )
 
 
@@ -158,7 +145,14 @@ class TestCheckModelAvailability:
         ``_check_candidates`` is the layer that decides whether a failed check degrades
         one region or fails the whole refresh, so this function must not swallow it.
         """
-        _stub_client(monkeypatch, _client_error())
+        _stub_client(
+            monkeypatch,
+            make_client_error(
+                "ThrottlingException",
+                "GetFoundationModelAvailability",
+                message="slow down",
+            ),
+        )
         with pytest.raises(ClientError) as excinfo:
             await _check_model_availability(_make_model())
         assert excinfo.value.response["Error"]["Code"] == "ThrottlingException"
@@ -341,7 +335,19 @@ class TestCheckCandidates:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/troubleshooting-api-error-codes.html
         """
         self._patch_availability(
-            monkeypatch, {"us-east-1": _client_error(), "eu-west-1": _client_error()}
+            monkeypatch,
+            {
+                "us-east-1": make_client_error(
+                    "ThrottlingException",
+                    "GetFoundationModelAvailability",
+                    message="slow down",
+                ),
+                "eu-west-1": make_client_error(
+                    "ThrottlingException",
+                    "GetFoundationModelAvailability",
+                    message="slow down",
+                ),
+            },
         )
         candidates = {
             "m1": [_make_model("m1")],
@@ -367,7 +373,16 @@ class TestCheckCandidates:
         The call log also pins the round structure: ``m1``'s retry in ``eu-west-1``
         happens in a second round, after both first-round checks.
         """
-        calls = self._patch_availability(monkeypatch, {"us-east-1": _client_error()})
+        calls = self._patch_availability(
+            monkeypatch,
+            {
+                "us-east-1": make_client_error(
+                    "ThrottlingException",
+                    "GetFoundationModelAvailability",
+                    message="slow down",
+                )
+            },
+        )
         candidates = {
             "m1": [_make_model("m1"), _make_model("m1", region="eu-west-1")],
             "m2": [_make_model("m2", region="eu-west-1")],
@@ -577,13 +592,7 @@ class TestInitializeBedrockModelsFaultIsolation:
     @staticmethod
     def _start_event() -> EventLog:
         """Build a minimal startup event log."""
-        return EventLog(
-            type="start",
-            level="info",
-            date=datetime.now(UTC),
-            server_id="test",
-            server_version="0.0.0",
-        )
+        return make_event_log(type="start")
 
     async def test_startup_fails_when_every_region_fails(
         self, monkeypatch: pytest.MonkeyPatch
@@ -621,7 +630,12 @@ class TestInitializeBedrockModelsFaultIsolation:
         )
 
         async def _denied(_model: ModelDetails) -> list[str]:
-            raise _client_error()
+            error = make_client_error(
+                "ThrottlingException",
+                "GetFoundationModelAvailability",
+                message="slow down",
+            )
+            raise error
 
         monkeypatch.setattr(stdapi.models, "_check_model_availability", _denied)
 
@@ -640,13 +654,7 @@ class TestInitializeBedrockModelsFaultIsolation:
         new model list; the warning lands on the startup event rather than a request log.
         """
         self._patch_fetches(monkeypatch)
-        start_event = EventLog(
-            type="start",
-            level="info",
-            date=datetime.now(UTC),
-            server_id="test",
-            server_version="0.0.0",
-        )
+        start_event = make_event_log(type="start")
 
         assert await stdapi.models.initialize_bedrock_models(start_event) is True
 
@@ -660,7 +668,7 @@ class TestInitializeBedrockModelsFaultIsolation:
         assert stdapi.models._CACHE["update_next"] is not None  # noqa: SLF001
 
     async def test_lazy_refresh_warns_in_the_request_log(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
     ) -> None:
         """A lazy refresh surfaces the unreachable region on the current request log.
 
@@ -671,18 +679,8 @@ class TestInitializeBedrockModelsFaultIsolation:
         # Pin the price-catalog refresh guard so this unit test never hits
         # the live AWS Pricing API when cost tracking is enabled.
         monkeypatch.setattr(SETTINGS, "cost_tracking", False)
-        request_log = EventLog(
-            type="request",
-            level="info",
-            date=datetime.now(UTC),
-            server_id="test",
-            server_version="0.0.0",
-        )
-        token = REQUEST_LOG.set(request_log)
-        try:
-            await stdapi.models.initialize_bedrock_models()
-        finally:
-            REQUEST_LOG.reset(token)
+
+        await stdapi.models.initialize_bedrock_models()
 
         assert request_log["level"] == "warning"
         unreachable = _unreachable_regions(request_log["error_detail"])
@@ -843,7 +841,7 @@ class TestTriggerPriceCatalogRefresh:
     """
 
     async def test_client_error_is_warned_and_does_not_propagate(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, request_log: dict[str, Any]
     ) -> None:
         """A ``ClientError`` from the catalog reload becomes a request-log warning, not a raise.
 
@@ -853,28 +851,16 @@ class TestTriggerPriceCatalogRefresh:
 
         async def _fail(model_ids: set[str]) -> None:
             requested.append(model_ids)
-            error = ClientError(
-                {"Error": {"Code": "ThrottlingException", "Message": "slow down"}},
-                "GetProducts",
+            error = make_client_error(
+                "ThrottlingException", "GetProducts", message="slow down"
             )
             raise error
 
         monkeypatch.setattr(
             stdapi.models, "refresh_price_catalog_for_new_models", _fail
         )
-        request_log = EventLog(
-            type="request",
-            level="info",
-            date=datetime.now(UTC),
-            server_id="test",
-            server_version="0.0.0",
-        )
-        token = REQUEST_LOG.set(request_log)
-        try:
-            # Does not raise: model listing must still succeed.
-            await _trigger_price_catalog_refresh(None, {"vendor.new-model"})
-        finally:
-            REQUEST_LOG.reset(token)
+        # Does not raise: model listing must still succeed.
+        await _trigger_price_catalog_refresh(None, {"vendor.new-model"})
 
         assert requested == [{"vendor.new-model"}], (
             "only the newly discovered model IDs are re-priced"

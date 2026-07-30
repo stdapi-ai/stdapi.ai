@@ -22,20 +22,13 @@ MISTRAL_7B_MODELS = (
 _FINISH_REASONS = frozenset({"stop", "length", "content_filter", "tool_calls"})
 
 
+@pytest.mark.gateway("Mistral 7b models are not supported on the official OpenAI API")
 class TestMistral7bChatCompletions:
     """Mistral 7b chat completions tests.
 
     Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-mistral.html
          stdapi/models/chat/mistral_7b.py:ChatModel
     """
-
-    @pytest.fixture(autouse=True)
-    def _skip_official_api(self, use_official_api: bool) -> None:
-        """Skip the whole class: Mistral 7B models are not served by the official OpenAI API."""
-        if use_official_api:
-            pytest.skip(
-                "Mistral 7b models are not supported on the official OpenAI API"
-            )
 
     @pytest.mark.parametrize("model", MISTRAL_7B_MODELS)
     def test_system_prompt_silently_dropped_when_enabled(

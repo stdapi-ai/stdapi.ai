@@ -21,14 +21,10 @@ VOXTRAL_SAMPLE = (VOXTRAL_MINI,)
 #: Words spoken by the ``sample_audio_mp3_file`` fixture ("This is a test.").
 _SAMPLE_AUDIO_WORDS = ("test", "this")
 
-
-@pytest.fixture(autouse=True)
-def _skip_on_official_api(use_official_api: bool) -> None:
-    """Skip every test here: the Voxtral models have no official OpenAI equivalent."""
-    if use_official_api:
-        pytest.skip(
-            "Mistral Voxtral models are not available on the official OpenAI API"
-        )
+#: Every test needs the gateway: Voxtral has no official OpenAI equivalent.
+pytestmark = pytest.mark.gateway(
+    "Mistral Voxtral models are not available on the official OpenAI API"
+)
 
 
 class TestMistralVoxtralTranscriptions:

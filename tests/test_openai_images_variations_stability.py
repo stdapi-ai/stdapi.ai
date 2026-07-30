@@ -20,12 +20,10 @@ STABLE_DIFFUSION_3_5_LARGE = "stability.sd3-5-large-v1:0"
 # Test groups
 STABILITY_ALL = (STABLE_DIFFUSION_3_5_LARGE,)
 
-
-@pytest.fixture(autouse=True)
-def _skip_on_official_api(use_official_api: bool) -> None:
-    """Skip every test here: the Stability models have no official OpenAI equivalent."""
-    if use_official_api:
-        pytest.skip("Stability AI is not available on the official OpenAI API")
+#: Every test here: the Stability models have no official OpenAI equivalent.
+pytestmark = pytest.mark.gateway(
+    "Stability AI is not available on the official OpenAI API"
+)
 
 
 class TestStabilityVariations:

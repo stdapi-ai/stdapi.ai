@@ -17,10 +17,13 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from openai import BadRequestError, NotFoundError, OpenAI
 
+from tests._helpers import assert_embedding_list, make_model_details
 from tests.conftest import logged_usage_entries
 
 if TYPE_CHECKING:
     from starlette.testclient import TestClient as TestClientType
+
+    from stdapi.models import ModelDetails
 
 #: Model aliases resolved by the stubbed ``validate_model``.
 _MODEL_ALIASES = {"embed-multilingual": "cohere.embed-multilingual-v3"}
@@ -80,26 +83,17 @@ class TestEmbeddings:
             model=embedding_model, input="The quick brown fox jumps over the lazy dog."
         )
 
-        assert response.object == "list"
         assert response.model == embedding_model
-        assert len(response.data) == 1
-
-        item = response.data[0]
-        assert item.object == "embedding"
-        assert item.index == 0
-        assert isinstance(item.embedding, list)
-        assert all(isinstance(x, float) for x in item.embedding)
-        assert len(item.embedding) >= _MIN_DIMENSIONS
-        assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
-        assert hypot(*item.embedding) == pytest.approx(1.0, abs=0.05), (
-            "vector is not L2-normalized"
+        assert_embedding_list(
+            response, count=1, min_dimensions=_MIN_DIMENSIONS, normalized=True
         )
 
         assert response.usage.prompt_tokens > 0, "no input tokens billed for text input"
         assert response.usage.total_tokens >= response.usage.prompt_tokens
 
+    @pytest.mark.gateway("Service tiers headers are not supported on the official API")
     def test_service_tier_headers(
-        self, openai_client: OpenAI, embedding_model: str, use_official_api: bool
+        self, openai_client: OpenAI, embedding_model: str
     ) -> None:
         """Bedrock performance/service-tier headers are accepted on the embeddings route.
 
@@ -112,8 +106,6 @@ class TestEmbeddings:
              https://docs.aws.amazon.com/bedrock/latest/userguide/latency-optimized-inference.html
              stdapi/aws_bedrock.py:set_performance_configuration
         """
-        if use_official_api:
-            pytest.skip("Service tiers headers are not supported on the official API")
         response = openai_client.embeddings.create(
             model=embedding_model,
             input="The quick brown fox jumps over the lazy dog.",
@@ -122,10 +114,10 @@ class TestEmbeddings:
                 "X-Amzn-Bedrock-Service-Tier": "default",
             },
         )
-        assert response.object == "list"
         assert response.model == embedding_model
-        assert len(response.data) == 1
-        assert len(response.data[0].embedding) >= _MIN_DIMENSIONS
+        assert_embedding_list(
+            response, count=1, min_dimensions=_MIN_DIMENSIONS, nonzero=False
+        )
         assert response.usage.prompt_tokens > 0
 
     def test_batch_input_processing(
@@ -148,19 +140,7 @@ class TestEmbeddings:
 
         response = openai_client.embeddings.create(model=embedding_model, input=inputs)
 
-        assert response.object == "list"
-        assert len(response.data) == len(inputs)
-
-        for i, item in enumerate(response.data):
-            assert item.index == i
-            assert item.object == "embedding"
-            assert isinstance(item.embedding, list)
-            assert all(isinstance(x, float) for x in item.embedding)
-
-        vectors = [item.embedding for item in response.data]
-        assert len({len(vector) for vector in vectors}) == 1, (
-            "batch returned vectors of different widths"
-        )
+        vectors = assert_embedding_list(response, count=len(inputs), nonzero=False)
         assert len({tuple(vector) for vector in vectors}) == len(inputs), (
             "distinct inputs produced identical vectors"
         )
@@ -215,18 +195,8 @@ class TestEmbeddings:
             encoding_format="float",
         )
 
-        assert response.object == "list"
-        assert len(response.data) == 1
-
-        item = response.data[0]
-        assert item.object == "embedding"
-        assert item.index == 0
-        assert isinstance(item.embedding, list)
-        assert all(isinstance(x, float) for x in item.embedding)
-        assert len(item.embedding) >= _MIN_DIMENSIONS
-        assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
-        assert hypot(*item.embedding) == pytest.approx(1.0, abs=0.05), (
-            "vector is not L2-normalized"
+        assert_embedding_list(
+            response, count=1, min_dimensions=_MIN_DIMENSIONS, normalized=True
         )
 
     @pytest.mark.parametrize("dimensions", [256, 512, 1024])
@@ -248,16 +218,7 @@ class TestEmbeddings:
             dimensions=dimensions,
         )
 
-        assert response.object == "list"
-        assert len(response.data) == 1
-
-        item = response.data[0]
-        assert item.object == "embedding"
-        assert isinstance(item.embedding, list)
-        assert len(item.embedding) == dimensions, (
-            f"requested {dimensions} dimensions, got {len(item.embedding)}"
-        )
-        assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
+        assert_embedding_list(response, count=1, dimensions=dimensions)
 
     def test_user_parameter_functionality(
         self, openai_client: OpenAI, embedding_model: str
@@ -277,16 +238,8 @@ class TestEmbeddings:
             user="test-user-123",
         )
 
-        assert response.object == "list"
         assert response.model == embedding_model
-        assert len(response.data) == 1
-
-        item = response.data[0]
-        assert item.object == "embedding"
-        assert item.index == 0
-        assert isinstance(item.embedding, list)
-        assert len(item.embedding) >= _MIN_DIMENSIONS
-        assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
+        assert_embedding_list(response, count=1, min_dimensions=_MIN_DIMENSIONS)
 
     def test_mixed_batch_with_parameters(
         self, openai_client: OpenAI, embedding_model: str
@@ -432,17 +385,11 @@ class TestEmbeddings:
                 model=embedding_model, input=inputs
             )
 
-            assert response.object == "list"
-            assert len(response.data) == batch_size
-
-            for i, item in enumerate(response.data):
-                assert item.index == i
-                assert item.object == "embedding"
-                assert isinstance(item.embedding, list)
-                assert len(item.embedding) >= _MIN_DIMENSIONS
-
-            assert len({len(item.embedding) for item in response.data}) == 1, (
-                "batch returned vectors of different widths"
+            assert_embedding_list(
+                response,
+                count=batch_size,
+                min_dimensions=_MIN_DIMENSIONS,
+                nonzero=False,
             )
             assert response.usage.total_tokens >= response.usage.prompt_tokens
             prompt_tokens.append(response.usage.prompt_tokens)
@@ -471,13 +418,8 @@ class TestEmbeddings:
             response = openai_client.embeddings.create(
                 model=embedding_model, input=test_text
             )
-            assert response.object == "list"
-            assert len(response.data) == 1
-
-            item = response.data[0]
-            assert item.object == "embedding"
-            assert isinstance(item.embedding, list)
-            vectors.append(item.embedding)
+            (vector,) = assert_embedding_list(response, count=1, nonzero=False)
+            vectors.append(list(vector))
 
         assert len({len(vector) for vector in vectors}) == 1, (
             "repeated calls returned vectors of different widths"
@@ -715,7 +657,6 @@ class TestEmbeddingsRouteMapping:
         Returns:
             The list the stub appends one recorded ``embed_text`` call to.
         """
-        from stdapi.models import ModelDetails  # noqa: PLC0415
         from stdapi.models.embedding import EmbeddingResponse  # noqa: PLC0415
         from stdapi.routes import openai_embeddings  # noqa: PLC0415
 
@@ -723,14 +664,7 @@ class TestEmbeddingsRouteMapping:
 
         async def _validate_model(model_id: str, *_args: object) -> ModelDetails:
             resolved = _MODEL_ALIASES.get(model_id, model_id)
-            return ModelDetails(
-                id=resolved,
-                name=resolved,
-                provider="Vendor",
-                input_modalities=["TEXT"],
-                output_modalities=["EMBEDDING"],
-                regions=["us-east-1"],
-            )
+            return make_model_details(resolved, output_modalities=["EMBEDDING"])
 
         class _StubEmbeddingModel:
             async def embed_text(
@@ -904,15 +838,8 @@ class TestEmbeddingRouteAdvertised:
     @staticmethod
     def _details(output_modalities: list[str]) -> Any:  # noqa: ANN401
         """Build a minimal TEXT-input model description with the given outputs."""
-        from stdapi.models import ModelDetails  # noqa: PLC0415
-
-        return ModelDetails(
-            id="vendor.embed-v1",
-            name="vendor.embed-v1",
-            provider="Vendor",
-            input_modalities=["TEXT"],
-            output_modalities=output_modalities,
-            regions=["us-east-1"],
+        return make_model_details(
+            "vendor.embed-v1", output_modalities=output_modalities
         )
 
     def test_embedding_model_advertises_the_three_embedding_routes(self) -> None:

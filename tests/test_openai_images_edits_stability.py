@@ -20,6 +20,10 @@ from typing import TYPE_CHECKING
 import pytest
 from openai import BadRequestError
 
+from tests._helpers import decoded_png
+
+from .test_openai_images_generations import validate_image_usage
+
 if TYPE_CHECKING:
     from openai import OpenAI
 
@@ -59,19 +63,15 @@ STABILITY_STYLE_TRANSFER = "stability.stable-style-transfer-v1:0"
 #: Models exercised by the generic image-to-image edit test
 STABILITY_ALL = (STABILITY_SD3_5,)
 
-#: PNG file signature, the format Stability returns unless another is requested
-_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 #: JPEG start-of-image marker
 _JPEG_MAGIC = b"\xff\xd8\xff"
 #: Shape of the ``size`` field built by ``build_images_response`` ("WIDTHxHEIGHT")
 _SIZE_PATTERN = re.compile(r"^\d+x\d+$")
 
-
-@pytest.fixture(autouse=True)
-def _skip_on_official_api(use_official_api: bool) -> None:
-    """Skip every test here: the Stability models have no official OpenAI equivalent."""
-    if use_official_api:
-        pytest.skip("Stability AI is not available on the official OpenAI API")
+#: Every test here: the Stability models have no official OpenAI equivalent.
+pytestmark = pytest.mark.gateway(
+    "Stability AI is not available on the official OpenAI API"
+)
 
 
 class TestStabilityEditing:
@@ -110,25 +110,10 @@ class TestStabilityEditing:
         data = response.data
         assert data is not None
         assert len(data) == 1
-        b64_json = data[0].b64_json
-        assert b64_json is not None
         assert data[0].url is None
-        assert base64.b64decode(b64_json).startswith(_PNG_MAGIC)
+        decoded_png(data[0].b64_json)
 
-        assert response.usage is not None
-        assert response.usage.input_tokens > 0
-        assert response.usage.input_tokens_details.text_tokens >= 0
-        assert response.usage.input_tokens_details.image_tokens > 0
-        assert response.usage.total_tokens > 0
-        assert (
-            response.usage.total_tokens
-            == response.usage.input_tokens + response.usage.output_tokens
-        )
-        assert (
-            response.usage.input_tokens_details.image_tokens
-            + response.usage.input_tokens_details.text_tokens
-            == response.usage.input_tokens
-        )
+        validate_image_usage(response.usage)
 
 
 class TestStabilityUpscaleModels:
@@ -298,9 +283,7 @@ class TestStabilityEditModels:
         assert data is not None
         assert len(data) == 1
         b64_json = data[0].b64_json
-        assert b64_json is not None
-        output_data = base64.b64decode(b64_json)
-        assert output_data.startswith(_PNG_MAGIC)
+        output_data = decoded_png(b64_json)
 
         # Save output for manual inspection
         (output_dir / "stability_search_recolor_result.jpg").write_bytes(output_data)
@@ -391,9 +374,7 @@ class TestStabilityEditModels:
         assert data is not None
         assert len(data) == 1
         b64_json = data[0].b64_json
-        assert b64_json is not None
-        output_data = base64.b64decode(b64_json)
-        assert output_data.startswith(_PNG_MAGIC)
+        output_data = decoded_png(b64_json)
 
         # Save output for manual inspection
         (output_dir / "stability_search_replace_result.jpg").write_bytes(output_data)
@@ -486,9 +467,7 @@ class TestStabilityEditModels:
         assert data is not None
         assert len(data) == 1
         b64_json = data[0].b64_json
-        assert b64_json is not None
-        output_data = base64.b64decode(b64_json)
-        assert output_data.startswith(_PNG_MAGIC)
+        output_data = decoded_png(b64_json)
 
         # Save output for manual inspection
         (output_dir / "stability_inpaint_result.jpg").write_bytes(output_data)
@@ -550,9 +529,7 @@ class TestStabilityEditModels:
         data = response.data
         assert data is not None
         assert len(data) == 1
-        b64_json = data[0].b64_json
-        assert b64_json is not None
-        assert base64.b64decode(b64_json).startswith(_PNG_MAGIC)
+        decoded_png(data[0].b64_json)
 
     @pytest.mark.expensive
     def test_erase(self, openai_client: OpenAI, chat_vision_judge_model: str) -> None:
@@ -586,10 +563,7 @@ class TestStabilityEditModels:
         data = response.data
         assert data is not None
         assert len(data) == 1
-        b64_json = data[0].b64_json
-        assert b64_json is not None
-        output_data = base64.b64decode(b64_json)
-        assert output_data.startswith(_PNG_MAGIC)
+        output_data = decoded_png(data[0].b64_json)
 
         # Save output for manual inspection
         (output_dir / "stability_erase_result.jpg").write_bytes(output_data)
@@ -624,9 +598,7 @@ class TestStabilityEditModels:
         assert data is not None
         assert len(data) == 1
         b64_json = data[0].b64_json
-        assert b64_json is not None
-        output_data = base64.b64decode(b64_json)
-        assert output_data.startswith(_PNG_MAGIC)
+        output_data = decoded_png(b64_json)
 
         # Save output for manual inspection
         (output_dir / "stability_remove_bg_result.png").write_bytes(output_data)
@@ -698,9 +670,7 @@ class TestStabilityControlModels:
         assert data is not None
         assert len(data) == 1
         b64_json = data[0].b64_json
-        assert b64_json is not None
-        output_data = base64.b64decode(b64_json)
-        assert output_data.startswith(_PNG_MAGIC)
+        output_data = decoded_png(b64_json)
 
         # Save output for manual inspection
         (output_dir / "stability_control_sketch_result.jpg").write_bytes(output_data)
@@ -766,9 +736,7 @@ class TestStabilityControlModels:
         assert data is not None
         assert len(data) == 1
         b64_json = data[0].b64_json
-        assert b64_json is not None
-        output_data = base64.b64decode(b64_json)
-        assert output_data.startswith(_PNG_MAGIC)
+        output_data = decoded_png(b64_json)
 
         # Save output for manual inspection
         (output_dir / "stability_control_structure_result.jpg").write_bytes(output_data)
@@ -832,9 +800,7 @@ class TestStabilityStyleModels:
         data = response.data
         assert data is not None
         assert len(data) == 1
-        b64_json = data[0].b64_json
-        assert b64_json is not None
-        assert base64.b64decode(b64_json).startswith(_PNG_MAGIC)
+        decoded_png(data[0].b64_json)
 
     @pytest.mark.expensive
     def test_style_transfer_with_mask_as_style_image(
@@ -872,9 +838,7 @@ class TestStabilityStyleModels:
         assert data is not None
         assert len(data) == 1
         b64_json = data[0].b64_json
-        assert b64_json is not None
-        output_data = base64.b64decode(b64_json)
-        assert output_data.startswith(_PNG_MAGIC)
+        output_data = decoded_png(b64_json)
 
         # Save output for manual inspection
         (output_dir / "stability_style_transfer_result.jpg").write_bytes(output_data)
@@ -949,9 +913,7 @@ class TestStabilityStyleModels:
         assert data is not None
         assert len(data) == 1
         b64_json = data[0].b64_json
-        assert b64_json is not None
-        output_data = base64.b64decode(b64_json)
-        assert output_data.startswith(_PNG_MAGIC)
+        output_data = decoded_png(b64_json)
 
         # Save output for manual inspection
         (output_dir / "stability_style_transfer_extra_body_result.jpg").write_bytes(

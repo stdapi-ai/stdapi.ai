@@ -21,9 +21,9 @@ from starlette.requests import Request
 
 from stdapi.input_file import _CURRENT_INPUT_FILES, InputFile
 from stdapi.main import _upstream_service_name, handle_exception_group
-from stdapi.models import ModelDetails
 from stdapi.routes import openai_chat_completions
 from stdapi.types.openai_chat_completions import ChatCompletion
+from tests._helpers import make_model_details
 
 #: All tests in this module exercise the local implementation in-process, and log
 #: outside request scope, so they need the shared request-log context.
@@ -135,14 +135,7 @@ class TestHandleExceptionGroup:
 
 async def _validate_model(model_id: str, *_args: object, **_kwargs: object) -> Any:  # noqa: ANN401
     """Return canned model details without hitting AWS."""
-    return ModelDetails(
-        id=model_id,
-        name=model_id,
-        provider="Vendor",
-        input_modalities=["TEXT"],
-        output_modalities=["TEXT"],
-        regions=["us-east-1"],
-    )
+    return make_model_details(model_id)
 
 
 class _RecordingChatBackend:

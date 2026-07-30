@@ -142,9 +142,8 @@ class TestOpenAIFiles:
         finally:
             openai_client.files.delete(result.id)
 
-    def test_upload_with_expires_after(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    @pytest.mark.gateway("expires_after behavior may differ on official API")
+    def test_upload_with_expires_after(self, openai_client: OpenAI) -> None:
         """``expires_after`` anchors ``expires_at`` at ``created_at`` plus the requested TTL.
 
         The gateway stores the absolute expiry in S3 user metadata and tags the
@@ -153,8 +152,6 @@ class TestOpenAIFiles:
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
              stdapi/files/_core.py:upload_file
         """
-        if use_official_api:
-            pytest.skip("expires_after behavior may differ on official API")
         result = openai_client.files.create(
             file=("expire.txt", io.BytesIO(_TEXT_FILE), "text/plain"),
             purpose="assistants",
@@ -170,8 +167,9 @@ class TestOpenAIFiles:
         finally:
             openai_client.files.delete(result.id)
 
+    @pytest.mark.gateway("batch default-expiry behavior may differ on official API")
     def test_upload_batch_purpose_defaults_to_thirty_day_expiry(
-        self, openai_client: OpenAI, use_official_api: bool
+        self, openai_client: OpenAI
     ) -> None:
         """``purpose=batch`` with no ``expires_after`` defaults to a 30-day TTL.
 
@@ -181,8 +179,6 @@ class TestOpenAIFiles:
         Ref: https://stdapi.ai/api_openai_files/
              stdapi/routes/openai_files.py:_resolve_expires_after_seconds
         """
-        if use_official_api:
-            pytest.skip("batch default-expiry behavior may differ on official API")
         result = openai_client.files.create(
             file=("batch.jsonl", io.BytesIO(_TEXT_FILE), "text/plain"), purpose="batch"
         )
@@ -288,9 +284,10 @@ class TestOpenAIFiles:
             openai_client.files.delete(f1.id)
             openai_client.files.delete(f2.id)
 
-    def test_list_order_asc(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    @pytest.mark.gateway(
+        "files uploaded within the same second share created_at; order not guaranteed on official API"
+    )
+    def test_list_order_asc(self, openai_client: OpenAI) -> None:
         """``order=asc`` returns the oldest files first.
 
         Ascending order without a purpose filter is the fast path: it pages S3
@@ -300,10 +297,6 @@ class TestOpenAIFiles:
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
              stdapi/files/_core.py:list_files
         """
-        if use_official_api:
-            pytest.skip(
-                "files uploaded within the same second share created_at; order not guaranteed on official API"
-            )
         f1 = openai_client.files.create(
             file=("asc1.txt", io.BytesIO(_TEXT_FILE), "text/plain"),
             purpose="assistants",
@@ -324,9 +317,10 @@ class TestOpenAIFiles:
             openai_client.files.delete(f1.id)
             openai_client.files.delete(f2.id)
 
-    def test_list_cursor_pagination(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    @pytest.mark.gateway(
+        "official API cursor uses creation-time order; files uploaded in the same second have indeterminate relative position"
+    )
+    def test_list_cursor_pagination(self, openai_client: OpenAI) -> None:
         """The ``after`` cursor excludes the anchor and returns only later IDs.
 
         The cursor is passed to S3 as ``StartAfter`` on the object key, so
@@ -336,10 +330,6 @@ class TestOpenAIFiles:
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
              stdapi/files/_core.py:list_files
         """
-        if use_official_api:
-            pytest.skip(
-                "official API cursor uses creation-time order; files uploaded in the same second have indeterminate relative position"
-            )
         uploaded = [
             openai_client.files.create(
                 file=(f"page{i}.txt", io.BytesIO(_TEXT_FILE), "text/plain"),
@@ -416,9 +406,8 @@ class TestOpenAIFiles:
 
     # --- Content ---
 
-    def test_download_content(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    @pytest.mark.gateway("Official OpenAI API restricts file downloads by purpose")
+    def test_download_content(self, openai_client: OpenAI) -> None:
         """``GET /files/{id}/content`` streams back the exact uploaded bytes and MIME type.
 
         The content type is not stored separately: it is the S3 object's own
@@ -427,8 +416,6 @@ class TestOpenAIFiles:
         Ref: https://developers.openai.com/api/reference/resources/files
              stdapi/routes/openai_files.py:get_content
         """
-        if use_official_api:
-            pytest.skip("Official OpenAI API restricts file downloads by purpose")
         content = b"Hello, Files API content download test!"
         f = openai_client.files.create(
             file=("content.txt", io.BytesIO(content), "text/plain"),
@@ -550,12 +537,9 @@ class TestOpenAIFiles:
         finally:
             openai_client.files.delete(f.id)
 
+    @pytest.mark.gateway("`file-id:` is a project-local URI scheme")
     def test_file_id_uri_scheme_in_chat_image_url(
-        self,
-        openai_client: OpenAI,
-        chat_vision_model: str,
-        sample_image_file: bytes,
-        use_official_api: bool,
+        self, openai_client: OpenAI, chat_vision_model: str, sample_image_file: bytes
     ) -> None:
         """``image_url.url`` accepts the project-local ``file-id:`` URI scheme.
 
@@ -567,8 +551,6 @@ class TestOpenAIFiles:
         Ref: https://stdapi.ai/api_openai_files/
              stdapi/input_file.py:InputFile._normalize_and_detect_origin
         """
-        if use_official_api:
-            pytest.skip("`file-id:` is a project-local URI scheme")
         uploaded = openai_client.files.create(
             file=("image.png", io.BytesIO(sample_image_file), "image/png"),
             purpose="vision",
@@ -1320,9 +1302,8 @@ class TestOpenAIUploads:
             assert completed.file is not None
             openai_client.files.delete(completed.file.id)
 
-    def test_complete_file_downloadable(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    @pytest.mark.gateway("Official OpenAI API restricts file downloads by purpose")
+    def test_complete_file_downloadable(self, openai_client: OpenAI) -> None:
         """The file produced by a completed upload is downloadable byte for byte.
 
         A single part below the S3 5 MiB minimum is legal because the last part
@@ -1331,8 +1312,6 @@ class TestOpenAIUploads:
         Ref: https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html
              stdapi/files/_multipart.py:complete_multipart_session
         """
-        if use_official_api:
-            pytest.skip("Official OpenAI API restricts file downloads by purpose")
         payload = b"Multipart content for download test."
         upload = openai_client.uploads.create(
             bytes=len(payload),
@@ -1355,9 +1334,10 @@ class TestOpenAIUploads:
             assert completed.file is not None
             openai_client.files.delete(completed.file.id)
 
-    def test_complete_wrong_size_rejected(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    @pytest.mark.gateway(
+        "official API rejects at add_part time (not complete time) when part exceeds declared bytes"
+    )
+    def test_complete_wrong_size_rejected(self, openai_client: OpenAI) -> None:
         """Completing with parts that do not add up to the declared ``bytes`` is rejected.
 
         The declared total is recorded on the session marker at creation and
@@ -1367,10 +1347,6 @@ class TestOpenAIUploads:
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
              stdapi/files/_multipart.py:complete_multipart_session
         """
-        if use_official_api:
-            pytest.skip(
-                "official API rejects at add_part time (not complete time) when part exceeds declared bytes"
-            )
         upload = openai_client.uploads.create(
             bytes=999999,  # wrong: doesn't match part sizes
             filename="size_mismatch.bin",
@@ -1500,6 +1476,7 @@ class TestOpenAIUploads:
         assert "not found" in message or "no such" in message, message
 
 
+@pytest.mark.gateway("JSON body input not supported by the official OpenAI API")
 class TestOpenAIUploadsJsonBody:
     """POST /v1/uploads/{upload_id}/parts with an ``application/json`` body.
 
@@ -1510,12 +1487,6 @@ class TestOpenAIUploadsJsonBody:
     Ref: https://stdapi.ai/api_openai_files/
          stdapi/routes/openai_uploads.py:add_upload_part
     """
-
-    @pytest.fixture(autouse=True)
-    def _skip_on_official_api(self, use_official_api: bool) -> None:
-        """JSON body input is an extension not supported by the official API."""
-        if use_official_api:
-            pytest.skip("JSON body input not supported by the official OpenAI API")
 
     def test_json_body_missing_data_returns_400(self, openai_client: OpenAI) -> None:
         """A JSON body without the required ``data`` field returns 400 naming the field.
@@ -1589,6 +1560,7 @@ class TestOpenAIUploadsJsonBody:
                     openai_client.files.delete(file_id)
 
 
+@pytest.mark.gateway("JSON body input not supported by the official OpenAI API")
 class TestOpenAIFilesJsonBody:
     """POST /v1/files with an ``application/json`` body.
 
@@ -1599,12 +1571,6 @@ class TestOpenAIFilesJsonBody:
     Ref: https://stdapi.ai/api_openai_files/
          stdapi/types/openai_files.py:FileUploadJsonBody
     """
-
-    @pytest.fixture(autouse=True)
-    def _skip_on_official_api(self, use_official_api: bool) -> None:
-        """JSON body input is an extension not supported by the official API."""
-        if use_official_api:
-            pytest.skip("JSON body input not supported by the official OpenAI API")
 
     def test_json_body_missing_file_returns_400(self, openai_client: OpenAI) -> None:
         """A JSON body without the required ``file`` field returns 400 naming the field.

@@ -19,7 +19,6 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from botocore.exceptions import ClientError
 from starlette.requests import Request
 from starlette.responses import Response
 
@@ -33,6 +32,7 @@ from stdapi.config import SETTINGS
 from stdapi.main import handle_botocore_client_error, set_retry_after_header
 from stdapi.monitoring import REQUEST
 from stdapi.region_routing import RegionRouter, quota_retry_after
+from tests._helpers import make_client_error
 
 if TYPE_CHECKING:
     from starlette.testclient import TestClient
@@ -322,7 +322,7 @@ class TestOpenaiErrorPayloads:
         resp = test_client.post(
             "/v1/chat/completions",
             json={"model": "x", "messages": [{"role": "user", "content": "hi"}]},
-            headers={"Authorization": "Bearer wrong-key"},
+            headers=_bearer_headers("wrong-key"),
         )
         assert resp.status_code == 401
         err = _assert_openai_error_shape(resp.json())
@@ -399,7 +399,7 @@ class TestAnthropicErrorPayloads:
                 "max_tokens": 100,
                 "messages": [{"role": "user", "content": "hi"}],
             },
-            headers={"x-api-key": "wrong-key", "anthropic-version": "2023-06-01"},
+            headers=_anthropic_headers("wrong-key"),
         )
         assert resp.status_code == 401
         err = _assert_anthropic_error_shape(resp.json())
@@ -459,7 +459,7 @@ class TestCohereErrorPayloads:
         resp = test_client.post(
             "/cohere/v2/rerank",
             json={"model": "x", "query": "q", "documents": ["a"]},
-            headers={"Authorization": "Bearer wrong-key"},
+            headers=_bearer_headers("wrong-key"),
         )
         assert resp.status_code == 401
         assert _assert_cohere_error_shape(resp.json()) == "Unauthorized"
@@ -477,7 +477,7 @@ class TestCohereErrorPayloads:
         resp = test_client.post(
             "/cohere/v2/embed",
             json={"model": "x", "texts": ["a"], "input_type": "search_document"},
-            headers={"Authorization": "Bearer wrong-key"},
+            headers=_bearer_headers("wrong-key"),
         )
         assert resp.status_code == 401
         assert _assert_cohere_error_shape(resp.json()) == "Unauthorized"
@@ -605,15 +605,6 @@ def _openai_request(
     )
 
 
-def _client_error(code: str, message: str = "boom") -> ClientError:
-    """Build a botocore ClientError carrying the given AWS error code.
-
-    Returns:
-        A ``ClientError`` mimicking one raised by an AWS SDK call.
-    """
-    return ClientError({"Error": {"Code": code, "Message": message}}, "SomeOperation")
-
-
 @pytest.mark.usefixtures("request_log")
 class TestBotocoreClientErrorEnvelope:
     """``handle_botocore_client_error`` maps an AWS error code onto the OpenAI envelope.
@@ -635,7 +626,7 @@ class TestBotocoreClientErrorEnvelope:
         make OpenAI clients report a non-existent parameter.
         """
         response = await handle_botocore_client_error(
-            _openai_request(), _client_error("ThrottlingException")
+            _openai_request(), make_client_error("ThrottlingException", message="boom")
         )
         err = _assert_openai_error_shape(json.loads(bytes(response.body)))
         assert response.status_code == 429
@@ -653,7 +644,7 @@ class TestBotocoreClientErrorEnvelope:
         Ref: https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html
         """
         response = await handle_botocore_client_error(
-            _openai_request(), _client_error(code)
+            _openai_request(), make_client_error(code, message="boom")
         )
         err = _assert_openai_error_shape(json.loads(bytes(response.body)))
         assert response.status_code == 400

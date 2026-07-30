@@ -26,14 +26,16 @@ from PIL import Image
 
 from stdapi.api_errors import ApiError
 from stdapi.config import SETTINGS
-from stdapi.models import ModelDetails
 from stdapi.models.video import VideoGenerationStart, VideoJob, VideoListing
 from stdapi.routes import openai_videos
+from tests._helpers import make_model_details
 
 if TYPE_CHECKING:
     from openai import OpenAI
     from openai.types.video import Video
     from starlette.testclient import TestClient
+
+    from stdapi.models import ModelDetails
 
 #: A well-formed async invocation ARN in the primary test region.
 _ARN = "arn:aws:bedrock:us-east-1:000000000000:async-invoke/abc123xyz"
@@ -96,13 +98,8 @@ def video_backend(monkeypatch: pytest.MonkeyPatch) -> _StubVideoModel:
     async def _validate_model(
         model_id: str, *_args: object, **_kwargs: object
     ) -> ModelDetails:
-        return ModelDetails(
-            id=model_id,
-            name=model_id,
-            provider="Vendor",
-            input_modalities=["TEXT", "IMAGE"],
-            output_modalities=["VIDEO"],
-            regions=["us-east-1"],
+        return make_model_details(
+            model_id, input_modalities=["TEXT", "IMAGE"], output_modalities=["VIDEO"]
         )
 
     stub = _StubVideoModel()
@@ -886,13 +883,13 @@ class TestOpenAIVideoIntegration:
 
     @pytest.mark.video
     @pytest.mark.slow
+    @pytest.mark.gateway("/search_models is not part of the official API")
     def test_every_advertised_model_generates(
         self,
         request: pytest.FixtureRequest,
         openai_client: OpenAI,
         test_client: TestClient | None,
         api_key: str,
-        use_official_api: bool,
         video_generation_model: str,
     ) -> None:
         """Every model advertising the route serves the full lifecycle.
@@ -904,8 +901,6 @@ class TestOpenAIVideoIntegration:
         Ref: stdapi/models/__init__.py:_compute_model_capabilities
              stdapi/routes/openai_videos.py:create_video
         """
-        if use_official_api:
-            pytest.skip("/search_models is not part of the official API")
         model_ids = _advertised_model_ids(request, test_client, api_key)
         assert model_ids
         for model_id in model_ids:
@@ -928,13 +923,13 @@ class TestOpenAIVideoIntegration:
 
     @pytest.mark.video
     @pytest.mark.slow
+    @pytest.mark.gateway("/search_models is not part of the official API")
     def test_nova_reel_multi_shot_duration(
         self,
         request: pytest.FixtureRequest,
         openai_client: OpenAI,
         test_client: TestClient | None,
         api_key: str,
-        use_official_api: bool,
     ) -> None:
         """Nova Reel serves durations beyond 6s through automated multi-shot.
 
@@ -945,8 +940,6 @@ class TestOpenAIVideoIntegration:
         Ref: https://docs.aws.amazon.com/nova/latest/userguide/video-gen-code-examples2.html
              https://docs.aws.amazon.com/nova/latest/userguide/video-generation.html
         """
-        if use_official_api:
-            pytest.skip("/search_models is not part of the official API")
         if "amazon.nova-reel-v1:1" not in _advertised_model_ids(
             request, test_client, api_key
         ):
@@ -969,8 +962,9 @@ class TestOpenAIVideoIntegration:
             with suppress(Exception):
                 openai_client.videos.delete(video.id)
 
+    @pytest.mark.gateway("Bedrock video models require a stdapi server")
     def test_unsupported_duration_returns_clean_error(
-        self, openai_client: OpenAI, use_official_api: bool
+        self, openai_client: OpenAI
     ) -> None:
         """A duration unsupported by the model is rejected with a clean 400.
 
@@ -981,8 +975,6 @@ class TestOpenAIVideoIntegration:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-luma.html
              stdapi/models/video/luma_ray.py:VideoModel.build_generation_input
         """
-        if use_official_api:
-            pytest.skip("Bedrock video models require a stdapi server")
         with pytest.raises(BadRequestError, match="seconds") as exc_info:
             openai_client.videos.create(
                 model="luma.ray-v2:0", prompt="a cat", seconds="4"
@@ -995,9 +987,8 @@ class TestOpenAIVideoIntegration:
             "the model layer must name the durations it supports"
         )
 
-    def test_unsupported_size_returns_clean_error(
-        self, openai_client: OpenAI, use_official_api: bool
-    ) -> None:
+    @pytest.mark.gateway("Bedrock video models require a stdapi server")
+    def test_unsupported_size_returns_clean_error(self, openai_client: OpenAI) -> None:
         """A size unsupported by the model is rejected with a clean 400.
 
         1024x1024 is a supported aspect ratio at an unsupported resolution, so it
@@ -1007,8 +998,6 @@ class TestOpenAIVideoIntegration:
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-luma.html
              stdapi/models/video/luma_ray.py:VideoModel.build_generation_input
         """
-        if use_official_api:
-            pytest.skip("Bedrock video models require a stdapi server")
         with pytest.raises(BadRequestError, match="size") as exc_info:
             openai_client.videos.create(
                 model="luma.ray-v2:0",
@@ -1021,7 +1010,8 @@ class TestOpenAIVideoIntegration:
         assert body["type"] == "invalid_request_error"
         assert "1024x1024" in body["message"]
 
-    def test_list_videos(self, openai_client: OpenAI, use_official_api: bool) -> None:
+    @pytest.mark.gateway("listing scope differs on the official API")
+    def test_list_videos(self, openai_client: OpenAI) -> None:
         """Previously generated jobs are listed newest first with duration and size.
 
         Duration and size are recovered from the invocation tags (AWS job summaries
@@ -1031,8 +1021,6 @@ class TestOpenAIVideoIntegration:
         Ref: https://stdapi.ai/api_openai_videos/
              stdapi/models/video/__init__.py:list_video_jobs
         """
-        if use_official_api:
-            pytest.skip("listing scope differs on the official API")
         page = openai_client.videos.list(limit=5)
         # AWS retains async job records for a limited time; a fresh account
         # may legitimately have nothing to list.

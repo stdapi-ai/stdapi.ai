@@ -21,6 +21,7 @@ from stdapi.config import SETTINGS
 from stdapi.models import RERANKING_MODALITY, ModelDetails
 from stdapi.models.rerank import RerankedDocument, RerankResponse
 from stdapi.routes import cohere_rerank, cohere_rerank_v1
+from tests._helpers import make_model_details
 from tests.test_models_rerank import RERANK_MODELS
 
 if TYPE_CHECKING:
@@ -64,14 +65,7 @@ def rerank_backend(monkeypatch: pytest.MonkeyPatch) -> _StubRerankModel:
     ) -> ModelDetails:
         if model_id == "unknown-model":
             raise UnsupportedModelError(model_id)
-        return ModelDetails(
-            id=model_id,
-            name=model_id,
-            provider="Vendor",
-            input_modalities=["TEXT"],
-            output_modalities=[RERANKING_MODALITY],
-            regions=["us-east-1"],
-        )
+        return make_model_details(model_id, output_modalities=[RERANKING_MODALITY])
 
     stub = _StubRerankModel()
     for module in (cohere_rerank, cohere_rerank_v1):
@@ -823,8 +817,9 @@ class TestCohereRerankIntegration:
         assert response.meta.billed_units is not None
         assert response.meta.billed_units.search_units == 1
 
+    @pytest.mark.gateway("Bedrock-specific model")
     def test_unsupported_extra_field_returns_clean_error(
-        self, cohere_client: cohere.ClientV2, use_official_api: bool
+        self, cohere_client: cohere.ClientV2
     ) -> None:
         """AWS's rejection of an unsupported model field surfaces as a Cohere 400.
 
@@ -837,8 +832,6 @@ class TestCohereRerankIntegration:
              stdapi/aws_bedrock.py:AWS_ERROR_MAP
              stdapi/api_providers/cohere.py:_format_error
         """
-        if use_official_api:
-            pytest.skip("Bedrock-specific model")
         with pytest.raises(cohere.BadRequestError) as excinfo:
             cohere_client.rerank(
                 model="amazon.rerank-v1:0",

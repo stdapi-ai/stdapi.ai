@@ -32,18 +32,13 @@ _GROUNDING_TOOL: list[dict[str, object]] = [
 _FINISH_REASONS = frozenset({"stop", "length", "content_filter", "tool_calls"})
 
 
+@pytest.mark.gateway("Amazon Nova is not supported on the official API")
 class TestNovaChatCompletions:
     """Amazon Nova chat completions tests.
 
     Ref: https://docs.aws.amazon.com/nova/latest/nova2-userguide/what-is-nova-2.html
          stdapi/models/chat/amazon_nova_2.py:ChatModel
     """
-
-    @pytest.fixture(autouse=True)
-    def _skip_official_api(self, use_official_api: bool) -> None:
-        """Skip the whole class: Nova models are not served by the official OpenAI API."""
-        if use_official_api:
-            pytest.skip("Amazon Nova is not supported on the official API")
 
     def test_reasoning_effort_parameter(self, openai_client: OpenAI) -> None:
         """``reasoning_effort="minimal"`` enables Nova reasoning and returns its text.
@@ -198,6 +193,7 @@ class TestNovaChatCompletions:
 
 
 @pytest.mark.expensive
+@pytest.mark.gateway("Amazon Nova is not supported on the official API")
 class TestNovaGrounding:
     """Tests for nova_grounding web search via the OpenAI Chat Completions route.
 
@@ -212,12 +208,6 @@ class TestNovaGrounding:
     Ref: https://docs.aws.amazon.com/nova/latest/nova2-userguide/web-grounding.html
          stdapi/models/chat/_adapters/_openai_chat_completion.py:extract_tool_calls
     """
-
-    @pytest.fixture(autouse=True)
-    def _skip_official_api(self, use_official_api: bool) -> None:
-        """Skip the whole class: Nova models are not served by the official OpenAI API."""
-        if use_official_api:
-            pytest.skip("Amazon Nova is not supported on the official API")
 
     def test_tool_calls_suppressed_non_streaming(self, openai_client: OpenAI) -> None:
         """A nova_grounding invocation is hidden from ``tool_calls``.

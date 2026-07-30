@@ -25,17 +25,13 @@ from anthropic import Anthropic, BadRequestError
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+#: Skip the module when a remote Anthropic-compatible target is selected.
+pytestmark = pytest.mark.gateway("Pegasus is not supported on the official API")
+
 PEGASUS_MODEL = "twelvelabs.pegasus-1-2-v1:0"
 
 #: Anthropic stop_reason values reachable from Pegasus's ``finishReason`` (stop, length).
 _PEGASUS_STOP_REASONS = frozenset({"end_turn", "max_tokens"})
-
-
-@pytest.fixture(autouse=True)
-def _skip_on_official_api(use_official_api: bool) -> None:
-    """Skip the module when a remote Anthropic-compatible target is selected."""
-    if use_official_api:
-        pytest.skip("Pegasus is not supported on the official API")
 
 
 @pytest.fixture

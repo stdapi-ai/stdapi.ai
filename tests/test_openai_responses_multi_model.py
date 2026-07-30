@@ -22,15 +22,16 @@ Ref: https://developers.openai.com/api/reference/resources/responses
      stdapi/models/chat/_mantle/_convert.py:_chat_to_responses_response
 """
 
-import base64
 import json
-import struct
-import zlib
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
 import pytest
 from openai import BadRequestError, NotFoundError
+
+from tests._helpers import red_png_b64
+from tests._multi_model import VISION_MODELS_OPENAI, with_marks
+from tests.conftest import REPO_ROOT
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -117,66 +118,47 @@ _BASIC_MODELS = pytest.mark.parametrize(
     ],
 )
 
+#: Models confirmed to support tool use via the Responses API, streaming or not.
+_TOOL_MODEL_IDS = (
+    "anthropic.claude-haiku-4-5-20251001-v1:0",  # Claude (reference)
+    "amazon.nova-lite-v1:0",  # Amazon Nova
+    "amazon.nova-2-lite-v1:0",  # Amazon Nova 2
+    # "ai21.jamba-1-5-mini-v1:0",  # AI21 Jamba Mini
+    # "ai21.jamba-1-5-large-v1:0",  # AI21 Jamba Large
+    "deepseek.v3-v1:0",  # DeepSeek V3
+    "deepseek.v3.2",  # DeepSeek V3.2 (newer revision)
+    "meta.llama3-1-70b-instruct-v1:0",  # Meta Llama 3.1 70B
+    "minimax.minimax-m2.5",  # MiniMax
+    "mistral.mistral-large-2402-v1:0",  # Mistral Large
+    "mistral.pixtral-large-2502-v1:0",  # Mistral Pixtral Large
+    "moonshotai.kimi-k2.5",  # Moonshot Kimi K2.5
+    "openai.gpt-oss-20b-1:0",  # OpenAI GPT-OSS 20B (Bedrock)
+    "openai.gpt-oss-120b-1:0",  # OpenAI GPT-OSS 120B (Bedrock)
+    "qwen.qwen3-32b-v1:0",  # Qwen3 32B
+    "writer.palmyra-x4-v1:0",  # Writer Palmyra X4
+    "writer.palmyra-x5-v1:0",  # Writer Palmyra X5
+    "zai.glm-5",  # Z.AI GLM-5
+)
+
 #: Models confirmed to support non-streaming tool use via the Responses API.
-_TOOL_MODELS = pytest.mark.parametrize(
-    "model",
-    [
-        "anthropic.claude-haiku-4-5-20251001-v1:0",  # Claude (reference)
-        "amazon.nova-lite-v1:0",  # Amazon Nova
-        "amazon.nova-2-lite-v1:0",  # Amazon Nova 2
-        # "ai21.jamba-1-5-mini-v1:0",  # AI21 Jamba Mini
-        # "ai21.jamba-1-5-large-v1:0",  # AI21 Jamba Large
-        "deepseek.v3-v1:0",  # DeepSeek V3
-        "deepseek.v3.2",  # DeepSeek V3.2 (newer revision)
-        "meta.llama3-1-70b-instruct-v1:0",  # Meta Llama 3.1 70B
-        "minimax.minimax-m2.5",  # MiniMax
-        "mistral.mistral-large-2402-v1:0",  # Mistral Large
-        "mistral.pixtral-large-2502-v1:0",  # Mistral Pixtral Large
-        "moonshotai.kimi-k2.5",  # Moonshot Kimi K2.5
-        "openai.gpt-oss-20b-1:0",  # OpenAI GPT-OSS 20B (Bedrock)
-        "openai.gpt-oss-120b-1:0",  # OpenAI GPT-OSS 120B (Bedrock)
-        "qwen.qwen3-32b-v1:0",  # Qwen3 32B
-        "writer.palmyra-x4-v1:0",  # Writer Palmyra X4
-        "writer.palmyra-x5-v1:0",  # Writer Palmyra X5
-        "zai.glm-5",  # Z.AI GLM-5
-    ],
+_TOOL_MODELS = pytest.mark.parametrize("model", _TOOL_MODEL_IDS)
+
+#: gpt-oss returns truncated JSON in streaming tool arguments (❌M).
+_GPT_OSS_STREAMING_XFAIL = pytest.mark.xfail(
+    strict=False,
+    reason="gpt-oss returns truncated JSON in streaming tool arguments (❌M)",
 )
 
 #: Models confirmed to support tool use in streaming mode via the Responses API.
 _STREAMING_TOOL_MODELS = pytest.mark.parametrize(
     "model",
-    [
-        "anthropic.claude-haiku-4-5-20251001-v1:0",  # Claude (reference)
-        "amazon.nova-lite-v1:0",  # Amazon Nova
-        "amazon.nova-2-lite-v1:0",  # Amazon Nova 2
-        # "ai21.jamba-1-5-mini-v1:0",  # AI21 Jamba Mini
-        # "ai21.jamba-1-5-large-v1:0",  # AI21 Jamba Large
-        "deepseek.v3-v1:0",  # DeepSeek V3
-        "deepseek.v3.2",  # DeepSeek V3.2 (newer revision)
-        "meta.llama3-1-70b-instruct-v1:0",  # Meta Llama 3.1 70B
-        "minimax.minimax-m2.5",  # MiniMax
-        "mistral.mistral-large-2402-v1:0",  # Mistral Large
-        "mistral.pixtral-large-2502-v1:0",  # Mistral Pixtral Large
-        "moonshotai.kimi-k2.5",  # Moonshot Kimi K2.5
-        pytest.param(
-            "openai.gpt-oss-20b-1:0",
-            marks=pytest.mark.xfail(
-                strict=False,
-                reason="gpt-oss returns truncated JSON in streaming tool arguments (❌M)",
-            ),
-        ),  # OpenAI GPT-OSS 20B (Bedrock)
-        pytest.param(
-            "openai.gpt-oss-120b-1:0",
-            marks=pytest.mark.xfail(
-                strict=False,
-                reason="gpt-oss returns truncated JSON in streaming tool arguments (❌M)",
-            ),
-        ),  # OpenAI GPT-OSS 120B (Bedrock)
-        "qwen.qwen3-32b-v1:0",  # Qwen3 32B
-        "writer.palmyra-x4-v1:0",  # Writer Palmyra X4
-        "writer.palmyra-x5-v1:0",  # Writer Palmyra X5
-        "zai.glm-5",  # Z.AI GLM-5
-    ],
+    with_marks(
+        _TOOL_MODEL_IDS,
+        {
+            "openai.gpt-oss-20b-1:0": _GPT_OSS_STREAMING_XFAIL,
+            "openai.gpt-oss-120b-1:0": _GPT_OSS_STREAMING_XFAIL,
+        },
+    ),
 )
 
 #: A single deterministic read-only tool for all tool-use tests.
@@ -195,7 +177,8 @@ _LIST_DIR_TOOL: list[dict[str, object]] = [
     }
 ]
 
-_PROJECT_ROOT = "/var/opt/projects/stdapi.ai"
+#: Directory the tool tests ask the models to list.
+_PROJECT_ROOT = str(REPO_ROOT)
 
 
 # ---------------------------------------------------------------------------
@@ -478,43 +461,22 @@ class TestMultiModelToolUse:
 # ---------------------------------------------------------------------------
 
 
-def _make_1x1_red_png_b64() -> str:
-    """Return a base64-encoded minimal valid 1x1 red PNG."""
-
-    def _chunk(name: bytes, data: bytes) -> bytes:
-        length = struct.pack(">I", len(data))
-        crc = struct.pack(">I", zlib.crc32(name + data) & 0xFFFFFFFF)
-        return length + name + data + crc
-
-    signature = b"\x89PNG\r\n\x1a\n"
-    ihdr = _chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
-    idat = _chunk(b"IDAT", zlib.compress(b"\x00\xff\x00\x00"))
-    iend = _chunk(b"IEND", b"")
-    return base64.b64encode(signature + ihdr + idat + iend).decode()
-
-
 #: Vision-capable models tested on the Responses API route.
 _VISION_MODELS = pytest.mark.parametrize(
     "model",
-    [
-        "anthropic.claude-haiku-4-5-20251001-v1:0",  # Claude (reference)
-        "amazon.nova-lite-v1:0",  # Amazon Nova
-        pytest.param(
-            "mistral.pixtral-large-2502-v1:0",
-            marks=pytest.mark.xfail(
+    with_marks(
+        VISION_MODELS_OPENAI,
+        {
+            "mistral.pixtral-large-2502-v1:0": pytest.mark.xfail(
                 strict=False,
                 reason="Pixtral non-deterministically misidentifies colour of 1x1 PNG",
             ),
-        ),  # Mistral Pixtral Large
-        "qwen.qwen3-vl-235b-a22b",  # Qwen3 VL 235B
-        pytest.param(
-            "writer.palmyra-vision-7b",
-            marks=pytest.mark.xfail(
+            "writer.palmyra-vision-7b": pytest.mark.xfail(
                 strict=False,
                 reason="Palmyra Vision non-deterministically misidentifies colour of 1x1 PNG",
             ),
-        ),  # Writer Palmyra Vision 7B
-    ],
+        },
+    ),
 )
 
 
@@ -548,7 +510,7 @@ class TestVision:
                         "content": [
                             {
                                 "type": "input_image",
-                                "image_url": f"data:image/png;base64,{_make_1x1_red_png_b64()}",
+                                "image_url": f"data:image/png;base64,{red_png_b64()}",
                                 "detail": "low",
                             },
                             {

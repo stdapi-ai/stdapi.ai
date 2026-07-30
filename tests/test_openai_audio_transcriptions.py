@@ -56,6 +56,21 @@ _STUB_TRANSCRIPT_DATA: dict[str, Any] = {
 _SAMPLE_AUDIO_WORDS = ("test", "this")
 
 
+def _stub_transcribe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace AWS Transcribe with the fixed ``_STUB_TRANSCRIPT_DATA`` job result.
+
+    Shared with ``test_openai_audio_translations.py``: both exercise
+    ``AudioModel._transcribe`` against the same amazon_transcribe backend.
+    """
+
+    async def _fake_transcribe(
+        _self: AudioModel, *_args: object, **_kwargs: object
+    ) -> dict[str, Any]:
+        return _STUB_TRANSCRIPT_DATA
+
+    monkeypatch.setattr(AudioModel, "_transcribe", _fake_transcribe)
+
+
 def _matches_sample_audio(transcript: str) -> bool:
     """Return whether *transcript* is a plausible transcript of the sample audio.
 
@@ -765,6 +780,7 @@ class TestAudioTranscriptions:
         assert transcribe_entry["input_seconds"] == 15
 
 
+@pytest.mark.gateway("JSON body input not supported by the official OpenAI API")
 class TestAudioTranscriptionsJsonBody:
     """``application/json`` request bodies for POST /v1/audio/transcriptions.
 
@@ -775,12 +791,6 @@ class TestAudioTranscriptionsJsonBody:
     Ref: https://stdapi.ai/api_openai_audio_transcriptions/
          stdapi/types/openai_audio.py:AudioTranscriptionJsonBody
     """
-
-    @pytest.fixture(autouse=True)
-    def _skip_on_official_api(self, use_official_api: bool) -> None:
-        """JSON body input is an extension not supported by the official API."""
-        if use_official_api:
-            pytest.skip("JSON body input not supported by the official OpenAI API")
 
     def test_json_body_missing_file_returns_400(
         self, openai_client: OpenAI, transcription_model: str
@@ -912,17 +922,6 @@ class TestAudioTranscriptionsResponseFormatBugs:
          stdapi/models/audio/amazon_transcribe.py:AudioModel._format_transcription_response
     """
 
-    @staticmethod
-    def _stub_transcribe(monkeypatch: pytest.MonkeyPatch) -> None:
-        """Replace AWS Transcribe with a fixed stubbed job result."""
-
-        async def _fake_transcribe(
-            _self: AudioModel, *_args: object, **_kwargs: object
-        ) -> dict[str, Any]:
-            return _STUB_TRANSCRIPT_DATA
-
-        monkeypatch.setattr(AudioModel, "_transcribe", _fake_transcribe)
-
     def test_text_format_returns_raw_plain_text(
         self, test_client: TestClientType, api_key: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -933,7 +932,7 @@ class TestAudioTranscriptionsResponseFormatBugs:
 
         Ref: stdapi/models/audio/amazon_transcribe.py:AudioModel._format_transcription_response
         """
-        self._stub_transcribe(monkeypatch)
+        _stub_transcribe(monkeypatch)
 
         response = test_client.post(
             "/v1/audio/transcriptions",
@@ -957,7 +956,7 @@ class TestAudioTranscriptionsResponseFormatBugs:
         Ref: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
              stdapi/models/audio/amazon_transcribe.py:_format_json_response
         """
-        self._stub_transcribe(monkeypatch)
+        _stub_transcribe(monkeypatch)
 
         response = test_client.post(
             "/v1/audio/transcriptions",
@@ -1188,13 +1187,7 @@ class TestTranscribeUnsupportedParameters:
         The response params are logged into the request context, which the
         ``request_log`` fixture provides outside a real request.
         """
-
-        async def _fake_transcribe(
-            _self: AudioModel, *_args: object, **_kwargs: object
-        ) -> dict[str, Any]:
-            return _STUB_TRANSCRIPT_DATA
-
-        monkeypatch.setattr(AudioModel, "_transcribe", _fake_transcribe)
+        _stub_transcribe(monkeypatch)
 
         response = await AudioModel("amazon.transcribe").stt(
             self._audio(), "json", temperature=0.0, logprobs=False

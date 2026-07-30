@@ -10,7 +10,6 @@ Ref: stdapi/monitoring.py:_finalize_usage
 """
 
 from asyncio import create_task, sleep
-from datetime import UTC, datetime
 from gc import collect
 from typing import TYPE_CHECKING, cast
 
@@ -31,6 +30,7 @@ from stdapi.monitoring import (
 )
 from stdapi.pricing import Dimension
 from stdapi.usage import get_model_state, record_bedrock_usage
+from tests._helpers import make_event_log
 from tests.conftest import set_test_price
 
 if TYPE_CHECKING:
@@ -44,16 +44,6 @@ if TYPE_CHECKING:
 
 #: All tests in this module exercise the local implementation in-process.
 pytestmark = pytest.mark.local
-
-
-def _new_log() -> EventLog:
-    return EventLog(
-        type="request",
-        level="info",
-        date=datetime.now(UTC),
-        server_id="test",
-        server_version="0.0.0",
-    )
 
 
 def _make_request(method: str = "GET", path: str = "/test") -> StarletteRequest:
@@ -178,7 +168,7 @@ class TestFinalizeUsage:
         set_test_price("modela", "us-east-1", Dimension.INPUT_TOKENS, "0.000003", "USD")
         record_bedrock_usage("modela", input_tokens=1000)
 
-        log = _new_log()
+        log = make_event_log()
         _finalize_usage(log)
 
         assert log["usage"][0]["cost"] == "0.003"
@@ -200,7 +190,7 @@ class TestFinalizeUsage:
         record_bedrock_usage("modela", input_tokens=1000)
         record_bedrock_usage("modelb", input_tokens=1000)
 
-        log = _new_log()
+        log = make_event_log()
         _finalize_usage(log)
 
         assert len(log["usage"]) == 2
@@ -224,7 +214,7 @@ class TestFinalizeUsage:
         )
         record_bedrock_usage("modela", input_tokens=1000, output_tokens=1000)
 
-        log = _new_log()
+        log = make_event_log()
         _finalize_usage(log)
 
         assert log["usage"][0]["costs"] == {"USD": "0.003", "EUR": "0.015"}
@@ -246,7 +236,7 @@ class TestFinalizeUsage:
         """
         monkeypatch.setattr(SETTINGS, "cost_tracking", True)
 
-        log = _new_log()
+        log = make_event_log()
         _finalize_usage(log)
 
         assert "usage" not in log
@@ -264,7 +254,7 @@ class TestFinalizeUsage:
         get_model_state("modela").region = "us-east-1"
         record_bedrock_usage("modela", input_tokens=1000)
 
-        log = _new_log()
+        log = make_event_log()
         _finalize_usage(log)
 
         assert log["usage"][0]["input_tokens"] == 1000
@@ -288,7 +278,7 @@ class TestFinalizeUsage:
         get_model_state("modela").region = "us-east-1"
         record_bedrock_usage("modela", input_tokens=1000)
 
-        log = _new_log()
+        log = make_event_log()
         _finalize_usage(log)
 
         assert log["usage"][0]["input_tokens"] == 1000
@@ -315,7 +305,7 @@ class TestFinalizeUsage:
         set_test_price("modela", "us-east-1", Dimension.INPUT_TOKENS, "0.000003", "USD")
         record_bedrock_usage("modelb", input_tokens=1000)
 
-        log = _new_log()
+        log = make_event_log()
         _finalize_usage(log)
 
         assert log["level"] == "warning"
@@ -422,7 +412,7 @@ class TestStreamUsageContinuity:
         token = usage.init_usage()
         try:
             record_bedrock_usage("drainedmodel", input_tokens=5, total_tokens=5)
-            log = _new_log()
+            log = make_event_log()
             _finalize_usage(log)
             assert log["usage"]
             assert not usage.USAGE.get()
@@ -448,7 +438,7 @@ class TestStreamUsageContinuity:
 
             monkeypatch.setattr(monitoring, "emit_usage_metrics", _boom)
             with pytest.raises(RuntimeError, match=r"^emit failed$"):
-                _finalize_usage(_new_log())
+                _finalize_usage(make_event_log())
             assert not usage.USAGE.get()
         finally:
             usage.USAGE.reset(token)
@@ -487,7 +477,7 @@ class TestStreamUsageContinuity:
             stream = monitoring.log_request_sse_stream_event(source())
             assert await stream.__anext__() is first_event
             # Middleware finalizes (and drains) the request log at this point.
-            request_log = _new_log()
+            request_log = make_event_log()
             _finalize_usage(request_log)
             assert "usage" not in request_log
             _ = [chunk async for chunk in stream]
@@ -750,6 +740,7 @@ class TestMidStreamErrorLoggedInStreamEvent:
          stdapi/monitoring.py:_stream_exception_detail
     """
 
+    @pytest.mark.usefixtures("request_log")
     async def test_sse_handled_stream_error_logs_message_and_warning_level(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -762,7 +753,6 @@ class TestMidStreamErrorLoggedInStreamEvent:
         written: list[EventLog] = []
         monkeypatch.setattr(monitoring, "write_log_event", written.append)
         id_token = REQUEST_ID.set("test-request-id")
-        log_token = REQUEST_LOG.set(_new_log())
         try:
 
             async def source() -> AsyncGenerator[ServerSentEvent]:
@@ -782,4 +772,3 @@ class TestMidStreamErrorLoggedInStreamEvent:
             )
         finally:
             REQUEST_ID.reset(id_token)
-            REQUEST_LOG.reset(log_token)

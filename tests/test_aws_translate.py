@@ -4,10 +4,10 @@ Ref: https://docs.aws.amazon.com/translate/latest/APIReference/API_TranslateText
      stdapi/aws_translate.py:translate
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import pytest
-from botocore.exceptions import ClientError, ParamValidationError
+from botocore.exceptions import ParamValidationError
 
 import stdapi.aws
 from stdapi import usage
@@ -15,6 +15,7 @@ from stdapi.api_errors import ApiError
 from stdapi.aws_translate import translate
 from stdapi.config import SETTINGS
 from stdapi.pricing import Dimension, Service
+from tests._helpers import make_client_error
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -39,11 +40,6 @@ class _StubTranslateClient:
         if isinstance(self._outcome, Exception):
             raise self._outcome
         return self._outcome
-
-
-def _client_error(code: str) -> ClientError:
-    response: Any = {"Error": {"Code": code, "Message": code}}
-    return ClientError(response, "TranslateText")
 
 
 @pytest.fixture(autouse=True)
@@ -87,7 +83,9 @@ class TestTranslateFailover:
         character count Translate charges on.
         """
         clients = {
-            "us-east-1": _StubTranslateClient(_client_error("ThrottlingException")),
+            "us-east-1": _StubTranslateClient(
+                make_client_error("ThrottlingException", "TranslateText")
+            ),
             "eu-west-1": _StubTranslateClient({"TranslatedText": "hello"}),
         }
         _patch_clients(monkeypatch, clients)
@@ -115,7 +113,7 @@ class TestTranslateFailover:
         """
         clients = {
             "us-east-1": _StubTranslateClient(
-                _client_error("UnsupportedLanguagePairException")
+                make_client_error("UnsupportedLanguagePairException", "TranslateText")
             ),
             "eu-west-1": _StubTranslateClient({"TranslatedText": "x"}),
         }

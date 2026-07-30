@@ -23,10 +23,9 @@ class TestClaudeReasoning:
     """
 
     @pytest.mark.expensive
+    @pytest.mark.gateway("Anthropic Claude is not supported on the official API")
     @pytest.mark.parametrize("model", CLAUDE_ALL)
-    def test_reasoning_effort_accepted(
-        self, openai_client: OpenAI, use_official_api: bool, model: str
-    ) -> None:
+    def test_reasoning_effort_accepted(self, openai_client: OpenAI, model: str) -> None:
         """``reasoning.effort`` is accepted by every Claude generation in the catalog.
 
         Without an explicit ``budget_tokens`` the gateway configures adaptive
@@ -42,8 +41,6 @@ class TestClaudeReasoning:
         Ref: https://platform.claude.com/docs/en/build-with-claude/extended-thinking
              stdapi/models/chat/_mantle/_convert.py:_chat_to_responses_response
         """
-        if use_official_api:
-            pytest.skip("Anthropic Claude is not supported on the official API")
         resp = openai_client.responses.create(
             model=model,
             input="Reply with OK.",

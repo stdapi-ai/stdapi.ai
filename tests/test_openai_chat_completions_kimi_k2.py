@@ -24,18 +24,13 @@ KIMI_ALL = (KIMI_K2_5, KIMI_K2_THINKING)
 _FINISH_REASONS = frozenset({"stop", "length", "content_filter", "tool_calls"})
 
 
+@pytest.mark.gateway("Kimi is not supported on the official API")
 class TestKimiK25ChatCompletions:
     """Moonshot Kimi K2.5 chat completions tests.
 
     Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards-moonshot-ai.html
          stdapi/models/chat/kimi_k25.py:ChatModel
     """
-
-    @pytest.fixture(autouse=True)
-    def _skip_official_api(self, use_official_api: bool) -> None:
-        """Skip the whole class: Kimi models are not served by the official OpenAI API."""
-        if use_official_api:
-            pytest.skip("Kimi is not supported on the official API")
 
     @pytest.mark.parametrize("model", KIMI_ALL)
     def test_thinking_not_set(self, openai_client: OpenAI, model: str) -> None:

@@ -20,6 +20,7 @@ from stdapi.api_errors import ApiError
 from stdapi.input_file import InputFileUrl
 from stdapi.models import InvokeResult
 from stdapi.models.embedding.cohere_embed import EmbeddingModel
+from tests._helpers import assert_embedding_list
 
 if TYPE_CHECKING:
     from openai import OpenAI
@@ -40,18 +41,13 @@ _SUPPORTED_DIMENSIONS = {
 }
 
 
+@pytest.mark.gateway("Cohere models are not available on the official OpenAI API")
 class TestCohereEmbeddings:
     """Live behavior of the Cohere Embed v3 and v4 families.
 
     Ref: https://docs.cohere.com/reference/embed
          stdapi/models/embedding/cohere_embed.py:EmbeddingModel.embed_text
     """
-
-    @pytest.fixture(autouse=True)
-    def _skip_on_official_api(self, use_official_api: bool) -> None:
-        """Skip the whole class when the target is the official OpenAI API."""
-        if use_official_api:
-            pytest.skip("Cohere models are not available on the official OpenAI API")
 
     @pytest.mark.parametrize("model_id", COHERE_SAMPLE)
     def test_text_extra_params_truncate(
@@ -72,14 +68,8 @@ class TestCohereEmbeddings:
             input="The quick brown fox.",
             extra_body={"truncate": truncate_value},
         )
-        assert response.object == "list"
-        assert len(response.data) == 1
-        item = response.data[0]
-        assert item.object == "embedding"
-        assert item.index == 0
-        assert isinstance(item.embedding, list)
-        assert len(item.embedding) in _SUPPORTED_DIMENSIONS[model_id]
-        assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
+        (vector,) = assert_embedding_list(response, count=1)
+        assert len(vector) in _SUPPORTED_DIMENSIONS[model_id]
 
     @pytest.mark.parametrize("model_id", COHERE_ALL)
     def test_text_single(self, openai_client: OpenAI, model_id: str) -> None:
@@ -91,14 +81,8 @@ class TestCohereEmbeddings:
         response = openai_client.embeddings.create(
             model=model_id, input="The quick brown fox jumps over the lazy dog."
         )
-        assert response.object == "list"
-        assert len(response.data) == 1
-        item = response.data[0]
-        assert item.object == "embedding"
-        assert item.index == 0
-        assert isinstance(item.embedding, list)
-        assert len(item.embedding) in _SUPPORTED_DIMENSIONS[model_id]
-        assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
+        (vector,) = assert_embedding_list(response, count=1)
+        assert len(vector) in _SUPPORTED_DIMENSIONS[model_id]
 
     @pytest.mark.parametrize("model_id", COHERE_ALL)
     def test_image_single(
@@ -116,14 +100,8 @@ class TestCohereEmbeddings:
         response = openai_client.embeddings.create(
             model=model_id, input=sample_image_file_base64
         )
-        assert response.object == "list"
-        assert len(response.data) == 1
-        item = response.data[0]
-        assert item.object == "embedding"
-        assert item.index == 0
-        assert isinstance(item.embedding, list)
-        assert len(item.embedding) in _SUPPORTED_DIMENSIONS[model_id]
-        assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
+        (vector,) = assert_embedding_list(response, count=1)
+        assert len(vector) in _SUPPORTED_DIMENSIONS[model_id]
 
     @pytest.mark.parametrize("model_id", COHERE_ALL)
     def test_text_batch(self, openai_client: OpenAI, model_id: str) -> None:
@@ -141,15 +119,10 @@ class TestCohereEmbeddings:
             "Third entry to complete batch.",
         ]
         response = openai_client.embeddings.create(model=model_id, input=inputs)
-        assert response.object == "list"
-        assert len(response.data) == len(inputs)
-        for i, item in enumerate(response.data):
-            assert item.index == i
-            assert item.object == "embedding"
-            assert isinstance(item.embedding, list)
-            assert len(item.embedding) in _SUPPORTED_DIMENSIONS[model_id]
-
-        vectors = [item.embedding for item in response.data]
+        vectors = assert_embedding_list(
+            response, count=len(inputs), nonzero=False, uniform_width=False
+        )
+        assert all(len(vector) in _SUPPORTED_DIMENSIONS[model_id] for vector in vectors)
         assert len({tuple(vector) for vector in vectors}) == len(inputs), (
             "distinct inputs produced identical vectors"
         )
@@ -172,14 +145,10 @@ class TestCohereEmbeddings:
             sample_image_file_base64,
         ]
         response = openai_client.embeddings.create(model=model_id, input=inputs)
-        assert response.object == "list"
-        assert len(response.data) == len(inputs)
-        for i, item in enumerate(response.data):
-            assert item.index == i
-            assert item.object == "embedding"
-            assert isinstance(item.embedding, list)
-            assert len(item.embedding) in _SUPPORTED_DIMENSIONS[model_id]
-            assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
+        vectors = assert_embedding_list(
+            response, count=len(inputs), uniform_width=False
+        )
+        assert all(len(vector) in _SUPPORTED_DIMENSIONS[model_id] for vector in vectors)
 
     @pytest.mark.parametrize("model_id", COHERE_SAMPLE)
     def test_mixed_text_image_batch(
@@ -196,16 +165,12 @@ class TestCohereEmbeddings:
         """
         inputs = ["A sample image.", sample_image_file_base64]
         response = openai_client.embeddings.create(model=model_id, input=inputs)
-        assert response.object == "list"
-        assert len(response.data) == len(inputs)
-        for i, item in enumerate(response.data):
-            assert item.index == i
-            assert item.object == "embedding"
-            assert isinstance(item.embedding, list)
-            assert len(item.embedding) in _SUPPORTED_DIMENSIONS[model_id]
-            assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
+        vectors = assert_embedding_list(
+            response, count=len(inputs), uniform_width=False
+        )
+        assert all(len(vector) in _SUPPORTED_DIMENSIONS[model_id] for vector in vectors)
 
-        assert response.data[0].embedding != response.data[1].embedding, (
+        assert vectors[0] != vectors[1], (
             "text and image inputs returned the same vector"
         )
 
@@ -227,13 +192,7 @@ class TestCohereEmbeddings:
             input="Test sentence for dimensions parameter.",
             dimensions=dimensions,
         )
-        assert response.object == "list"
-        assert len(response.data) == 1
-        item = response.data[0]
-        assert item.object == "embedding"
-        assert isinstance(item.embedding, list)
-        assert len(item.embedding) == dimensions
-        assert any(x != 0.0 for x in item.embedding), "vector is all zeros"
+        assert_embedding_list(response, count=1, dimensions=dimensions)
 
 
 @pytest.mark.local
