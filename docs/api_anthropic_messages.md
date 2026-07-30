@@ -126,7 +126,7 @@ Mantle-only Claude models are passed through to the upstream Anthropic Messages 
 
 ### ![Claude](styles/logo_anthropic_claude.svg){ style="height: 1.2em; vertical-align: text-bottom;" } Claude Models Name Aliases
 
-This API supports dynamic model name aliases matching the official Anthropic API. You can use Claude model names exactly as they appear in [Anthropic's documentation](https://docs.anthropic.com/en/docs/about-claude/models), and they will be automatically resolved to the corresponding Bedrock model identifiers.
+This API supports dynamic model name aliases matching the official Anthropic API. You can use Claude model names exactly as they appear in [Anthropic's documentation](https://platform.claude.com/docs/en/about-claude/models/overview), and they will be automatically resolved to the corresponding Bedrock model identifiers.
 
 **Examples:**
 
