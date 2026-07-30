@@ -2636,43 +2636,40 @@ class TestAnthropicMessages:
 
     # --- Tool choice none ---
 
-    def test_tool_choice_none_raises_error(
-        self,
-        anthropic_client: Anthropic,
-        anthropic_chat_basic_model: str,
-        use_anthropic_api: bool,
+    def test_tool_choice_none_keeps_tools_declared_but_unused(
+        self, anthropic_client: Anthropic, anthropic_chat_basic_model: str
     ) -> None:
-        """``tool_choice`` ``none`` is rejected with HTTP 400 by this implementation.
+        """``tool_choice`` ``none`` answers normally without calling a tool.
 
-        Anthropic documents ``none`` as the way to keep tools declared but unused;
-        Bedrock Converse has no equivalent ``toolChoice``, so the gateway answers
-        with an ``invalid_request_error`` telling the caller to drop ``tools``.
+        Anthropic documents ``none`` as the way to keep tools declared but unused.
+        Converse has no equivalent ``toolChoice``, so the gateway drops the whole
+        tool config instead; the model layer restores a permissive one when the
+        history still carries ``toolUse``/``toolResult`` blocks, which is what
+        makes dropping it safe. No skip here: this used to be a gateway-only 400,
+        and the test now holds on the official API too.
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools#forcing-tool-use
              https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
-             stdapi/models/chat/_adapters/_anthropic_message.py:_map_tool_choice
+             stdapi/models/chat/_adapters/_anthropic_message.py:_build_tool_config
         """
-        if use_anthropic_api:
-            pytest.skip("tool_choice 'none' is supported on the official API")
+        response = anthropic_client.messages.create(
+            model=anthropic_chat_basic_model,
+            max_tokens=100,
+            messages=[{"role": "user", "content": "Hello"}],
+            tools=[
+                {
+                    "name": "test_tool",
+                    "description": "A test tool",
+                    "input_schema": {"type": "object", "properties": {}},
+                }
+            ],
+            tool_choice={"type": "none"},
+        )
 
-        with pytest.raises(BadRequestError) as excinfo:
-            anthropic_client.messages.create(
-                model=anthropic_chat_basic_model,
-                max_tokens=100,
-                messages=[{"role": "user", "content": "Hello"}],
-                tools=[
-                    {
-                        "name": "test_tool",
-                        "description": "A test tool",
-                        "input_schema": {"type": "object", "properties": {}},
-                    }
-                ],
-                tool_choice={"type": "none"},
-            )
-
-        assert excinfo.value.status_code == 400
-        assert excinfo.value.type == "invalid_request_error"
-        assert "tool_choice" in str(excinfo.value)
+        assert not [block for block in response.content if block.type == "tool_use"], (
+            "tool_choice 'none' must not produce a tool call"
+        )
+        assert response.stop_reason != "tool_use"
 
     # --- Cache creation input tokens ---
 

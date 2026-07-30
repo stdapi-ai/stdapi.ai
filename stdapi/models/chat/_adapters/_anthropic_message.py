@@ -698,10 +698,9 @@ def _map_tool_choice(tool_choice: ToolChoiceParam | None) -> ToolChoiceTypeDef |
         tool_choice: Anthropic tool choice param, or ``None``.
 
     Returns:
-        Bedrock tool choice dict, or ``None`` if not specified.
-
-    Raises:
-        ApiError: If ``ToolChoiceNoneParam`` is used (not supported by Bedrock).
+        Bedrock tool choice dict, or ``None`` when unspecified or ``none`` --
+        Converse has no ``none`` choice, so ``_build_tool_config`` drops the
+        whole tool config instead.
     """
     match tool_choice:
         case ToolChoiceAutoParam():
@@ -710,10 +709,7 @@ def _map_tool_choice(tool_choice: ToolChoiceParam | None) -> ToolChoiceTypeDef |
             return {"any": {}}
         case ToolChoiceToolParam(name=name):
             return {"tool": {"name": name}}
-        case ToolChoiceNoneParam():
-            msg = "tool_choice 'none' is not supported by this implementation. Remove tools from the request instead."
-            raise ApiError(msg)
-        case None:
+        case ToolChoiceNoneParam() | None:
             return None
 
 
@@ -787,6 +783,12 @@ def _build_tool_config(
     ``toolSpec`` stubs for downstream handling by ``_req_promote_system_tools``
     or ``_req_configure_tools``.
 
+    ``tool_choice`` of ``none`` returns no tool config at all, so the model
+    behaves as if no tools were passed -- Converse has no ``none`` choice of its
+    own. When the history still requires a ``toolConfig`` because it carries
+    ``toolUse``/``toolResult`` blocks, the model layer synthesizes a permissive
+    one, exactly as it does for the Chat Completions route.
+
     Args:
         tools: Anthropic tool params, or ``None``.
         tool_choice: Anthropic tool choice, or ``None``.
@@ -795,12 +797,13 @@ def _build_tool_config(
         tool_name_map: Anthropic server tool name → Bedrock name translation map.
 
     Returns:
-        Bedrock ``ToolConfigurationTypeDef``, or ``None`` when *tools* is empty.
+        Bedrock ``ToolConfigurationTypeDef``, ``None`` when *tools* is empty or
+        *tool_choice* disables tool calling.
 
     Raises:
         ApiError: If *tool_name_map* is provided and a server tool name is absent.
     """
-    if not tools:
+    if not tools or isinstance(tool_choice, ToolChoiceNoneParam):
         return None
 
     tool_list: list[ToolTypeDef] = []

@@ -15,8 +15,14 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from stdapi.models.chat._adapters._anthropic_message import _build_tool_config
 from stdapi.models.chat._adapters._openai_chat_completion import build_tool_config
 from stdapi.models.chat._default import ChatModel
+from stdapi.types.anthropic_messages import (
+    ToolChoiceAutoParam,
+    ToolChoiceNoneParam,
+    ToolParam,
+)
 from stdapi.types.openai_chat_completions import CompletionCreateParams
 
 if TYPE_CHECKING:
@@ -37,6 +43,12 @@ _WEATHER_TOOL: dict[str, Any] = {
         "name": "get_weather",
         "parameters": {"type": "object", "properties": {}},
     },
+}
+
+#: The same tool declared in Anthropic's Messages API shape.
+_ANTHROPIC_WEATHER_TOOL: dict[str, Any] = {
+    "name": "get_weather",
+    "input_schema": {"type": "object", "properties": {}},
 }
 
 #: The permissive ``toolSpec`` the model layer synthesizes from tool history.
@@ -179,3 +191,51 @@ async def test_no_tools_no_history_has_no_tool_config() -> None:
     payload = await _prepare(messages, None)
     assert "toolConfig" not in payload
     assert payload["messages"] == messages
+
+
+class TestAnthropicToolChoiceNone:
+    """The Anthropic route disables tool calling the same way as Chat Completions.
+
+    Both surfaces reach the same ``_prepare_converse_request``, so ``none`` can
+    drop the tool config on both: when history still carries ``toolUse``/
+    ``toolResult`` blocks the model layer synthesizes a permissive config, which
+    is what makes dropping it safe.
+
+    Ref: https://docs.claude.com/en/api/messages
+         stdapi/models/chat/_adapters/_anthropic_message.py:_build_tool_config
+    """
+
+    def test_tool_choice_none_omits_tool_config(self) -> None:
+        """``tool_choice: {"type": "none"}`` yields no tool config at all."""
+        assert (
+            _build_tool_config(
+                [ToolParam.model_validate(_ANTHROPIC_WEATHER_TOOL)],
+                ToolChoiceNoneParam(type="none"),
+            )
+            is None
+        )
+
+    def test_other_choices_still_build_a_config(self) -> None:
+        """``auto`` still produces a config, so ``none`` is the only disabling value."""
+        tool_config = _build_tool_config(
+            [ToolParam.model_validate(_ANTHROPIC_WEATHER_TOOL)],
+            ToolChoiceAutoParam(type="auto"),
+        )
+        assert tool_config is not None
+        assert tool_config["toolChoice"] == {"auto": {}}
+
+    async def test_tool_choice_none_with_tool_history_still_succeeds(self) -> None:
+        """Dropping the config leaves Converse a synthesized one for the history.
+
+        Converse rejects ``toolUse``/``toolResult`` blocks without a
+        ``toolConfig``. This is the case the audit judged unfixable; it is safe
+        because the synthesis is shared by every route.
+        """
+        tool_config = _build_tool_config(
+            [ToolParam.model_validate(_ANTHROPIC_WEATHER_TOOL)],
+            ToolChoiceNoneParam(type="none"),
+        )
+        payload = await _prepare(_tool_call_history(), tool_config)
+        assert payload["toolConfig"]["tools"] == [_SYNTHESIZED_WEATHER_SPEC]
+        # 'none' must never force a tool call: no explicit toolChoice is emitted.
+        assert "toolChoice" not in payload["toolConfig"]
