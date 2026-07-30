@@ -455,3 +455,126 @@ class TestMapMessagesRemoteSources:
             )
         assert "S3 bucket not allowed" in str(excinfo.value)
         assert "not-an-allowed-bucket" in str(excinfo.value)
+
+
+def _text_msg(role: str, text: str) -> MessageParam:
+    """Return a message with a single text block, for role-merging tests."""
+    return MessageParam(role=role, content=[TextBlockParam(type="text", text=text)])  # type: ignore[arg-type]
+
+
+class TestMapMessagesRoleMerging:
+    """Consecutive same-role messages are merged into one Bedrock message.
+
+    Bedrock Converse rejects non-alternating ``user``/``assistant`` turns (Claude:
+    "roles must alternate"), so ``_map_messages`` must fold any run of
+    same-role input messages into a single Bedrock message rather than emitting
+    them back-to-back.
+
+    Ref: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+         stdapi/models/chat/_adapters/_anthropic_message.py:_map_messages
+         stdapi/models/chat/_adapters/_anthropic_message.py:_append_or_merge
+    """
+
+    async def test_consecutive_user_messages_are_merged(self) -> None:
+        """Two consecutive ``user`` messages become a single Bedrock message."""
+        result = await _map_messages(
+            [_text_msg("user", "a"), _text_msg("user", "b")],
+            allow_explicit_caching=False,
+            allow_tool_caching=False,
+        )
+        assert len(result) == 1
+        assert result[0]["role"] == "user"
+        assert result[0]["content"] == [{"text": "a"}, {"text": "b"}]
+
+    async def test_consecutive_assistant_messages_are_merged(self) -> None:
+        """Two consecutive ``assistant`` messages become a single Bedrock message."""
+        result = await _map_messages(
+            [_text_msg("assistant", "a"), _text_msg("assistant", "b")],
+            allow_explicit_caching=False,
+            allow_tool_caching=False,
+        )
+        assert len(result) == 1
+        assert result[0]["role"] == "assistant"
+        assert result[0]["content"] == [{"text": "a"}, {"text": "b"}]
+
+    async def test_alternating_messages_are_left_untouched(self) -> None:
+        """Already-alternating ``user``/``assistant`` turns stay one message each."""
+        result = await _map_messages(
+            [
+                _text_msg("user", "a"),
+                _text_msg("assistant", "b"),
+                _text_msg("user", "c"),
+            ],
+            allow_explicit_caching=False,
+            allow_tool_caching=False,
+        )
+        assert [m["role"] for m in result] == ["user", "assistant", "user"]
+        assert [m["content"] for m in result] == [
+            [{"text": "a"}],
+            [{"text": "b"}],
+            [{"text": "c"}],
+        ]
+
+    async def test_merged_content_preserves_block_order(self) -> None:
+        """Merging concatenates content lists in order, never reordering blocks."""
+        result = await _map_messages(
+            [
+                MessageParam(
+                    role="user",
+                    content=[
+                        TextBlockParam(type="text", text="a"),
+                        TextBlockParam(type="text", text="b"),
+                    ],
+                ),
+                MessageParam(
+                    role="user",
+                    content=[
+                        TextBlockParam(type="text", text="c"),
+                        TextBlockParam(type="text", text="d"),
+                    ],
+                ),
+            ],
+            allow_explicit_caching=False,
+            allow_tool_caching=False,
+        )
+        assert len(result) == 1
+        assert result[0]["content"] == [
+            {"text": "a"},
+            {"text": "b"},
+            {"text": "c"},
+            {"text": "d"},
+        ]
+
+    async def test_system_role_message_is_not_merged_into_adjacent_user_message(
+        self,
+    ) -> None:
+        """A forwarded historical ``system`` message stays its own Bedrock message.
+
+        ``_map_messages`` may receive a ``role="system"`` entry: a historical
+        ``user -> system -> assistant`` directive that ``_prepare_messages_and_system``
+        forwards as-is (instead of extracting it into the system field) for models
+        that accept mid-conversation system turns natively (Claude 4.8+). Such an
+        entry sits right after a ``user`` message but must never be folded into it,
+        since the two are semantically distinct Bedrock roles.
+        """
+        result = await _map_messages(
+            [_text_msg("user", "hi"), _text_msg("system", "be terse")],
+            allow_explicit_caching=False,
+            allow_tool_caching=False,
+        )
+        assert [m["role"] for m in result] == ["user", "system"]
+        assert result[1]["content"] == [{"text": "be terse"}]
+
+    async def test_message_with_only_empty_text_block_is_dropped(self) -> None:
+        """A message whose only content block maps to nothing yields no Bedrock message.
+
+        An empty-string text block maps to no Bedrock content block, so the
+        message's ``content`` list ends up empty; Bedrock rejects empty content,
+        so ``_map_messages`` drops the message rather than emitting an invalid one.
+        """
+        result = await _map_messages(
+            [MessageParam(role="user", content=[TextBlockParam(type="text", text="")])],
+            allow_explicit_caching=False,
+            allow_tool_caching=False,
+        )
+        assert result == []

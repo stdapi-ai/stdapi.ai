@@ -102,6 +102,7 @@ if TYPE_CHECKING:
     from types_aiobotocore_bedrock.literals import RegionName
     from types_aiobotocore_bedrock_runtime.literals import (
         CacheTTLType,
+        ConversationRoleType,
         ServiceTierTypeType,
         StopReasonType,
     )
@@ -556,6 +557,30 @@ def _prepare_messages_and_system(
     return kept, _merge_system_content(system, system_blocks)
 
 
+def _append_or_merge(
+    result: list[MessageTypeDef],
+    role: ConversationRoleType,
+    content: list[ContentBlockTypeDef],
+) -> None:
+    """Append ``content`` to ``result`` under ``role``, merging with the trailing message.
+
+    Merges into the trailing message when its ``role`` matches; otherwise appends a
+    new message.  Bedrock requires strictly alternating user/assistant turns and
+    rejects empty content, so an empty ``content`` list is a no-op.
+
+    Args:
+        result: Mutable Bedrock messages list to append to.
+        role: Bedrock role of the content to append.
+        content: Content blocks to append.
+    """
+    if not content:
+        return
+    if result and result[-1]["role"] == role:
+        result[-1]["content"] += content  # type: ignore[operator]
+    else:
+        result.append({"role": role, "content": content})
+
+
 async def _map_messages(
     messages: list[MessageParam],
     *,
@@ -566,9 +591,15 @@ async def _map_messages(
 ) -> list[MessageTypeDef]:
     """Convert a list of Anthropic messages to Bedrock messages.
 
+    Consecutive messages mapping to the same Bedrock role are merged into a single
+    message, since Bedrock rejects non-alternating turns.
+
     Args:
-        messages: Anthropic message params (system-role messages must already be
-            extracted via ``_extract_system_messages`` before calling this).
+        messages: Anthropic message params, already passed through
+            ``_extract_system_messages``.  System-role messages are extracted into
+            system blocks except historical ``user -> system -> assistant``
+            directives, which are kept with ``role="system"`` and forwarded as-is
+            for models that accept them natively.
         allow_explicit_caching: Whether to allow explicit prompt caching for messages.
         allow_tool_caching: Whether cache points may follow tool-use or
             tool-result blocks (some models reject them there).
@@ -617,7 +648,7 @@ async def _map_messages(
                         and (cache_control := block.cache_control)
                     ):
                         content.append(_build_cache_point(cache_control))
-        result.append({"role": msg.role, "content": content})
+        _append_or_merge(result, msg.role, content)
     return result
 
 
